@@ -33,6 +33,10 @@ class Sim:
         self._pending_rule_buffer_update = False  # Set true to trigger rule buffer write next frame
         self._pending_entity_id = None  # Entity ID to read back after rule buffer is written
 
+        # Tournament mode
+        self._tournament_enabled = False
+        self._tournament_grid = 4
+
     def get_entity_count(self) -> int:
         """Calculate entity count based on world size."""
         return int(600000 * self.world_size)
@@ -216,6 +220,13 @@ class Sim:
 
 
 
+        # Tournament tiling uniforms
+        tryset(self.entity_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
+        tryset(self.entity_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
+        if self._tournament_enabled:
+            # Force per-particle mutation off so all particles in a tile share the genome
+            tryset(self.entity_update_program, 'MUTATION_SCALE_SETTING.slider_value', 0.0)
+
         num_workgroups = (self.entity_count + 63) // 64
         ctx.memory_barrier()
         self.entity_update_program.run(num_workgroups)
@@ -305,6 +316,10 @@ class Sim:
             tryset(self.canvas_update_program, 'previous_mouse', prev_mouse_pos)
             tryset(self.canvas_update_program, 'draw_size', draw_size)
             tryset(self.canvas_update_program, 'draw_power', draw_power)
+
+        # Tournament tiling uniforms (trail isolation)
+        tryset(self.canvas_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
+        tryset(self.canvas_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
 
         if strong_determinism:
             # Double-buffer: write to the opposite buffer from the one we're reading
@@ -713,6 +728,15 @@ class Sim:
             set_rule_uniform(self.entity_update_program, np.zeros((10, 8), dtype=np.float32))
         else:
             set_rule_uniform(self.entity_update_program, rule)
+
+    def apply_tournament(self, enabled: bool, grid: int = 4) -> None:
+        """Enable/disable tournament tiling for the next update."""
+        self._tournament_enabled = enabled
+        self._tournament_grid = grid
+
+    def write_tournament_rules(self, rule_bytes: bytes) -> None:
+        """Upload 16 packed genomes into the (reused) multi-load rule buffer."""
+        self.multi_load_rule_buffer.write(rule_bytes)
 
     def get_entity_buffer(self) -> moderngl.Buffer:
         """Expose entity buffer for EntityPicker."""
