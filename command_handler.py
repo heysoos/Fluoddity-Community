@@ -13,7 +13,7 @@ class CommandHandler:
 
     def __init__(self, sim, camera, ui, rule_manager, entity_picker,
                  video_service, config_saver, multi_load_service, user_configs_dir,
-                 field_handler=None, param_lock_service=None):
+                 field_handler=None, param_lock_service=None, tournament_service=None):
         self.sim = sim
         self.camera = camera
         self.ui = ui
@@ -25,6 +25,7 @@ class CommandHandler:
         self.user_configs_dir = user_configs_dir
         self.field_handler = field_handler
         self.param_lock_service = param_lock_service
+        self.tournament_service = tournament_service
 
         # Preview state
         self.preview_rule_active = False  # File->load preview
@@ -146,6 +147,9 @@ class CommandHandler:
         # Handle config clipboard commands
         self._handle_clipboard_commands(ui_state)
 
+        # Tournament mode
+        self._handle_tournament(ui_state)
+
         return None
 
     def _handle_world_size_change(self, ui_state):
@@ -212,6 +216,15 @@ class CommandHandler:
 
     def _handle_mouse_clicks(self, ui_state, tiling_mode):
         """Handle left/right mouse click behavior based on mode."""
+        # Tournament mode: left click selects the tile under the cursor
+        if ui_state.tournament.enabled and ui_state.left_click_this_frame:
+            tex = self.camera.screen_to_tex(ui_state.mouse_pos, self.sim.view_tex.size)
+            grid = 4
+            tx = min(grid - 1, max(0, int(tex[0] * grid)))
+            ty = min(grid - 1, max(0, int(tex[1] * grid)))
+            ui_state.tournament.clicked_tile = ty * grid + tx
+            return
+
         if ui_state.left_click_this_frame:
             if ui_state.sim.parameter_sweeps_enabled:
                 self._handle_sweep_click(ui_state, tiling_mode)
@@ -229,6 +242,69 @@ class CommandHandler:
                     if prev_seed is not None:
                         ui_state.sim.rule_seed = prev_seed
                     self.sim.apply_rule(prev_rule)
+
+    def _handle_tournament(self, ui_state):
+        """Drive the TournamentService from tournament one-shot flags."""
+        svc = self.tournament_service
+        if svc is None:
+            return
+        ts = ui_state.tournament
+
+        # Sync persistent controls
+        svc.mutation_strength = ts.mutation_strength
+        svc.inject_randoms = ts.inject_randoms
+        svc.crossover_enabled = ts.crossover_enabled
+
+        if not ts.enabled:
+            self._clear_tournament_flags(ts)
+            return
+
+        # Lazy-init the population the first time tournament turns on
+        if not svc.initialized:
+            svc.init_population()
+
+        if ts.clicked_tile >= 0:
+            svc.toggle_select(ts.clicked_tile)
+        if ts.next_gen_requested:
+            svc.next_generation()
+        if ts.undo_requested:
+            svc.undo()
+        if ts.reset_requested:
+            svc.reset()
+        if ts.save_requested:
+            self._save_tournament_selection(ui_state)
+
+        # These are one-shot: clear them now that they've been consumed.
+        # (UI.get_state() returns the live state object and only clears its own
+        #  private mirrors, so the consumer must clear these.)
+        self._clear_tournament_flags(ts)
+
+        # Upload + clear/reseed whenever the population changed
+        if svc.is_dirty():
+            self.sim.write_tournament_rules(svc.pack_rule_bytes())
+            self.sim.reset()   # clears canvas + frame_count=0 => reseed into tiles
+            svc.clear_dirty()
+
+    @staticmethod
+    def _clear_tournament_flags(ts):
+        """Reset tournament one-shot flags after consumption."""
+        ts.clicked_tile = -1
+        ts.next_gen_requested = False
+        ts.undo_requested = False
+        ts.reset_requested = False
+        ts.save_requested = False
+
+    def _save_tournament_selection(self, ui_state):
+        """Save each selected genome to a config JSON in the user configs dir."""
+        svc = self.tournament_service
+        if not svc.selected:
+            print("Tournament save: no tiles selected")
+            return
+        for tile in sorted(svc.selected):
+            config = self.config_saver.create_config(ui_state.sim, svc.population[tile])
+            filepath = self.user_configs_dir / f"tournament_tile{tile}.json"
+            self.config_saver.save_to_file(config, filepath)
+            print(f"Saved tournament tile {tile} -> {filepath}")
 
     def _handle_sweep_click(self, ui_state, tiling_mode):
         """Handle left click when parameter sweeps are enabled."""

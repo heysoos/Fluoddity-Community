@@ -5,7 +5,7 @@ import numpy as np
 from camera import Camera
 from sim import Sim, SIZE_OF_ENTITY_STRUCT
 from ui import UI
-from services import RuleManager, EntityPicker, VideoRecorderService, ConfigSaver, ArrowDebugService, MultiLoadService
+from services import RuleManager, EntityPicker, VideoRecorderService, ConfigSaver, ArrowDebugService, MultiLoadService, TournamentService
 from services.field_handler import FieldHandler
 from services.parameter_lock_service import ParameterLockService
 from utilities.paths import initialize_user_data, get_user_physics_configs_dir, get_app_physics_configs_dir, get_screenshots_dir
@@ -67,8 +67,10 @@ class App:
         self.config_saver = ConfigSaver()
         self.arrow_debug_service = ArrowDebugService(self.ctx)
         self.multi_load_service = MultiLoadService()
+        self.tournament_service = TournamentService()
         self.advanced_drawing_processor = AdvancedDrawingProcessor(self.ctx)
         self.ui.multi_load_service = self.multi_load_service
+        self.ui.tournament_service = self.tournament_service
         self.ui.advanced_drawing_processor = self.advanced_drawing_processor
 
         # Physics configs directories
@@ -87,7 +89,8 @@ class App:
             self.entity_picker, self.video_service, self.config_saver,
             self.multi_load_service, self.user_configs_dir,
             field_handler=self.field_handler,
-            param_lock_service=self.param_lock_service
+            param_lock_service=self.param_lock_service,
+            tournament_service=self.tournament_service
         )
         # Xbox controller (FPS camera for shader-driven field)
         self.controller_cam = ControllerCam()
@@ -224,6 +227,7 @@ class App:
         self.sim.apply_camera_state(ui_state.camera)
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)
+        self.sim.apply_tournament(ui_state.tournament.enabled, grid=4)
         self.camera.BRIGHTNESS = ui_state.preferences.brightness
 
         # 5.0.1 Force/Strafe field view modes: override view_tex with field texture
