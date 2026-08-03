@@ -60,6 +60,10 @@ uniform int COHORTS; //each cohort gets its own rule and starting location
 uniform float RULE_SEED;
 uniform bool WRITE_RULES; // Set true for one frame when rule buffer readback is needed
 
+// Tournament mode: partition the canvas into a TOURNAMENT_GRID x TOURNAMENT_GRID grid
+uniform int TOURNAMENT_MODE;   // 0 = off, 1 = on
+uniform int TOURNAMENT_GRID;   // grid side length (4 => 16 tiles)
+
 // Multi-load control uniforms (small, stay as uniforms)
 uniform int MULTILOAD_COUNT; // Number of loaded configs (0 = normal mode)
 uniform float MULTI_LOAD_CURRENT_PROGRESS; // Current position in config ring (0-1)
@@ -130,6 +134,24 @@ int get_particle_config_index() {
 
     // Clamp to valid range
     return clamp(config_index, 0, MULTILOAD_COUNT - 1);
+}
+
+// Tournament: a particle's stable "home tile" is derived from its buffer index,
+// so a particle never migrates between tiles even if it drifts spatially.
+int tournament_home_tile(uint index){
+    int n = TOURNAMENT_GRID * TOURNAMENT_GRID;
+    int tile = int(floor(float(index) / float(ACTIVE_COUNT) * float(n)));
+    return clamp(tile, 0, n - 1);
+}
+// Entity-space bounding box [lo, hi] of a tile index.
+void tournament_tile_box(int tile, out vec2 lo, out vec2 hi){
+    float ca = canvas_resolution.x / canvas_resolution.y;
+    vec2 half_extent = vec2(sqrt(ca), 1.0 / sqrt(ca));
+    int tx = tile % TOURNAMENT_GRID;
+    int ty = tile / TOURNAMENT_GRID;
+    vec2 cell = (2.0 * half_extent) / float(TOURNAMENT_GRID);
+    lo = -half_extent + vec2(float(tx), float(ty)) * cell;
+    hi = lo + cell;
 }
                             //Entities with index > ACTIVE_COUNT aren't rendered or updated
 int get_particle_cohorts() {
@@ -380,6 +402,17 @@ void reset(uint index){
     }
 
     
+    //Tournament: place the particle uniformly inside its home tile (with a small margin).
+    if(TOURNAMENT_MODE == 1){
+        int htile = tournament_home_tile(index);
+        vec2 lo, hi; tournament_tile_box(htile, lo, hi);
+        vec2 margin = (hi - lo) * 0.04;
+        lo += margin; hi -= margin;
+        vec2 r = vec2(hash(vec2(cohort_val, float(index)+0.1)),
+                      hash(vec2(float(index)+0.2, cohort_val)));
+        pos = mix(lo, hi, r);
+    }
+
     //store to persistent entity buffer
     entities[index]=Entity(pos,vel,size,cohort_val/float(cohorts),float[2](0,0),color);
 }
@@ -471,8 +504,11 @@ void main() {
     float cohort = get_cohort(index);
 
     Rule current_rule=get_particle_target_rule();
+    if(TOURNAMENT_MODE == 1){
+        current_rule = target_rules[tournament_home_tile(index)];
+    }
     //if a few arbitrary coefficients are exactly 0, then assume target_rule is all 0s (no target) and generate a random rule instead.
-    if(current_rule.centers[0].frequency==vec4(0) && current_rule.centers[5].amplitude==vec4(0)){
+    else if(current_rule.centers[0].frequency==vec4(0) && current_rule.centers[5].amplitude==vec4(0)){
         current_rule = Rule(generate_random_centers(get_particle_rule_seed()+floor(cohort)));
     }
     //Each cohort gets a random mutation
@@ -505,9 +541,16 @@ void main() {
     pR(left_sensor_offset,calculate_setting(get_particle_sensor_angle(),e.pos,cohort)*PI);//rotate them opposite directions
     pR(right_sensor_offset,-calculate_setting(get_particle_sensor_angle(),e.pos,cohort)*PI);
 
-    //read the trails from canvas
-    vec4 ltap = get_can(e.pos+left_sensor_offset);
-    vec4 rtap = get_can(e.pos+right_sensor_offset);
+    //read the trails from canvas (tournament: keep sample points inside the home tile)
+    vec2 lsample = e.pos + left_sensor_offset;
+    vec2 rsample = e.pos + right_sensor_offset;
+    if(TOURNAMENT_MODE == 1){
+        vec2 tlo, thi; tournament_tile_box(tournament_home_tile(index), tlo, thi);
+        lsample = clamp(lsample, tlo, thi);
+        rsample = clamp(rsample, tlo, thi);
+    }
+    vec4 ltap = get_can(lsample);
+    vec4 rtap = get_can(rsample);
 
     
     //rescale sensor values
@@ -577,6 +620,15 @@ void main() {
         //wrap: X wraps [-x_edge,x_edge], Y wraps [-y_edge, y_edge]
         e.pos.x = x_edge * 2.0 * (fract(e.pos.x / (x_edge * 2.0) - 0.5) - 0.5);
         e.pos.y = y_edge * 2.0 * (fract(e.pos.y / (y_edge * 2.0) - 0.5) - 0.5);
+    }
+
+    //Tournament: override world boundaries with per-tile bounce so tiles stay isolated.
+    if(TOURNAMENT_MODE == 1){
+        vec2 tlo, thi; tournament_tile_box(tournament_home_tile(index), tlo, thi);
+        if(e.pos.x < tlo.x){ e.pos.x = tlo.x; e.vel.x = abs(e.vel.x); }
+        if(e.pos.x > thi.x){ e.pos.x = thi.x; e.vel.x = -abs(e.vel.x); }
+        if(e.pos.y < tlo.y){ e.pos.y = tlo.y; e.vel.y = abs(e.vel.y); }
+        if(e.pos.y > thi.y){ e.pos.y = thi.y; e.vel.y = -abs(e.vel.y); }
     }
 
     //Commit new entity state to buffers
