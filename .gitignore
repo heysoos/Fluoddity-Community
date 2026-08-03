@@ -41,3 +41,7 @@ physics_configs/Custom/
 build/
 dist/
 *.spec.bak
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
