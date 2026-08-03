@@ -26,6 +26,7 @@ from .menu_bar import MenuBarMixin
 from .physics_window import PhysicsWindowMixin
 from .advanced_drawing_window import AdvancedDrawingWindowMixin
 from .field_loader_window import FieldLoaderWindowMixin
+from .tournament_window import TournamentWindowMixin
 
 
 @dataclass
@@ -46,6 +47,7 @@ class UI(
     SliderWidgetsMixin,
     AdvancedDrawingWindowMixin,
     FieldLoaderWindowMixin,
+    TournamentWindowMixin,
 ):
     """Passive UI - renders widgets, exposes state, handles no logic."""
 
@@ -678,6 +680,10 @@ class UI(
 
         # Render field loader window (transient, not gated by sidebar)
         self.render_field_loader_window()
+
+        # Render tournament window if enabled (hidden when windows toggled off)
+        if self.show_sidebar:
+            self.render_tournament_window()
 
         if self.show_demo_window:
             imgui.show_demo_window()

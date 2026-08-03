@@ -322,6 +322,13 @@ class MenuBarMixin:
                     self.show_video_recording_window
                 )
 
+                # Tournament mode (interactive evolution)
+                _, self.state.tournament.enabled = imgui.checkbox(
+                    "Tournament Mode",
+                    self.state.tournament.enabled
+                )
+                self._delayed_tooltip("Evolve brains interactively: a 4x4 grid of live sims.\nClick tiles you like, then breed the next generation.")
+
                 # Load Field submenu
                 if imgui.begin_menu("Load Field"):
                     if imgui.menu_item("Load Force Field...", "", False)[0]:
