@@ -9,7 +9,9 @@ uniform bool strafe_field_checked;  // Whether Strafe Field checkbox is active
 uniform float draw_target_overlay_opacity; // Opacity of field color overlay (0-1)
 uniform bool is_first_frame;
 uniform bool final_sample;
-uniform int view_mode;  // 0=can, 1=brush_tex, 2=cam_brush
+uniform int view_mode;  // 0=can, 1=brush_tex, 2=cam_brush, 3=cam_brush tiled, 4/5=field, 6=cam_brush+trails
+uniform sampler2D trail_tex;          // Persistent trail canvas, for view_mode 6
+uniform float TRAIL_OVERLAY_STRENGTH; // How strongly trails show under particles (view_mode 6)
 uniform bool PARAMETER_SWEEP_MODE;  // Whether parameter sweeps are active
 uniform vec2 sweep_reticle_pos;     // Screen UV position of sweep reticle (0-1 range)
 uniform bool sweep_reticle_visible; // Whether to show the reticle
@@ -192,7 +194,7 @@ vec3 emboss(vec2 uv){
         // In tiling mode, use tiled UV for emboss texture
         canv_uv = tiled_sample_uv_emboss(uv);
     } else {
-        canv_uv = (view_mode == 2 || view_mode == 3) ? screen_to_canvas_uv(uv) : uv;
+        canv_uv = (view_mode == 2 || view_mode == 3 || view_mode == 6) ? screen_to_canvas_uv(uv) : uv;
     }
     vec2 grad = gradient(emboss_tex, canv_uv, .01*EMBOSS_SMOOTHNESS);
     grad *= max(abs(canv_uv-.5).x,abs(canv_uv-.5).y)>.5?0:1;
@@ -306,6 +308,19 @@ void main() {
         current_color = texture(input_frame, uv).rgb;
     }
 
+    // Combined view: particles (input_frame, already camera-transformed) plus the
+    // persistent trail field sampled through the same camera transform, colored the
+    // way the Canvas view colors it (hue = flow direction, value = flow magnitude).
+    if (view_mode == 6 && TRAIL_OVERLAY_STRENGTH > 0.0) {
+        vec2 trail_uv = screen_to_canvas_uv(uv);
+        if (clamp(trail_uv, vec2(0.0), vec2(1.0)) == trail_uv) {
+            vec4 t = texture(trail_tex, trail_uv);
+            vec3 trail_col = 8.0 * hsv2rgb(vec3(atan(t.y, t.x) / 2.0 / 3.1415,
+                                                0.75, length(t.xy)));
+            current_color += TRAIL_OVERLAY_STRENGTH * trail_col;
+        }
+    }
+
     // In watercolor mode, convert from log-space optical density to linear transmission
     if (WATERCOLOR_MODE) {
         // INK_WEIGHT controls optical density - higher = darker/more opaque
@@ -346,7 +361,7 @@ void main() {
     
         //Conditionally draw sweep reticle and mouse draw reticle
         vec2 overlay_uv=uv;
-        if(view_mode < 2 || view_mode >= 4){overlay_uv = canvas_uv_to_screen(uv);}
+        if(view_mode < 2 || view_mode == 4 || view_mode == 5){overlay_uv = canvas_uv_to_screen(uv);}
             if(PARAMETER_SWEEP_MODE){
                 fragColor.xyz += sweep_overlay(overlay_uv)* (WATERCOLOR_MODE?-1:1);
             }
@@ -358,7 +373,7 @@ void main() {
 
         //conditionally draw field overlay
         //CURRENTLY TURNED OFF. MAYBE INCLUDE LATER
-        if(advanced_drawing_resources_initialized&& draw_target_overlay_opacity>0.0 && (view_mode==2||view_mode==3)){
+        if(advanced_drawing_resources_initialized&& draw_target_overlay_opacity>0.0 && (view_mode==2||view_mode==3||view_mode==6)){
             vec2 field_uv = screen_to_canvas_uv(uv);
             vec4 field = vec4(0);
             if(tiling_mode_enabled||clamp(field_uv,vec2(0),vec2(1))==field_uv){

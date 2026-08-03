@@ -120,6 +120,9 @@ class App:
         # Track previous view option for camera repositioning when leaving tiling mode
         self.prev_view_option = 0
 
+        # Track tournament enable edge (to frame the grid when it turns on)
+        self._tournament_was_enabled = False
+
         # Ensure _Default.json exists and load it
         self._ensure_default_config()
         self._load_default_config()
@@ -229,6 +232,7 @@ class App:
         self.multi_load_service.apply_state(ui_state.multi_load)
         self.sim.apply_tournament(ui_state.tournament.enabled, grid=4)
         self.camera.BRIGHTNESS = ui_state.preferences.brightness
+        self.camera.trail_overlay_strength = ui_state.preferences.trail_overlay_strength
 
         # 5.0.1 Force/Strafe field view modes: override view_tex with field texture
         if ui_state.sim.current_view_option in (4, 5):
@@ -246,6 +250,22 @@ class App:
             if self.param_lock_service.enabled:
                 self.param_lock_service.reset()
                 ui_state.preferences.parameter_locks_enabled = False
+
+        # 5.1.5. Tournament conflict prevention
+        # The tiled view replicates the canvas infinitely, which is incoherent with a
+        # 16-tile grid and desyncs click->tile mapping. Force a plain camera view, and
+        # frame the whole grid when tournament is first switched on.
+        if ui_state.tournament.enabled:
+            if ui_state.sim.current_view_option == 3:
+                ui_state.sim.current_view_option = 2
+                ui_state.camera.cam_brush_mode = True
+                # Suppress the "leaving tiling mode" camera fmod below, which would
+                # otherwise clobber the framing reset we are about to apply.
+                self.prev_view_option = 2
+            if not self._tournament_was_enabled:
+                ui_state.camera.position[:] = [0.0, 0.0]
+                ui_state.camera.zoom = 1.0
+        self._tournament_was_enabled = ui_state.tournament.enabled
 
         # 5.2. Sync parameter lock master toggle
         self.param_lock_service.enabled = ui_state.preferences.parameter_locks_enabled

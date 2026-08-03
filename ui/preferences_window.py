@@ -180,26 +180,43 @@ class PreferencesWindowMixin:
             imgui.text("View")
 
             # View dropdown - conditionally show Force/Strafe field views
+            # The combo's list position is NOT the view id: the field views are
+            # conditional, so we keep a parallel list of ids to preserve the stable
+            # view_mode numbering the shaders and orchestrator rely on.
             view_items = self.view_option_labels + ['Camera (Particles rendered as dots)', 'Camera [Tiled]']
+            view_ids = [0, 1, 2, 3]
             adp = getattr(self, 'advanced_drawing_processor', None)
             if adp is not None and adp.field_texture is not None:
                 view_items = view_items + ['Force Field', 'Strafe Field']
+                view_ids = view_ids + [4, 5]
+            view_items = view_items + ['Camera (Particles + Trails)']
+            view_ids = view_ids + [6]
 
-            changed, self.state.sim.current_view_option = imgui.combo(
+            current_id = self.state.sim.current_view_option
+            current_pos = view_ids.index(current_id) if current_id in view_ids else 0
+
+            changed, new_pos = imgui.combo(
                 label="Current View",
-                current_item=self.state.sim.current_view_option,
+                current_item=current_pos,
                 items=view_items
             )
 
             if changed:
-                # cam_brush_mode is True for Camera (index 2) and Tiled (index 3)
-                # Force Field (4) and Strafe Field (5) are raw texture views like canvas/brush
-                if self.state.sim.current_view_option in (2, 3):
+                self.state.sim.current_view_option = view_ids[new_pos]
+                # cam_brush_mode is True for the camera views: Camera (2), Tiled (3),
+                # and Particles + Trails (6). Force/Strafe field (4, 5) are raw
+                # texture views like canvas/brush.
+                if self.state.sim.current_view_option in (2, 3, 6):
                     self.state.camera.cam_brush_mode = True
                 else:
                     self.state.camera.cam_brush_mode = False
                     # Watercolor is unsupported in non-camera views
                     self.state.sim.watercolor_mode = False
+
+            # Trail strength only applies to the combined particles + trails view
+            if self.state.sim.current_view_option == 6:
+                _, self.state.preferences.trail_overlay_strength = imgui.slider_float(
+                    "Trail Strength", self.state.preferences.trail_overlay_strength, 0.0, 3.0)
 
             # Physics tooltips checkbox
             _, self.state.preferences.physics_tooltips_enabled = imgui.checkbox(

@@ -75,6 +75,8 @@ class TournamentService:
                 new[tile] = mutate(child, self.mutation_strength, self._rng)
 
         self.population = [g for g in new]  # all slots filled
+        # Start each round with a clean slate; undo() restores the prior selection.
+        self.selected.clear()
         self.mark_dirty()
 
     def undo(self) -> None:

@@ -18,6 +18,7 @@ class PreferencesState:
     brightness: float = 3.0  # Global brightness multiplier
     tonemap_softness: float = 2.5  # Asinh tonemap stretch (higher = more highlight compression)
     exposure: float = 0.0  # Frame blending for motion blur effect (0=disabled, 1=long exposure)
+    trail_overlay_strength: float = 1.0  # View 'Camera (Particles + Trails)': trail brightness under particles
     bloom_enabled: bool = True  # Whether bloom post-processing is active
     bloom_threshold: float = 0.11  # Brightness threshold for bloom extraction
     bloom_intensity: float = 0.23  # Bloom contribution strength

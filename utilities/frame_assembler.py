@@ -78,7 +78,8 @@ class FrameAssembler:
                        brush_mode=0, fixed_direction_heading=0.0,
                        field_texture=None, advanced_drawing_resources_initialized=False,
                        force_field_checked=False, strafe_field_checked=False,
-                       draw_target_overlay_opacity=0.0):
+                       draw_target_overlay_opacity=0.0,
+                       trail_tex=None, trail_overlay_strength=0.0):
         """
         Accumulate a frame and optionally apply gamma correction.
 
@@ -136,11 +137,16 @@ class FrameAssembler:
             emboss_tex.use(location=2)  # emboss_tex
         if field_texture is not None:
             field_texture.use(location=3)  # field_texture
+        if trail_tex is not None:
+            trail_tex.use(location=4)  # trail_tex (view_mode 6: particles + trails)
 
         # Set uniforms
         self.resources['shader']['input_frame'] = 0
         self.resources['shader']['accumulation_buffer'] = 1
         tryset(self.resources['shader'], 'emboss_tex', 2)
+        tryset(self.resources['shader'], 'trail_tex', 4)
+        tryset(self.resources['shader'], 'TRAIL_OVERLAY_STRENGTH',
+               trail_overlay_strength if trail_tex is not None else 0.0)
         self.resources['shader']['is_first_frame'] = is_first_frame
         self.resources['shader']['final_sample'] = final_sample
         tryset(self.resources['shader'], 'view_mode', view_mode)

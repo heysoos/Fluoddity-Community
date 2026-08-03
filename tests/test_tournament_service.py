@@ -60,6 +60,30 @@ def test_next_generation_with_no_selection_mutates_all():
     assert all(not np.array_equal(svc.population[i], before[i]) for i in range(16))
 
 
+def test_next_generation_clears_selection():
+    svc = make_service()
+    svc.toggle_select(2)
+    svc.toggle_select(9)
+    svc.next_generation()
+    assert svc.selected == set()
+
+
+def test_reset_clears_selection():
+    svc = make_service()
+    svc.toggle_select(4)
+    svc.reset()
+    assert svc.selected == set()
+
+
+def test_undo_restores_selection_that_bred_the_generation():
+    svc = make_service()
+    svc.toggle_select(6)
+    svc.next_generation()
+    assert svc.selected == set()
+    svc.undo()
+    assert svc.selected == {6}
+
+
 def test_undo_restores_previous_population():
     svc = make_service()
     snapshot = [g.copy() for g in svc.population]

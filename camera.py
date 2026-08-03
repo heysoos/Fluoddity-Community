@@ -11,6 +11,7 @@ class Camera:
         self.sim = sim
         self.window = window
         self.BRIGHTNESS = 1
+        self.trail_overlay_strength = 1.0  # view_mode 6 trail brightness (set by orchestrator)
         self.ink_weight = 1
         self.cam_brush_mode = True
         self.watercolor_mode = False
@@ -254,7 +255,9 @@ class Camera:
                 view_max=tuple(view_max),
                 tiling_scale=self.compute_tiling_scale(),
                 canvas_resolution=self.sim.get_canvas_dimensions(),
-                tonemap_softness=tonemap_softness
+                tonemap_softness=tonemap_softness,
+                trail_tex=(self.sim.can if current_view_option == 6 else None),
+                trail_overlay_strength=self.trail_overlay_strength
             )
             # assemble_frame returns the texture immediately when total_samples=1
             if bloom_enabled and not watercolor_mode and TEX_TO_VIEW is not None:
