@@ -2,6 +2,16 @@
 from imgui_bundle import imgui
 
 
+def ui_row_order(grid: int = 4) -> list[int]:
+    """Canvas tile-rows (ty) in the order ImGui should draw them, top row first.
+
+    Tile 0 is the BOTTOM-left of the canvas because entity-space y grows upward,
+    but ImGui draws the first row it is given at the TOP of the window. Handing it
+    the rows in descending ty makes the button panel match the canvas on screen.
+    """
+    return list(reversed(range(grid)))
+
+
 class TournamentWindowMixin:
     """Renders the interactive tournament window. Combined into UI via multiple inheritance."""
 
@@ -24,8 +34,11 @@ class TournamentWindowMixin:
         imgui.separator()
 
         # 4x4 selectable grid mirroring the on-canvas tiles.
+        # Tile 0 is the BOTTOM-left of the canvas (entity space y grows upward), but
+        # ImGui draws the first row it is given at the TOP. Walk rows top-down in
+        # canvas terms (ty = 3 first) so this panel matches what you see on screen.
         grid = 4
-        for ty in range(grid):
+        for ty in ui_row_order(grid):
             for tx in range(grid):
                 tile = ty * grid + tx
                 is_sel = tile in selected

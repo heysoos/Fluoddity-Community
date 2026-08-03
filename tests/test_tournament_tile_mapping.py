@@ -71,3 +71,29 @@ def test_click_tile_and_box_agree_for_every_tile():
 def test_clicks_are_clamped_in_range():
     assert click_to_tile(-0.5, -0.5) == 0
     assert click_to_tile(1.5, 1.5) == 15
+
+
+def test_ui_button_grid_is_not_vertically_mirrored_against_canvas():
+    """The ImGui panel's first-drawn row must be the canvas's TOP row.
+
+    Regression: the panel originally drew ty=0 first, but ty=0 is the BOTTOM of
+    the canvas, so every selection appeared shifted vertically.
+    """
+    from ui.tournament_window import ui_row_order
+
+    order = ui_row_order(GRID)
+    assert len(order) == GRID and set(order) == set(range(GRID))
+
+    # First row drawn (top of the panel) must be the row highest on the canvas.
+    top_row_ty = order[0]
+    top_tiles = [top_row_ty * GRID + tx for tx in range(GRID)]
+    bottom_row_ty = order[-1]
+    bottom_tiles = [bottom_row_ty * GRID + tx for tx in range(GRID)]
+
+    top_y = min(tile_box(t)[0][1] for t in top_tiles)       # lo.y of top row
+    bottom_y = max(tile_box(t)[1][1] for t in bottom_tiles)  # hi.y of bottom row
+    assert top_y > bottom_y, "panel's top row must sit higher on the canvas"
+
+    # And concretely: tile 0 (canvas bottom-left) must be drawn in the LAST row.
+    assert 0 in bottom_tiles
+    assert (GRID * GRID - 1) in top_tiles
