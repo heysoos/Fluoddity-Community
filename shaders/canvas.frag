@@ -28,6 +28,10 @@ uniform int BOUNDARY_CONDITIONS_MODE; //0-1-2 == BOUNCE-RESET-WRAP
 // Tiling mode
 uniform bool tiling_mode;
 
+// Tournament isolation
+uniform int TOURNAMENT_MODE;   // 0 = off, 1 = on
+uniform int TOURNAMENT_GRID;   // grid side length
+
 // Canvas dimensions for aspect correction
 uniform vec2 canvas_resolution;
 
@@ -109,6 +113,13 @@ vec4 getCan(vec2 p, sampler2D sam) {
     return texture(sam, uv);
 }
 
+// Which tile (in uv space) a texcoord belongs to. -1 when tournament is off.
+int tournament_tile_uv(vec2 uv){
+    if(TOURNAMENT_MODE != 1) return -1;
+    ivec2 t = ivec2(floor(clamp(uv, 0.0, 0.999999) * float(TOURNAMENT_GRID)));
+    return t.y * TOURNAMENT_GRID + t.x;
+}
+
 vec4 getBlur(vec2 pos, sampler2D sam,float diffusion_constant) {
     ivec2 imsz = textureSize(sam, 0);
     vec3 off = vec3(1. / vec2(imsz), 0);
@@ -116,12 +127,22 @@ vec4 getBlur(vec2 pos, sampler2D sam,float diffusion_constant) {
     vec2 sp = pos - off.zy;
     vec2 wp = pos - off.xz;
     vec2 ep = pos + off.xz;
+    vec4 cc = getCan(pos, sam);
     vec4 nc = getCan(np, sam);
     vec4 sc = getCan(sp, sam);
     vec4 wc = getCan(wp, sam);
     vec4 ec = getCan(ep, sam);
+    // Tournament: zero-flux at tile borders — a neighbor in another tile is
+    // replaced by the center value so no trail energy crosses the seam.
+    if(TOURNAMENT_MODE == 1){
+        int ct = tournament_tile_uv(pos);
+        if(tournament_tile_uv(np) != ct) nc = cc;
+        if(tournament_tile_uv(sp) != ct) sc = cc;
+        if(tournament_tile_uv(wp) != ct) wc = cc;
+        if(tournament_tile_uv(ep) != ct) ec = cc;
+    }
     float K = diffusion_constant;
-    return (getCan(pos, sam) * K + nc + sc + wc + ec) / (4. + K);
+    return (cc * K + nc + sc + wc + ec) / (4. + K);
 }
 
 // Aspect-correct UV delta so length() is isotropic in entity space
