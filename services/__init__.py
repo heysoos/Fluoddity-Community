@@ -5,5 +5,6 @@ from .config_saver import ConfigSaver
 from .arrow_debug_service import ArrowDebugService
 from .multi_load_service import MultiLoadService
 from .field_handler import FieldHandler
+from .tournament_service import TournamentService
 
-__all__ = ['RuleManager', 'EntityPicker', 'VideoRecorderService', 'ConfigSaver', 'ArrowDebugService', 'MultiLoadService', 'FieldHandler']
+__all__ = ['RuleManager', 'EntityPicker', 'VideoRecorderService', 'ConfigSaver', 'ArrowDebugService', 'MultiLoadService', 'FieldHandler', 'TournamentService']
