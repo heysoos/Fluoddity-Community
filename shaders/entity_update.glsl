@@ -505,7 +505,14 @@ void main() {
 
     Rule current_rule=get_particle_target_rule();
     if(TOURNAMENT_MODE == 1){
-        current_rule = target_rules[tournament_home_tile(index)];
+        int htile = tournament_home_tile(index);
+        current_rule = target_rules[htile];
+        // Safety net: if the genome buffer was reallocated (canvas/world resize) and
+        // not yet re-uploaded, fall back to a generated rule so the tile still runs
+        // instead of freezing on an all-zero brain.
+        if(current_rule.centers[0].frequency==vec4(0) && current_rule.centers[5].amplitude==vec4(0)){
+            current_rule = Rule(generate_random_centers(get_particle_rule_seed()+float(htile)));
+        }
     }
     //if a few arbitrary coefficients are exactly 0, then assume target_rule is all 0s (no target) and generate a random rule instead.
     else if(current_rule.centers[0].frequency==vec4(0) && current_rule.centers[5].amplitude==vec4(0)){

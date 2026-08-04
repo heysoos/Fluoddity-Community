@@ -162,6 +162,11 @@ class CommandHandler:
         if self.rule_manager.has_rules():
             self.sim.apply_rule(self.rule_manager.get_current_rule())
         self.sim.reset()
+        # setup_simulation_state() reallocated every GPU buffer, which zeroes the
+        # buffer holding the 16 tournament genomes. Without a re-upload every
+        # particle gets a null brain and the whole grid freezes.
+        if self.tournament_service is not None:
+            self.tournament_service.mark_dirty()
         # Reinitialize field texture at new canvas dimensions (if it exists)
         if self.field_handler and self.field_handler._has_field_tex:
             canvas_dim_x, canvas_dim_y = self.sim.get_canvas_dimensions()
