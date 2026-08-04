@@ -3,9 +3,13 @@
 in vec2 uv;
 in vec4 pos_vel;
 in vec4 view_col;
+in vec2 frag_world;
+flat in vec2 tile_lo;
+flat in vec2 tile_hi;
 out vec4 brush_out;
 
 uniform int frame_count;
+uniform int TOURNAMENT_MODE;
 
 vec3 hsv2rgb(vec3 c) {
   vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
@@ -25,6 +29,15 @@ void main() {
     if (frame_count == 0) {
         brush_out = vec4(0, 0, 0, 1);
         return;
+    }
+
+    // Tournament: a particle sprite has ~1px extent, so without this clip a
+    // particle near a seam deposits trail into the neighbouring tile, which that
+    // tile's sensors then read. Keeps tiles genuinely independent.
+    if (TOURNAMENT_MODE == 1) {
+        if (any(lessThan(frag_world, tile_lo)) || any(greaterThan(frag_world, tile_hi))) {
+            discard;
+        }
     }
 
     float kernel_func = gaussian(uv - .5, .163);

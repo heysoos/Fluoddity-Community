@@ -238,6 +238,11 @@ class Sim:
         # Pass frame count to shader for initialization
         tryset(self.brush_update_program, 'frame_count', self.frame_count)
 
+        # Tournament: clip deposits to each particle's own tile
+        tryset(self.brush_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
+        tryset(self.brush_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
+        tryset(self.brush_update_program, 'TOURNAMENT_ACTIVE', float(self.entity_count))
+
         # Always use additive blending
         ctx.enable(moderngl.BLEND)
         ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE

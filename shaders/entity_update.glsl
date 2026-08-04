@@ -553,6 +553,11 @@ void main() {
     vec2 rsample = e.pos + right_sensor_offset;
     if(TOURNAMENT_MODE == 1){
         vec2 tlo, thi; tournament_tile_box(tournament_home_tile(index), tlo, thi);
+        // Inset by one texel: get_can() samples bilinearly, so clamping exactly to
+        // the seam would still blend in texels belonging to the neighbouring tile.
+        float ca_s = canvas_resolution.x / canvas_resolution.y;
+        vec2 texel = 2.0 * vec2(sqrt(ca_s), 1.0/sqrt(ca_s)) / canvas_resolution;
+        tlo += texel; thi -= texel;
         lsample = clamp(lsample, tlo, thi);
         rsample = clamp(rsample, tlo, thi);
     }

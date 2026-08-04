@@ -14,9 +14,17 @@ layout(std430, binding = 0) buffer EntityBuffer {
     Entity entities[];
 };
 
+// Tournament tiling: deposits must not spill into a neighbouring tile.
+uniform int TOURNAMENT_MODE;      // 0 = off, 1 = on
+uniform int TOURNAMENT_GRID;      // grid side length
+uniform float TOURNAMENT_ACTIVE;  // active particle count (matches ACTIVE_COUNT)
+
 out vec2 uv;
 out vec4 pos_vel;
 out vec4 view_col;
+out vec2 frag_world;         // entity-space position of this fragment
+flat out vec2 tile_lo;       // home tile bounds (entity space)
+flat out vec2 tile_hi;
 void main() {
     int instance_id = gl_InstanceID;
     int vertex_id = gl_VertexID;
@@ -49,4 +57,18 @@ void main() {
     uv = particle_uv;
     pos_vel=vec4(entity_pos,entity_vel);
     view_col=entities[instance_id].color;
+
+    // Home tile box, matching tournament_home_tile()/tournament_tile_box() in
+    // entity_update.glsl. The fragment stage clips deposits to this box.
+    frag_world = vertex_pos;
+    tile_lo = vec2(-1e9);
+    tile_hi = vec2(1e9);
+    if (TOURNAMENT_MODE == 1) {
+        int n = TOURNAMENT_GRID * TOURNAMENT_GRID;
+        int tile = clamp(int(floor(float(instance_id) / TOURNAMENT_ACTIVE * float(n))), 0, n - 1);
+        vec2 half_extent = vec2(sqrt(ca), 1.0 / sqrt(ca));
+        vec2 cell = (2.0 * half_extent) / float(TOURNAMENT_GRID);
+        tile_lo = -half_extent + vec2(float(tile % TOURNAMENT_GRID), float(tile / TOURNAMENT_GRID)) * cell;
+        tile_hi = tile_lo + cell;
+    }
 }
