@@ -1,0 +1,45 @@
+"""Cheap validity checks on the capture and the physics configuration.
+
+Both failure modes here are silent: a black capture and a confounded physics
+sweep each produce a fitness landscape that looks plausible and is meaningless.
+"""
+from __future__ import annotations
+
+import numpy as np
+
+# Tournament mode takes ownership of this one (it is driven in sim.py), so a
+# sweep on it is neutralised rather than warned about.
+_OWNED = {"MUTATION_SCALE"}
+
+
+def check_capture(crops: np.ndarray) -> str | None:
+    """Return a warning string, or None when the capture looks usable."""
+    if crops.size == 0:
+        return "Capture was empty - the offscreen framebuffer produced no pixels."
+    if int(crops.max()) == 0:
+        return (
+            "Capture is entirely black. Fitness will be flat and meaningless - "
+            "check that the offscreen framebuffer is being drawn into."
+        )
+    mean = float(crops.mean())
+    if mean < 2.0:
+        return f"Capture is nearly black (mean {mean:.1f}/255); fitness will be flat."
+    if mean > 253.0:
+        return f"Capture is blown out (mean {mean:.1f}/255); fitness will be flat."
+    return None
+
+
+def sweeping_parameters(sim_state) -> list[str]:
+    """Parameters whose value differs across tiles.
+
+    Tiles partition both position space and cohort index, so any parameter with
+    a non-zero x, y or cohort sweep takes different values in different tiles.
+    Neither human selection nor a CLIP score is then comparing genomes on equal
+    terms - the comparison is confounded by position.
+    """
+    names: set[str] = set()
+    for attr in ("x_sweeps", "y_sweeps", "cohort_sweeps"):
+        for key, value in (getattr(sim_state, attr, None) or {}).items():
+            if value and key not in _OWNED:
+                names.add(key)
+    return sorted(names)

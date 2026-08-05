@@ -13,7 +13,8 @@ class CommandHandler:
 
     def __init__(self, sim, camera, ui, rule_manager, entity_picker,
                  video_service, config_saver, multi_load_service, user_configs_dir,
-                 field_handler=None, param_lock_service=None, tournament_service=None):
+                 field_handler=None, param_lock_service=None, tournament_service=None,
+                 auto_service=None):
         self.sim = sim
         self.camera = camera
         self.ui = ui
@@ -26,6 +27,8 @@ class CommandHandler:
         self.field_handler = field_handler
         self.param_lock_service = param_lock_service
         self.tournament_service = tournament_service
+        self.auto_service = auto_service
+        self._auto_capture_warned = False
 
         # Preview state
         self.preview_rule_active = False  # File->load preview
@@ -110,6 +113,9 @@ class CommandHandler:
             self.camera.reload()
             if self.field_handler and self.field_handler.adv_draw:
                 self.field_handler.adv_draw.reload()
+            # A partial rollout across a shader swap is not a valid sample.
+            if self.auto_service is not None:
+                self.auto_service.abort_generation()
 
         # Simple reset (R key)
         if ui_state.request_reset:
@@ -150,6 +156,9 @@ class CommandHandler:
         # Tournament mode
         self._handle_tournament(ui_state)
 
+        # Automatic (CLIP-guided) tournament mode
+        self._handle_auto_tournament(ui_state)
+
         return None
 
     def _handle_world_size_change(self, ui_state):
@@ -167,6 +176,9 @@ class CommandHandler:
         # particle gets a null brain and the whole grid freezes.
         if self.tournament_service is not None:
             self.tournament_service.mark_dirty()
+        # A partial rollout is not a valid fitness sample.
+        if self.auto_service is not None:
+            self.auto_service.abort_generation()
         # Reinitialize field texture at new canvas dimensions (if it exists)
         if self.field_handler and self.field_handler._has_field_tex:
             canvas_dim_x, canvas_dim_y = self.sim.get_canvas_dimensions()
@@ -310,6 +322,177 @@ class CommandHandler:
             filepath = self.user_configs_dir / f"tournament_tile{tile}.json"
             self.config_saver.save_to_file(config, filepath)
             print(f"Saved tournament tile {tile} -> {filepath}")
+
+    # ------------------------------------------------------------------
+    # Automatic (CLIP-guided) tournament
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clear_auto_flags(ats):
+        """Reset auto one-shot flags after consumption.
+
+        Cleared here rather than in UI.get_state(): get_state returns the live
+        state object, so clearing there would wipe flags before this handler
+        ever read them. `warning` is persistent and is NOT cleared.
+        """
+        ats.start_requested = False
+        ats.pause_requested = False
+        ats.reset_requested = False
+        ats.prompt_changed = False
+        ats.grid_changed = False
+        ats.save_checkpoint_requested = False
+        ats.save_best_requested = False
+        ats.save_tile_requested = -1
+        ats.load_checkpoint_path = ""
+        ats.load_genome_path = ""
+        ats.download_model_requested = False
+
+    def _handle_auto_tournament(self, ui_state):
+        """Drive the AutoTournamentService from auto one-shot flags."""
+        ats = ui_state.auto_tournament
+
+        if ats.download_model_requested:
+            self._start_model_download()
+
+        svc = self.auto_service
+        if svc is None:
+            self._clear_auto_flags(ats)
+            return
+
+        if ats.grid_changed and self.tournament_service is not None:
+            # Applied at a generation boundary; resets the optimizer because
+            # cmaes.CMA fixes popsize at construction.
+            self.tournament_service.set_grid(ats.grid)
+            svc.reset()
+
+        svc.configure(
+            steps_per_gen=ats.steps_per_gen,
+            snapshots_per_gen=ats.snapshots_per_gen,
+            sim_steps_per_frame=ats.sim_steps_per_frame,
+            sigma0=ats.sigma0,
+            algorithm=ats.algorithm,
+            autosave_every=ats.autosave_every,
+            tile_mutation_enabled=ats.tile_mutation_enabled,
+            variants_per_tile=ats.variants_per_tile,
+            tile_mutation_strength=ats.tile_mutation_strength,
+        )
+
+        if ats.prompt_changed:
+            svc.set_prompt(ats.prompt)
+        if ats.reset_requested:
+            svc.reset()
+        if ats.pause_requested:
+            svc.pause()
+        if ats.load_genome_path:
+            self._load_auto_genome(svc, ats)
+        if ats.load_checkpoint_path:
+            self._load_auto_checkpoint(svc, ats)
+        if ats.start_requested and ats.prompt.strip():
+            self._auto_capture_warned = False
+            svc.start(ats.prompt)
+        if ats.save_best_requested:
+            self._save_auto_genome(svc, ui_state, tile=None)
+        if ats.save_tile_requested >= 0:
+            self._save_auto_genome(svc, ui_state, tile=ats.save_tile_requested)
+        if ats.save_checkpoint_requested:
+            self._save_auto_checkpoint(svc)
+
+        ats.running = svc.phase.value == "rollout"
+        self._clear_auto_flags(ats)
+
+    def _start_model_download(self):
+        import threading
+
+        from tools.fetch_clip_onnx import fetch
+
+        threading.Thread(target=fetch, daemon=True).start()
+        print("[auto] downloading CLIP model in the background")
+
+    def report_capture_health(self, crops, ui_state):
+        """Reported once per run rather than once per frame."""
+        if self._auto_capture_warned:
+            return
+        from services.capture_health import check_capture
+
+        msg = check_capture(crops)
+        if msg:
+            self._auto_capture_warned = True
+            ui_state.auto_tournament.warning = msg
+            print(f"[auto] {msg}")
+
+    def _load_auto_genome(self, svc, ats):
+        from services.genome_io import import_genome
+
+        try:
+            z, clamped, _meta = import_genome(ats.load_genome_path)
+        except (OSError, ValueError, KeyError) as exc:
+            ats.warning = f"could not load genome: {exc}"
+            print(f"[auto] {ats.warning}")
+            return
+        svc.set_x0(z)
+        if clamped:
+            ats.warning = (f"loaded genome with {clamped}/80 coefficients "
+                           "clamped to the searchable range")
+            print(f"[auto] {ats.warning}")
+
+    def _load_auto_checkpoint(self, svc, ats):
+        from services.run_checkpoint import CheckpointError, load_checkpoint
+
+        try:
+            state = load_checkpoint(ats.load_checkpoint_path,
+                                    expect_signature=svc.spec.signature())
+            svc.restore(state)
+        except CheckpointError as exc:
+            ats.warning = f"checkpoint not loaded: {exc}"
+            print(f"[auto] {ats.warning}")
+            return
+        # Loading forces the grid to the checkpoint's value; keep the UI in sync.
+        ats.grid = svc.tournament.grid
+        ats.algorithm = svc.algorithm
+        ats.prompt = svc.prompt
+        ats.steps_per_gen = svc.steps_per_gen
+        ats.snapshots_per_gen = svc.snapshots_per_gen
+        ats.sim_steps_per_frame = svc.sim_steps_per_frame
+        ats.sigma0 = svc.sigma0
+        print(f"[auto] resumed at generation {svc.generation}")
+
+    def _save_auto_checkpoint(self, svc):
+        from services.run_checkpoint import save_checkpoint
+
+        if svc.logger is None or not svc.logger.enabled:
+            print("[auto] no run directory; checkpoint not saved")
+            return
+        path = svc.logger.dir / f"checkpoint_gen{svc.generation:06d}.npz"
+        save_checkpoint(path, svc.checkpoint_state())
+        print(f"[auto] saved {path}")
+
+    def _save_auto_genome(self, svc, ui_state, tile):
+        from services.genome_io import export_genome
+
+        if tile is None:
+            z = svc.optimizer.best()[0] if svc.optimizer is not None else None
+            name = f"evolved_best_gen{svc.generation:04d}.json"
+        else:
+            cz = svc.current_z
+            z = cz[tile] if cz is not None and tile < len(cz) else None
+            name = f"evolved_tile{tile}_gen{svc.generation:04d}.json"
+        if z is None:
+            print("[auto] nothing to save yet")
+            return
+        canvas_px = self.sim.get_canvas_dimensions()[0]
+        meta = {
+            "generation": svc.generation,
+            "prompt": svc.prompt,
+            "algorithm": svc.algorithm,
+            "evolved_at_canvas_px": int(canvas_px),
+            "evolved_at_tile_px": 224,
+            "evolved_with_tile_mutation": bool(svc.tile_mutation_enabled),
+            "mutation_strength": float(svc.tile_mutation_strength),
+            "variants_per_tile": int(svc.variants_per_tile),
+        }
+        path = self.user_configs_dir / name
+        export_genome(path, z, ui_state.sim, meta)
+        print(f"[auto] saved {path}")
 
     def _handle_sweep_click(self, ui_state, tiling_mode):
         """Handle left click when parameter sweeps are enabled."""

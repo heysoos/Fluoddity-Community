@@ -5,6 +5,7 @@ from .recording_state import RecordingState
 from .preferences_state import PreferencesState
 from .multi_load_state import MultiLoadState
 from .tournament_state import TournamentState
+from .auto_tournament_state import AutoTournamentState
 
 
 @dataclass
@@ -16,6 +17,7 @@ class UIState:
     preferences: PreferencesState = field(default_factory=PreferencesState)
     multi_load: MultiLoadState = field(default_factory=MultiLoadState)
     tournament: TournamentState = field(default_factory=TournamentState)
+    auto_tournament: AutoTournamentState = field(default_factory=AutoTournamentState)
 
     # Input state (updated by callbacks)
     keys_pressed: set = field(default_factory=set)
