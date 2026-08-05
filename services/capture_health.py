@@ -36,7 +36,19 @@ def sweeping_parameters(sim_state) -> list[str]:
     a non-zero x, y or cohort sweep takes different values in different tiles.
     Neither human selection nor a CLIP score is then comparing genomes on equal
     terms - the comparison is confounded by position.
+
+    Gated on parameter_sweeps_enabled, matching what actually reaches the GPU:
+    _assign_physics_setting sends 0.0 for every sweep while the master toggle is
+    off, so the stored values are inert. Presets routinely carry sweep values
+    with the toggle off, and warning about those cries wolf. This mirrors
+    Sim.has_active_xy_sweep / has_active_cohort_sweep.
+
+    Jitter is deliberately not counted: it is per-particle noise, not a
+    systematic gradient, so it does not bias one tile against another.
     """
+    if not getattr(sim_state, "parameter_sweeps_enabled", False):
+        return []
+
     names: set[str] = set()
     for attr in ("x_sweeps", "y_sweeps", "cohort_sweeps"):
         for key, value in (getattr(sim_state, attr, None) or {}).items():

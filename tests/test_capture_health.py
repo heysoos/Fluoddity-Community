@@ -40,6 +40,7 @@ def test_a_spatial_sweep_is_named():
     """Tiles partition position space, so any x/y/cohort sweep makes tiles
     run different physics and the comparison is confounded."""
     s = SimState()
+    s.parameter_sweeps_enabled = True
     s.x_sweeps["SENSOR_DISTANCE"] = 0.8
     s.cohort_sweeps["TRAIL_DIFFUSION"] = -1.0
     got = sweeping_parameters(s)
@@ -51,5 +52,37 @@ def test_mutation_scale_is_excluded():
     """Tournament mode owns Mutation Scale, so a sweep on it is neutralised
     in sim.py rather than warned about."""
     s = SimState()
+    s.parameter_sweeps_enabled = True
     s.x_sweeps["MUTATION_SCALE"] = 1.0
+    assert sweeping_parameters(s) == []
+
+
+def test_stored_sweeps_do_not_count_while_the_master_toggle_is_off():
+    """_assign_physics_setting sends 0.0 for every sweep when
+    parameter_sweeps_enabled is False, so the GPU never sees these values and
+    the tiles ARE comparable. Presets routinely carry sweep values with the
+    toggle off; warning about them cries wolf."""
+    s = SimState()
+    s.parameter_sweeps_enabled = False
+    s.x_sweeps["AXIAL_FORCE"] = 1.0
+    s.y_sweeps["GLOBAL_FORCE_MULT"] = -1.0
+    s.cohort_sweeps["DRAG"] = 0.5
+    assert sweeping_parameters(s) == []
+
+
+def test_toggling_sweeps_back_on_restores_the_warning():
+    s = SimState()
+    s.x_sweeps["AXIAL_FORCE"] = 1.0
+    assert sweeping_parameters(s) == []
+    s.parameter_sweeps_enabled = True
+    assert sweeping_parameters(s) == ["AXIAL_FORCE"]
+
+
+def test_jitter_alone_is_not_a_confound():
+    """Jitter is per-particle noise hashed on position, not a systematic
+    gradient across the canvas, so it does not bias one tile against another.
+    It is also applied regardless of the master toggle."""
+    s = SimState()
+    s.parameter_sweeps_enabled = True
+    s.jitters["AXIAL_FORCE"] = 0.5
     assert sweeping_parameters(s) == []
