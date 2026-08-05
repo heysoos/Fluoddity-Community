@@ -214,7 +214,7 @@ per-tile physics uniforms in the shader, which is why it is out of scope now.
 
 ## 6. Architecture
 
-Seven new units. Each has one purpose, a small interface, and can be understood and tested
+Nine new units. Each has one purpose, a small interface, and can be understood and tested
 without the others.
 
 ### 6.1 `services/clip_scorer.py` — `CLIPScorer`
@@ -369,7 +369,11 @@ Per-generation metrics to disk and to the UI. See §8.
 
 Pure functions over a state dict. See §9.
 
-### 6.7 `state/auto_tournament_state.py` — `AutoTournamentState`
+### 6.7 `services/genome_io.py` — `export_genome` / `import_genome`
+
+Converts between `z` vectors and `PhysicsConfig` files. See §9.2.
+
+### 6.8 `state/auto_tournament_state.py` — `AutoTournamentState`
 
 A dataclass following the existing convention: plain fields for UI state (`enabled`,
 `prompt`, `algorithm`, `grid`, `steps_per_gen`, `sim_steps_per_frame`, `snapshots_per_gen`,
@@ -379,7 +383,7 @@ A dataclass following the existing convention: plain fields for UI state (`enabl
 cleared by the consuming side in `CommandHandler`, matching the correction already made for
 `TournamentState`.
 
-### 6.8 `ui/auto_tournament_window.py` — `AutoTournamentWindowMixin`
+### 6.9 `ui/auto_tournament_window.py` — `AutoTournamentWindowMixin`
 
 Follows the existing mixin pattern; mixed into `UI` in `ui/core.py` and rendered from
 inside the existing tournament window under the Auto tab. Passive: renders widgets, exposes
