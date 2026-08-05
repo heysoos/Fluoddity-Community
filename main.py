@@ -67,7 +67,16 @@ class App:
         self.config_saver = ConfigSaver()
         self.arrow_debug_service = ArrowDebugService(self.ctx)
         self.multi_load_service = MultiLoadService()
-        self.tournament_service = TournamentService()
+        self.tournament_service = TournamentService(grid=4)
+        # Built lazily on first use of Auto mode - onnxruntime and cmaes must
+        # never be imported at startup.
+        self.auto_service = None
+        self.tile_capture = None
+        self.capture_blit = None
+        self.clip_scorer = None
+        self._auto_prev_aspect = None
+        self._auto_was_enabled = False
+        self._last_crops = None
         self.advanced_drawing_processor = AdvancedDrawingProcessor(self.ctx)
         self.ui.multi_load_service = self.multi_load_service
         self.ui.tournament_service = self.tournament_service
@@ -90,7 +99,8 @@ class App:
             self.multi_load_service, self.user_configs_dir,
             field_handler=self.field_handler,
             param_lock_service=self.param_lock_service,
-            tournament_service=self.tournament_service
+            tournament_service=self.tournament_service,
+            auto_service=None,  # set by _ensure_auto_service()
         )
         # Xbox controller (FPS camera for shader-driven field)
         self.controller_cam = ControllerCam()
@@ -129,6 +139,120 @@ class App:
         self.sim.reload()
         self.sim.reset()
 
+    # ------------------------------------------------------------------
+    # Automatic (CLIP-guided) tournament
+    # ------------------------------------------------------------------
+
+    def _ensure_auto_service(self):
+        """Build the CLIP scorer, capture buffer and service on first use.
+
+        Imports are deliberately lazy: onnxruntime and cmaes must not be
+        imported at startup, and Auto mode must degrade to a message rather
+        than crashing when they are absent.
+        """
+        if self.auto_service is not None:
+            return True
+        try:
+            from services.auto_tournament_service import AutoTournamentService
+            from services.capture_blit import CaptureBlit
+            from services.clip_scorer import CLIPScorer
+            from services.run_logger import RunLogger
+            from services.tile_capture import TileCapture
+            from tools.fetch_clip_onnx import MODEL_DIR, is_present
+        except ImportError as exc:
+            self.ui.auto_unavailable = f"missing package: {exc.name}"
+            return False
+
+        if not is_present(MODEL_DIR):
+            self.ui.auto_unavailable = "model_missing"
+            return False
+
+        try:
+            self.clip_scorer = CLIPScorer(MODEL_DIR)
+        except Exception as exc:
+            self.ui.auto_unavailable = f"could not load CLIP: {exc}"
+            return False
+
+        self.tile_capture = TileCapture(self.ctx, self.tournament_service.grid)
+        self.capture_blit = CaptureBlit(self.ctx)
+        self.auto_service = AutoTournamentService(
+            self.tournament_service,
+            scorer=self.clip_scorer,
+            logger=RunLogger(config={"grid": self.tournament_service.grid}),
+        )
+        self.command_handler.auto_service = self.auto_service
+        self.ui.auto_service = self.auto_service
+        self.ui.auto_unavailable = ""
+        return True
+
+    def _capture_tiles(self):
+        """Blit the assembled view's grid rectangle into the square capture FBO.
+
+        The source rect comes from the camera's own tex_to_screen(), so the crop
+        is exact at any window size, zoom or pan - CLIP sees the same pixels the
+        user does.
+        """
+        tex = self.camera.assembled_texture
+        if tex is None:
+            return None
+        w, h = tex.size
+        x0, y0 = self.camera.tex_to_screen((0.0, 0.0), self.sim.view_tex.size)
+        x1, y1 = self.camera.tex_to_screen((1.0, 1.0), self.sim.view_tex.size)
+        lo = (min(x0, x1) / w, min(y0, y1) / h)
+        hi = (max(x0, x1) / w, max(y0, y1) / h)
+
+        self.tile_capture.resize(self.tournament_service.grid)
+        crops = self.tile_capture.capture(
+            lambda fbo: self.capture_blit.draw(tex, lo, hi)
+        )
+        self.ctx.screen.use()
+        width, height = glfw.get_framebuffer_size(self.window)
+        self.ctx.viewport = (0, 0, width, height)
+        return crops
+
+    def _drive_auto_tournament(self, ui_state):
+        """Advance the auto loop one frame. Returns the number of physics steps
+        the simulation should run this frame."""
+        from services.auto_tournament_service import Action
+
+        svc = self.auto_service
+        action = svc.update()
+
+        if action is Action.WRITE_RULES:
+            self.sim.write_tournament_rules(self.tournament_service.pack_rule_bytes())
+            self.tournament_service.clear_dirty()
+            self.sim.reset()
+            return 0
+        if action is Action.CAPTURE:
+            crops = self._capture_tiles()
+            if crops is not None:
+                self._last_crops = crops
+                self.command_handler.report_capture_health(crops, ui_state)
+                svc.submit_frames(crops)
+            return 0
+        if action is Action.SCORE:
+            fit = svc.score_and_tell()
+            self._after_generation(fit)
+            return 0
+        if action is Action.STEP:
+            return max(1, int(svc.sim_steps_per_frame))
+        return 1
+
+    def _after_generation(self, fit):
+        """Periodic best-tile frame dump and checkpoint autosave."""
+        from services.run_checkpoint import save_checkpoint
+
+        svc = self.auto_service
+        gen = svc.generation
+        log = svc.logger
+        if log is None or not log.enabled:
+            return
+        if self._last_crops is not None and gen % 10 == 0:
+            log.save_frame(self._last_crops[int(np.argmax(fit))], gen)
+        if svc.autosave_every and gen % svc.autosave_every == 0:
+            save_checkpoint(log.dir / f"checkpoint_gen{gen:06d}.npz",
+                            svc.checkpoint_state())
+
     def _ensure_default_config(self):
         """Ensure _Default.json exists in physics_configs directory. Create it if missing."""
         default_path = self.app_configs_dir / "Core/_Default.json"
@@ -166,6 +290,29 @@ class App:
         # 1. Get current UI state
         ui_state = self.ui.get_state()
         tiling_mode = (ui_state.sim.current_view_option == 3)
+
+        # 1.5. Auto-mode enable edge. This MUST run before process_commands:
+        # _handle_auto_tournament clears the one-shot flags, so if the service
+        # were built later the very first start_requested would be consumed and
+        # discarded before anything could act on it.
+        #
+        # Auto mode also requires square tiles - tiles inherit the canvas aspect
+        # ratio, and a 16:9 tile cannot be fitted to CLIP's square input without
+        # distortion, padding or discarding content.
+        auto = ui_state.auto_tournament
+        if auto.enabled and not self._auto_was_enabled:
+            self._auto_prev_aspect = ui_state.preferences.canvas_aspect_ratio
+            if ui_state.preferences.canvas_aspect_ratio != "1:1":
+                ui_state.preferences.canvas_aspect_ratio = "1:1"
+                ui_state.request_world_size_change = True
+            self._ensure_auto_service()
+        elif not auto.enabled and self._auto_was_enabled:
+            if self._auto_prev_aspect and self._auto_prev_aspect != "1:1":
+                ui_state.preferences.canvas_aspect_ratio = self._auto_prev_aspect
+                ui_state.request_world_size_change = True
+            if self.auto_service is not None:
+                self.auto_service.pause()
+        self._auto_was_enabled = auto.enabled
 
         # 2. Process one-shot commands
         result = self.command_handler.process_commands(ui_state, tiling_mode)
@@ -230,9 +377,26 @@ class App:
         self.sim.apply_camera_state(ui_state.camera)
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)
-        self.sim.apply_tournament(
-            ui_state.tournament.enabled, grid=self.tournament_service.grid
+        _auto_svc = self.auto_service
+        _tile_mut = (
+            _auto_svc.tile_mutation_strength
+            if (_auto_svc is not None
+                and ui_state.auto_tournament.enabled
+                and _auto_svc.tile_mutation_enabled)
+            else 0.0
         )
+        self.sim.apply_tournament(
+            ui_state.tournament.enabled,
+            grid=self.tournament_service.grid,
+            mutation=_tile_mut,
+        )
+        if _tile_mut > 0.0:
+            # Cohorts must be a multiple of the tile count or each tile holds
+            # exactly one cohort and stays a monoculture. See cohort_tiling.
+            from services.cohort_tiling import cohorts_for
+            ui_state.sim.num_cohorts = cohorts_for(
+                self.tournament_service.grid, _auto_svc.variants_per_tile
+            )
         self.camera.BRIGHTNESS = ui_state.preferences.brightness
         self.camera.trail_overlay_strength = ui_state.preferences.trail_overlay_strength
 
@@ -268,6 +432,14 @@ class App:
                 ui_state.camera.position[:] = [0.0, 0.0]
                 ui_state.camera.zoom = 1.0
         self._tournament_was_enabled = ui_state.tournament.enabled
+
+        # Auto mode drives the physics step count via speedmult, which the
+        # SimulationRunner already honours.
+        auto_running = (auto.enabled and self.auto_service is not None
+                        and ui_state.tournament.enabled)
+        if auto_running:
+            steps = self._drive_auto_tournament(ui_state)
+            ui_state.preferences.speedmult = max(0, steps)
 
         # 5.2. Sync parameter lock master toggle
         self.param_lock_service.enabled = ui_state.preferences.parameter_locks_enabled

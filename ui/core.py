@@ -27,6 +27,7 @@ from .physics_window import PhysicsWindowMixin
 from .advanced_drawing_window import AdvancedDrawingWindowMixin
 from .field_loader_window import FieldLoaderWindowMixin
 from .tournament_window import TournamentWindowMixin
+from .auto_tournament_window import AutoTournamentWindowMixin
 
 
 @dataclass
@@ -48,6 +49,7 @@ class UI(
     AdvancedDrawingWindowMixin,
     FieldLoaderWindowMixin,
     TournamentWindowMixin,
+    AutoTournamentWindowMixin,
 ):
     """Passive UI - renders widgets, exposes state, handles no logic."""
 

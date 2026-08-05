@@ -138,3 +138,74 @@ reproducible. Non-black coverage 0.967 (N=4) and 0.994 (N=6).
 The `sim.py` change is the additive one the plan permitted: `apply_tournament`
 gained a `mutation` parameter, and the suppression block now also zeroes
 `x_sweep` / `y_sweep` / `cohort_sweep` / `jitter`.
+
+## Tasks 5-12 — pure-Python units
+
+GenomeSpec, optimizers, genome_io, TileCapture, RunLogger, checkpoints, the
+state machine, state and CommandHandler wiring. All as planned.
+
+**Test bugs found and fixed (implementation was correct in both cases):**
+
+- `test_higher_fitness_is_better` asserted Random Search improves over 40
+  generations. It does not learn, and in 80-D its best-of-640 equals its
+  best-of-16 - which is exactly why it is the control. Split into a direct
+  sign-convention test covering all four optimizers, plus an improvement test
+  for the three that learn.
+- `test_real_optimizer_state_survives_a_roundtrip` captured the reference
+  `ask()` before snapshotting state, but `ask()` advances the RNG, so the
+  checkpoint was one batch ahead.
+
+**Real bug found by a test:** `np.savez` appends `.npz` to any path lacking it,
+so writing to `ck.npz.tmp` produced `ck.npz.tmp.npz` and the atomic rename found
+nothing. Fixed by writing through a file handle.
+
+**Deviation:** `_CMAFamily.state_dict` captures every numpy array and scalar
+attribute rather than an allowlist of the ones believed mutable. Constants
+restore harmlessly and nothing can be silently missed. Verified against the real
+`cmaes` internals by roundtrip tests.
+
+## Tasks 13-14 — orchestrator and UI
+
+### Deviation 1: speedmult already exists
+
+The plan called for looping the physics step. `SimulationRunner` already honours
+`ui_state.preferences.speedmult`, so Auto mode simply sets it - fewer moving
+parts and it reuses the existing motion-blur-aware step loop.
+
+### Deviation 2: capture is a blit, not a re-render
+
+`FrameAssembler.assemble_frame` binds its own accumulation FBO, so it cannot be
+redirected to the square capture target without modifying it.
+
+Instead `services/capture_blit.py` blits the already-assembled view into the
+square FBO, deriving the source rectangle from `camera.tex_to_screen()`. Using
+the camera's own transform means the crop is exact at any window size, zoom or
+pan, rather than assuming a square window or a centred fit. Verified visually:
+16 tiles land on exact 224px boundaries in full display colour.
+
+### Ordering bug found by the end-to-end run
+
+`_handle_auto_tournament` clears the one-shot flags, and it runs inside
+`process_commands` (step 2). With `_ensure_auto_service()` at step 5.1.6 the
+service did not exist on the first frame, so the handler returned early and
+consumed `start_requested` before anything could act on it - the loop sat in
+`idle` for 40,000 frames. Service creation now happens at step 1.5, before
+command processing.
+
+### End-to-end result (12 generations, "glowing coral")
+
+```
+fit_best  0.202 0.368 0.287 0.315 0.293 0.299 0.245 0.418 0.352 0.361 0.407 0.445
+fit_mean  0.066 0.116 0.064 0.100 0.107 0.152 0.099 0.117 0.162 0.131 0.140 0.149
+sigma     0.477 0.462 0.450 0.441 0.435 0.433 0.434 0.434 0.437 0.438 0.439 0.438
+```
+
+144 frames for 12 generations. Best fitness roughly doubles, mean rises, sigma
+contracts. The rendered grid at generation 12 contains recognisably coral-like
+morphologies. log.jsonl has one line per generation and the gen-10 checkpoint
+autosaved.
+
+**Harness note:** the Manual tab sets `auto_tournament.enabled = False` every
+frame it renders, which is the spec'd "switching to Manual pauses Auto"
+behaviour. Headless cannot select a tab, so the harness re-asserts the flag each
+frame. Not an app bug.

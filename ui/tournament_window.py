@@ -29,6 +29,18 @@ class TournamentWindowMixin:
             imgui.end()
             return
 
+        if imgui.begin_tab_bar("tournament_modes"):
+            if imgui.begin_tab_item("Manual")[0]:
+                self.state.auto_tournament.enabled = False
+                self._render_manual_tournament(state, selected)
+                imgui.end_tab_item()
+            if imgui.begin_tab_item("Auto (CLIP)")[0]:
+                self.render_auto_tournament_tab()
+                imgui.end_tab_item()
+            imgui.end_tab_bar()
+        imgui.end()
+
+    def _render_manual_tournament(self, state, selected):
         imgui.text_colored(imgui.ImVec4(0.6, 0.6, 0.6, 1.0),
                            "Click tiles (on canvas or below) to select, then breed")
         imgui.separator()
@@ -47,6 +59,8 @@ class TournamentWindowMixin:
                     imgui.push_style_color(imgui.Col_.button_hovered, imgui.ImVec4(0.3, 0.8, 0.4, 1.0))
                 if imgui.button(f"{tile}", imgui.ImVec2(40, 40)):
                     state.clicked_tile = tile
+                if imgui.is_item_clicked(imgui.MouseButton_.right):
+                    self.state.auto_tournament.save_tile_requested = tile
                 if is_sel:
                     imgui.pop_style_color(2)
                 if tx < grid - 1:
@@ -76,4 +90,3 @@ class TournamentWindowMixin:
             state.save_requested = True
 
         imgui.text(f"Selected: {sorted(selected)}")
-        imgui.end()
