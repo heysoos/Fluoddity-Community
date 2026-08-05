@@ -112,7 +112,14 @@ layout(std430, binding = 4) buffer MultiLoadRuleBuffer {
 
 ////////////////////////////CONSTANTS
 #define PI 3.1415926
-#define ACTIVE_COUNT (600000*WORLD_SIZE) //Supports up to the size of the entity buffer.
+// The real allocated/dispatched particle count, which is
+// 600000 * WORLD_SIZE * PARTICLE_DENSITY. It must NOT be re-derived from
+// WORLD_SIZE here: ACTIVE_COUNT is the denominator for the index-derived slices
+// below (cohorts, tournament tiles), so a denominator larger than the buffer
+// would compress every slice into the bottom of the range - at density 0.5 the
+// top half of the tournament grid would render empty.
+#define ACTIVE_COUNT float(ENTITY_COUNT)
+#define SQRT_WORLD_SIZE (sqrt(WORLD_SIZE))
 #define SQRT_WORLD_SIZE (sqrt(WORLD_SIZE))
 // Multi-load helper: Calculate which config index this particle should use
 int get_particle_config_index() {

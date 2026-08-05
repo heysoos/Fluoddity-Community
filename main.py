@@ -51,13 +51,15 @@ class App:
         loaded_prefs = load_preferences()
 
         # Create components (no cross-references between UI and sim/camera)
-        self.sim = Sim(self.ctx, world_size=loaded_prefs.world_size, canvas_aspect_ratio=loaded_prefs.canvas_aspect_ratio)
+        self.sim = Sim(self.ctx, world_size=loaded_prefs.world_size, canvas_aspect_ratio=loaded_prefs.canvas_aspect_ratio,
+                       particle_density=loaded_prefs.particle_density)
         self.camera = Camera(self.ctx, self.sim, self.window)
         self.ui = UI(self.window, self.ctx, self.sim.view_option_labels)
 
         # Apply loaded preferences to UI
         self.ui.state.preferences = loaded_prefs
         self.ui._last_applied_world_size = loaded_prefs.world_size
+        self.ui._last_applied_particle_density = loaded_prefs.particle_density
 
         # Create services (Orchestrator owns these)
         self.rule_manager = RuleManager()

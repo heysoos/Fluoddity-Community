@@ -48,6 +48,8 @@ def test_world_size_change_marks_tournament_dirty():
 def test_handler_without_tournament_service_still_resizes():
     """Resize must not blow up when tournament support is absent."""
     sim = MagicMock()
+    sim.get_canvas_dimensions.return_value = (1024, 1024)
+    sim.entity_count = 600000
     rule_manager = MagicMock()
     rule_manager.has_rules.return_value = False
     handler = CommandHandler(

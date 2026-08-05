@@ -13,6 +13,7 @@ class PreferencesState:
     motion_blur: bool = True
     blur_quality: int = 2  # Motion blur render cadence (1 = every frame, 2 = every 2 frames, etc.)
     world_size: float = 0.40  # World size multiplier (affects entity count and canvas dimensions)
+    particle_density: float = 1.0  # Particles per texel, relative to the default. world_size alone cannot change this.
     canvas_aspect_ratio: str = "1:1"  # Canvas aspect ratio (e.g. "1:1", "16:9", "3:4")
     rule_seed: float = 0.0
     brightness: float = 3.0  # Global brightness multiplier

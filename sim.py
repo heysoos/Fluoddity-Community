@@ -10,10 +10,12 @@ SIZE_OF_ENTITY_STRUCT = 4*12  # 4 bytes per 32bit value. 12 values (pos:2, vel:2
 SIZE_OF_RULE_STRUCT = 4*4*20  # 4 bytes per float32. 4 floats per vec4. 20 vec4s per rule
 
 class Sim:
-    def __init__(self, ctx: moderngl.Context, world_size: float = 1.0, canvas_aspect_ratio: str = "1:1"):
+    def __init__(self, ctx: moderngl.Context, world_size: float = 1.0, canvas_aspect_ratio: str = "1:1",
+                 particle_density: float = 1.0):
         self.ctx = ctx
         self.world_size = world_size
         self.canvas_aspect_ratio = canvas_aspect_ratio
+        self.particle_density = particle_density
         self.entity_count = self.get_entity_count()
         self.time = 0.0
         self.start_time_stamp = time.time()
@@ -39,8 +41,16 @@ class Sim:
         self._tournament_mutation = 0.0
 
     def get_entity_count(self) -> int:
-        """Calculate entity count based on world size."""
-        return int(600000 * self.world_size)
+        """Calculate entity count based on world size and particle density.
+
+        world_size scales the canvas by sqrt(world_size) per side, so on its own
+        it holds particles-per-texel fixed - it buys more world, not a more or
+        less crowded one. particle_density is the multiplier that moves density,
+        leaving the canvas alone.
+
+        Never returns 0: a zero-length buffer is a GL error.
+        """
+        return max(1, int(600000 * self.world_size * self.particle_density))
 
     def get_canvas_dimensions(self) -> tuple[int, int]:
         """Calculate canvas dimensions based on world size and aspect ratio."""

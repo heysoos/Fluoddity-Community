@@ -60,6 +60,30 @@ class PreferencesWindowMixin:
 
             self._delayed_tooltip("EXPENSIVE - Controls the size of the simulation world.\nAffects both entity count and canvas resolution to keep density ~fixed")
 
+            # Particle Density - the knob World Size cannot be. World Size scales
+            # particles and canvas area together, so density is invariant under it.
+            changed, new_density = imgui.input_float(
+                "Particle Density",
+                self.state.preferences.particle_density,
+                step=0.0,
+                step_fast=0.0,
+                format="%.2f"
+            )
+            new_density = min(2.0, max(0.02, new_density))
+            self.state.preferences.particle_density = new_density
+
+            if imgui.is_item_deactivated_after_edit():
+                if abs(self.state.preferences.particle_density
+                       - self._last_applied_particle_density) > 0.001:
+                    self._request_world_size_change = True
+
+            self._delayed_tooltip(
+                "EXPENSIVE - How crowded the world is, at the same size.\n"
+                "World Size cannot do this: it scales particle count and canvas\n"
+                "area together, so particles-per-texel stays fixed.\n\n"
+                "Below 1.0 is CHEAPER - fewer particles over the same canvas.\n"
+                "Lower it if particles are overcrowded and flying everywhere.")
+
             # Canvas Aspect Ratio dropdown
             current_ratio = self.state.preferences.canvas_aspect_ratio
             if imgui.begin_combo("World Shape", current_ratio):

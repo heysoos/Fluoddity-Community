@@ -73,14 +73,28 @@ No additional wiring needed â€” the orchestrator pattern handles the rest.
 
 ## Important Caveats
 
-- **CLIP/evolution dependencies are optional and lazy** — `onnxruntime-directml`,
+- **CLIP/evolution dependencies are optional and lazy** ï¿½ `onnxruntime-directml`,
   `tokenizers` and `cmaes` must never be imported at startup. Auto tournament mode
   degrades to a message when they are absent; manual mode must keep working.
 - **Tile and cohort indices both derive from the particle index**, so the cohort count
-  must be a multiple of the tile count — otherwise each tile holds exactly one cohort
+  must be a multiple of the tile count ï¿½ otherwise each tile holds exactly one cohort
   and stays a monoculture. See `services/cohort_tiling.py`.
 - **`calculate_setting()` ignores `slider_value` whenever any sweep or jitter is
   non-zero.** Zeroing a slider is not enough to disable a parameter; zero the sweeps too.
+
+- **`world_size` cannot change particle density.** It scales entity count by
+  `ws` and canvas area by `ws` (side by `sqrt(ws)`), so particles-per-texel is
+  a constant 0.572 for every world size - it buys *more world*, not a more or
+  less crowded one. `particle_density` is the multiplier that moves density.
+  Lowering it is *cheaper*: at ws=4.0, density 0.1 runs 4.7x faster than 1.0.
+
+- **`ACTIVE_COUNT` in `entity_update.glsl` is the denominator for every
+  index-derived slice** - cohorts (`get_cohort`) and tournament tiles
+  (`tournament_home_tile`). It must equal the real allocated count, so it is
+  `float(ENTITY_COUNT)` and must never be re-derived from `WORLD_SIZE`. A
+  denominator larger than the buffer silently compresses every slice into the
+  bottom of the range: at density 0.5 the top half of the tournament grid would
+  render empty.
 
 - **`sim.py` is user-owned** â€” do not restructure without asking. It has its own hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.
 - **Windows platform** â€” use forward slashes or `os.path`; use `rm` not `del` in bash commands.

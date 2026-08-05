@@ -165,6 +165,7 @@ class CommandHandler:
         """Handle world size change request (also handles aspect ratio changes)."""
         self.sim.world_size = ui_state.preferences.world_size
         self.sim.canvas_aspect_ratio = ui_state.preferences.canvas_aspect_ratio
+        self.sim.particle_density = ui_state.preferences.particle_density
         self.sim.setup_simulation_state()
         self.sim.setup_shaders()
         self.entity_picker.update_buffer(self.sim.get_entity_buffer())
@@ -184,9 +185,13 @@ class CommandHandler:
             canvas_dim_x, canvas_dim_y = self.sim.get_canvas_dimensions()
             self.field_handler.adv_draw.ensure_initialized(canvas_dim_x, canvas_dim_y)
         self.ui._last_applied_world_size = ui_state.preferences.world_size
+        self.ui._last_applied_particle_density = ui_state.preferences.particle_density
+        w, h = self.sim.get_canvas_dimensions()
         print(f"World size changed to {self.sim.world_size} "
-              f"(entity_count: {self.sim.entity_count}, "
-              f"canvas: {self.sim.get_canvas_dimensions()[0]}x{self.sim.get_canvas_dimensions()[1]})")
+              f"(density: {self.sim.particle_density}, "
+              f"entity_count: {self.sim.entity_count}, "
+              f"canvas: {w}x{h}, "
+              f"{self.sim.entity_count / (w * h):.3f} particles/texel)")
 
     def _handle_toggle_recording(self, ui_state):
         """Handle video recording toggle with delayed start support."""

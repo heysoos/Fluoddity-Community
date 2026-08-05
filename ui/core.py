@@ -141,6 +141,7 @@ class UI(
 
         # Track last applied world size to detect changes
         self._last_applied_world_size: float = 1.0
+        self._last_applied_particle_density: float = 1.0
 
         # State containers (Orchestrator reads these each frame)
         self.state = UIState(
