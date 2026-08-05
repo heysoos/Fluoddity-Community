@@ -73,6 +73,15 @@ No additional wiring needed — the orchestrator pattern handles the rest.
 
 ## Important Caveats
 
+- **CLIP/evolution dependencies are optional and lazy** � `onnxruntime-directml`,
+  `tokenizers` and `cmaes` must never be imported at startup. Auto tournament mode
+  degrades to a message when they are absent; manual mode must keep working.
+- **Tile and cohort indices both derive from the particle index**, so the cohort count
+  must be a multiple of the tile count � otherwise each tile holds exactly one cohort
+  and stays a monoculture. See `services/cohort_tiling.py`.
+- **`calculate_setting()` ignores `slider_value` whenever any sweep or jitter is
+  non-zero.** Zeroing a slider is not enough to disable a parameter; zero the sweeps too.
+
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.
 - **Windows platform** — use forward slashes or `os.path`; use `rm` not `del` in bash commands.
 - **No test suite** — changes must be verified manually.

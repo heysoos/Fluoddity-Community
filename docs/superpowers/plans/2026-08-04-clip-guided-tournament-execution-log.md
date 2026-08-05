@@ -209,3 +209,33 @@ autosaved.
 frame it renders, which is the spec'd "switching to Manual pauses Auto"
 behaviour. Headless cannot select a tab, so the harness re-asserts the flag each
 frame. Not an app bug.
+
+## Tasks 15-16 — verification
+
+**Verified end to end, headlessly:**
+
+| check | result |
+|---|---|
+| 12 generations, "glowing coral" | fit_best 0.20 -> 0.45, sigma 0.477 -> 0.438 |
+| capture correctness | 16 tiles on exact 224px boundaries, full display colour |
+| cohorts driven to k x tiles | grid4/k2=32, grid4/k9=144, grid2/k7=28 - all exact |
+| checkpoint save -> resume | gen 4 -> 4, prompt preserved, best fitness identical |
+| genome export | loads through the normal ConfigSaver, 80/80 coefficients |
+| suite | 178 passed (CPU), 9 passed (GPU) |
+
+### Bug found by the grid-sweep verification
+
+`cmaes` fixes its population at construction and asserts on it in `tell()`. A
+grid change through any route that did not also reset the optimizer crashed the
+app with `AssertionError: Must tell popsize-length solutions`. The
+CommandHandler path did reset, but the service was trusting its callers.
+
+`_begin_generation` now compares `optimizer.popsize` against the live tile count
+and rebuilds on mismatch. Pinned by
+`test_grid_change_without_reset_rebuilds_instead_of_crashing`.
+
+### Not verified
+
+Interactive GUI behaviour - tab switching, tooltips, sliders, the sparkline and
+the "Open run folder" button - was never exercised by a human. Everything behind
+those widgets is covered headlessly, but the widget wiring itself is not.

@@ -235,3 +235,17 @@ def test_checkpoint_state_roundtrip():
     assert svc2.generation == 1
     assert svc2.prompt == "coral"
     assert svc2.phase is Phase.PAUSED
+
+
+def test_grid_change_without_reset_rebuilds_instead_of_crashing():
+    """cmaes fixes popsize at construction and asserts on it in tell(). A grid
+    change by any route that did not reset the optimizer must not crash."""
+    svc, ts = make(grid=2)
+    svc.start("coral")
+    run_one_generation(svc)
+    assert svc.optimizer.popsize == 4
+
+    ts.set_grid(4)               # bypasses the CommandHandler reset path
+    run_one_generation(svc)      # must not raise
+    assert svc.optimizer.popsize == 16
+    assert len(svc.fitness) == 16

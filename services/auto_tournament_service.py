@@ -150,6 +150,11 @@ class AutoTournamentService:
             self._needs_write = True
 
     def _begin_generation(self) -> None:
+        # The population size is fixed at optimizer construction (cmaes asserts
+        # on it in tell()). If the grid changed by any route that did not reset
+        # us, rebuild rather than crash on the next tell.
+        if self.optimizer is not None and self.optimizer.popsize != self.popsize:
+            self.optimizer = None
         self._ensure_optimizer()
         self._z = self.optimizer.ask(self.popsize)
         self.tournament.population = [decode(z) for z in self._z]

@@ -21,6 +21,8 @@ class Optimizer(Protocol):
     def ask(self, n: int) -> np.ndarray: ...
     def tell(self, z: np.ndarray, fitness: np.ndarray) -> None: ...
     def best(self) -> tuple[np.ndarray, float]: ...
+    @property
+    def popsize(self) -> int: ...
     def state_dict(self) -> dict: ...
     def load_state_dict(self, d: dict) -> None: ...
     @property
@@ -86,6 +88,10 @@ class _BaseOptimizer:
         if float(fitness[i]) > self._best_f:
             self._best_f = float(fitness[i])
             self._best_z = np.asarray(z[i], dtype=np.float32).copy()
+
+    @property
+    def popsize(self) -> int:
+        return self._popsize
 
     def best(self):
         if self._best_z is None:
