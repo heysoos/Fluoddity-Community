@@ -62,8 +62,10 @@ In Auto mode:
 - A **metrics panel**: generation number, best-ever score, a sparkline of best and mean
   fitness per generation, and a scrollable table of the last 50 generations (§8).
 - **Save checkpoint** / **Load checkpoint** buttons, plus an **Autosave every N gens**
-  control (§9).
-- A **Save best genome** button, reusing the existing tournament save path.
+  control (§9.1).
+- **Save best genome** / **Save this tile** / **Load genome as starting point** buttons.
+  These write and read ordinary Fluoddity config files, so an evolved creature can be opened
+  in the normal single-simulation view at full resolution (§9.2).
 
 If the CLIP model files or `onnxruntime` are missing, the Auto tab renders a single
 explanatory line and a **Download CLIP model (~330 MB)** button (§11.1). Manual mode is
@@ -517,7 +519,19 @@ The periodic best-tile PNG is deliberate: a run folder full of `gen_000010.png`,
 `gen_000020.png`, … is directly assemblable into a timelapse of the evolution, which is a
 natural artifact for a generative art tool and costs one image write per 10 generations.
 
-## 9. Checkpoints
+## 9. Checkpoints and genome export
+
+Two distinct save formats, because they answer two different questions.
+
+A **checkpoint** (§9.1) is *"resume this exact search"* — it carries optimizer state, RNG,
+history and settings, and is inseparable from its grid size.
+
+A **genome export** (§9.2) is *"keep this creature"* — it is just the 80 floats plus
+provenance, carries no optimizer state at all, and can be loaded anywhere: as a new search's
+starting point with different settings, or into the normal single-simulation view at full
+resolution.
+
+### 9.1 Checkpoints (full run state)
 
 `services/run_checkpoint.py` — `save_checkpoint(path, state)` and `load_checkpoint(path)`,
 pure functions over a dict. Format is a single `.npz`, with non-array metadata stored as a
@@ -559,6 +573,59 @@ symlinks require elevation on Windows).
 - The run continues into a **new** `runs/<new_id>/` directory whose `config.json` records
   `resumed_from`. The original run's log is never appended to by a second process, which
   keeps every log file a single coherent timeline.
+
+### 9.2 Genome export/import (model only, no optimizer state)
+
+**Export uses the existing config format.** `services/config_saver.py`'s `PhysicsConfig`
+already carries a `rule: np.ndarray (10, 8)` field alongside every physics slider, and
+already has `save_to_file`, `load_from_file` and clipboard encode/decode. An evolved genome
+is therefore exported as an **ordinary Fluoddity config file** — the evolved rule combined
+with the physics slider values it was evolved under.
+
+This is deliberately not a new file format. The consequence is that an exported genome:
+
+- loads into the **normal single-simulation view at any canvas resolution** through the
+  existing config browser, with no new load path — this is the "train small, then run it
+  big" workflow;
+- is copy-pasteable through the existing clipboard config string;
+- can be dropped into a **manual** tournament tile;
+- is readable by every existing tool that understands configs.
+
+**Export triggers:** a **Save best genome** button (best-ever individual), a **Save this
+tile** action on any tile in the grid, and an optional autosave of the best genome every N
+generations into `runs/<run_id>/genomes/gen_XXXXXX.json`.
+
+**Import as a search starting point.** Loading a genome into Auto mode sets the CMA-ES
+initial mean `x0` and nothing else — sigma, algorithm, grid and popsize are all taken from
+the current UI, not from the file. This is the "load the model, not the optimizer" case:
+you can take a creature evolved at N=4 with CMA-ES and continue it at N=6 with Sep-CMA-ES
+and a larger sigma, which a checkpoint deliberately cannot do.
+
+Import requires inverting the §5.1 squash:
+
+```python
+EPS = 1e-4
+z_freq = np.arctanh(np.clip(freq / 3.0, -1 + EPS, 1 - EPS))
+z_amp  = np.arctanh(np.clip(amp,         -1 + EPS, 1 - EPS))
+```
+
+The clamp is necessary because a config file may hold values outside the squash's range —
+from the legacy rule generator, from hand-editing, or from a future wider range. The
+clamp is **lossy at the extremes**: a coefficient at or beyond the boundary comes back as
+`atanh(1 - 1e-4) ≈ 4.95` rather than infinity. This is correct behaviour (the search must
+start at a finite point) but means an imported genome is not always a bit-exact roundtrip.
+Import therefore logs how many of the 80 coefficients were clamped, so a badly
+out-of-range file is visible rather than silent.
+
+**Resolution caveat, recorded in the export.** The simulation is only approximately
+scale-invariant: forces are divided by `SQRT_WORLD_SIZE` and particle size scales with it,
+but sensor geometry is in entity units, so the number of texels between a particle and its
+sensors changes with canvas resolution. A genome evolved on 256 px tiles will not look
+identical at 2048². The export therefore records `evolved_at_canvas_px` and
+`evolved_at_tile_px` in the config's metadata, and loading it at a substantially different
+resolution shows a one-line note rather than silently behaving differently. This is
+information, not a restriction — running a genome at a resolution it was not evolved at is
+a legitimate and interesting thing to do.
 
 ## 10. Data flow per frame (Auto mode running)
 
@@ -627,6 +694,7 @@ grid range.
 | `NaN`/`inf` fitness | Replaced with the generation minimum before `tell`, and the occurrence is logged. |
 | Shader hot-reload (`V`) mid-rollout | Abort and restart the generation, same as resize. |
 | Checkpoint fails to load (version/signature mismatch) | Refuse with a specific message naming the mismatch; the current run is left untouched. |
+| Imported genome has out-of-range coefficients | Clamped per §9.2 and the clamp count is reported in the UI, rather than producing `inf` in `x0` and silently breaking the search. |
 | `runs/` not writable | Logging and autosave disabled with one warning; the run continues. Evolution must not be blocked by a disk problem. |
 
 ## 12. Testing
@@ -661,6 +729,11 @@ the scratchpad. No GPU required except where noted.
   a `format_version` mismatch raises a specific error; a `genome_spec_signature` mismatch
   raises a specific error; writes are atomic (a simulated crash mid-write leaves the prior
   checkpoint intact).
+- `test_genome_io.py` — an exported genome is a valid `PhysicsConfig` that `load_from_file`
+  reads back with an identical rule; `z → genome → z` roundtrips within tolerance for
+  in-range values; out-of-range coefficients are clamped rather than producing `inf`, and
+  the clamp count is reported; importing sets only `x0` and leaves sigma, algorithm and
+  grid untouched.
 - `test_tile_geometry.py` — the §7.3 index formula, tested purely arithmetically for
   N ∈ [2,8]: every tile index in `[0, N²)` maps to a unique non-overlapping crop rectangle,
   and `tile_index = ty*N + tx` agrees with `tournament_home_tile`.
@@ -721,6 +794,7 @@ services/tile_capture.py
 services/auto_tournament_service.py
 services/run_logger.py
 services/run_checkpoint.py
+services/genome_io.py
 state/auto_tournament_state.py
 ui/auto_tournament_window.py
 tools/fetch_clip_onnx.py
@@ -731,6 +805,7 @@ tests/test_auto_tournament_service.py
 tests/test_auto_tournament_state.py
 tests/test_run_logger.py
 tests/test_run_checkpoint.py
+tests/test_genome_io.py
 tests/test_tile_geometry.py
 tests/test_tile_capture.py           (gpu-marked)
 tests/test_clip_real_model.py        (gpu-marked)
