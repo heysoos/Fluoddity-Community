@@ -239,3 +239,56 @@ and rebuilds on mismatch. Pinned by
 Interactive GUI behaviour - tab switching, tooltips, sliders, the sparkline and
 the "Open run folder" button - was never exercised by a human. Everything behind
 those widgets is covered headlessly, but the widget wiring itself is not.
+
+## Post-review round: first run in the real app
+
+Three defects, all in the widget layer that the "Not verified" note above called
+out. Fixed in `62724db`.
+
+1. **No confirmation when setting the goal.** The typed buffer and the applied
+   prompt were rendered identically, so there was no way to tell whether CLIP
+   was scoring what the box showed. The input is now tinted while they differ.
+2. **Reset left the old fitness curve on the plot.** `reset()` cleared the
+   optimizer but not the logger, which is what the plot reads.
+3. **Sigma was logged but never drawn.** Now overlaid, separately normalised.
+
+### The widget layer is now testable
+
+ImGui needs only `io.display_size` and a frame - no window, no GL renderer - so
+`tests/test_tournament_window_render.py` renders both tabs for real. Two gotchas
+worth keeping:
+
+- ImGui 1.92 builds its font atlas lazily; without
+  `io.backend_flags |= BackendFlags_.renderer_has_textures` NewFrame asserts.
+- A window emits **no geometry on the frame it is created** (it is auto-sizing),
+  so vertex-count assertions must render twice or they depend on test order.
+
+An unbalanced begin/end trips an assert inside `EndFrame`, so a test that
+completes has proved the stack balances.
+
+## world_size is a workload multiplier, not a coordinate rescale
+
+Reported as "0.4 -> 4.0 lags a LOT more". Not a bug - measured and expected.
+
+`world_size` scales *area*, holding particle density and feature size constant:
+`entity_count = 600000 * ws` and the canvas is `1024 * sqrt(ws)` per side, so
+both particles and texels grow linearly in `ws`. The shader deliberately
+compensates the physics - particle size, sensor distance and forces all carry a
+`1/SQRT_WORLD_SIZE` factor - so you get *more world*, not a *bigger* world.
+
+Measured on an RTX 3080 Laptop, full `sim.update()`:
+
+| ws | particles | canvas | VRAM | ms/step | vs 0.4 |
+|---|---|---|---|---|---|
+| 0.4 | 240,000 | 647² | 108 MB | 0.64 | 1.00x |
+| 1.0 | 600,000 | 1024² | 271 MB | 1.36 | 2.15x |
+| 2.0 | 1,200,000 | 1448² | 542 MB | 2.22 | 3.49x |
+| 4.0 | 2,400,000 | 2048² | 1085 MB | 4.43 | 6.97x |
+
+10x the work costs 6.97x the time - sublinear, so nothing pathological. The
+apparent severity comes from the multiplier: cost is per *step*, and the app
+runs `speedmult` steps per frame.
+
+The one disproportionate number is `rule_buffer`, at 320 B/particle: 768 MB of
+the 1085 MB at ws=4.0. Harmless on an 8 GB card, but on a smaller GPU it is the
+term that would spill to system memory and turn this linear curve into a cliff.
