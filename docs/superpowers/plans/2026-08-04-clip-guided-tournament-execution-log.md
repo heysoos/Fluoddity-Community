@@ -59,3 +59,64 @@ is unavailable — with default options that path would crash rather than degrad
 `SessionOptions.graph_optimization_level = ORT_ENABLE_BASIC` on both sessions.
 Applied unconditionally rather than only on CPU, so the two providers run the
 same graph and cannot diverge in behaviour.
+
+## Task 2 — CLIPScorer
+
+Implemented with the three Task 1 findings folded in. 11 unit tests + 4
+gpu-marked real-model tests passing, including an explicit CPU-fallback test.
+
+**Deviation:** `preprocess()` gained a `dtype` parameter (default float32),
+driven by the session's declared input type, per Finding 2.
+
+## Task 3 — CLIP signal gate
+
+**GATE PASSED: 5/6 prompts** above the std 0.05 bar, on 32 real tournament
+tiles captured headlessly across two generations.
+
+| prompt | std | range |
+|---|---|---|
+| glowing coral | 0.190 | 0.008 – 0.741 |
+| a spider web | 0.182 | 0.044 – 0.753 |
+| a dense city map | 0.146 | 0.027 – 0.587 |
+| tree branches | 0.083 | 0.004 – 0.299 |
+| a swirling galaxy | 0.060 | 0.027 – 0.231 |
+| flowing water | 0.039 | 0.004 – 0.146 (flat) |
+
+Rankings inspected visually: coral → pink polyp-like clusters, tree branches →
+radiating frond structures, spider web → a cyan reticulated network with real
+junctions. All defensible. Losers were uniformly dense noise, consistently.
+
+### Finding 4: a dead canvas was a degenerate attractor
+
+The visual inspection caught what the std numbers hid — "flowing water" was won
+by a near-black tile. Testing a pure black image directly, with the spec's
+original six distractors:
+
+| prompt | black scores | black outranks |
+|---|---|---|
+| flowing water | 0.366 | **31 of 32 real tiles** |
+| tree branches | 0.352 | 30 of 32 |
+| a spider web | 0.297 | 12 of 32 |
+
+CMA-ES would have driven straight to an empty simulation. `"a blank image"` and
+`"a solid color"` did not catch it.
+
+**Deviation:** `DEFAULT_DISTRACTORS` gains three black-specific entries —
+`"a black image"`, `"an empty black background"`, `"a dark empty scene"`.
+Measured effect:
+
+| | before | after |
+|---|---|---|
+| black, worst case | outranks 31/32 | outranks 6/32 |
+| black on flowing water | 0.366 | 0.029 |
+| coral std (real signal) | 0.189 | 0.194 |
+| spider web std | 0.177 | 0.161 |
+
+The degenerate attractor is removed at essentially no cost to real signal.
+`tests/test_clip_real_model.py::test_black_canvas_is_not_a_degenerate_attractor`
+pins this.
+
+"flowing water" drops below the bar as a result. That is the honest outcome:
+it was only passing because black was gaming it. The substrate does not produce
+water-like imagery, and the prompt is a poor fit rather than the scorer being
+broken.

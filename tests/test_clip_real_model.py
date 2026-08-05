@@ -46,3 +46,18 @@ def test_cpu_provider_loads(scorer):
     cpu = CLIPScorer(MODEL_DIR, providers=["CPUExecutionProvider"])
     cpu.set_prompt("a red square")
     assert np.isfinite(cpu.score(_square((220, 30, 30))[None])[0])
+
+
+def test_black_canvas_is_not_a_degenerate_attractor(scorer):
+    """A dead simulation must not outscore a live one.
+
+    Measured in the Task 3 gate: with only the original six distractors, pure
+    black scored 0.37 on 'flowing water' and outranked 31 of 32 real tiles.
+    """
+    black = np.zeros((1, 224, 224, 3), dtype=np.uint8)
+    for prompt in ("tree branches", "flowing water", "a spider web"):
+        scorer.set_prompt(prompt)
+        assert scorer.score(black)[0] < 0.10, (
+            f"black scores too well on {prompt!r}; the optimizer would "
+            "drive toward an empty canvas"
+        )

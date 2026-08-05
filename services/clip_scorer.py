@@ -45,6 +45,16 @@ DEFAULT_DISTRACTORS = [
     # prompt, because "abstract texture" is the honest description of most of
     # the search space.
     "an abstract texture",
+    # The last three exist because a DEAD CANVAS is a degenerate attractor.
+    # Measured on 32 real tiles (Task 3 gate): with only the six distractors
+    # above, a pure black image scored 0.37 on "flowing water" and 0.35 on
+    # "tree branches", outranking 31 of 32 genuine tiles. The optimizer would
+    # have driven straight to an empty simulation. "a blank image" and "a solid
+    # color" alone did not catch it; these do, dropping black to 0.03 while
+    # leaving real-signal spread essentially unchanged.
+    "a black image",
+    "an empty black background",
+    "a dark empty scene",
 ]
 
 
