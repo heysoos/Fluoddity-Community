@@ -61,9 +61,11 @@ In Auto mode:
   tile is **force-injected as an elite** into the next generation (§6.4) and the selection
   is then cleared. This is the "steer and veto" the user asked for.
 - A **Per-tile mutation** checkbox (default off) with a **Variants per tile** slider and a
-  **Mutation strength** slider. When on, each tile runs a cloud of brains scattered around
-  its genome and CMA-ES learns the cloud's center (§5.3). Costs nothing — it re-enables work
-  the shader already does.
+  **Mutation strength** slider (default 0.1). When on, each tile runs a cloud of brains
+  scattered around its genome and CMA-ES learns the cloud's center (§5.3). Costs nothing —
+  it re-enables work the shader already does. Two UI affordances are required here, both
+  specified in §5.3.6: a live sigma readout next to the mutation slider, and a tooltip
+  explaining the cohort/tile relationship.
 - A **metrics panel**: generation number, best-ever score, a sparkline of best and mean
   fitness per generation, and a scrollable table of the last 50 generations (§8).
 - **Save checkpoint** / **Load checkpoint** buttons, plus an **Autosave every N gens**
@@ -327,6 +329,53 @@ The export therefore records `evolved_with_tile_mutation`, `mutation_strength` a
 `variants_per_tile` alongside the resolution provenance, and the loader surfaces them. This
 is the difference between "my saved creature looks wrong" and "my saved creature is the
 center of a cloud, and here is how to reconstitute the cloud".
+
+#### 5.3.6 Required UI affordances
+
+Both of these exist because the underlying mechanics are invisible and their failure modes
+are silent. They are not polish.
+
+**Live sigma readout.** The mutation strength must be displayed next to the optimizer's
+*current* sigma, not just as a bare number:
+
+```
+Mutation strength  [====|--------]  0.10     (sigma 0.31 — ok)
+Mutation strength  [====|--------]  0.10     (sigma 0.09 — too high, search has stalled)
+```
+
+Rationale: sigma shrinks as CMA-ES converges. Once sigma approaches the mutation strength,
+the spread *between* tiles is no longer larger than the wobble *inside* each tile, and the
+optimizer can no longer distinguish its own candidates — it stalls in a blurry region
+without any error. The mutation strength is effectively a floor on achievable convergence.
+
+The readout shows "ok" while `mutation_strength < sigma / 3`, and a warning otherwise. The
+`/3` threshold is a rule of thumb, and is labelled as guidance rather than a hard rule.
+
+**Cohort tooltip.** Hovering the Variants per tile slider explains the relationship, since
+nothing on screen reveals that cohort index and tile index are derived from the same
+particle numbering:
+
+> Particles are numbered in one long list. Both "which tile" and "which cohort" are just
+> slices of that list, so they nest: with 64 cohorts across 16 tiles, each tile contains 4
+> cohorts, and each cohort gets its own small tweak of that tile's genome.
+>
+> This is why cohorts must be a multiple of the tile count. If they were equal, each tile
+> would contain exactly one cohort — one tweak applied to every particle — and the tile
+> would still be uniform, just shifted. Cohorts are set for you while this is enabled.
+
+**Numbers for calibration** (from the operator at `entity_update.glsl:426`, for the
+implementer's reference and for the tooltip's second page):
+
+| Mutation strength | Amplitude wobble (range ±1) | Frequency wobble (multiplicative) |
+|---|---|---|
+| 0.05 | ±0.05 | ±1.25% |
+| 0.1 (default) | ±0.10 | ±2.5% |
+| 0.3 | ±0.30 | ±7.5% |
+
+Amplitudes are perturbed additively and frequencies multiplicatively, so amplitudes move
+roughly 4× harder at the same setting. At the default sigma0 of 0.5, a mutation strength of
+0.1 makes the within-tile cloud about one fifth of the between-tile spread, which is the
+intended starting ratio.
 
 ## 6. Architecture
 
