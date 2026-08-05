@@ -36,6 +36,7 @@ class Sim:
         # Tournament mode
         self._tournament_enabled = False
         self._tournament_grid = 4
+        self._tournament_mutation = 0.0
 
     def get_entity_count(self) -> int:
         """Calculate entity count based on world size."""
@@ -224,8 +225,18 @@ class Sim:
         tryset(self.entity_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
         tryset(self.entity_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
         if self._tournament_enabled:
-            # Force per-particle mutation off so all particles in a tile share the genome
-            tryset(self.entity_update_program, 'MUTATION_SCALE_SETTING.slider_value', 0.0)
+            # Per-particle mutation is owned by tournament mode. Zeroing
+            # slider_value alone is NOT enough: calculate_setting() returns
+            # slider_value only when every sweep and jitter is zero, and
+            # otherwise computes from the sweeps and ignores slider_value
+            # entirely - so a user sweep on Mutation Scale would survive the
+            # suppression and vary the amount across the canvas.
+            tryset(self.entity_update_program,
+                   'MUTATION_SCALE_SETTING.slider_value',
+                   float(self._tournament_mutation))
+            for _field in ('x_sweep', 'y_sweep', 'cohort_sweep', 'jitter'):
+                tryset(self.entity_update_program,
+                       f'MUTATION_SCALE_SETTING.{_field}', 0.0)
 
         num_workgroups = (self.entity_count + 63) // 64
         ctx.memory_barrier()
@@ -734,10 +745,16 @@ class Sim:
         else:
             set_rule_uniform(self.entity_update_program, rule)
 
-    def apply_tournament(self, enabled: bool, grid: int = 4) -> None:
-        """Enable/disable tournament tiling for the next update."""
+    def apply_tournament(self, enabled: bool, grid: int = 4,
+                         mutation: float = 0.0) -> None:
+        """Enable/disable tournament tiling for the next update.
+
+        `mutation` is the per-particle mutation scale tournament mode imposes;
+        0.0 means every particle in a tile shares that tile's genome exactly.
+        """
         self._tournament_enabled = enabled
         self._tournament_grid = grid
+        self._tournament_mutation = mutation
 
     def write_tournament_rules(self, rule_bytes: bytes) -> None:
         """Upload 16 packed genomes into the (reused) multi-load rule buffer."""

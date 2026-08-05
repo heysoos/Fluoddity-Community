@@ -37,7 +37,7 @@ class TournamentWindowMixin:
         # Tile 0 is the BOTTOM-left of the canvas (entity space y grows upward), but
         # ImGui draws the first row it is given at the TOP. Walk rows top-down in
         # canvas terms (ty = 3 first) so this panel matches what you see on screen.
-        grid = 4
+        grid = self.tournament_service.grid
         for ty in ui_row_order(grid):
             for tx in range(grid):
                 tile = ty * grid + tx

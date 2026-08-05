@@ -120,3 +120,21 @@ pins this.
 it was only passing because black was gaming it. The substrate does not produce
 water-like imagery, and the prompt is a poor fit rather than the scorer being
 broken.
+
+## Task 4 — Variable grid, cohort tiling, mutation suppression fix
+
+Done as planned. `TILES = 16` is now a constructor argument; the UI grid, click
+mapping and shader uniform all follow `TournamentService.grid`. 16 new cohort
+tiling tests, 3 new service tests, 67 passing overall.
+
+Confirmed the spec's claim that no GLSL change is needed: a 6x6 grid renders 36
+independent, seam-isolated tiles with only the Python side changed.
+
+**Deviation (verification method):** plan Step 9 said to launch `main.py` and
+check by hand. Ran the headless harness instead and inspected the rendered grid
+directly at N=4 and N=6, which is stronger evidence than a GUI glance and is
+reproducible. Non-black coverage 0.967 (N=4) and 0.994 (N=6).
+
+The `sim.py` change is the additive one the plan permitted: `apply_tournament`
+gained a `mutation` parameter, and the suppression block now also zeroes
+`x_sweep` / `y_sweep` / `cohort_sweep` / `jitter`.

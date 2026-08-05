@@ -230,7 +230,9 @@ class App:
         self.sim.apply_camera_state(ui_state.camera)
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)
-        self.sim.apply_tournament(ui_state.tournament.enabled, grid=4)
+        self.sim.apply_tournament(
+            ui_state.tournament.enabled, grid=self.tournament_service.grid
+        )
         self.camera.BRIGHTNESS = ui_state.preferences.brightness
         self.camera.trail_overlay_strength = ui_state.preferences.trail_overlay_strength
 

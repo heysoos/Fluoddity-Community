@@ -11,7 +11,7 @@ def make_service(seed=0):
 
 def test_init_population_makes_16_distinct_genomes():
     svc = make_service()
-    assert len(svc.population) == svc.TILES == 16
+    assert len(svc.population) == svc.tiles == 16
     for g in svc.population:
         assert g.shape == GENOME_SHAPE and g.dtype == np.float32
     # Not all identical
@@ -109,3 +109,29 @@ def test_dirty_flag_lifecycle():
     svc.toggle_select(1)
     svc.next_generation()
     assert svc.is_dirty() is True
+
+
+def test_grid_is_configurable():
+    svc = TournamentService(grid=6)
+    svc.init_population()
+    assert svc.tiles == 36
+    assert len(svc.population) == 36
+
+
+def test_set_grid_resizes_and_clears_selection():
+    svc = TournamentService(grid=4)
+    svc.init_population()
+    svc.toggle_select(3)
+    svc.set_grid(2)
+    assert svc.tiles == 4
+    assert len(svc.population) == 4
+    assert svc.selected == set()
+    assert svc.is_dirty()
+
+
+def test_set_grid_to_same_value_is_a_no_op():
+    svc = TournamentService(grid=4)
+    svc.init_population()
+    before = [g.copy() for g in svc.population]
+    svc.set_grid(4)
+    assert all((a == b).all() for a, b in zip(before, svc.population))

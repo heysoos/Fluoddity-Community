@@ -224,7 +224,7 @@ class CommandHandler:
         # Tournament mode: left click selects the tile under the cursor
         if ui_state.tournament.enabled and ui_state.left_click_this_frame:
             tex = self.camera.screen_to_tex(ui_state.mouse_pos, self.sim.view_tex.size)
-            grid = 4
+            grid = self.tournament_service.grid if self.tournament_service else 4
             tx = min(grid - 1, max(0, int(tex[0] * grid)))
             ty = min(grid - 1, max(0, int(tex[1] * grid)))
             ui_state.tournament.clicked_tile = ty * grid + tx

@@ -9,12 +9,12 @@ from services.genome import random_genome, mutate, crossover, GENOME_SHAPE
 
 
 class TournamentService:
-    TILES = 16
-
-    def __init__(self, rng: np.random.Generator | None = None):
+    def __init__(self, grid: int = 4, rng: np.random.Generator | None = None):
+        self.grid = int(grid)
+        self.tiles = self.grid * self.grid
         self._rng = rng if rng is not None else np.random.default_rng()
         self.population: list[np.ndarray] = [
-            np.zeros(GENOME_SHAPE, dtype=np.float32) for _ in range(self.TILES)
+            np.zeros(GENOME_SHAPE, dtype=np.float32) for _ in range(self.tiles)
         ]
         self.selected: set[int] = set()
         self.mutation_strength: float = 0.15
@@ -26,21 +26,35 @@ class TournamentService:
 
     # --- lifecycle ---
     def init_population(self) -> None:
-        self.population = [random_genome(self._rng) for _ in range(self.TILES)]
+        self.population = [random_genome(self._rng) for _ in range(self.tiles)]
         self.selected.clear()
         self._undo_stack.clear()
         self.initialized = True
         self.mark_dirty()
 
+    def set_grid(self, grid: int) -> None:
+        """Resize the population. Callers must only do this between generations
+        - cmaes.CMA fixes popsize at construction, so the optimizer is reset
+        separately by AutoTournamentService."""
+        grid = int(grid)
+        if grid == self.grid:
+            return
+        self.grid = grid
+        self.tiles = grid * grid
+        self.selected.clear()
+        self._undo_stack.clear()
+        self.population = [random_genome(self._rng) for _ in range(self.tiles)]
+        self.mark_dirty()
+
     def reset(self) -> None:
         self._push_undo()
-        self.population = [random_genome(self._rng) for _ in range(self.TILES)]
+        self.population = [random_genome(self._rng) for _ in range(self.tiles)]
         self.selected.clear()
         self.mark_dirty()
 
     # --- selection ---
     def toggle_select(self, tile: int) -> None:
-        if not (0 <= tile < self.TILES):
+        if not (0 <= tile < self.tiles):
             return
         if tile in self.selected:
             self.selected.remove(tile)
@@ -53,12 +67,12 @@ class TournamentService:
         parents = ([self.population[i] for i in sorted(self.selected)]
                    if self.selected else list(self.population))
 
-        new: list[np.ndarray | None] = [None] * self.TILES
+        new: list[np.ndarray | None] = [None] * self.tiles
         # Survivors stay pinned to their own tiles.
         for i in self.selected:
             new[i] = self.population[i].copy()
 
-        empty = [i for i in range(self.TILES) if new[i] is None]
+        empty = [i for i in range(self.tiles) if new[i] is None]
         self._rng.shuffle(empty)
         n_random = max(0, min(self.inject_randoms, len(empty)))
 
