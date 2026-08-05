@@ -10,8 +10,9 @@ The user can steer or veto at any point.
 **Builds on:** `2026-08-03-interactive-tournament-design.md`. The tiled canvas, hard tile
 isolation, genome representation, rule packing and GPU upload are all reused unchanged.
 
-**Revision 2 adds:** variable grid size (§4), an explicit CLIP input pipeline contract (§7),
-run logging (§8), and checkpoint save/load (§9).
+**Revision 2 adds:** variable grid size (§4), optional per-tile mutation (§5.3), an explicit
+CLIP input pipeline contract (§7), genome export as ordinary config files (§9.2),
+run logging (§8), and checkpoint save/load (§9.1).
 
 ## 1. Goal & non-goals
 
@@ -59,6 +60,10 @@ In Auto mode:
   the last completed generation. Clicking a tile still selects it; in Auto mode a selected
   tile is **force-injected as an elite** into the next generation (§6.4) and the selection
   is then cleared. This is the "steer and veto" the user asked for.
+- A **Per-tile mutation** checkbox (default off) with a **Variants per tile** slider and a
+  **Mutation strength** slider. When on, each tile runs a cloud of brains scattered around
+  its genome and CMA-ES learns the cloud's center (§5.3). Costs nothing — it re-enables work
+  the shader already does.
 - A **metrics panel**: generation number, best-ever score, a sparkline of best and mean
   fitness per generation, and a scrollable table of the last 50 generations (§8).
 - **Save checkpoint** / **Load checkpoint** buttons, plus an **Autosave every N gens**
@@ -211,6 +216,117 @@ incompatible checkpoints — see §9). Adding physics later means appending
 `Block(name="physics", size=12, decode=physics_decode)`; the optimizer, scorer, logger and
 loop are all dimension-agnostic and need no changes. The remaining work at that point is
 per-tile physics uniforms in the shader, which is why it is out of scope now.
+
+### 5.3 Per-tile mutation — optional (`Per-tile mutation` checkbox)
+
+**Default: off.** When enabled, each tile runs a small *cloud* of brains scattered around
+its genome rather than a single brain, using the simulation's own existing per-cohort
+mutation — the same mechanism the manual sim exposes through the Mutation Scale slider.
+CMA-ES then learns the **center** of that cloud.
+
+**Mechanism — no new shader code.** `entity_update.glsl:522` already applies
+`mutate_rule(current_rule, <mutation scale>, rule_seed + floor(cohort))` to every particle,
+producing a deterministic offset seeded from the rule's own coefficients plus the cohort
+index. Tournament mode currently suppresses this (§5.3.3). Enabling the checkbox simply
+stops suppressing it and sets a tournament-specific strength.
+
+#### 5.3.1 Cohorts must be a multiple of the tile count
+
+`get_cohort(index) = COHORTS * index / ACTIVE_COUNT` and
+`tournament_home_tile(index) = floor(index / ACTIVE_COUNT * T)` are both monotonic in
+particle index, so **cohort and tile are correlated**. The number of distinct cohorts
+falling inside one tile is `COHORTS / T`.
+
+This matters: if `COHORTS == T`, every tile contains exactly one cohort, so every tile gets
+exactly one offset and remains a monoculture — just a displaced one. The feature would
+appear to do nothing while quietly changing every genome.
+
+Therefore, when the checkbox is on, `num_cohorts` is **driven** to `k · T`, where `k` is a
+**Variants per tile** slider. `num_cohorts` is capped at 144 by the existing UI, so:
+
+| N | tiles T | max k |
+|---|---|---|
+| 2 | 4 | 36 |
+| 3 | 9 | 16 |
+| 4 | 16 | 9 |
+| 5 | 25 | 5 |
+| 6 | 36 | 4 |
+| 8 | 64 | 2 |
+
+`k` defaults to 4 and its slider maximum is `144 // T`, recomputed when the grid changes.
+While the checkbox is on, the Number of Cohorts slider is shown as driven and read-only, so
+the two controls cannot silently fight.
+
+#### 5.3.2 What CMA-ES is actually optimizing
+
+This is worth stating precisely, because it is easy to describe wrongly.
+
+The CLIP score is computed on the **whole tile image**, which contains all `k` variants
+rendered together. So the objective is **not** `f(θ)`, and it is **not**
+`mean_i f(θ + ε_i)` — it is `f(render(θ+ε_1, …, θ+ε_k))`: a single image of the ensemble.
+CMA-ES converges to the center of a cloud that *looks good collectively*.
+
+That is a robustness pressure, and specifically an anti-adversarial one. A sharp CLIP spike
+sitting exactly at θ cannot survive, because only ~1/k of the particles are near θ. It is
+the genome-space counterpart of the augmented-crops defense in §6.1, and it is a genuine
+reason to prefer this mode once the basic loop works.
+
+The offsets are deterministic given the rule coefficients, so they are **fixed within a
+generation** — snapshots do not disagree with each other. But the seed is
+`hash(rule coefficients)`, so as CMA-ES moves θ the offsets are effectively redrawn. From
+the optimizer's point of view this is a stochastic estimate of a smoothed objective, which
+is exactly the implicit-averaging behaviour that makes the smoothing work.
+
+**Cost: zero.** No extra simulation time, no extra CLIP inference, no extra readback. The
+shader already performs this work; tournament mode was throwing it away.
+
+#### 5.3.3 Correctness fix: suppression must zero sweeps, not just the slider
+
+`sim.py:228` currently disables per-particle mutation in tournament mode with:
+
+```python
+tryset(self.entity_update_program, 'MUTATION_SCALE_SETTING.slider_value', 0.0)
+```
+
+This is **not sufficient**. `calculate_setting` (`entity_update.glsl:171`) returns
+`slider_value` only when `x_sweep`, `y_sweep`, `cohort_sweep` and `jitter` are all zero;
+otherwise it computes from the sweeps and **ignores `slider_value` entirely**. So a user who
+has any sweep set on Mutation Scale currently gets mutation in tournament mode despite the
+suppression, with the amount varying across the canvas.
+
+Suppression must therefore zero `x_sweep`, `y_sweep`, `cohort_sweep` and `jitter` as well.
+Symmetrically, when per-tile mutation is *enabled*, those four are zeroed and only
+`slider_value` is set, so the strength is uniform across every tile and the tiles stay
+comparable.
+
+This is an additive change to the existing `if self._tournament_enabled:` block in `sim.py`
+— extra `tryset` calls, no restructuring — but `sim.py` is user-owned, so the change is
+called out explicitly rather than made silently.
+
+#### 5.3.4 Related pre-existing hazard: spatial sweeps break tile comparability
+
+The same mechanism has a broader consequence that already applies to **manual** tournament
+mode today. Because tiles partition position space and cohort index, any physics parameter
+with `x_sweep`, `y_sweep` or `cohort_sweep` enabled takes **different values in different
+tiles**. Tiles are then not running the same physics, so neither human selection nor a CLIP
+score is comparing genomes on equal terms — the comparison is confounded by position.
+
+v1 handles this by **detection and warning, not by silent override**: when tournament mode
+is active and any physics parameter has a non-zero spatial or cohort sweep, the UI names the
+offending parameters and states that tiles are not comparable. Overriding the user's sweeps
+outright would be a surprising loss of a deliberate feature; Mutation Scale is the sole
+exception, because tournament mode is already claiming ownership of it.
+
+#### 5.3.5 Interaction with genome export
+
+With per-tile mutation on, the exported genome (§9.2) is the **center** of the cloud. Loading
+it into the normal single-simulation view with mutation off will look tamer and thinner than
+the tile it came from — the richness came from the ensemble, not from the center alone.
+
+The export therefore records `evolved_with_tile_mutation`, `mutation_strength` and
+`variants_per_tile` alongside the resolution provenance, and the loader surfaces them. This
+is the difference between "my saved creature looks wrong" and "my saved creature is the
+center of a cloud, and here is how to reconstitute the cloud".
 
 ## 6. Architecture
 
@@ -377,7 +493,8 @@ Converts between `z` vectors and `PhysicsConfig` files. See §9.2.
 
 A dataclass following the existing convention: plain fields for UI state (`enabled`,
 `prompt`, `algorithm`, `grid`, `steps_per_gen`, `sim_steps_per_frame`, `snapshots_per_gen`,
-`sigma0`, `autosave_every`, `running`) plus one-shot request flags (`start_requested`,
+`sigma0`, `autosave_every`, `tile_mutation_enabled`, `variants_per_tile`,
+`tile_mutation_strength`, `running`) plus one-shot request flags (`start_requested`,
 `pause_requested`, `reset_requested`, `prompt_changed`, `grid_changed`,
 `save_checkpoint_requested`, `load_checkpoint_path`, `save_best_requested`). One-shots are
 cleared by the consuming side in `CommandHandler`, matching the correction already made for
@@ -699,6 +816,8 @@ grid range.
 | Shader hot-reload (`V`) mid-rollout | Abort and restart the generation, same as resize. |
 | Checkpoint fails to load (version/signature mismatch) | Refuse with a specific message naming the mismatch; the current run is left untouched. |
 | Imported genome has out-of-range coefficients | Clamped per §9.2 and the clamp count is reported in the UI, rather than producing `inf` in `x0` and silently breaking the search. |
+| A physics parameter has a spatial or cohort sweep enabled | UI names the offending parameters and warns that tiles are not comparable (§5.3.4). Not overridden — Mutation Scale is the only parameter tournament mode takes ownership of. |
+| Grid changed while per-tile mutation is on | `num_cohorts` is re-driven to `k·T` and `k` is re-clamped to `144 // T` at the same generation boundary as the grid change. |
 | `runs/` not writable | Logging and autosave disabled with one warning; the run continues. Evolution must not be blocked by a disk problem. |
 
 ## 12. Testing
@@ -738,6 +857,10 @@ the scratchpad. No GPU required except where noted.
   in-range values; out-of-range coefficients are clamped rather than producing `inf`, and
   the clamp count is reported; importing sets only `x0` and leaves sigma, algorithm and
   grid untouched.
+- `test_cohort_tiling.py` — for every N ∈ [2,8] and every legal `k`, assert that
+  `COHORTS = k·T` gives exactly `k` distinct `floor(get_cohort(index))` values inside each
+  tile, using the same integer arithmetic as the shader. This is the test that would catch
+  the `COHORTS == T` monoculture trap in §5.3.1. Also assert `k_max == 144 // T`.
 - `test_tile_geometry.py` — the §7.3 index formula, tested purely arithmetically for
   N ∈ [2,8]: every tile index in `[0, N²)` maps to a unique non-overlapping crop rectangle,
   and `tile_index = ty*N + tx` agrees with `tournament_home_tile`.
@@ -810,6 +933,7 @@ tests/test_auto_tournament_state.py
 tests/test_run_logger.py
 tests/test_run_checkpoint.py
 tests/test_genome_io.py
+tests/test_cohort_tiling.py
 tests/test_tile_geometry.py
 tests/test_tile_capture.py           (gpu-marked)
 tests/test_clip_real_model.py        (gpu-marked)
@@ -830,4 +954,11 @@ services/__init__.py          export (lazy — must not import onnxruntime at st
 docs/testing_checklist.md     Auto-mode manual checks
 ```
 
-**Unchanged, deliberately:** `sim.py` (user-owned), all `shaders/*`.
+**`sim.py` — additive change only, and only inside the existing `if self._tournament_enabled:`
+block (§5.3.3).** Extra `tryset` calls to zero `x_sweep` / `y_sweep` / `cohort_sweep` /
+`jitter` on `MUTATION_SCALE_SETTING`, and to set `slider_value` from the tournament mutation
+strength instead of unconditionally 0.0. No restructuring. `sim.py` is user-owned, so this is
+called out explicitly and should be confirmed before it is made.
+
+**Unchanged, deliberately:** all `shaders/*` — per-tile mutation reuses `mutate_rule` exactly
+as it stands.
