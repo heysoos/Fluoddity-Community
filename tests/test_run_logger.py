@@ -74,6 +74,54 @@ def test_unwritable_root_degrades_to_a_warning(tmp_path):
     log.close()
 
 
+def test_start_new_run_clears_the_history(tmp_path):
+    """Reset must not leave the previous search's curve on the plot."""
+    log = RunLogger(root=tmp_path)
+    for g in range(4):
+        log.log_generation({"gen": g, "fit_best": g / 10, "sigma": 0.5})
+    assert log.history()["fit_best"] != []
+    log.start_new_run()
+    assert log.history()["fit_best"] == []
+    assert log.history()["sigma"] == []
+    log.close()
+
+
+def test_start_new_run_writes_to_a_fresh_file(tmp_path):
+    """The old run's generations must stay in the old file, not be appended to."""
+    log = RunLogger(root=tmp_path)
+    log.log_generation({"gen": 0, "fit_best": 0.9})
+    old_dir, old_id = log.dir, log.run_id
+
+    log.start_new_run()
+    assert log.run_id != old_id
+    log.log_generation({"gen": 0, "fit_best": 0.1})
+    log.close()
+
+    assert len((old_dir / "log.jsonl").read_text().strip().splitlines()) == 1
+    new_recs = (log.dir / "log.jsonl").read_text().strip().splitlines()
+    assert len(new_recs) == 1
+    assert json.loads(new_recs[0])["fit_best"] == 0.1
+
+
+def test_start_new_run_reuses_an_untouched_run(tmp_path):
+    """Clicking Reset repeatedly must not litter empty run folders."""
+    log = RunLogger(root=tmp_path)
+    first = log.run_id
+    log.start_new_run()
+    log.start_new_run()
+    assert log.run_id == first
+    assert len(list(tmp_path.iterdir())) == 1
+    log.close()
+
+
+def test_start_new_run_on_a_disabled_logger_is_harmless(tmp_path):
+    blocker = tmp_path / "blocked"
+    blocker.write_text("i am a file")
+    log = RunLogger(root=blocker)
+    log.start_new_run()          # must not raise
+    assert log.history()["fit_best"] == []
+
+
 def test_save_frame_writes_a_png(tmp_path):
     log = RunLogger(root=tmp_path)
     img = np.zeros((224, 224, 3), dtype=np.uint8)

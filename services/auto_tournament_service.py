@@ -131,6 +131,10 @@ class AutoTournamentService:
             self.phase = Phase.PAUSED
 
     def reset(self) -> None:
+        # The plot reads logger.history(); leaving it would draw the abandoned
+        # search's curve in front of the new one.
+        if self.logger is not None:
+            self.logger.start_new_run()
         self.optimizer = None
         self.generation = 0
         self.step_in_gen = 0

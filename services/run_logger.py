@@ -23,18 +23,45 @@ def new_run_id(now: _dt.datetime | None = None) -> str:
 class RunLogger:
     def __init__(self, root="runs", run_id: str | None = None,
                  config: dict | None = None):
-        self.run_id = run_id or new_run_id()
-        self.dir = Path(root) / self.run_id
+        self.root = Path(root)
         self.enabled = True
         self._fh = None
+        self._config = dict(config or {})
+        self._n_logged = 0
         self._history: dict[str, list] = {k: [] for k in _HISTORY_KEYS}
+        self._open(run_id or new_run_id())
+
+    def _open(self, run_id: str) -> None:
+        self.run_id = run_id
+        self.dir = self.root / run_id
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
-            (self.dir / "config.json").write_text(json.dumps(config or {}, indent=2))
+            (self.dir / "config.json").write_text(
+                json.dumps(self._config, indent=2))
             self._fh = open(self.dir / "log.jsonl", "a", encoding="utf-8")
         except OSError as exc:
             self.enabled = False
             print(f"[RunLogger] logging disabled ({exc}); the run continues")
+
+    def start_new_run(self) -> None:
+        """Begin a fresh run: clears the plotted history and moves to a new
+        folder so the previous search's generations are not appended to.
+
+        A reset that logged nothing reuses the current run rather than leaving
+        an empty folder behind - Reset is easy to click twice.
+        """
+        self._history = {k: [] for k in _HISTORY_KEYS}
+        if not self.enabled or self._n_logged == 0:
+            return
+        self.close()
+        self._n_logged = 0
+        # new_run_id() has one-second resolution; two resets inside the same
+        # second must not land in the same folder.
+        base = new_run_id()
+        run_id, n = base, 2
+        while (self.root / run_id).exists():
+            run_id, n = f"{base}-{n}", n + 1
+        self._open(run_id)
 
     def log_generation(self, rec: dict) -> None:
         if not self.enabled:
@@ -42,6 +69,7 @@ class RunLogger:
         for k in _HISTORY_KEYS:
             if k in rec:
                 self._history[k].append(rec[k])
+        self._n_logged += 1
         try:
             self._fh.write(json.dumps(rec) + "\n")
             self._fh.flush()  # a crash must lose at most one generation

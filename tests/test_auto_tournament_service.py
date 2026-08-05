@@ -194,6 +194,37 @@ def test_reset_clears_the_optimizer():
     assert svc.optimizer is None
 
 
+def test_reset_clears_the_logged_history(tmp_path):
+    """The plot reads logger.history(); a stale curve after Reset makes the new
+    search look like it started where the old one left off."""
+    from services.run_logger import RunLogger
+
+    svc, _ = make()
+    svc.logger = RunLogger(root=tmp_path)
+    svc.start("coral")
+    run_one_generation(svc)
+    assert svc.logger.history()["fit_best"] != []
+
+    svc.reset()
+    assert svc.logger.history()["fit_best"] == []
+    svc.logger.close()
+
+
+def test_sigma_is_logged_every_generation(tmp_path):
+    """The sigma trace is plotted alongside fitness, so it must be recorded."""
+    from services.run_logger import RunLogger
+
+    svc, _ = make()
+    svc.logger = RunLogger(root=tmp_path)
+    svc.start("coral")
+    run_one_generation(svc)
+    run_one_generation(svc)
+    sig = svc.logger.history()["sigma"]
+    assert len(sig) == 2
+    assert all(s > 0 for s in sig)
+    svc.logger.close()
+
+
 def test_population_is_written_into_the_tournament_service():
     svc, ts = make(grid=2)
     svc.start("coral")

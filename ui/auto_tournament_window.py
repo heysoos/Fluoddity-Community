@@ -4,7 +4,6 @@ Passive: renders widgets and sets state, runs no logic.
 """
 from __future__ import annotations
 
-import numpy as np
 from imgui_bundle import imgui
 
 from services.capture_health import sweeping_parameters
@@ -25,6 +24,33 @@ COHORT_TOOLTIP = (
 
 _WARN = (1.0, 0.6, 0.2, 1.0)
 _BAD = (1.0, 0.4, 0.3, 1.0)
+_OK = (0.4, 0.9, 0.5, 1.0)
+
+_FIT_COLOR = (0.35, 0.85, 0.45, 1.0)      # green, climbing
+_SIGMA_COLOR = (1.0, 0.65, 0.25, 1.0)     # orange, decaying
+
+
+def normalize_series(values) -> list[float]:
+    """Map a series onto 0..1 against its own min/max.
+
+    Fitness and sigma live on different scales, so a shared axis would flatten
+    one of them. Each gets its own normalisation and its real range is printed
+    in the legend. A flat series sits in the middle rather than dividing by zero.
+    """
+    vals = [float(v) for v in values]
+    finite = [v for v in vals if v == v and abs(v) != float("inf")]
+    if not vals:
+        return []
+    if not finite:
+        return [0.5] * len(vals)
+    lo, hi = min(finite), max(finite)
+    if hi - lo <= 0.0:
+        return [0.5] * len(vals)
+    span = hi - lo
+    return [
+        (min(max(v, lo), hi) - lo) / span if v == v else 0.5
+        for v in vals
+    ]
 
 
 class AutoTournamentWindowMixin:
@@ -49,14 +75,7 @@ class AutoTournamentWindowMixin:
         imgui.text(f"Generation {gen}")
         imgui.separator()
 
-        changed, ats.prompt = imgui.input_text(
-            "Goal", ats.prompt, imgui.InputTextFlags_.enter_returns_true
-        )
-        if changed:
-            ats.prompt_changed = True
-        imgui.same_line()
-        if imgui.button("Set"):
-            ats.prompt_changed = True
+        self._render_goal(ats, svc)
 
         idx = (ALGORITHM_NAMES.index(ats.algorithm)
                if ats.algorithm in ALGORITHM_NAMES else 0)
@@ -121,6 +140,42 @@ class AutoTournamentWindowMixin:
             imgui.text_wrapped(f"Auto mode unavailable: {self.auto_unavailable}")
             imgui.text_disabled("pip install onnxruntime-directml tokenizers cmaes")
 
+    def _render_goal(self, ats, svc):
+        """Typed text is not the goal until it is submitted. The box is tinted
+        while the two differ, so there is never a moment where the UI shows one
+        prompt and CLIP is scoring another."""
+        active = (svc.prompt if svc is not None else "").strip()
+        pending = ats.prompt.strip() != active
+
+        if pending:
+            imgui.push_style_color(imgui.Col_.frame_bg,
+                                   imgui.ImVec4(0.42, 0.28, 0.05, 1.0))
+            imgui.push_style_color(imgui.Col_.frame_bg_hovered,
+                                   imgui.ImVec4(0.52, 0.35, 0.07, 1.0))
+            imgui.push_style_color(imgui.Col_.frame_bg_active,
+                                   imgui.ImVec4(0.58, 0.40, 0.09, 1.0))
+        changed, ats.prompt = imgui.input_text(
+            "Goal", ats.prompt, imgui.InputTextFlags_.enter_returns_true
+        )
+        if pending:
+            imgui.pop_style_color(3)
+
+        if changed:
+            ats.prompt_changed = True
+        imgui.same_line()
+        imgui.begin_disabled(not pending)
+        if imgui.button("Set"):
+            ats.prompt_changed = True
+        imgui.end_disabled()
+
+        if pending and ats.prompt.strip():
+            imgui.text_colored(imgui.ImVec4(*_WARN),
+                               "not set - press Enter or click Set")
+        elif active:
+            imgui.text_colored(imgui.ImVec4(*_OK), f'steering toward: "{active}"')
+        else:
+            imgui.text_disabled("no goal set")
+
     def _render_grid_hints(self, ats):
         tiles = ats.grid * ats.grid
         src_px = 1024 // ats.grid
@@ -184,8 +239,7 @@ class AutoTournamentWindowMixin:
             imgui.text_disabled("no generations completed yet")
             return
         imgui.text(f"best {max(best):.3f}   last {best[-1]:.3f}")
-        imgui.plot_lines("fitness", np.asarray(best, dtype=np.float32),
-                         graph_size=imgui.ImVec2(0, 60))
+        self._render_trace(best, h.get("sigma") or [])
         if imgui.begin_table("autolog", 3, imgui.TableFlags_.borders):
             imgui.table_setup_column("gen")
             imgui.table_setup_column("best")
@@ -200,6 +254,64 @@ class AutoTournamentWindowMixin:
                 imgui.table_next_column()
                 imgui.text(f"{mean[i]:.3f}" if i < len(mean) else "-")
             imgui.end_table()
+
+    _TRACE_H = 92.0
+    _TRACE_PAD = 6.0
+    _TRACE_MAX_PTS = 400      # one run can reach thousands of generations
+
+    def _render_trace(self, best, sigma):
+        """Fitness and sigma overlaid, each on its own axis.
+
+        Sharing an axis would be misleading: fitness climbs through ~0.05-0.5
+        while sigma decays from ~0.5 toward 0, so whichever has the wider range
+        flattens the other. Each is normalised separately and the true range is
+        printed next to its colour.
+        """
+        w = max(120.0, imgui.get_content_region_avail().x)
+        p0 = imgui.get_cursor_screen_pos()
+        imgui.dummy(imgui.ImVec2(w, self._TRACE_H))
+        dl = imgui.get_window_draw_list()
+
+        x0, y0 = p0.x, p0.y
+        x1, y1 = x0 + w, y0 + self._TRACE_H
+        dl.add_rect_filled(imgui.ImVec2(x0, y0), imgui.ImVec2(x1, y1),
+                           imgui.get_color_u32(imgui.ImVec4(0.09, 0.09, 0.11, 1.0)))
+        dl.add_rect(imgui.ImVec2(x0, y0), imgui.ImVec2(x1, y1),
+                    imgui.get_color_u32(imgui.ImVec4(0.30, 0.30, 0.34, 1.0)))
+
+        pad = self._TRACE_PAD
+        iw, ih = w - 2 * pad, self._TRACE_H - 2 * pad
+
+        def draw(values, color):
+            if not values:
+                return
+            norm = normalize_series(values)
+            # Never more points than the plot is wide.
+            if len(norm) > self._TRACE_MAX_PTS:
+                step = len(norm) / self._TRACE_MAX_PTS
+                norm = [norm[min(int(i * step), len(norm) - 1)]
+                        for i in range(self._TRACE_MAX_PTS)]
+            col = imgui.get_color_u32(imgui.ImVec4(*color))
+            n = len(norm)
+            if n == 1:
+                dl.add_circle_filled(
+                    imgui.ImVec2(x0 + pad + iw * 0.5, y0 + pad + ih * 0.5), 2.5, col)
+                return
+            pts = [imgui.ImVec2(x0 + pad + iw * i / (n - 1),
+                                y0 + pad + ih * (1.0 - v))
+                   for i, v in enumerate(norm)]
+            for a, b in zip(pts, pts[1:]):
+                dl.add_line(a, b, col, 1.6)
+
+        draw(sigma, _SIGMA_COLOR)     # behind
+        draw(best, _FIT_COLOR)        # in front - it is the thing being optimised
+
+        imgui.text_colored(imgui.ImVec4(*_FIT_COLOR),
+                           f"fitness {min(best):.3f} - {max(best):.3f}")
+        if sigma:
+            imgui.same_line()
+            imgui.text_colored(imgui.ImVec4(*_SIGMA_COLOR),
+                               f"   sigma {min(sigma):.3f} - {max(sigma):.3f}")
 
     def _render_save_load(self, ats, svc):
         if imgui.button("Save best genome"):
