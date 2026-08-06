@@ -226,6 +226,8 @@ class App:
             # Every tile of a generation shares this seed, so the population is
             # compared on equal footing; it changes between generations so a
             # genome cannot win by suiting one fixed starting layout.
+            if svc.tile_physics:
+                self.sim.write_tournament_physics(svc.tile_physics)
             self.sim.reset_seed = float(svc.gen_seed)
             self.sim.reset()
             return 0
@@ -400,7 +402,20 @@ class App:
             # its genome (29.5% of the fitness spread, measured).
             plain_colour=(_auto_svc is not None
                           and ui_state.auto_tournament.enabled),
+            # Each tile reads its own physics block from the config SSBO.
+            physics=(_auto_svc is not None
+                     and ui_state.auto_tournament.enabled
+                     and _auto_svc.physics_enabled
+                     and bool(_auto_svc.tile_physics)),
         )
+        if _auto_svc is not None and ui_state.auto_tournament.enabled:
+            # z=0 must mean "the preset as loaded", not the midpoint of every
+            # slider - the midpoint has no axial force and no drag.
+            from services.physics_genome import PHYSICS_PARAMS
+            _auto_svc.physics_origin = {
+                n: float(getattr(ui_state.sim, n, 0.0))
+                for n, _g, _lo, _hi in PHYSICS_PARAMS
+            }
         if _tile_mut > 0.0:
             # Cohorts must be a multiple of the tile count or each tile holds
             # exactly one cohort and stays a monoculture. See cohort_tiling.

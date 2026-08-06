@@ -22,6 +22,17 @@ COHORT_TOOLTIP = (
     "Cohorts are set for you while this is enabled."
 )
 
+PHYSICS_TOOLTIP = (
+    "Put the physics sliders into the search space alongside the brain.\n\n"
+    "With the brain alone, the loaded preset decides the overall look and the "
+    "brain only shapes local behaviour - so a run improves only when the preset "
+    "already sits near your goal. Measured over 25 generations: the default "
+    "config gained +0.225 on 'glowing coral', while the same optimizer on "
+    "HungryHungryHippos gained +0.008.\n\n"
+    "Each tile gets its own physics block, so tiles differ in physics as well "
+    "as brain. Toggling this resets the search - the space changes dimension."
+)
+
 _WARN = (1.0, 0.6, 0.2, 1.0)
 _BAD = (1.0, 0.4, 0.3, 1.0)
 _OK = (0.4, 0.9, 0.5, 1.0)
@@ -100,6 +111,9 @@ class AutoTournamentWindowMixin:
         _, ats.snapshots_per_gen = imgui.slider_int(
             "Snapshots per Gen", ats.snapshots_per_gen, 1, 8)
         _, ats.sigma0 = imgui.slider_float("Initial Sigma", ats.sigma0, 0.05, 1.5)
+
+        imgui.separator()
+        self._render_physics_search(ats, svc)
 
         imgui.separator()
         self._render_tile_mutation(ats, sigma)
@@ -199,6 +213,29 @@ class AutoTournamentWindowMixin:
         imgui.same_line()
         if imgui.button("Reset"):
             ats.reset_requested = True
+
+    def _render_physics_search(self, ats, svc):
+        from services.physics_genome import PHYSICS_PARAMS
+
+        was = ats.physics_enabled
+        _, ats.physics_enabled = imgui.checkbox(
+            "Search Physics Too", ats.physics_enabled)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(PHYSICS_TOOLTIP)
+        if ats.physics_enabled != was:
+            ats.reset_requested = True     # the search space changed dimension
+
+        if not ats.physics_enabled:
+            imgui.text_disabled(
+                "brain only - the loaded preset fixes the overall look")
+            return
+
+        imgui.text_disabled(
+            "searching " + ", ".join(n.replace('_', ' ').title()
+                                     for n, _g, _lo, _hi in PHYSICS_PARAMS))
+        imgui.text_colored(
+            imgui.ImVec4(*_WARN),
+            "the preset's physics sliders no longer apply while this is on")
 
     def _render_tile_mutation(self, ats, sigma):
         _, ats.tile_mutation_enabled = imgui.checkbox(

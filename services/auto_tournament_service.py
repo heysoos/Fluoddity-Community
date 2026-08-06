@@ -13,7 +13,8 @@ from enum import Enum
 
 import numpy as np
 
-from services.genome_spec import BRAIN_SPEC, decode
+from services.genome_spec import BRAIN_PHYSICS_SPEC, BRAIN_SPEC, decode
+from services.physics_genome import decode_physics, encode_physics
 from services.optimizers import make_optimizer
 
 
@@ -52,6 +53,13 @@ class AutoTournamentService:
         self.sim_steps_per_frame = 10
         self.sigma0 = 0.5
         self.algorithm = "CMA-ES"
+        self.physics_enabled = False
+        self.tile_physics: list[dict] = []
+        # Current physics, so z=0 decodes to the LOADED PRESET rather than the
+        # midpoint of every slider. The midpoint is AXIAL_FORCE=0,
+        # LATERAL_FORCE=0, DRAG=0 - a dead configuration with no propulsion,
+        # which is where CMA-ES would otherwise centre its search.
+        self.physics_origin: dict[str, float] = {}
         self.tile_mutation_enabled = False
         self.variants_per_tile = 4
         self.tile_mutation_strength = 0.1
@@ -95,8 +103,31 @@ class AutoTournamentService:
     def sigma(self) -> float:
         return float(self.optimizer.sigma) if self.optimizer else self.sigma0
 
+    def _resolve_spec(self) -> None:
+        """Point self.spec at the space the current settings imply.
+
+        Must run before the optimizer is built, not only in _begin_generation:
+        start() calls _ensure_optimizer() first, and an 80-D optimizer built
+        there would never be widened to hold the physics block.
+        """
+        want = BRAIN_PHYSICS_SPEC if self.physics_enabled else BRAIN_SPEC
+        if self.spec is not want:
+            self.spec = want
+            self.optimizer = None
+
+    def _physics_x0(self):
+        """Search origin: brain at 0, physics at the loaded preset."""
+        if not (self.physics_enabled and self.physics_origin):
+            return None
+        x0 = np.zeros(self.spec.dim, dtype=np.float64)
+        x0[BRAIN_SPEC.dim:] = encode_physics(self.physics_origin)
+        return x0
+
     def _ensure_optimizer(self, x0=None) -> None:
+        self._resolve_spec()
         if self.optimizer is None:
+            if x0 is None:
+                x0 = self._physics_x0()
             self.optimizer = make_optimizer(
                 self.algorithm, self.spec.dim, self.popsize,
                 self.sigma0, self.base_seed, x0,
@@ -140,6 +171,7 @@ class AutoTournamentService:
         self.step_in_gen = 0
         self.fitness = None
         self._z = None
+        self.tile_physics = []
         self._buffer.clear()
         self._needs_write = False
         self.phase = Phase.IDLE
@@ -154,6 +186,9 @@ class AutoTournamentService:
             self._needs_write = True
 
     def _begin_generation(self) -> None:
+        # Turning physics search on or off changes the dimension of the search
+        # space, so the optimizer cannot be carried across the switch.
+        self._resolve_spec()
         # The population size is fixed at optimizer construction (cmaes asserts
         # on it in tell()). If the grid changed by any route that did not reset
         # us, rebuild rather than crash on the next tell.
@@ -161,7 +196,10 @@ class AutoTournamentService:
             self.optimizer = None
         self._ensure_optimizer()
         self._z = self.optimizer.ask(self.popsize)
-        self.tournament.population = [decode(z) for z in self._z]
+        parts = [self.spec.decode(z) for z in self._z]
+        self.tournament.population = [p["brain"] for p in parts]
+        self.tile_physics = ([decode_physics(p["physics"]) for p in parts]
+                             if self.physics_enabled else [])
         self.tournament.mark_dirty()
         self._snaps = snapshot_steps(self.steps_per_gen, self.snapshots_per_gen)
         self._next_snap = 0
@@ -243,6 +281,7 @@ class AutoTournamentService:
                 "snapshots": self.snapshots_per_gen,
                 "elites_injected": len(selected),
                 "tile_mutation": bool(self.tile_mutation_enabled),
+                "physics_search": bool(self.physics_enabled),
                 "nan_replaced": int(bad.sum()),
             })
 
@@ -271,6 +310,7 @@ class AutoTournamentService:
                 "sigma0": self.sigma0,
                 "autosave_every": self.autosave_every,
                 "tile_mutation_enabled": self.tile_mutation_enabled,
+                "physics_enabled": self.physics_enabled,
                 "variants_per_tile": self.variants_per_tile,
                 "tile_mutation_strength": self.tile_mutation_strength,
             },
@@ -291,6 +331,7 @@ class AutoTournamentService:
             sigma0=float(s["sigma0"]),
             autosave_every=int(s.get("autosave_every", 10)),
             tile_mutation_enabled=bool(s.get("tile_mutation_enabled", False)),
+            physics_enabled=bool(s.get("physics_enabled", False)),
             variants_per_tile=int(s.get("variants_per_tile", 4)),
             tile_mutation_strength=float(s.get("tile_mutation_strength", 0.1)),
             algorithm=str(state["optimizer_name"]),

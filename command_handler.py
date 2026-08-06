@@ -377,6 +377,7 @@ class CommandHandler:
             sigma0=ats.sigma0,
             algorithm=ats.algorithm,
             autosave_every=ats.autosave_every,
+            physics_enabled=ats.physics_enabled,
             tile_mutation_enabled=ats.tile_mutation_enabled,
             variants_per_tile=ats.variants_per_tile,
             tile_mutation_strength=ats.tile_mutation_strength,

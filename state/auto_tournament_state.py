@@ -21,6 +21,7 @@ class AutoTournamentState:
     snapshots_per_gen: int = 4
     sigma0: float = 0.5
     autosave_every: int = 10
+    physics_enabled: bool = False
     tile_mutation_enabled: bool = False
     variants_per_tile: int = 4
     tile_mutation_strength: float = 0.1

@@ -90,3 +90,10 @@ class GenomeSpec:
 
 
 BRAIN_SPEC = GenomeSpec([Block("brain", DIM)])
+
+# Physics in the search space. Measured: brain-only search only improves when
+# the starting preset already sits near the goal, because the preset fixes gross
+# morphology and the brain only shapes local behaviour.
+from services.physics_genome import PHYSICS_DIM  # noqa: E402
+
+BRAIN_PHYSICS_SPEC = GenomeSpec([Block("brain", DIM), Block("physics", PHYSICS_DIM)])

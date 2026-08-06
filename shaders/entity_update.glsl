@@ -66,6 +66,9 @@ uniform int TOURNAMENT_GRID;   // grid side length (4 => 16 tiles)
 // Reshuffles initial conditions between generations so a genome is not scored
 // on one lucky starting layout. 0.0 = the original deterministic reset.
 uniform float RESET_SEED;
+// 1 = each tile's physics comes from its own configs[] entry, so the optimizer
+// can search physics as well as the brain.
+uniform int TOURNAMENT_PHYSICS;
 
 // Multi-load control uniforms (small, stay as uniforms)
 uniform int MULTILOAD_COUNT; // Number of loaded configs (0 = normal mode)
@@ -125,7 +128,15 @@ layout(std430, binding = 4) buffer MultiLoadRuleBuffer {
 #define SQRT_WORLD_SIZE (sqrt(WORLD_SIZE))
 #define SQRT_WORLD_SIZE (sqrt(WORLD_SIZE))
 // Multi-load helper: Calculate which config index this particle should use
+int tournament_home_tile(uint index);   // defined below
+
 int get_particle_config_index() {
+    // Auto tournament with physics in the search space: every tile reads its
+    // own PhysicsSetting block, reusing the multi-load config SSBO. Checked
+    // before MULTILOAD_COUNT because tournament mode does not load configs.
+    if (TOURNAMENT_MODE == 1 && TOURNAMENT_PHYSICS == 1) {
+        return tournament_home_tile(gl_GlobalInvocationID.x);
+    }
     if (MULTILOAD_COUNT == 0) return -1; // Not in multi-load mode
 
     // Calculate normalized index (0 to 1) for this particle

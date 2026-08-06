@@ -40,6 +40,7 @@ class Sim:
         self._tournament_grid = 4
         self._tournament_mutation = 0.0
         self._tournament_plain_colour = False
+        self._tournament_physics = False
         # Shifts the reset() draws so generations do not replay one fixed
         # starting layout. 0.0 reproduces the original deterministic reset.
         self.reset_seed = 0.0
@@ -77,9 +78,11 @@ class Sim:
         self.entities = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_ENTITY_STRUCT)
         self.rule_buffer = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_RULE_STRUCT)
 
-        # Multi-load config buffer (64 configs * 248 bytes per config)
-        # Each MultiLoadConfig struct: 9 PhysicsSetting (54 floats) + 6 ints + 2 floats = 248 bytes
-        MULTI_LOAD_CONFIG_SIZE = 248
+        # Multi-load config buffer. Each MultiLoadConfig is
+        # 10 PhysicsSetting * 7 floats (280) + 6 ints (24) + 3 floats (12).
+        # This was 248, which under-reserved the buffer by 68 bytes per config -
+        # harmless only because nothing had yet written all 64 entries.
+        MULTI_LOAD_CONFIG_SIZE = 316
         MAX_MULTI_LOAD_CONFIGS = 64
         self.multi_load_buffer = self.ctx.buffer(reserve=MAX_MULTI_LOAD_CONFIGS * MULTI_LOAD_CONFIG_SIZE)
 
@@ -257,6 +260,8 @@ class Sim:
             # tiles against each other, so that has to go.
             if self._tournament_plain_colour:
                 tryset(self.entity_update_program, 'COLOR_BY_COHORT', False)
+        tryset(self.entity_update_program, 'TOURNAMENT_PHYSICS',
+               1 if (self._tournament_enabled and self._tournament_physics) else 0)
 
         num_workgroups = (self.entity_count + 63) // 64
         ctx.memory_barrier()
@@ -766,7 +771,8 @@ class Sim:
             set_rule_uniform(self.entity_update_program, rule)
 
     def apply_tournament(self, enabled: bool, grid: int = 4,
-                         mutation: float = 0.0, plain_colour: bool = False) -> None:
+                         mutation: float = 0.0, plain_colour: bool = False,
+                         physics: bool = False) -> None:
         """Enable/disable tournament tiling for the next update.
 
         `mutation` is the per-particle mutation scale tournament mode imposes;
@@ -783,6 +789,58 @@ class Sim:
         self._tournament_grid = grid
         self._tournament_mutation = mutation
         self._tournament_plain_colour = bool(plain_colour) and enabled
+        self._tournament_physics = bool(physics) and enabled
+
+    # 10 PhysicsSetting structs in GLSL declaration order. Order is load
+    # bearing: this is a raw std430 write, not a named one.
+    _TOURNAMENT_PHYSICS_ORDER = [
+        ('AXIAL_FORCE', -1.0, 1.0),
+        ('LATERAL_FORCE', -1.0, 1.0),
+        ('SENSOR_GAIN', 0.0, 5.0),
+        ('MUTATION_SCALE', -0.5, 0.5),
+        ('DRAG', -1.0, 1.0),
+        ('STRAFE_POWER', 0.0, 0.5),
+        ('SENSOR_ANGLE', -1.0, 1.0),
+        ('GLOBAL_FORCE_MULT', 0.0, 2.0),
+        ('SENSOR_DISTANCE', 0.0, 4.0),
+        ('HAZARD_RATE', 0.0, 0.05),
+    ]
+
+    def write_tournament_physics(self, per_tile: list[dict]) -> None:
+        """Give each tile its own physics block in the multi-load config SSBO.
+
+        `per_tile[i]` overrides parameters for tile i; anything absent falls
+        back to the current global SimState, so only what the genome searches
+        varies between tiles. Sweeps and jitter are written as 0 - a sweep would
+        make the parameter vary WITHIN a tile by position and destroy the
+        comparison the tournament exists to make.
+        """
+        import struct
+
+        data = bytearray()
+        for cfg in per_tile:
+            for name, dmin, dmax in self._TOURNAMENT_PHYSICS_ORDER:
+                lo, hi = self._get_slider_range(
+                    name.replace('_', ' ').title(), dmin, dmax)
+                value = float(cfg.get(name, getattr(self._state, name, 0.0)))
+                # slider_value, min, max, x_sweep, y_sweep, cohort_sweep, jitter
+                data.extend(struct.pack('7f', value, lo, hi, 0.0, 0.0, 0.0, 0.0))
+            data.extend(struct.pack(
+                '6i',
+                int(self._state.DISABLE_SYMMETRY),
+                int(self._state.ABSOLUTE_ORIENTATION),
+                int(self._state.boundary_conditions),
+                int(self._state.initial_conditions),
+                int(self._state.num_cohorts),
+                int(self._state.color_by_cohort),
+            ))
+            data.extend(struct.pack(
+                '3f',
+                float(self._state.hue_sensitivity),
+                float(self._state.ORIENTATION_MIX),
+                float(self._state.rule_seed),
+            ))
+        self.multi_load_buffer.write(bytes(data))
 
     def write_tournament_rules(self, rule_bytes: bytes) -> None:
         """Upload 16 packed genomes into the (reused) multi-load rule buffer."""
