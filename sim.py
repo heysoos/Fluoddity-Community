@@ -40,6 +40,9 @@ class Sim:
         self._tournament_grid = 4
         self._tournament_mutation = 0.0
         self._tournament_plain_colour = False
+        # Shifts the reset() draws so generations do not replay one fixed
+        # starting layout. 0.0 reproduces the original deterministic reset.
+        self.reset_seed = 0.0
 
     def get_entity_count(self) -> int:
         """Calculate entity count based on world size and particle density.
@@ -188,6 +191,7 @@ class Sim:
         tryset(self.entity_update_program, 'frame_count', self.frame_count)
         tryset(self.entity_update_program, 'canvas', 1)
         tryset(self.entity_update_program, 'WORLD_SIZE', self.world_size)
+        tryset(self.entity_update_program, 'RESET_SEED', float(self.reset_seed))
 
         # Advanced drawing field texture
         tryset(self.entity_update_program, 'field_texture', 5)

@@ -223,6 +223,10 @@ class App:
         if action is Action.WRITE_RULES:
             self.sim.write_tournament_rules(self.tournament_service.pack_rule_bytes())
             self.tournament_service.clear_dirty()
+            # Every tile of a generation shares this seed, so the population is
+            # compared on equal footing; it changes between generations so a
+            # genome cannot win by suiting one fixed starting layout.
+            self.sim.reset_seed = float(svc.gen_seed)
             self.sim.reset()
             return 0
         if action is Action.CAPTURE:

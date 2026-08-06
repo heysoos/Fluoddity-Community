@@ -63,6 +63,9 @@ uniform bool WRITE_RULES; // Set true for one frame when rule buffer readback is
 // Tournament mode: partition the canvas into a TOURNAMENT_GRID x TOURNAMENT_GRID grid
 uniform int TOURNAMENT_MODE;   // 0 = off, 1 = on
 uniform int TOURNAMENT_GRID;   // grid side length (4 => 16 tiles)
+// Reshuffles initial conditions between generations so a genome is not scored
+// on one lucky starting layout. 0.0 = the original deterministic reset.
+uniform float RESET_SEED;
 
 // Multi-load control uniforms (small, stay as uniforms)
 uniform int MULTILOAD_COUNT; // Number of loaded configs (0 = normal mode)
@@ -378,8 +381,10 @@ void reset(uint index){
     vec4 color=vec4(0,0,1,.045);
     //set pos and vel to random values on a small disk
     float cohort_scale = 0.019;//Size of each disk
-    vec2 pos=cohort_scale*vec2(hash(vec2(cohort_val)),hash(vec2(cohort_val+index+2.142)));
-    vec2 vel=.00005*(vec2(hash(vec2(cohort_val,index)),hash(vec2(cohort_val,pos.y)))*2-1);
+    // RESET_SEED shifts every draw below. It is 0.0 outside auto-tournament
+    // mode, where adding it is a no-op, so ordinary resets are bit-identical.
+    vec2 pos=cohort_scale*vec2(hash(vec2(cohort_val+RESET_SEED)),hash(vec2(cohort_val+index+2.142+RESET_SEED)));
+    vec2 vel=.00005*(vec2(hash(vec2(cohort_val+RESET_SEED,index)),hash(vec2(cohort_val,pos.y)))*2-1);
 
     //RESET_MODE: 0=Grid, 1=Random, 2=Ring
     int reset_mode = get_particle_reset_mode();
@@ -415,8 +420,8 @@ void reset(uint index){
         vec2 lo, hi; tournament_tile_box(htile, lo, hi);
         vec2 margin = (hi - lo) * 0.04;
         lo += margin; hi -= margin;
-        vec2 r = vec2(hash(vec2(cohort_val, float(index)+0.1)),
-                      hash(vec2(float(index)+0.2, cohort_val)));
+        vec2 r = vec2(hash(vec2(cohort_val + RESET_SEED, float(index)+0.1)),
+                      hash(vec2(float(index)+0.2, cohort_val + RESET_SEED)));
         pos = mix(lo, hi, r);
     }
 
