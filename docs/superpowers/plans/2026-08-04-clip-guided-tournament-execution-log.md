@@ -292,3 +292,70 @@ runs `speedmult` steps per frame.
 The one disproportionate number is `rule_buffer`, at 320 B/particle: 768 MB of
 the 1085 MB at ws=4.0. Harmless on an 8 GB card, but on a smaller GPU it is the
 term that would spill to system memory and turn this linear curve into a cliff.
+
+## Why runs looked like noise: headless diagnosis
+
+Seven headless experiments, driving the real pipeline (rule upload -> reset ->
+rollout -> capture -> CLIP) with the optimizer swapped for a scripted one so the
+evaluated genomes are chosen exactly.
+
+### The search is NOT broken
+
+25 generations, "glowing coral", against a Random Search control - the only
+baseline that matters, since it draws from the same distribution every
+generation and never learns:
+
+| config | mean gain | final mean |
+|---|---|---|
+| CMA-ES | +0.266 | 0.451 |
+| CMA-ES, cohort colour off | +0.232 | 0.470 |
+| Sep-CMA-ES | +0.174 | 0.369 |
+| **Random Search (control)** | **-0.005** | **0.143** |
+
+CMA-ES reaches 3.3x the control's final mean. There is real optimisation.
+
+### Ruled out
+
+- **No signal.** SNR of 2.7-3.9 across three prompts, measured as
+  sqrt(total_var - noise_var)/noise_std, where the noise floor is the spread
+  across 16 tiles all running the SAME genome.
+- **Softmax temperature.** LOGIT_SCALE=100 is CLIP's classification temperature
+  and looks brutal, but rankings at x100, x30 and x10 agree at rho ~ 0.97, and
+  CMA-ES consumes only ranks. Irrelevant.
+
+### Confirmed and fixed: cohort colour leaked the tile slot into fitness
+
+29.5% of the within-generation spread was decided by which tile a genome landed
+in. See commit for the mechanism. Real, but not the blocker.
+
+### The actual blocker: the search space is brain-only
+
+Whether a run improves is decided by the (starting physics preset x prompt)
+PAIR, because the genome only shapes the brain while the preset fixes the gross
+morphology and palette:
+
+| preset | prompt | mean gain | final mean |
+|---|---|---|---|
+| _Default | glowing coral | **+0.225** | **0.378** |
+| _Default | a fiery explosion | +0.052 | 0.111 |
+| _Default | a swirling nebula | +0.004 | 0.042 |
+| HungryHungryHippos | glowing coral | +0.008 | 0.044 |
+| HungryHungryHippos | a fiery explosion | +0.031 | 0.088 |
+| HungryHungryHippos | a swirling nebula | +0.005 | 0.022 |
+
+One pair of six climbs strongly; most are flat. HungryHungryHippos is flat for
+every prompt tried - its physics (global_force_mult -0.341, i.e. inverted and
+weak, plus Wrap boundaries) leaves the brain almost no leverage over the image.
+
+This is the cost of the deferred "physics behind a toggle later" decision, now
+quantified. Until physics joins the search space, Auto mode only works when
+started from a preset already in the visual neighbourhood of the goal.
+
+**Feasibility signal:** generation 1 predicts the run. A first-generation
+fit_best near 0.5 climbed to 0.9; one near 0.03 never left 0.06.
+
+### Also found
+
+`AutoTournamentService.gen_seed` is computed and logged to the JSONL but never
+applied to anything. The "shared seed, reshuffled per generation" decision was
+never wired in, so every generation starts from identical initial conditions.
