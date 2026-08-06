@@ -391,6 +391,11 @@ class App:
             ui_state.tournament.enabled,
             grid=self.tournament_service.grid,
             mutation=_tile_mut,
+            # Auto mode ranks tiles against each other, and cohort colouring
+            # gives each tile a fixed palette decided by its slot rather than
+            # its genome (29.5% of the fitness spread, measured).
+            plain_colour=(_auto_svc is not None
+                          and ui_state.auto_tournament.enabled),
         )
         if _tile_mut > 0.0:
             # Cohorts must be a multiple of the tile count or each tile holds

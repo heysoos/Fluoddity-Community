@@ -39,6 +39,7 @@ class Sim:
         self._tournament_enabled = False
         self._tournament_grid = 4
         self._tournament_mutation = 0.0
+        self._tournament_plain_colour = False
 
     def get_entity_count(self) -> int:
         """Calculate entity count based on world size and particle density.
@@ -247,6 +248,11 @@ class Sim:
             for _field in ('x_sweep', 'y_sweep', 'cohort_sweep', 'jitter'):
                 tryset(self.entity_update_program,
                        f'MUTATION_SCALE_SETTING.{_field}', 0.0)
+            # Cohorts nest inside tiles, so hash(cohort) hues make a tile's
+            # palette a function of its SLOT, not its genome. Auto mode ranks
+            # tiles against each other, so that has to go.
+            if self._tournament_plain_colour:
+                tryset(self.entity_update_program, 'COLOR_BY_COHORT', False)
 
         num_workgroups = (self.entity_count + 63) // 64
         ctx.memory_barrier()
@@ -756,15 +762,23 @@ class Sim:
             set_rule_uniform(self.entity_update_program, rule)
 
     def apply_tournament(self, enabled: bool, grid: int = 4,
-                         mutation: float = 0.0) -> None:
+                         mutation: float = 0.0, plain_colour: bool = False) -> None:
         """Enable/disable tournament tiling for the next update.
 
         `mutation` is the per-particle mutation scale tournament mode imposes;
         0.0 means every particle in a tile shares that tile's genome exactly.
+
+        `plain_colour` suppresses cohort colouring (Auto mode). Each tile owns a
+        disjoint block of cohort indices, so hue = hash(cohort) gives every tile
+        a fixed palette decided by its slot rather than by its genome - measured
+        at 29.5% of the fitness spread, which the optimizer cannot help but
+        chase. Suppressed at the uniform, never in SimState, so the user's saved
+        appearance setting survives.
         """
         self._tournament_enabled = enabled
         self._tournament_grid = grid
         self._tournament_mutation = mutation
+        self._tournament_plain_colour = bool(plain_colour) and enabled
 
     def write_tournament_rules(self, rule_bytes: bytes) -> None:
         """Upload 16 packed genomes into the (reused) multi-load rule buffer."""
