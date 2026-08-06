@@ -14,7 +14,7 @@ from enum import Enum
 import numpy as np
 
 from services.genome_spec import BRAIN_PHYSICS_SPEC, BRAIN_SPEC, decode
-from services.physics_genome import decode_physics, encode_physics
+from services.physics_genome import decode_physics
 from services.optimizers import make_optimizer
 
 
@@ -115,19 +115,9 @@ class AutoTournamentService:
             self.spec = want
             self.optimizer = None
 
-    def _physics_x0(self):
-        """Search origin: brain at 0, physics at the loaded preset."""
-        if not (self.physics_enabled and self.physics_origin):
-            return None
-        x0 = np.zeros(self.spec.dim, dtype=np.float64)
-        x0[BRAIN_SPEC.dim:] = encode_physics(self.physics_origin)
-        return x0
-
     def _ensure_optimizer(self, x0=None) -> None:
         self._resolve_spec()
         if self.optimizer is None:
-            if x0 is None:
-                x0 = self._physics_x0()
             self.optimizer = make_optimizer(
                 self.algorithm, self.spec.dim, self.popsize,
                 self.sigma0, self.base_seed, x0,
@@ -198,8 +188,9 @@ class AutoTournamentService:
         self._z = self.optimizer.ask(self.popsize)
         parts = [self.spec.decode(z) for z in self._z]
         self.tournament.population = [p["brain"] for p in parts]
-        self.tile_physics = ([decode_physics(p["physics"]) for p in parts]
-                             if self.physics_enabled else [])
+        self.tile_physics = (
+            [decode_physics(p["physics"], self.physics_origin) for p in parts]
+            if self.physics_enabled else [])
         self.tournament.mark_dirty()
         self._snaps = snapshot_steps(self.steps_per_gen, self.snapshots_per_gen)
         self._next_snap = 0

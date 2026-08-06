@@ -7,41 +7,79 @@ from services.genome_spec import BRAIN_PHYSICS_SPEC, BRAIN_SPEC
 from services.physics_genome import (
     PHYSICS_DIM,
     PHYSICS_PARAMS,
+    SPAN_FRACTION,
     decode_physics,
+    default_origin,
     encode_physics,
     midpoint_z,
 )
 from services.tournament_service import TournamentService
 
+# A preset that sits OUTSIDE several nominal ranges, as real presets do.
+# HungryHungryHippos stores global_force_mult = -0.341 against a nominal
+# (0.0, 2.0), which is what broke the original absolute parameterisation.
+HHH_ORIGIN = {
+    "SENSOR_DISTANCE": -1.0521,
+    "SENSOR_ANGLE": -0.7286,
+    "SENSOR_GAIN": 0.9078,
+    "AXIAL_FORCE": 0.3593,
+    "LATERAL_FORCE": -1.2937,
+    "STRAFE_POWER": 0.0762,
+    "GLOBAL_FORCE_MULT": -0.3407,
+    "DRAG": 0.5608,
+}
 
-def test_every_parameter_decodes_inside_its_slider_range():
+
+def test_zero_reproduces_the_origin_exactly():
+    """The whole point: ticking the toggle must change nothing until the
+    optimizer moves. Previously -0.341 decoded to 0.0002, silently switching
+    the forces off before generation 1."""
+    vals = decode_physics(midpoint_z(), HHH_ORIGIN)
+    for name, value in HHH_ORIGIN.items():
+        assert vals[name] == pytest.approx(value, abs=1e-9)
+
+
+def test_an_out_of_range_preset_value_is_not_at_a_saturated_edge():
+    """-0.341 used to encode to z = -4.605, where the tanh gradient is 4e-4 and
+    CMA-ES could never move the gene again."""
+    z = encode_physics(HHH_ORIGIN, HHH_ORIGIN)
+    assert np.allclose(z, 0.0, atol=1e-6)
+    gradient = 1.0 - np.tanh(z) ** 2
+    assert gradient.min() > 0.99, "origin must sit where the map is steepest"
+
+
+def test_every_parameter_stays_within_one_span_of_the_origin():
     rng = np.random.default_rng(0)
     for _ in range(200):
-        vals = decode_physics(rng.normal(0, 3, PHYSICS_DIM))
+        vals = decode_physics(rng.normal(0, 3, PHYSICS_DIM), HHH_ORIGIN)
         for name, _glsl, lo, hi in PHYSICS_PARAMS:
-            assert lo <= vals[name] <= hi, f"{name} escaped [{lo}, {hi}]"
+            span = SPAN_FRACTION * (hi - lo)
+            assert abs(vals[name] - HHH_ORIGIN[name]) <= span + 1e-6
 
 
 def test_extreme_z_saturates_rather_than_escaping():
     """tanh, not clipping: no repair bias at the boundary."""
-    hot = decode_physics(np.full(PHYSICS_DIM, 50.0))
-    cold = decode_physics(np.full(PHYSICS_DIM, -50.0))
+    hot = decode_physics(np.full(PHYSICS_DIM, 50.0), HHH_ORIGIN)
+    cold = decode_physics(np.full(PHYSICS_DIM, -50.0), HHH_ORIGIN)
     for name, _g, lo, hi in PHYSICS_PARAMS:
-        assert hot[name] == pytest.approx(hi, abs=1e-4)
-        assert cold[name] == pytest.approx(lo, abs=1e-4)
+        span = SPAN_FRACTION * (hi - lo)
+        assert hot[name] == pytest.approx(HHH_ORIGIN[name] + span, abs=1e-3)
+        assert cold[name] == pytest.approx(HHH_ORIGIN[name] - span, abs=1e-3)
 
 
-def test_zero_is_the_midpoint_of_every_range():
+def test_without_an_origin_zero_is_the_nominal_midpoint():
+    """Fallback for callers that have no preset to hand."""
     vals = decode_physics(midpoint_z())
     for name, _g, lo, hi in PHYSICS_PARAMS:
         assert vals[name] == pytest.approx((lo + hi) / 2)
+    assert default_origin()["GLOBAL_FORCE_MULT"] == pytest.approx(1.0)
 
 
 def test_encode_decode_roundtrips():
     rng = np.random.default_rng(1)
     z = rng.normal(0, 1.5, PHYSICS_DIM)
-    vals = decode_physics(z)
-    assert np.allclose(encode_physics(vals), z, atol=1e-3)
+    vals = decode_physics(z, HHH_ORIGIN)
+    assert np.allclose(encode_physics(vals, HHH_ORIGIN), z, atol=1e-3)
 
 
 def test_wrong_length_is_rejected():
@@ -177,16 +215,30 @@ def test_starting_with_physics_already_enabled_does_not_crash():
     assert len(svc.tile_physics) == ts.tiles
 
 
-def test_search_is_centred_on_the_loaded_preset_not_the_midpoint():
-    """z=0 at the midpoint means AXIAL_FORCE=0, LATERAL_FORCE=0, DRAG=0 - no
-    propulsion at all, which is where CMA-ES would centre its search."""
-    svc, _ = make(True)
-    origin = {n: lo + 0.8 * (hi - lo) for n, _g, lo, hi in PHYSICS_PARAMS}
-    svc.physics_origin = origin
+def test_the_service_decodes_against_the_loaded_preset():
+    """Origin-relative means the search starts AT the preset, so the optimizer
+    perturbs it rather than replacing it."""
+    ts = TournamentService(grid=4)          # popsize 16, so the mean is stable
+    ts.init_population()
+    svc = AutoTournamentService(ts, scorer=FakeScorer(), logger=None)
+    svc.configure(steps_per_gen=20, snapshots_per_gen=1, sim_steps_per_frame=20,
+                  physics_enabled=True)
+    svc.physics_origin = dict(HHH_ORIGIN)
     svc.start("coral")
-    x0 = svc._physics_x0()
-    assert x0 is not None and x0.shape == (BRAIN_PHYSICS_SPEC.dim,)
-    assert np.allclose(x0[:BRAIN_SPEC.dim], 0.0), "brain still starts at zero"
-    recovered = decode_physics(x0[BRAIN_SPEC.dim:])
-    for name, _g, _lo, _hi in PHYSICS_PARAMS:
-        assert recovered[name] == pytest.approx(origin[name], rel=1e-3)
+
+    # z is drawn symmetrically about 0, and z=0 IS the preset, so the
+    # population centres on the preset rather than on the nominal midpoint
+    # (which for GLOBAL_FORCE_MULT would be +1.0).
+    gfm = np.array([b["GLOBAL_FORCE_MULT"] for b in svc.tile_physics])
+    assert abs(gfm.mean() - HHH_ORIGIN["GLOBAL_FORCE_MULT"]) < 0.4
+    assert abs(gfm.mean() - 1.0) > 0.8, "must not be centred on the midpoint"
+
+
+def test_enabling_physics_search_does_not_move_the_preset_on_its_own():
+    """Regression: the absolute parameterisation decoded HungryHungryHippos'
+    global_force_mult of -0.341 to 0.0002, switching the forces off before a
+    single generation had run."""
+    svc, _ = make(True)
+    svc.physics_origin = dict(HHH_ORIGIN)
+    at_origin = decode_physics(np.zeros(PHYSICS_DIM), svc.physics_origin)
+    assert at_origin["GLOBAL_FORCE_MULT"] == pytest.approx(-0.3407, abs=1e-6)
