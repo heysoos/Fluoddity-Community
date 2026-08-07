@@ -77,6 +77,7 @@ class App:
         self.capture_blit = None
         self.clip_scorer = None
         self._auto_prev_aspect = None
+        self._auto_prev_speedmult = None
         self._auto_was_enabled = False
         self._last_crops = None
         self.advanced_drawing_processor = AdvancedDrawingProcessor(self.ctx)
@@ -310,6 +311,7 @@ class App:
         auto = ui_state.auto_tournament
         if auto.enabled and not self._auto_was_enabled:
             self._auto_prev_aspect = ui_state.preferences.canvas_aspect_ratio
+            self._auto_prev_speedmult = ui_state.preferences.speedmult
             if ui_state.preferences.canvas_aspect_ratio != "1:1":
                 ui_state.preferences.canvas_aspect_ratio = "1:1"
                 ui_state.request_world_size_change = True
@@ -318,6 +320,8 @@ class App:
             if self._auto_prev_aspect and self._auto_prev_aspect != "1:1":
                 ui_state.preferences.canvas_aspect_ratio = self._auto_prev_aspect
                 ui_state.request_world_size_change = True
+            if self._auto_prev_speedmult is not None:
+                ui_state.preferences.speedmult = self._auto_prev_speedmult
             if self.auto_service is not None:
                 self.auto_service.pause()
         self._auto_was_enabled = auto.enabled
@@ -626,9 +630,28 @@ class App:
         self.screenshot_in_progress = False
         self.screenshot_saved_settings = {}
 
+    def _restore_auto_overrides(self, ui_state):
+        """Undo Auto mode's transient overrides before anything is persisted.
+
+        Auto mode drives the physics step count through preferences.speedmult
+        and forces a 1:1 canvas. Both are restored on the Auto->off edge, but
+        quitting while Auto is still enabled never crosses that edge. That
+        matters because _drive_auto_tournament returns 0 on capture, score and
+        write-rules frames, so the persisted speedmult could be 0 - and a
+        speedmult of 0 means the next launch never steps the simulation: a
+        black canvas with a working UI and no visible cause.
+        """
+        if not ui_state.auto_tournament.enabled:
+            return
+        if self._auto_prev_speedmult is not None:
+            ui_state.preferences.speedmult = self._auto_prev_speedmult
+        if self._auto_prev_aspect:
+            ui_state.preferences.canvas_aspect_ratio = self._auto_prev_aspect
+
     def cleanup(self):
         # Save preferences before cleanup
         ui_state = self.ui.get_state()
+        self._restore_auto_overrides(ui_state)
         save_preferences(ui_state.preferences)
 
         self.advanced_drawing_processor.cleanup()

@@ -103,7 +103,16 @@ def load_preferences(filepath: Path | str = None) -> PreferencesState:
         # Filter out any fields that are no longer in PreferencesState (backward compat)
         valid_fields = set(PreferencesState.__dataclass_fields__.keys())
         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
-        return PreferencesState(**filtered_data)
+        prefs = PreferencesState(**filtered_data)
+        # speedmult 0 means the simulation never steps: a black canvas with a
+        # working UI, and nothing on screen to explain it. Auto mode drives
+        # speedmult and legitimately sets it to 0 on capture and score frames,
+        # so quitting on one of those used to persist a file that could never
+        # render again. The write side is fixed, but existing poisoned files
+        # must heal themselves rather than requiring a settings reset.
+        if prefs.speedmult < 1:
+            prefs.speedmult = 1
+        return prefs
     except (json.JSONDecodeError, TypeError) as e:
         print(f"Warning: Failed to load preferences from {filepath}: {e}")
         print("Using default preferences")
