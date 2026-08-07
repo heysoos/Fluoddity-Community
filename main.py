@@ -403,10 +403,15 @@ class App:
             plain_colour=(_auto_svc is not None
                           and ui_state.auto_tournament.enabled),
             # Each tile reads its own physics block from the config SSBO.
+            # It must cover EVERY tile: get_particle_config_index() returns the
+            # home tile, so a tile with no block written reads a zeroed config -
+            # zero force, zero drag, zero sensor gain - and renders black. That
+            # happens whenever the grid grows between generations, since
+            # tile_physics still holds the old, smaller population.
             physics=(_auto_svc is not None
                      and ui_state.auto_tournament.enabled
                      and _auto_svc.physics_enabled
-                     and bool(_auto_svc.tile_physics)),
+                     and len(_auto_svc.tile_physics) >= self.tournament_service.tiles),
         )
         if _auto_svc is not None and ui_state.auto_tournament.enabled:
             # z=0 must mean "the preset as loaded", not the midpoint of every

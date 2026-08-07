@@ -242,3 +242,24 @@ def test_enabling_physics_search_does_not_move_the_preset_on_its_own():
     svc.physics_origin = dict(HHH_ORIGIN)
     at_origin = decode_physics(np.zeros(PHYSICS_DIM), svc.physics_origin)
     assert at_origin["GLOBAL_FORCE_MULT"] == pytest.approx(-0.3407, abs=1e-6)
+
+
+def test_a_stale_smaller_population_must_not_enable_per_tile_physics():
+    """get_particle_config_index() returns the home tile, so a tile with no
+    block written reads a zeroed config - zero force, zero drag, zero sensor
+    gain - and renders black. Growing the grid between generations leaves
+    tile_physics holding the old, smaller population."""
+    ts = TournamentService(grid=2)
+    ts.init_population()
+    svc = AutoTournamentService(ts, scorer=FakeScorer(), logger=None)
+    svc.configure(steps_per_gen=20, snapshots_per_gen=1, sim_steps_per_frame=20,
+                  physics_enabled=True)
+    svc.start("coral")
+    assert len(svc.tile_physics) == 4
+
+    ts.set_grid(4)                     # 16 tiles, blocks still sized for 4
+    assert len(svc.tile_physics) < ts.tiles, (
+        "stale coverage is the condition the orchestrator must refuse")
+
+    svc._begin_generation()            # after a rebuild it covers them again
+    assert len(svc.tile_physics) == ts.tiles

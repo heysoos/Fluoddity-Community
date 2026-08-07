@@ -302,7 +302,15 @@ void main() {
     // the hole grows forever. Zeroing it here lets existing damage heal instead
     // of requiring the canvas to be cleared by hand.
     //
-    // Magnitude bound rather than isnan(): false for NaN, false for Inf, and it
-    // also catches finite-but-absurd values before they overflow next frame.
-    if(!all(lessThan(abs(can_out), vec4(1e6)))) can_out = vec4(0.0, 0.0, 0.0, 1.0);
+    // Magnitude bound rather than isnan(): false for NaN and false for Inf,
+    // and a driver assuming finite math cannot fold it away.
+    //
+    // The bound is 1e30, not the 1e6 used for particle state. Particle
+    // positions and velocities have a physical scale of order 1, so 1e6 there
+    // means "already broken". Canvas values do NOT: they accumulate, and a
+    // normal run was measured at max 12930 after three generations. A 1e6
+    // bound here would eventually start deleting the brightest real trails,
+    // which is data loss dressed up as a safety check. 1e30 is unreachable by
+    // accumulation but still below infinity.
+    if(!all(lessThan(abs(can_out), vec4(1e30)))) can_out = vec4(0.0, 0.0, 0.0, 1.0);
 }
