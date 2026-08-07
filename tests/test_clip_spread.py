@@ -58,6 +58,23 @@ def test_pass_bar_is_mean_over_015_and_std_over_005():
     assert r["passes"] == (r["mean_pairwise"] > 0.15 and r["std_pairwise"] > 0.05)
 
 
+def test_a_duplicate_dominated_sample_is_flagged():
+    """One converged run's frames can be 57% of the pairs and drag the mean
+    below the bar while the across-run spread is fine. Measured 2026-08-07."""
+    rng = np.random.default_rng(11)
+    clump = _unit(np.array([1.0, 0, 0, 0], np.float32) + rng.normal(0, 0.02, (60, 4)))
+    outliers = _unit(rng.normal(size=(6, 4)).astype(np.float32))
+    r = spread_report(np.concatenate([clump, outliers]).astype(np.float32))
+    assert r["p50"] < 0.5 * r["mean_pairwise"]
+    assert r["duplicate_dominated"] is True
+
+
+def test_a_healthy_sample_is_not_flagged_as_duplicate_dominated():
+    rng = np.random.default_rng(12)
+    e = _unit(rng.normal(size=(80, 16)).astype(np.float32))
+    assert spread_report(e)["duplicate_dominated"] is False
+
+
 def test_fewer_than_two_embeddings_reports_zero_and_fails():
     r = spread_report(np.zeros((1, 4), dtype=np.float32))
     assert r["n"] == 1

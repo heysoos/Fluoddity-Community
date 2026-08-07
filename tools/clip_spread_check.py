@@ -39,13 +39,23 @@ def spread_report(embeddings: np.ndarray) -> dict:
     v = d[iu]
     mean = float(np.mean(v))
     std = float(np.std(v))
+    p50 = float(np.percentile(v, 50))
     return {
         "n": n,
         "mean_pairwise": mean,
         "std_pairwise": std,
         "p05": float(np.percentile(v, 5)),
-        "p50": float(np.percentile(v, 50)),
+        "p50": p50,
         "p95": float(np.percentile(v, 95)),
+        # A median far below the mean means a large block of near-identical
+        # images is dragging the aggregate down while a minority of genuinely
+        # distinct pairs holds the mean up. Measured 2026-08-07: one converged
+        # run's 481 best-tile frames sat at mean 0.043 and were 57% of all
+        # pairs in a 635-image sample, pulling a 0.18 across-run spread down to
+        # 0.14. The aggregate is not wrong, it is answering a different
+        # question - re-measure on a decorrelated subsample before believing a
+        # FAIL.
+        "duplicate_dominated": bool(n >= 8 and p50 < 0.5 * mean),
         "passes": bool(mean > MEAN_BAR and std > STD_BAR),
     }
 
@@ -66,6 +76,13 @@ def main(argv: list[str]) -> int:
         print("usage: python -m tools.clip_spread_check <image> <image> ...")
         return 2
 
+    # The app has a pre-existing import cycle: services/__init__ ->
+    # config_saver -> ui.physics_params -> ui/__init__ -> ui.core ->
+    # services.config_saver. It resolves only when `ui` is imported first,
+    # which is what main.py happens to do. Prime that order, as
+    # tests/conftest.py does.
+    import ui  # noqa: F401
+
     from services.clip_scorer import CLIPScorer
     from tools.fetch_clip_onnx import MODEL_DIR
 
@@ -78,6 +95,11 @@ def main(argv: list[str]) -> int:
     print(f"std  pairwise     {r['std_pairwise']:.4f}   (bar > {STD_BAR})")
     print(f"p05 / p50 / p95   {r['p05']:.4f} / {r['p50']:.4f} / {r['p95']:.4f}")
     print("VERDICT:          " + ("PASS" if r["passes"] else "FAIL"))
+    if r["duplicate_dominated"]:
+        print("\nWARNING: the median is far below the mean, so this sample is")
+        print("dominated by near-identical images - most likely many frames")
+        print("from one converged run. Re-measure on a decorrelated subsample")
+        print("(e.g. one frame per run directory) before trusting the verdict.")
     if not r["passes"]:
         print("\nDo not build the archive on this. Adjust the eval image first -")
         print("colormap, exposure, zoom - and re-measure. See spec 12.1.")
