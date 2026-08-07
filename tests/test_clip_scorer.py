@@ -137,3 +137,75 @@ def test_default_distractors_include_abstract_texture():
 
 def test_logit_scale_matches_clip():
     assert LOGIT_SCALE == pytest.approx(100.0)
+
+
+# --- embeddings, for the exploration archive -------------------------------
+
+
+def test_embed_returns_l2_normalised_rows():
+    s = _scorer_with_stubs()
+    e = s.embed(np.zeros((3, 224, 224, 3), dtype=np.uint8), n_views=1)
+    assert e.shape == (3, 4)
+    assert e.dtype == np.float32
+    assert np.allclose(np.linalg.norm(e, axis=1), 1.0, atol=1e-5)
+
+
+def test_embed_with_one_view_skips_augmentation():
+    s = _scorer_with_stubs()
+    s.embed(np.zeros((5, 224, 224, 3), dtype=np.uint8), n_views=1)
+    assert sum(s._vision.batch_sizes) == 5, "n_views=1 must not expand the batch"
+
+
+def test_embed_defaults_to_the_instance_view_count():
+    s = _scorer_with_stubs()          # _n_views == 3
+    e = s.embed(np.zeros((2, 224, 224, 3), dtype=np.uint8))
+    assert len(e) == 6
+
+
+def test_embed_chunks_large_batches():
+    s = _scorer_with_stubs()
+    s.embed(np.zeros((200, 224, 224, 3), dtype=np.uint8), n_views=1)
+    assert max(s._vision.batch_sizes) <= CLIPScorer.MAX_CHUNK
+    assert sum(s._vision.batch_sizes) == 200
+
+
+def test_score_is_recoverable_from_embed():
+    """score() must be exactly the softmax over embed(); if these ever disagree,
+    the archive and the prompt objective are measuring different things."""
+    s = _scorer_with_stubs()
+    emb = np.zeros((3, 4), dtype=np.float32)
+    emb[0] = [1.0, 0, 0, 0]
+    emb[1] = [0, 1.0, 0, 0]
+    emb[2] = [0, 0, 1.0, 0]
+    s._text_emb = emb
+
+    images = np.zeros((4, 224, 224, 3), dtype=np.uint8)
+    s._rng = np.random.default_rng(7)
+    got = s.score(images)
+
+    s._rng = np.random.default_rng(7)
+    e = s.embed(images, s._n_views)
+    logits = LOGIT_SCALE * (e @ emb.T)
+    logits -= logits.max(axis=1, keepdims=True)
+    p = np.exp(logits)
+    p /= p.sum(axis=1, keepdims=True)
+    expected = p[:, 0].reshape(4, -1).mean(axis=1)
+
+    assert np.allclose(got, expected, atol=1e-6)
+
+
+def test_embed_text_does_not_disturb_the_cached_prompt_embedding():
+    s = _scorer_with_stubs()
+
+    class _Tok:
+        def encode_batch(self, prompts):
+            return [type("E", (), {"ids": [0] * 77, "attention_mask": [1] * 77})()
+                    for _ in prompts]
+
+    s._tokenizer = _Tok()
+    cached = np.full((7, 4), 0.5, dtype=np.float32)
+    s._text_emb = cached
+    out = s.embed_text(["a", "b"])
+    assert out.shape == (2, 4)
+    assert np.allclose(np.linalg.norm(out, axis=1), 1.0, atol=1e-5)
+    assert s._text_emb is cached, "embed_text must not overwrite the score() cache"

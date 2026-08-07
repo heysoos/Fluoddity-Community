@@ -160,7 +160,17 @@ class CLIPScorer:
         prompts = [text] + list(
             DEFAULT_DISTRACTORS if distractors is None else distractors
         )
-        encoded = self._tokenizer.encode_batch(prompts)
+        self._text_emb = self.embed_text(prompts)
+        self._prompt = text
+
+    def embed_text(self, prompts: list[str]) -> np.ndarray:
+        """(P,) strings -> float32 (P, 512), L2-normalised.
+
+        Deliberately does NOT write self._text_emb: the exploration archive's
+        goal embeddings and score()'s prompt+distractor cache are different
+        things and must not be able to clobber each other.
+        """
+        encoded = self._tokenizer.encode_batch(list(prompts))
         feed = {self._text_in: np.array([e.ids for e in encoded], dtype=np.int64)}
         for inp in self._text.get_inputs()[1:]:
             if inp.name == "attention_mask":
@@ -168,8 +178,7 @@ class CLIPScorer:
                     [e.attention_mask for e in encoded], dtype=np.int64
                 )
         emb = self._text.run([self._text_out], feed)[0].astype(np.float32)
-        self._text_emb = _l2(emb)
-        self._prompt = text
+        return _l2(emb)
 
     def _embed_images(self, crops: np.ndarray) -> np.ndarray:
         chunks = []
@@ -179,6 +188,20 @@ class CLIPScorer:
             chunks.append(out.astype(np.float32))
         return _l2(np.concatenate(chunks, axis=0))
 
+    def embed(self, images: np.ndarray, n_views: int | None = None) -> np.ndarray:
+        """uint8 (B,224,224,3) -> float32 (B*n_views, 512), L2-normalised.
+
+        Output is image-major: [img0 v0, img0 v1, ..., img1 v0, ...].
+        n_views=None uses the instance default.
+
+        n_views=1 skips augmentation entirely. Augmentation is an
+        anti-adversarial defence for a DIRECTED objective; for novelty search it
+        would turn three random sub-crops of one tile into three competing
+        archive descriptors for one behaviour.
+        """
+        v = self._n_views if n_views is None else int(n_views)
+        return self._embed_images(augment(images, v, self._rng))
+
     def score(self, images: np.ndarray) -> np.ndarray:
         """uint8 (B,224,224,3) -> float32 (B,). Softmax probability of the
         target prompt against the distractor set, averaged over augmented views.
@@ -186,8 +209,7 @@ class CLIPScorer:
         if self._text_emb is None:
             raise RuntimeError("set_prompt() must be called before score()")
         b = len(images)
-        views = augment(images, self._n_views, self._rng)
-        emb = self._embed_images(views)
+        emb = self.embed(images, self._n_views)
         logits = LOGIT_SCALE * (emb @ self._text_emb.T)
         logits -= logits.max(axis=1, keepdims=True)
         probs = np.exp(logits)
