@@ -295,4 +295,14 @@ void main() {
         fill_vector *= draw_power / 5.0;
         can_out.xy += .25*fill_vector;
     }
+
+    // Self-healing NaN scrub. entity_update.glsl stops particles seeding NaN,
+    // but getBlur() above is a 5-tap kernel reading the PREVIOUS canvas, so any
+    // NaN already stored keeps poisoning its four neighbours every frame and
+    // the hole grows forever. Zeroing it here lets existing damage heal instead
+    // of requiring the canvas to be cleared by hand.
+    //
+    // Magnitude bound rather than isnan(): false for NaN, false for Inf, and it
+    // also catches finite-but-absurd values before they overflow next frame.
+    if(!all(lessThan(abs(can_out), vec4(1e6)))) can_out = vec4(0.0, 0.0, 0.0, 1.0);
 }

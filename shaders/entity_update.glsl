@@ -666,6 +666,27 @@ void main() {
         if(e.pos.y > thi.y){ e.pos.y = thi.y; e.vel.y = -abs(e.vel.y); }
     }
 
+    // Non-finite guard. NaN fails <, > and == alike, so a NaN position walks
+    // straight through the tile bounce above, splats its brush quad at an
+    // arbitrary place on the canvas, and seeds the trail with NaN. getBlur()
+    // is a 5-tap kernel, so one NaN texel turns its neighbours NaN every
+    // frame: the hole grows and never heals, which is what the black boxes
+    // are. Searching physics makes this reachable - extreme parameter draws
+    // overflow the velocity integration - but a hand-cranked slider can do it
+    // too, so the guard is unconditional.
+    //
+    // Written as a magnitude bound rather than isnan()/isinf(): the bound is
+    // false for NaN, false for Inf, and also catches finite-but-absurd values
+    // that would overflow on the next step. Drivers compiling with fast-math
+    // assumptions may fold isnan() away; they cannot fold this.
+    if(!(all(lessThan(abs(e.pos), vec2(1e6))) &&
+         all(lessThan(abs(e.vel), vec2(1e6))) &&
+         abs(e.size) < 1e6 &&
+         all(lessThan(abs(e.color), vec4(1e6))))){
+        reset(index);
+        return;
+    }
+
     //Commit new entity state to buffers
     entities[index]=e;
 
