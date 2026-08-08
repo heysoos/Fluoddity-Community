@@ -154,3 +154,149 @@ def test_the_archive_window_renders_with_no_archive(gui):
     h = Harness()
     h.state.archive.show_browser = True
     assert frame(h.render_archive_window) > host_only()
+
+
+# ---- the gallery -------------------------------------------------------
+
+def _populated(n=8):
+    """A real ArchiveEntry per slot, so the gallery walks real fields."""
+    from services.archive import ArchiveEntry
+
+    arc = _FakeArchive(n=n)
+    for i in range(n):
+        arc.entries.append(ArchiveEntry(
+            id=i, novelty=0.5 - 0.01 * i, liveness=0.02 * (i + 1),
+            pinned=(i % 4 == 0),
+            source=("expedition" if i % 3 else "expansion"),
+            spec="brain:80", goal=("coral reef" if i % 2 else ""),
+            run_id="r", gen=i, tile=i % 4, ts=1000.0 + i,
+            thumb=f"{i:06d}.jpg"))
+    return arc
+
+
+class _FakeTex:
+    """imgui.ImTextureRef only needs the integer handle; nothing dereferences
+    it until the renderer runs, and these tests never get that far."""
+    glo = 1
+
+
+def test_the_gallery_renders_entries(gui):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    assert frame(h.render_archive_window) > host_only()
+
+
+def test_the_gallery_renders_thumbnails_when_the_cache_has_them(gui):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+
+    class _Cache:
+        def get(self, name):
+            return _FakeTex()
+
+    h.thumb_cache = _Cache()
+    assert frame(h.render_archive_window) > host_only()
+
+
+def test_a_missing_thumbnail_falls_back_to_a_placeholder(gui):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+
+    class _Cache:
+        def get(self, name):
+            return None
+
+    h.thumb_cache = _Cache()
+    assert frame(h.render_archive_window) > host_only()
+
+
+@pytest.mark.parametrize("mode", ["novelty", "recency", "liveness", "nonsense"])
+def test_every_sort_mode_renders(gui, mode):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.state.archive.sort_by = mode
+    assert frame(h.render_archive_window) > host_only()
+
+
+def test_the_pinned_only_filter_renders(gui):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.state.archive.pinned_only = True
+    assert frame(h.render_archive_window) > host_only()
+
+
+def _button_labels(h, n=3):
+    """Every button label the window emits.
+
+    Vertex counts cannot answer this: ImGui culls geometry for content below
+    the fold, and the shared module context means this window's size is
+    whatever an earlier test left it at. Our Python code runs either way, so
+    the labels are the honest signal.
+    """
+    seen = []
+    real = imgui.button
+
+    def spy(label, *a, **kw):
+        seen.append(label)
+        return real(label, *a, **kw)
+
+    imgui.button = spy
+    try:
+        frame(h.render_archive_window, n=n)
+    finally:
+        imgui.button = real
+    return seen
+
+
+ACTIONS = {"Export as config", "Seed a run from here", "Delete"}
+
+
+def test_the_actions_are_hidden_until_an_entry_is_selected(gui):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    assert not (ACTIONS & set(_button_labels(h)))
+
+
+def test_selecting_an_entry_reveals_the_actions(gui):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.state.archive.selected_entry_id = 3
+    assert ACTIONS <= set(_button_labels(h))
+
+
+def test_every_entry_gets_a_placeholder_when_there_are_no_thumbnails(gui):
+    h = Harness(archive=_populated(n=8))
+    h.state.archive.show_browser = True
+    # a set: _button_labels runs several frames, so every label repeats
+    labels = {x for x in _button_labels(h) if x.startswith("#")}
+    assert labels == {f"#{i}" for i in range(8)}
+
+
+def test_sorting_orders_entries_as_labelled(gui):
+    """The combo labels promise an order; this is the only thing that checks
+    the labels and the sort keys agree."""
+    h = Harness(archive=_populated())
+    ast = h.state.archive
+
+    ast.sort_by = "novelty"
+    nov = [e.novelty for _, e in h._sorted_entries(ast, h.archive_obj)]
+    assert nov == sorted(nov, reverse=True)
+
+    ast.sort_by = "liveness"
+    liv = [e.liveness for _, e in h._sorted_entries(ast, h.archive_obj)]
+    assert liv == sorted(liv, reverse=True)
+
+    ast.sort_by = "recency"
+    ts = [e.ts for _, e in h._sorted_entries(ast, h.archive_obj)]
+    assert ts == sorted(ts, reverse=True)
+
+    ast.sort_by = "nonsense"
+    fallback = [e.novelty for _, e in h._sorted_entries(ast, h.archive_obj)]
+    assert fallback == sorted(fallback, reverse=True), "unknown mode falls back"
+
+
+def test_the_pinned_only_filter_keeps_only_pins(gui):
+    h = Harness(archive=_populated())
+    h.state.archive.pinned_only = True
+    got = h._sorted_entries(h.state.archive, h.archive_obj)
+    assert got and all(e.pinned for _, e in got)

@@ -194,14 +194,93 @@ class ArchiveWindowMixin:
     # ---- the browser ---------------------------------------------------
 
     def render_archive_window(self):
-        """Body arrives in Task 8; the early return is the permanent guard."""
         ast = self.state.archive
         if not ast.show_browser:
             return
+        # Without an explicit size ImGui auto-fits this window to something
+        # smaller than its own content: the 360px gallery child gets clipped and
+        # the Export / Seed / Delete row lands entirely below the fold, drawing
+        # nothing at all. first_use_ever, so a window the user has resized keeps
+        # their size.
+        imgui.set_next_window_size(imgui.ImVec2(760, 620),
+                                   imgui.Cond_.first_use_ever)
         expanded, opened = imgui.begin("Archive", True)
         if not opened:
             ast.show_browser = False
             imgui.end()
             return
-        imgui.text_colored(imgui.ImVec4(*_DIM), "No archive yet.")
+        arc = self.archive_obj
+        if arc is None:
+            imgui.text_colored(imgui.ImVec4(*_DIM), "No archive yet.")
+            imgui.end()
+            return
+
+        st = arc.stats()
+        imgui.text(f"{st['size']} entries   {st['n_pinned']} pinned   "
+                   f"threshold {st['threshold']:.3f}   "
+                   f"admitting {100.0 * st['admission_rate']:.0f}%")
+        imgui.separator()
+
+        if imgui.begin_tab_bar("archive_views"):
+            if imgui.begin_tab_item("Gallery")[0]:
+                self._render_gallery(ast, arc)
+                imgui.end_tab_item()
+            if imgui.begin_tab_item("Map")[0]:
+                self._render_map(ast, arc)
+                imgui.end_tab_item()
+            imgui.end_tab_bar()
         imgui.end()
+
+    def _sorted_entries(self, ast, arc):
+        entries = list(enumerate(arc.entries))
+        if ast.pinned_only:
+            entries = [(i, e) for i, e in entries if e.pinned]
+        key = {"novelty": lambda p: -p[1].novelty,
+               "liveness": lambda p: -p[1].liveness,
+               "recency": lambda p: -p[1].ts}.get(ast.sort_by,
+                                                  lambda p: -p[1].novelty)
+        return sorted(entries, key=key)
+
+    def _render_gallery(self, ast, arc):
+        modes = ["novelty", "recency", "liveness"]
+        idx = modes.index(ast.sort_by) if ast.sort_by in modes else 0
+        ch, idx = imgui.combo("Sort", idx, ["Novelty", "Recency", "Liveness"])
+        if ch:
+            ast.sort_by = modes[idx]
+        imgui.same_line()
+        _, ast.pinned_only = imgui.checkbox("Pinned only", ast.pinned_only)
+
+        cache = getattr(self, "thumb_cache", None)
+        per_row = 6
+        imgui.begin_child("gallery", imgui.ImVec2(0, 360))
+        for n, (i, e) in enumerate(self._sorted_entries(ast, arc)[:240]):
+            tex = cache.get(e.thumb) if cache is not None else None
+            if tex is not None:
+                imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(96, 96))
+            else:
+                imgui.button(f"#{e.id}", imgui.ImVec2(96, 96))
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    f"#{e.id}  {e.source}\nnovelty {e.novelty:.3f}\n"
+                    f"liveness {e.liveness:.3f}\ngoal: {e.goal or '-'}")
+            if imgui.is_item_clicked():
+                ast.selected_entry_id = e.id
+            if n % per_row != per_row - 1:
+                imgui.same_line()
+        imgui.end_child()
+
+        if ast.selected_entry_id >= 0:
+            imgui.separator()
+            imgui.text(f"Selected #{ast.selected_entry_id}")
+            if imgui.button("Export as config"):
+                ast.export_entry_id = ast.selected_entry_id
+            imgui.same_line()
+            if imgui.button("Seed a run from here"):
+                ast.seed_entry_id = ast.selected_entry_id
+            imgui.same_line()
+            if imgui.button("Delete"):
+                ast.delete_entry_id = ast.selected_entry_id
+
+    def _render_map(self, ast, arc):
+        """Body arrives in Task 9."""
+        imgui.text_colored(imgui.ImVec4(*_DIM), "Not enough entries to project yet.")

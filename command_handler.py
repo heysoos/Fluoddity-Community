@@ -502,8 +502,73 @@ class CommandHandler:
                 and self.archive_projection is not None):
             self.archive_projection.fit(self.archive.embeddings)
 
+        if ast.export_entry_id >= 0:
+            self._export_archive_entry(ui_state, ast.export_entry_id)
+        if ast.seed_entry_id >= 0:
+            self._seed_from_archive(ast.seed_entry_id)
+        if ast.delete_entry_id >= 0:
+            self._delete_archive_entry(ast)
+
         ast.running = svc.phase.value == "rollout"
         self._clear_explore_flags(ast)
+
+    def _archive_index(self, entry_id):
+        for i, e in enumerate(self.archive.entries):
+            if e.id == int(entry_id):
+                return i
+        return None
+
+    def _export_archive_entry(self, ui_state, entry_id):
+        """Write an archive entry as an ordinary Fluoddity config, so it opens
+        in the normal single-simulation view at any resolution."""
+        from services.genome_io import export_genome
+        from services.genome_spec import encode
+        from services.physics_genome import PHYSICS_PARAMS
+
+        i = self._archive_index(entry_id)
+        if i is None:
+            return
+        e = self.archive.entries[i]
+        z, _clamped = encode(self.archive.brains[i])
+        sim_state = ui_state.sim
+        if "physics" in e.spec:
+            # The archive stores ABSOLUTE physics, so applying it needs no origin.
+            for j, (name, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
+                setattr(sim_state, name, float(self.archive.physics[i][j]))
+        meta = {"archive_id": int(e.id), "novelty": float(e.novelty),
+                "liveness": float(e.liveness), "source": e.source,
+                "goal": e.goal, "run_id": e.run_id, "spec": e.spec}
+        path = self.user_configs_dir / f"archive_{e.id:06d}.json"
+        export_genome(path, z, sim_state, meta)
+        print(f"[archive] saved {path}")
+
+    def _seed_from_archive(self, entry_id):
+        """Load an archive entry as a search starting point.
+
+        Only Auto mode has an x0 - an IMGEP expansion draws its parents from the
+        archive by novelty, so 'seed from here' has no meaning there and must
+        say so rather than silently do nothing.
+        """
+        from services.genome_spec import encode
+
+        i = self._archive_index(entry_id)
+        if i is None or self.auto_service is None:
+            return
+        if not hasattr(self.auto_service.driver, "set_x0"):
+            print("[archive] seeding applies to Auto (CLIP) mode; "
+                  "Explore draws its parents from the archive already")
+            return
+        z, _ = encode(self.archive.brains[i])
+        self.auto_service.set_x0(z)
+
+    def _delete_archive_entry(self, ast):
+        i = self._archive_index(ast.delete_entry_id)
+        if i is None:
+            return
+        self.archive._remove(i)
+        self.archive.maybe_flush(force=True)
+        if ast.selected_entry_id == ast.delete_entry_id:
+            ast.selected_entry_id = -1
 
     def _start_model_download(self):
         import threading

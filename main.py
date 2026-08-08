@@ -216,6 +216,7 @@ class App:
         from services.archive_projection import Projection
         from services.goal_source import GoalList
         from services.imgep_driver import ImgepDriver
+        from services.thumb_cache import ThumbCache, gl_loader
         from utilities.paths import get_archive_dir
 
         store = ArchiveStore(get_archive_dir())
@@ -236,6 +237,9 @@ class App:
         self.archive_projection = Projection()
         self.archive_projection.fit(archive.embeddings)
         self._last_projection_size = len(archive)
+
+        self.thumb_cache = ThumbCache(gl_loader(self.ctx, store), capacity=256)
+        self.ui.thumb_cache = self.thumb_cache
 
         self.ui.archive_driver = self.imgep_driver
         self.ui.archive_obj = archive
