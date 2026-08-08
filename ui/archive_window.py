@@ -353,3 +353,39 @@ class ArchiveWindowMixin:
                               f"goal: {hovered.goal or '-'}")
             if clicked_canvas:
                 ast.selected_entry_id = hovered.id
+
+        self._render_map_selection(ast, arc)
+
+    def _render_map_selection(self, ast, arc):
+        """The picked dot's actual image.
+
+        A dot is a position in a projection; without the picture beside it the
+        map says where something sits but never what it is - which is most of
+        why you would click it."""
+        entry = next((e for e in arc.entries if e.id == ast.selected_entry_id),
+                     None)
+        if entry is None:
+            imgui.text_colored(imgui.ImVec4(*_DIM),
+                               "Click a point to see what it is.")
+            return
+
+        imgui.separator()
+        cache = getattr(self, "thumb_cache", None)
+        tex = cache.get(entry.thumb) if cache is not None else None
+        if tex is not None:
+            imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(128, 128))
+        else:
+            imgui.button(f"#{entry.id}##mapsel", imgui.ImVec2(128, 128))
+        imgui.same_line()
+        imgui.begin_group()
+        imgui.text(f"#{entry.id}   {entry.source}"
+                   f"{'   pinned' if entry.pinned else ''}")
+        imgui.text(f"novelty {entry.novelty:.3f}   liveness {entry.liveness:.3f}")
+        imgui.text(f"goal: {entry.goal or '-'}")
+        imgui.text_disabled(f"gen {entry.gen}   tile {entry.tile}   {entry.spec}")
+        if imgui.button("Export as config##map"):
+            ast.export_entry_id = entry.id
+        imgui.same_line()
+        if imgui.button("Delete##map"):
+            ast.delete_entry_id = entry.id
+        imgui.end_group()

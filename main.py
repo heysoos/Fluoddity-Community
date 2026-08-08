@@ -17,6 +17,24 @@ from controller_input import ControllerCam, process_controller_input, find_joyst
 from utilities.advanced_drawing import AdvancedDrawingProcessor
 
 
+def put_back_auto_overrides(ui_state, prev_aspect, prev_speedmult,
+                            prev_motion_blur):
+    """Restore the three preferences an automatic mode commandeers.
+
+    Module level and parameterised rather than a method, so the single
+    implementation is shared by the mode-off edge and by the quit path without
+    either having to know about the other.
+    """
+    prefs = ui_state.preferences
+    if prev_aspect and prev_aspect != "1:1":
+        prefs.canvas_aspect_ratio = prev_aspect
+        ui_state.request_world_size_change = True
+    if prev_speedmult is not None:
+        prefs.speedmult = prev_speedmult
+    if prev_motion_blur is not None:
+        prefs.motion_blur = prev_motion_blur
+
+
 class App:
     """Main application orchestrator.
 
@@ -78,6 +96,7 @@ class App:
         self.clip_scorer = None
         self._auto_prev_aspect = None
         self._auto_prev_speedmult = None
+        self._auto_prev_motion_blur = None
         self._auto_was_enabled = False
         self._last_crops = None
         # Explore (IMGEP) mode, also lazy - it needs the same CLIP scorer.
@@ -261,13 +280,15 @@ class App:
         user does.
         """
         tex = self.camera.assembled_texture
-        if tex is None:
+        rect = self.camera.assembled_view_rect
+        if tex is None or rect is None:
             return None
-        w, h = tex.size
-        x0, y0 = self.camera.tex_to_screen((0.0, 0.0), self.sim.view_tex.size)
-        x1, y1 = self.camera.tex_to_screen((1.0, 1.0), self.sim.view_tex.size)
-        lo = (min(x0, x1) / w, min(y0, y1) / h)
-        hi = (max(x0, x1) / w, max(y0, y1) / h)
+        # The rect recorded when this texture was rendered - NOT a fresh one.
+        # This texture is a frame old; recomputing here would crop it with a
+        # camera that has since moved, pulling each tile's neighbour into its
+        # crop. Measured at grid 8: 4px for a small pan, 43px for one scroll
+        # notch of zoom.
+        lo, hi = rect
 
         self.tile_capture.resize(self.tournament_service.grid)
         crops = self.tile_capture.capture(
@@ -393,18 +414,10 @@ class App:
         # distortion, padding or discarding content.
         auto = ui_state.auto_tournament
         if auto.enabled and not self._auto_was_enabled:
-            self._auto_prev_aspect = ui_state.preferences.canvas_aspect_ratio
-            self._auto_prev_speedmult = ui_state.preferences.speedmult
-            if ui_state.preferences.canvas_aspect_ratio != "1:1":
-                ui_state.preferences.canvas_aspect_ratio = "1:1"
-                ui_state.request_world_size_change = True
+            self._save_auto_overrides(ui_state)
             self._ensure_auto_service()
         elif not auto.enabled and self._auto_was_enabled:
-            if self._auto_prev_aspect and self._auto_prev_aspect != "1:1":
-                ui_state.preferences.canvas_aspect_ratio = self._auto_prev_aspect
-                ui_state.request_world_size_change = True
-            if self._auto_prev_speedmult is not None:
-                ui_state.preferences.speedmult = self._auto_prev_speedmult
+            self._undo_auto_overrides(ui_state)
             if self.auto_service is not None:
                 self.auto_service.pause()
         self._auto_was_enabled = auto.enabled
@@ -415,11 +428,7 @@ class App:
         # snapshot scheduling and the capture wiring in exactly one place.
         expl = ui_state.archive
         if expl.enabled and not self._explore_was_enabled:
-            self._auto_prev_aspect = ui_state.preferences.canvas_aspect_ratio
-            self._auto_prev_speedmult = ui_state.preferences.speedmult
-            if ui_state.preferences.canvas_aspect_ratio != "1:1":
-                ui_state.preferences.canvas_aspect_ratio = "1:1"
-                ui_state.request_world_size_change = True
+            self._save_auto_overrides(ui_state)
             if self._ensure_archive_service():
                 self.auto_service.driver = self.imgep_driver
                 self.auto_service.abort_generation()
@@ -429,11 +438,7 @@ class App:
                 self.auto_service.driver = self.prompt_driver
             if self.archive is not None:
                 self.archive.maybe_flush(force=True)
-            if self._auto_prev_aspect and self._auto_prev_aspect != "1:1":
-                ui_state.preferences.canvas_aspect_ratio = self._auto_prev_aspect
-                ui_state.request_world_size_change = True
-            if self._auto_prev_speedmult is not None:
-                ui_state.preferences.speedmult = self._auto_prev_speedmult
+            self._undo_auto_overrides(ui_state)
         self._explore_was_enabled = expl.enabled
 
         # 2. Process one-shot commands
@@ -744,23 +749,55 @@ class App:
         self.screenshot_in_progress = False
         self.screenshot_saved_settings = {}
 
-    def _restore_auto_overrides(self, ui_state):
-        """Undo Auto mode's transient overrides before anything is persisted.
+    def _save_auto_overrides(self, ui_state):
+        """Remember the preferences an automatic mode is about to commandeer,
+        then commandeer them. Shared by Auto and Explore - both drive the same
+        rollout machine and need the same three conditions."""
+        prefs = ui_state.preferences
+        self._auto_prev_aspect = prefs.canvas_aspect_ratio
+        self._auto_prev_speedmult = prefs.speedmult
+        self._auto_prev_motion_blur = prefs.motion_blur
 
-        Auto mode drives the physics step count through preferences.speedmult
-        and forces a 1:1 canvas. Both are restored on the Auto->off edge, but
-        quitting while Auto is still enabled never crosses that edge. That
-        matters because _drive_auto_tournament returns 0 on capture, score and
-        write-rules frames, so the persisted speedmult could be 0 - and a
-        speedmult of 0 means the next launch never steps the simulation: a
-        black canvas with a working UI and no visible cause.
+        # Tiles inherit the canvas aspect ratio, and a 16:9 tile cannot be
+        # squared for CLIP without distortion, padding or lost content.
+        if prefs.canvas_aspect_ratio != "1:1":
+            prefs.canvas_aspect_ratio = "1:1"
+            ui_state.request_world_size_change = True
+
+        # Motion blur accumulates speedmult/blur_quality renders into one
+        # texture - at the tournament's speedmult of 10 and the default quality
+        # of 2 that is a FIVE frame temporal average, and _capture_tiles grabs
+        # exactly that texture. Both the archive thumbnails and CLIP's input
+        # were smeared across five simulation steps, which blurs away the fine
+        # structure that distinguishes one genome from another.
+        prefs.motion_blur = False
+
+    def _undo_auto_overrides(self, ui_state):
+        put_back_auto_overrides(
+            ui_state, self._auto_prev_aspect, self._auto_prev_speedmult,
+            self._auto_prev_motion_blur)
+
+    def _restore_auto_overrides(self, ui_state):
+        """Undo the transient overrides before anything is persisted.
+
+        An automatic mode drives the physics step count through
+        preferences.speedmult, forces a 1:1 canvas and disables motion blur.
+        All three are restored on the mode->off edge, but quitting while the
+        mode is still enabled never crosses that edge. That matters because
+        _drive_auto_tournament returns 0 on capture, score and write-rules
+        frames, so the persisted speedmult could be 0 - and a speedmult of 0
+        means the next launch never steps the simulation: a black canvas with a
+        working UI and no visible cause.
+
+        Checks BOTH modes. Explore commandeers the same preferences, so
+        checking only auto_tournament let a quit from the Explore tab persist
+        all three overrides.
         """
-        if not ui_state.auto_tournament.enabled:
+        if not (ui_state.auto_tournament.enabled or ui_state.archive.enabled):
             return
-        if self._auto_prev_speedmult is not None:
-            ui_state.preferences.speedmult = self._auto_prev_speedmult
-        if self._auto_prev_aspect:
-            ui_state.preferences.canvas_aspect_ratio = self._auto_prev_aspect
+        put_back_auto_overrides(
+            ui_state, self._auto_prev_aspect, self._auto_prev_speedmult,
+            self._auto_prev_motion_blur)
 
     def cleanup(self):
         # Save preferences before cleanup

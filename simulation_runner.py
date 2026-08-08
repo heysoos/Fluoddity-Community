@@ -321,6 +321,13 @@ class SimulationRunner:
                 tonemap_softness=ui_state.preferences.tonemap_softness,
             )
         self.camera.assembled_texture = assembled_tex
+        # Recorded HERE, with the texture, and never recomputed at capture time.
+        # The tournament capture crops this texture a frame later, by which
+        # point the camera may have panned, zoomed or been resized - and a rect
+        # derived from the newer state names the wrong pixels of the older
+        # frame. See Camera.canvas_view_rect.
+        self.camera.assembled_view_rect = self.camera.canvas_view_rect(
+            assembled_tex.size)
         if self.video_service.is_active():
             self.video_service.process_frame(
                 self.camera.ctx,

@@ -379,3 +379,43 @@ def test_the_map_renders_through_the_archive_window(gui):
     h.archive_projection = _spread(h.archive_obj)
     h.state.archive.show_browser = True
     assert frame(h.render_archive_window) > host_only()
+
+
+def test_the_map_prompts_you_to_click_when_nothing_is_selected(gui):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
+    assert "Export as config##map" not in labels
+
+
+def test_clicking_a_dot_shows_that_entrys_image_and_actions(gui):
+    """A dot is a position; without the picture the map says where something
+    sits but never what it is."""
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.selected_entry_id = 5
+    labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
+    assert "Export as config##map" in labels
+    assert "Delete##map" in labels
+
+
+def test_the_map_selection_falls_back_to_a_placeholder_without_a_thumbnail(gui):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.selected_entry_id = 5
+
+    class _Cache:
+        def get(self, name):
+            return None
+
+    h.thumb_cache = _Cache()
+    assert "#5##mapsel" in button_labels(
+        lambda: h._render_map(h.state.archive, h.archive_obj))
+
+
+def test_a_stale_selection_does_not_break_the_map(gui):
+    """The entry may have been deleted since it was picked."""
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.selected_entry_id = 9999
+    assert frame(lambda: h._render_map(h.state.archive, h.archive_obj)) > host_only()

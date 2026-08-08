@@ -81,6 +81,9 @@ class Camera:
         # Frame assembler (temporal accumulation + gamma correction)
         self.frame_assembler = FrameAssembler(self.ctx, self.cam_brush_target)
         self.assembled_texture = None
+        # The canvas rect that was valid when assembled_texture was produced.
+        # Assigned together with it, never recomputed - see canvas_view_rect.
+        self.assembled_view_rect = None
 
         # Bloom processor (lazily initialized on first use)
         self._bloom_processor = None
@@ -290,6 +293,28 @@ class Camera:
         if winx > 0 and winy > 0:
             self.setup_rendering()
 
+    def canvas_view_rect(self, tex_size, fb_size=None, canvas_tex_size=None):
+        """Where the canvas sits inside a screen-shaped texture, as a 0..1 rect.
+
+        MUST be evaluated at the moment the texture is produced and stored
+        alongside it - see assembled_view_rect. Recomputing it later crops one
+        frame's pixels with another frame's camera: main.py applies camera state
+        at step 5, captures at step 5.1.5 and renders at step 7, so the texture
+        being cropped is always a frame old. Measured at grid 8, one frame of
+        ordinary input displaces the crop by 4px (a small pan) to 43px (one
+        scroll notch), and every tile picks up a strip of its neighbour.
+
+        The divisor is the TEXTURE size rather than the framebuffer size, and
+        the two are not assumed equal: cam_brush_target only follows a window
+        resize on the debounced reload, so for ~150ms they differ.
+        """
+        w, h = tex_size
+        src = canvas_tex_size if canvas_tex_size is not None else self.sim.view_tex.size
+        x0, y0 = self.tex_to_screen((0.0, 0.0), src, fb_size)
+        x1, y1 = self.tex_to_screen((1.0, 1.0), src, fb_size)
+        return ((min(x0, x1) / w, min(y0, y1) / h),
+                (max(x0, x1) / w, max(y0, y1) / h))
+
     def screen_to_tex(self, coord_tuple, tex_size: tuple = None):
         """
         Transform screen coordinates to texture coordinates.
@@ -334,19 +359,27 @@ class Camera:
 
         return (tex_x, tex_y)
 
-    def tex_to_screen(self, coord_tuple, tex_size: tuple = None):
+    def tex_to_screen(self, coord_tuple, tex_size: tuple = None, fb_size: tuple = None):
         """
         Transform texture coordinates to screen coordinates.
 
         Args:
             coord_tuple: (tex_x, tex_y) texture coordinates where (0,0) is top-left
             tex_size: (width, height) of texture. If None, uses self.sim.view_tex.size
+            fb_size: (width, height) of the framebuffer. If None, queries GLFW.
+                Passing it explicitly is what lets canvas_view_rect() be computed
+                for a frame other than the current one, and tested without GL.
 
         Returns:
             (x, y) screen coordinates where (0,0) is top-left of screen
         """
         tex_x, tex_y = coord_tuple
-        width, height = glfw.get_framebuffer_size(self.window)
+        width, height = (fb_size if fb_size is not None
+                         else glfw.get_framebuffer_size(self.window))
+        # A minimised window reports 0x0. screen_to_tex has always clamped;
+        # this did not, so the first frame after minimising divided by zero.
+        width = max(1, width)
+        height = max(1, height)
 
         in_pos_x = tex_x * 2 - 1
         in_pos_y = tex_y * 2 - 1

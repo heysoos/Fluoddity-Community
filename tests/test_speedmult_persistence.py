@@ -54,11 +54,17 @@ def test_a_healthy_speedmult_is_left_alone(tmp_path):
 
 
 class FakeUIState:
-    def __init__(self, enabled, speedmult, aspect):
+    def __init__(self, enabled, speedmult, aspect, archive_enabled=False,
+                 motion_blur=True):
         self.preferences = PreferencesState()
         self.preferences.speedmult = speedmult
         self.preferences.canvas_aspect_ratio = aspect
+        self.preferences.motion_blur = motion_blur
         self.auto_tournament = type("A", (), {"enabled": enabled})()
+        # Explore mode commandeers the same three preferences, so the restore
+        # has to see it too - checking only auto_tournament let a quit from the
+        # Explore tab persist all of them.
+        self.archive = type("B", (), {"enabled": archive_enabled})()
 
 
 def _restore(app_like, ui_state):
@@ -67,9 +73,10 @@ def _restore(app_like, ui_state):
 
 
 class FakeApp:
-    def __init__(self, prev_speedmult, prev_aspect):
+    def __init__(self, prev_speedmult, prev_aspect, prev_motion_blur=None):
         self._auto_prev_speedmult = prev_speedmult
         self._auto_prev_aspect = prev_aspect
+        self._auto_prev_motion_blur = prev_motion_blur
 
 
 def test_quitting_mid_run_restores_the_user_speedmult():
@@ -92,3 +99,38 @@ def test_restore_is_a_no_op_before_auto_has_ever_run():
     ui = FakeUIState(enabled=True, speedmult=2, aspect="1:1")
     _restore(FakeApp(None, None), ui)
     assert ui.preferences.speedmult == 2
+
+
+# -- Explore mode and motion blur --------------------------------------------
+
+def test_quitting_from_the_explore_tab_also_restores():
+    """Explore commandeers the same three preferences as Auto. The restore
+    originally checked only auto_tournament.enabled, so quitting from the
+    Explore tab persisted every override - including speedmult 0."""
+    ui = FakeUIState(enabled=False, speedmult=0, aspect="1:1",
+                     archive_enabled=True)
+    _restore(FakeApp(6, "16:9"), ui)
+    assert ui.preferences.speedmult == 6
+    assert ui.preferences.canvas_aspect_ratio == "16:9"
+
+
+def test_motion_blur_is_restored_on_quit():
+    """An automatic mode turns motion blur off so captures are single crisp
+    frames rather than a five-frame average; leaving it off would silently
+    change how the app looks on the next launch."""
+    ui = FakeUIState(enabled=True, speedmult=0, aspect="1:1", motion_blur=False)
+    _restore(FakeApp(4, "16:9", prev_motion_blur=True), ui)
+    assert ui.preferences.motion_blur is True
+
+
+def test_motion_blur_is_left_off_if_that_is_what_the_user_had():
+    ui = FakeUIState(enabled=True, speedmult=0, aspect="1:1", motion_blur=False)
+    _restore(FakeApp(4, "16:9", prev_motion_blur=False), ui)
+    assert ui.preferences.motion_blur is False
+
+
+def test_nothing_is_restored_when_neither_mode_is_enabled():
+    ui = FakeUIState(enabled=False, speedmult=3, aspect="16:9", motion_blur=False)
+    _restore(FakeApp(99, "1:1", prev_motion_blur=True), ui)
+    assert ui.preferences.speedmult == 3
+    assert ui.preferences.motion_blur is False
