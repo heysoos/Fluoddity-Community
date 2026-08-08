@@ -26,10 +26,16 @@ from __future__ import annotations
 import numpy as np
 
 from services.archive import Candidate
+from services.archive_projection import Projection
 from services.capture_health import is_viable_tile
 from services.descriptor import descriptor, liveness, stack_snapshots
+from services.expedition_fitness import (
+    IMAGE_LOGIT_SCALE,
+    TEXT_LOGIT_SCALE,
+    contrastive,
+)
 from services.genome_spec import BRAIN_SPEC, encode
-from services.goal_source import Goal, latent_goal
+from services.goal_source import LATENT_DIMS, Goal, latent_goal
 from services.novelty import sample_by_novelty
 from services.optimizers import make_optimizer
 from services.physics_genome import PHYSICS_DIM, PHYSICS_PARAMS, encode_physics
@@ -73,8 +79,12 @@ class ImgepDriver:
         self.expedition_gens = 50        # E&E uses 350; that is ~16 min at 2000 steps
         self.expedition_sigma = 0.1      # E&E's value; deliberately << sigma0
         self.latent_share = 0.5
-        self.beta = 0.5                  # latent extrapolation distance
         self.goal_order = "round_robin"  # or "least_matched"
+
+        # The search's OWN projection, separate from the map's 2-component one:
+        # refitting between 2 and 8 components every frame would thrash both.
+        self.projection = Projection(LATENT_DIMS)
+        self._distractors = None
 
         self._optimizer = None
         self._goal: Goal | None = None
@@ -240,7 +250,8 @@ class ImgepDriver:
                          if self.goal_order == "least_matched"
                          else self.goals.next_goal())
         if want_latent or text_goal is None:
-            return latent_goal(self.archive, self.rng, self.alpha, self.beta) or text_goal
+            return (latent_goal(self.archive, self.rng, self.projection,
+                                self.alpha) or text_goal)
         return text_goal
 
     def chase(self, tile: int) -> bool:
@@ -318,7 +329,7 @@ class ImgepDriver:
         self.archive.maybe_flush(every=self.flush_every)
 
         if self.regime == "expedition":
-            fit = (b @ self._goal.embedding).astype(np.float32)
+            fit = self._expedition_fitness(snaps)
             self._optimizer.tell(z, fit)
             self._remaining -= 1
             if self._remaining <= 0:
@@ -334,6 +345,53 @@ class ImgepDriver:
 
         self._last_score_label = "novelty"
         return np.asarray(nov, dtype=np.float32)
+
+    # ---- expedition fitness ---------------------------------------------
+
+    def _expedition_fitness(self, snaps: np.ndarray) -> np.ndarray:
+        """Contrastive, from the PER-SNAPSHOT embeddings.
+
+        Deliberately not `descriptor(snaps) @ goal`. That was the old objective
+        and it failed twice over: raw cosine saturates in a cone whose mean
+        pairwise similarity is 0.897, and descriptor() renormalises the
+        trajectory centroid, so 1/||m|| paid a bonus for decorrelated snapshots
+        rather than for matching the goal. The descriptor is still the right
+        thing to ARCHIVE - novelty needs unit vectors - it was only ever wrong
+        as a fitness.
+        """
+        refs, scale = self._references()
+        if refs is None or len(refs) == 0:
+            # No centroid means an empty archive, which cannot happen inside an
+            # expedition. Fall back to raw alignment rather than raising in the
+            # middle of a generation.
+            return (descriptor(snaps) @ self._goal.embedding).astype(np.float32)
+        return contrastive(snaps, self._goal.embedding, refs, logit_scale=scale)
+
+    def _references(self):
+        """-> (references, logit_scale) for the active goal.
+
+        The scale differs by MODALITY, not by taste: CLIP's 100 is tuned for the
+        narrow band that text-image similarity occupies, and applying it to
+        image-image similarity above 0.9 floors 59.6% of a generation to zero.
+        """
+        if self._goal is not None and self._goal.kind == "text":
+            return self._distractor_embeddings(), TEXT_LOGIT_SCALE
+        c = self.archive.centroid()
+        return (None if c is None else c[None, :]), IMAGE_LOGIT_SCALE
+
+    def _distractor_embeddings(self):
+        """The Auto tab's distractor set, embedded once for the whole run.
+
+        Deliberately NOT via scorer.set_prompt(): that writes scorer._text_emb,
+        which the Auto tab owns, and the two modes must not clobber each other.
+        """
+        if self._distractors is None and self.scorer is not None:
+            from services.clip_scorer import DEFAULT_DISTRACTORS
+
+            self._distractors = np.asarray(
+                self.scorer.embed_text(list(DEFAULT_DISTRACTORS)),
+                dtype=np.float32)
+        return self._distractors
 
     # ---- checkpointing -------------------------------------------------
 

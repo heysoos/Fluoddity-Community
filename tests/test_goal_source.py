@@ -3,7 +3,9 @@ import pytest
 
 from services.archive import Archive, Candidate
 from services.archive_io import ArchiveStore
-from services.goal_source import Goal, GoalList, latent_goal
+from services.archive_projection import Projection
+from services.expedition_fitness import IMAGE_LOGIT_SCALE, contrastive
+from services.goal_source import LATENT_DIMS, Goal, GoalList, latent_goal
 
 
 def _unit(a):
@@ -191,30 +193,143 @@ def test_goals_persist_through_the_store(tmp_path):
 
 # ---- latent goals -------------------------------------------------------
 
+def cone_archive(n=300, dim=256, seed=0):
+    """An anisotropic cone in a space much larger than LATENT_DIMS.
+
+    All three properties are load-bearing, and a fixture missing any of them
+    makes the whitened construction look identical to the one it replaces:
+
+      TIGHT       the real archive's mean pairwise <b, b'> is 0.897. Geometry
+                  on a spread-out cloud says nothing about the app.
+      ANISOTROPIC half the real variance is in 3 of 512 components. Whitening
+                  an isotropic cloud is a uniform rescale, i.e. a no-op, and the
+                  goal collapses back to plain radial extrapolation.
+      dim >> 8    the goal lies entirely inside the 8-d subspace, while every
+                  entry keeps most of its energy outside it. That is what makes
+                  <e, g> rank differently from <e, seed>, and the effect scales
+                  with dim/LATENT_DIMS: measured at 7/20 goals leaving room past
+                  the seed at dim 64, 10/20 at 128, 14/20 at 256, and 54/60 on
+                  the real archive at dim 512.
+    """
+    rng = np.random.default_rng(seed)
+    axis = _unit(rng.normal(size=dim).astype(np.float32)[None])[0]
+    scales = (0.09 * (0.985 ** np.arange(dim))).astype(np.float32)
+    vecs = _unit(axis + rng.normal(size=(n, dim)).astype(np.float32) * scales)
+    # Its own Archive rather than archive_with(): that helper caps capacity at
+    # 100, which would silently evict two thirds of this fixture and quietly
+    # weaken every measurement taken on it.
+    a = Archive(store=None, dim=dim, seed_n=0, liveness_min=0.0, capacity=n)
+    a.threshold.value = 0.0
+    for v in vecs:
+        a.consider(
+            Candidate(brain=np.zeros((10, 8), np.float32),
+                      physics=np.zeros(8, np.float32),
+                      embedding=v.astype(np.float32), liveness=1.0,
+                      spec="brain:80"),
+            novelty=1.0,
+        )
+    assert len(a) == n, "the fixture must not be evicting itself"
+    return a
+
+
+def beaten_by(archive, goal):
+    """How many archived entries out-score the entry the expedition SEEDS at.
+
+    Archive.nearest() returns argmax(embeddings @ goal), so the seed is the
+    archive's best entry under the goal by construction - for any goal. 0 here
+    means CMA-ES starts on the optimum of its own objective and every move it
+    can make scores worse. That is the bug, stated as a number.
+    """
+    e = archive.embeddings
+    seed = int(np.argmax(e @ goal))
+    fit = contrastive(e[None, :, :], goal, archive.centroid()[None, :],
+                      logit_scale=IMAGE_LOGIT_SCALE)
+    return int((fit > fit[seed]).sum())
+
+
+def old_goal(b, c):
+    """g = normalise(b + 0.5(b - c)), the construction this replaced."""
+    g = np.asarray(b, np.float32) + 0.5 * (np.asarray(b, np.float32)
+                                           - np.asarray(c, np.float32))
+    return (g / np.linalg.norm(g)).astype(np.float32)
+
+
 def test_latent_goal_is_unit_norm_and_labelled():
-    a = archive_with([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
-    goal = latent_goal(a, np.random.default_rng(0))
+    a = cone_archive()
+    goal = latent_goal(a, np.random.default_rng(0), Projection(LATENT_DIMS))
     assert goal.kind == "latent"
     assert goal.text == ""
     assert np.linalg.norm(goal.embedding) == pytest.approx(1.0, abs=1e-5)
 
 
-def test_latent_goal_points_further_out_than_its_source():
-    """The whole point: extrapolate past the frontier, do not sit on it."""
-    a = archive_with([[1, 0, 0, 0], [1, 0.1, 0, 0], [1, 0.2, 0, 0], [0, 0, 1, 0]],
-                     novelties=[0.1, 0.1, 0.1, 0.9])
+def test_the_old_construction_left_nothing_to_climb():
+    """Kept as a regression witness. If someone reinstates centroid
+    extrapolation, this is what they are reinstating."""
+    a = cone_archive()
     c = a.centroid()
-    goal = latent_goal(a, np.random.default_rng(0), alpha=8.0, beta=0.5)
-    src = a.embeddings[3]                      # the novel outlier is the source
-    assert float(goal.embedding @ c) < float(src @ c)
+    beaten = [beaten_by(a, old_goal(a.embeddings[i], c)) for i in range(20)]
+    assert max(beaten) == 0, "the seed was unbeatable under its own goal"
+
+
+def test_the_whitened_goal_leaves_real_room_past_the_seed():
+    """THE fix. Measured on the real archive: 0.0 entries beat the seed under
+    the old construction, 23.8 under this one."""
+    a = cone_archive()
+    proj = Projection(LATENT_DIMS)
+    beaten = [beaten_by(a, latent_goal(a, np.random.default_rng(t), proj).embedding)
+              for t in range(20)]
+    # 10/20, not 20/20: this fixture is dim 256 against the real archive's 512,
+    # and the effect scales with dim/LATENT_DIMS (see cone_archive). Measured
+    # 14/20 here and 54/60 on the real archive.
+    assert sum(1 for b in beaten if b > 0) >= 10, \
+        f"most goals must leave something above the seed, got {beaten}"
+
+
+def test_the_goal_does_not_sit_on_an_entry_the_archive_already_has():
+    """Extrapolate past the frontier, do not sit on it.
+
+    Stated as REACH - the best score anything already archived gets - because
+    that is the quantity the old construction pinned at ~0.987, i.e. an entry
+    the archive was already holding. Measured on the real archive: 0.9871 for
+    the old goal against 0.9613 for this one.
+
+    Not stated as distance from the centroid: the goal lies inside the top-8
+    subspace, which is naturally BETTER aligned with the centroid than a real
+    entry is, since entries carry most of their energy outside it.
+    """
+    a = cone_archive()
+    c = a.centroid()
+    proj = Projection(LATENT_DIMS)
+    new = [float((a.embeddings @ latent_goal(
+        a, np.random.default_rng(t), proj).embedding).max()) for t in range(10)]
+    old = [float((a.embeddings @ old_goal(a.embeddings[i], c)).max())
+           for i in range(10)]
+    assert np.mean(new) < np.mean(old)
+
+
+def test_a_bigger_push_lands_further_from_the_centroid():
+    a = cone_archive()
+    c = a.centroid()
+    near = latent_goal(a, np.random.default_rng(5), Projection(LATENT_DIMS),
+                       push_sd=1.0)
+    far = latent_goal(a, np.random.default_rng(5), Projection(LATENT_DIMS),
+                      push_sd=6.0)
+    assert float(far.embedding @ c) < float(near.embedding @ c)
 
 
 def test_latent_goal_on_an_empty_archive_is_none():
     a = Archive(store=None, dim=4)
-    assert latent_goal(a, np.random.default_rng(0)) is None
+    assert latent_goal(a, np.random.default_rng(0), Projection(LATENT_DIMS)) is None
 
 
-def test_latent_goal_on_a_single_entry_returns_that_entry():
+def test_a_projection_that_cannot_fit_yields_no_goal():
+    """It must NOT fall back to the seed or to centroid extrapolation - both
+    hand back a goal the seed already maximises, which is the bug. The caller
+    falls through to a text goal instead."""
     a = archive_with([[1, 0, 0, 0]])
-    goal = latent_goal(a, np.random.default_rng(0))
-    assert np.allclose(goal.embedding, a.embeddings[0], atol=1e-5)
+    assert latent_goal(a, np.random.default_rng(0), Projection(LATENT_DIMS)) is None
+
+
+def test_no_projection_at_all_yields_no_goal():
+    a = cone_archive()
+    assert latent_goal(a, np.random.default_rng(0), None) is None

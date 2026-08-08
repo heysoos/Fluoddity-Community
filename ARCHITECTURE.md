@@ -97,12 +97,13 @@ Auto (CLIP) mode and Explore (IMGEP) mode share one rollout machine
 | `archive.py` | 377 | Admission gates, adaptive novelty threshold, capacity, novelty refresh |
 | `archive_io.py` | 183 | `index.jsonl` + atomic `vectors.npz` + thumbnails; degrades to a no-op on disk trouble |
 | `archive_library.py` | 207 | Named archive directories: safe names, listing, create / clear / delete |
-| `goal_source.py` | 174 | `Goal`, the user's text `GoalList`, and `latent_goal()` frontier extrapolation |
+| `goal_source.py` | 220 | `Goal`, the user's text `GoalList`, and `latent_goal()` whitened frontier extrapolation |
+| `expedition_fitness.py` | 92 | Contrastive expedition objective; per-modality logit scales |
 | `prompt_driver.py` | 145 | Auto mode's driver: CMA-ES climbing a CLIP text prompt |
 | `novelty.py` | 131 | k-NN novelty, `NOV^alpha` parent sampling, the rejects ring |
 | `thumb_cache.py` | 79 | LRU of GL textures for gallery thumbnails, with explicit release |
 | `descriptor.py` | 63 | Trajectory-centroid behaviour descriptor and ASAL liveness |
-| `archive_projection.py` | 61 | 2-D PCA for the map view, sign-aligned across refits |
+| `archive_projection.py` | 69 | PCA: 2-D for the map view, 8-D (with variances) for latent goals |
 | `search_driver.py` | 46 | The `SearchDriver` protocol both drivers implement |
 
 Archives live under `Documents/Fluoddity/archives/<name>/`, one directory per

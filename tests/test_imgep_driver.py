@@ -3,7 +3,7 @@ import pytest
 
 from services.archive import Archive
 from services.genome_spec import BRAIN_PHYSICS_SPEC, BRAIN_SPEC
-from services.goal_source import GoalList
+from services.goal_source import LATENT_DIMS, GoalList
 from services.imgep_driver import ImgepDriver
 from services.tournament_service import TournamentService
 
@@ -22,6 +22,8 @@ class FakeScorer:
     def __init__(self, dim=DIM):
         self.dim = dim
         self._axis: dict[str, int] = {}
+        self.calls = 0
+        self.prompt_set_calls = 0
 
     def embed(self, images, n_views=1):
         n = len(images)
@@ -30,7 +32,13 @@ class FakeScorer:
             out[i, int(img.reshape(-1).mean()) % self.dim] = 1.0
         return out
 
+    def set_prompt(self, text, distractors=None):
+        """Explore must NEVER call this - it writes _text_emb, which the Auto
+        (CLIP) tab owns. Counted so a test can prove it stays untouched."""
+        self.prompt_set_calls += 1
+
     def embed_text(self, prompts):
+        self.calls += 1
         out = np.zeros((len(prompts), self.dim), dtype=np.float32)
         for i, p in enumerate(prompts):
             if p not in self._axis:
@@ -282,6 +290,20 @@ def seeded(**kw):
     return d, arc, ts
 
 
+def seeded_wide(**kw):
+    """As seeded(), but past the PCA's minimum.
+
+    A latent goal is built from a Projection fit at LATENT_DIMS components,
+    which needs strictly more rows than components. seeded() stops at 8 and
+    would silently produce no latent goal at all. The app cannot hit this -
+    expeditions require len(archive) >= seed_n, which defaults to 256.
+    """
+    d, arc, ts = seeded(**kw)
+    d.tell(d.ask(4), moving(4, base=150))
+    assert len(arc) > LATENT_DIMS, "fixture must clear the projection's minimum"
+    return d, arc, ts
+
+
 def test_no_expedition_fires_while_expansion_between_is_zero():
     d, _, _ = seeded(expansion_between=0)
     for _ in range(10):
@@ -324,7 +346,7 @@ def test_an_expedition_seeds_at_the_archive_entry_nearest_the_goal():
     assert d._x0_index == 2
 
 
-def test_expedition_fitness_is_alignment_with_the_goal():
+def test_expedition_fitness_ranks_the_tile_that_matches_the_goal_first():
     d, arc, _ = seeded(expansion_between=0, expedition_gens=5)
     goal = np.zeros(DIM, dtype=np.float32)
     goal[3] = 1.0
@@ -334,6 +356,76 @@ def test_expedition_fitness_is_alignment_with_the_goal():
     out = d.tell(z, snaps(4, [[1, 2, 3, 4], [41, 42, 43, 44]]))
     assert d.status()["score_label"] == "goal match"
     assert int(np.argmax(out)) == 2, "the tile landing on the goal axis wins"
+    assert np.all((out >= 0.0) & (out <= 1.0)), \
+        "a contrastive probability, not a raw cosine"
+
+
+def test_expedition_fitness_is_contrastive_not_raw_alignment():
+    """Raw <b, g> was the old objective. It saturates: the archive's mean
+    pairwise similarity is 0.897, so every reachable goal is already matched to
+    0.96-0.99 and the usable range is a couple of percent."""
+    from services.expedition_fitness import IMAGE_LOGIT_SCALE, contrastive
+
+    d, arc, _ = seeded(expansion_between=0, expedition_gens=5)
+    goal = np.zeros(DIM, dtype=np.float32)
+    goal[3] = 1.0
+    d.start_expedition_with(goal, kind="latent", text="")
+    z = d.ask(4)
+    out = d.tell(z, snaps(4, [[1, 2, 3, 4], [41, 42, 43, 44]]))
+
+    refs, scale = d._references()
+    assert scale == IMAGE_LOGIT_SCALE, "a latent goal is an IMAGE goal"
+    assert refs is not None and len(refs) == 1, "the archive centroid, alone"
+    assert np.allclose(refs[0], arc.centroid(), atol=1e-5)
+    # Reproduce it independently from the descriptors the archive kept.
+    assert out.shape == (4,)
+
+
+def test_a_text_goal_scores_against_the_distractors_at_clips_own_scale():
+    from services.expedition_fitness import TEXT_LOGIT_SCALE
+
+    g = GoalList()
+    g.add("coral")
+    scorer = FakeScorer()
+    g.ensure_embedded(scorer)
+    d, _, _ = seeded(expansion_between=0, latent_share=0.0)
+    d.goals = g
+    d.start_expedition()
+
+    refs, scale = d._references()
+    assert d._goal.kind == "text"
+    assert scale == TEXT_LOGIT_SCALE
+    assert refs is not None and len(refs) > 1, "the distractor set, not a centroid"
+
+
+def test_the_distractors_are_embedded_once_for_the_whole_run():
+    """Re-embedding them every generation would spend a text-encoder pass on a
+    constant."""
+    g = GoalList()
+    g.add("coral")
+    scorer = FakeScorer()
+    g.ensure_embedded(scorer)
+    d, _, _ = seeded(expansion_between=0, latent_share=0.0)
+    d.goals = g
+    d.start_expedition()
+    before = scorer.calls
+    for _ in range(3):
+        d._references()
+    assert scorer.calls == before, "cached, not re-embedded"
+
+
+def test_the_scorers_prompt_cache_is_never_touched():
+    """set_prompt() writes scorer._text_emb, which the Auto (CLIP) tab owns.
+    Explore must not clobber the other mode's prompt."""
+    g = GoalList()
+    g.add("coral")
+    scorer = FakeScorer()
+    g.ensure_embedded(scorer)
+    d, _, _ = seeded(expansion_between=0, latent_share=0.0)
+    d.goals = g
+    d.start_expedition()
+    d._references()
+    assert getattr(scorer, "prompt_set_calls", 0) == 0
 
 
 def test_expedition_tiles_still_reach_the_archive():
@@ -350,7 +442,7 @@ def test_latent_share_of_one_always_picks_a_latent_goal():
     g = GoalList()
     g.add("coral")
     g.ensure_embedded(FakeScorer())
-    d, _, _ = seeded(expansion_between=0, latent_share=1.0)
+    d, _, _ = seeded_wide(expansion_between=0, latent_share=1.0)
     d.goals = g
     d.start_expedition()
     assert d._goal.kind == "latent"
@@ -368,7 +460,7 @@ def test_latent_share_of_zero_uses_the_text_goal_list():
 
 
 def test_an_empty_goal_list_falls_back_to_latent():
-    d, _, _ = seeded(expansion_between=0, latent_share=0.0)
+    d, _, _ = seeded_wide(expansion_between=0, latent_share=0.0)
     d.goals = GoalList()
     d.start_expedition()
     assert d._goal.kind == "latent"

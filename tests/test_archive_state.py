@@ -61,7 +61,7 @@ def test_the_driver_settings_the_command_handler_pushes_all_exist():
 
     pushed = ("sigma_expand", "alpha", "k", "seed_n", "liveness_min",
               "refresh_per_gen", "expansion_between", "expedition_gens",
-              "expedition_sigma", "latent_share", "beta", "goal_order")
+              "expedition_sigma", "latent_share", "goal_order")
     names = {f.name for f in fields(ArchiveState)}
     driver_attrs = set(vars(ImgepDriver(None, None, [], rng=None)))
     for name in pushed:

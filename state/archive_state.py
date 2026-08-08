@@ -57,7 +57,6 @@ class ArchiveState:
     expedition_gens: int = 50
     expedition_sigma: float = 0.1
     latent_share: float = 0.5
-    beta: float = 0.5                # latent extrapolation distance
     goal_order: str = "round_robin"  # or "least_matched"
 
     # browser view
@@ -84,6 +83,7 @@ class ArchiveState:
     move_goal_index: int = -1
     move_goal_delta: int = 0
     grid_changed: bool = False
+    cancel_expedition_requested: bool = False
     chase_tile: int = -1
     pin_tile: int = -1
     export_entry_id: int = -1

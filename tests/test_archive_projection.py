@@ -131,3 +131,43 @@ def test_degenerate_input_does_not_raise():
     out = p.transform(x)
     assert out.shape == (50, 2)
     assert np.all(np.isfinite(out))
+
+
+# ---- variances: the search whitens with these ---------------------------
+
+def test_variances_are_the_retained_eigenvalues_descending():
+    """latent_goal divides by their square root, so an extrapolation distance
+    means the same thing along a dominant axis and a minor one."""
+    rng = np.random.default_rng(11)
+    x = _structured(300, 10, rng)
+    p = Projection(n_components=4)
+    p.fit(x)
+    assert p.variances.shape == (4,)
+    assert np.all(np.diff(p.variances) <= 0.0), "descending"
+    # each equals the variance of the data projected on that component
+    proj = (x - p.mean) @ p.components.T
+    assert np.allclose(p.variances, proj.var(axis=0, ddof=1), rtol=0.02)
+
+
+def test_variances_are_never_negative():
+    """eigh returns a tiny negative for a near-zero eigenvalue, and a negative
+    variance becomes a NaN standard deviation the moment it is whitened with."""
+    x = np.tile(np.array([[1.0, 0.0, 0.0, 0.0]], np.float32), (50, 1))
+    p = Projection(n_components=3)
+    p.fit(x)
+    assert np.all(p.variances >= 0.0)
+    assert np.all(np.isfinite(np.sqrt(np.maximum(p.variances, 1e-12))))
+
+
+def test_variances_are_absent_until_a_fit_succeeds():
+    p = Projection(n_components=2)
+    assert p.variances is None
+    assert p.fit(np.zeros((2, 8), np.float32)) is False
+    assert p.variances is None
+
+
+def test_the_dominant_component_carries_the_most_variance():
+    rng = np.random.default_rng(12)
+    p = Projection(n_components=2)
+    p.fit(_structured(400, 10, rng))
+    assert p.variances[0] > 2.0 * p.variances[1]

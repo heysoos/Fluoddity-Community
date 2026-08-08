@@ -153,22 +153,68 @@ class GoalList:
             self.store.save_goals(self.items)
 
 
-def latent_goal(archive, rng, alpha: float = 4.0, beta: float = 0.5) -> Goal | None:
-    """Extrapolate past the frontier: g = normalise(b + beta*(b - c)).
+# The archive is a low-dimensional cloud inside a 512-d space: measured
+# 2026-08-08 over 4784 descriptors, HALF its variance lies in 3 components and
+# 80% in 18. Extrapolating in the top 8 therefore moves along the manifold the
+# creatures actually occupy.
+#
+# d must stay SMALL. At d=32 this construction is nearly a no-op - seed rank
+# 0.1, against 41.3 at d=8 - because whitening equalises the components and the
+# unit direction then puts most of its energy in the minor ones, which unwhiten
+# back to almost nothing. Raising d to "capture more variance" silently turns
+# the push off.
+LATENT_DIMS = 8
 
-    'Keep going in the direction that already looks unlike everything else.'
+# In whitened units, so it is 3 standard deviations along the seed's own
+# direction whichever axes that direction uses. Measured seed rank: 21.0 at
+# +1sd, 29.1 at +2sd, 41.3 at +3sd, with reach still 0.962 - far enough to
+# leave real room past the seed, near enough to stay on the manifold.
+LATENT_PUSH_SD = 3.0
+
+
+def latent_goal(archive, rng, projection, alpha: float = 4.0,
+                push_sd: float = LATENT_PUSH_SD) -> Goal | None:
+    """Extrapolate past the frontier IN THE ARCHIVE'S PRINCIPAL SUBSPACE.
+
     The source b is drawn with p proportional to NOV^alpha, so the goal is
-    anchored on a genuinely novel entry rather than a random one.
+    anchored on a genuinely novel entry rather than a random one. It is then
+    whitened, pushed out along its own direction, and unwhitened.
+
+    This replaces g = normalise(b + beta*(b - c)), which did not work and could
+    not be made to work by tuning beta. Archive.nearest() returns
+    argmax(embeddings @ g), so the expedition always seeds on the archive's best
+    entry under its goal; the old construction then put the goal 0.965 cosine
+    from that very seed, because <b, c> = 0.947 makes b - c a tiny vector.
+    Measured over 200 trials: the goal's nearest entry WAS the seed it was built
+    from 199 times, at mean rank 0.01. CMA-ES started on the optimum of its own
+    objective and every subsequent move could only score worse. Raising beta
+    bought climbability at a ruinous rate - beta=20 reaches only 0.328, as
+    unreachable as a text prompt.
+
+    Returns None when the projection cannot be fit. It must NOT fall back to the
+    seed or to centroid extrapolation: both hand back a goal the seed already
+    maximises, which is the bug this function exists to remove. The caller falls
+    through to a text goal, exactly as it does for an empty archive.
     """
-    if len(archive) == 0:
+    if len(archive) == 0 or projection is None:
         return None
-    c = archive.centroid()
-    if c is None:
+    if not projection.fit(archive.embeddings):
         return None
+
     nov = np.array([e.novelty for e in archive.entries], dtype=np.float32)
     i = int(sample_by_novelty(nov, 1, rng, alpha)[0])
     b = archive.embeddings[i]
-    g = b + float(beta) * (b - c)
+
+    sd = np.sqrt(np.maximum(projection.variances, 1e-12))
+    y = ((b - projection.mean) @ projection.components.T) / sd
+    n = float(np.linalg.norm(y))
+    if not np.isfinite(n) or n < 1e-6:
+        # The seed sits on the centroid, so it has no direction of its own.
+        return None
+    y = y + float(push_sd) * (y / n)
+
+    g = projection.mean + ((y * sd) @ projection.components)
     nrm = float(np.linalg.norm(g))
-    g = (g / nrm) if nrm > 1e-6 else b.copy()
-    return Goal("latent", "", g.astype(np.float32))
+    if not np.isfinite(nrm) or nrm < 1e-6:
+        return None
+    return Goal("latent", "", (g / nrm).astype(np.float32))

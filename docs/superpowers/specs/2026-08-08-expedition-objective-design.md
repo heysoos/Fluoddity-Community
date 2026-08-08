@@ -132,6 +132,26 @@ def contrastive(snaps, goal, references, logit_scale=100.0) -> np.ndarray:
 Requires `m >= 1`; an empty reference set makes the softmax degenerate (always
 1.0) and is a caller error rather than a silent flat landscape.
 
+**The logit scale is per-modality.** Found during implementation, when a test
+fixture saturated: CLIP's 100 is the temperature learned for *text-image*
+similarity, which the modality gap confines to a narrow band near 0.2. Image-
+image similarity sits above 0.9, where 100 is far too sharp. Measured on the
+real archive, a +3sd latent goal scored against the centroid:
+
+| scale | floored | distinct in a 16-tile generation | spread |
+|---|---|---|---|
+| 100 | **59.6%** | 10.6 / 16 | 0.37 |
+| **30** | **1.4%** | **16.0 / 16** | **0.44** |
+| 10 | 0.0% | 16.0 / 16 | 0.33 |
+
+A floored tile is invisible to a rank-based optimizer, so at CLIP's own scale a
+third of every generation carried no information at all. Text goals show none
+of this (0.0% floored at 100, and a wider spread there than at 30), so they keep
+CLIP's value — which is also exactly what the working Auto tab uses.
+
+`TEXT_LOGIT_SCALE = 100.0`, `IMAGE_LOGIT_SCALE = 30.0`, and `logit_scale` has
+**no default**: the wrong one saturates the landscape without raising anything.
+
 References are resolved by the driver from `goal.kind`, so `goal_source.py`
 stays free of the fitness concern:
 
@@ -182,6 +202,19 @@ which is the bug this spec exists to remove. Expeditions require `len(archive)
 d=8 worked across +1/+2/+3 sd. d must stay small — **d=32 was nearly a no-op**
 (seed rank 0.1), because whitening equalises the components and then most of the
 push lands in directions that are geometrically tiny.
+
+**Why whitening helps at all**, established while building the test fixture,
+because a first attempt showed no effect: three properties of the archive are
+each necessary, and the construction degenerates to the old one without them.
+It must be *tight* (real mean pairwise 0.897), *anisotropic* (half the variance
+in 3 of 512 components — whitening an isotropic cloud is a uniform rescale,
+i.e. radial extrapolation again), and **`dim >> LATENT_DIMS`**. The last is the
+big one: the goal lies entirely inside the 8-d affine subspace while every entry
+keeps most of its energy outside it, and that is what makes `<e, g>` rank
+differently from `<e, seed>`. The effect scales with `dim / LATENT_DIMS` —
+measured at 7/20 goals leaving room past the seed at dim 64, 10/20 at 128, 14/20
+at 256, and 54/60 on the real archive at 512. It is a second, independent reason
+d must stay small.
 
 `beta` is deleted: from `ArchiveState`, from the `_handle_explore` push list,
 from `ImgepDriver`, and from `latent_goal`'s signature. Its UI slider

@@ -17,6 +17,11 @@ class Projection:
         self.n_components = int(n_components)
         self.components: np.ndarray | None = None
         self.mean: np.ndarray | None = None
+        # The retained eigenvalues, descending - the variance along each
+        # component. The map does not need them; the search does, because
+        # whitening is what makes an extrapolation distance mean the same thing
+        # along a dominant axis and a minor one. See goal_source.latent_goal.
+        self.variances: np.ndarray | None = None
         self._prev: np.ndarray | None = None
 
     @property
@@ -47,6 +52,9 @@ class Projection:
 
         self.components = comp
         self.mean = mean.astype(np.float32)
+        # Clamped at 0: eigh can return a tiny negative for a near-zero
+        # eigenvalue, and a negative variance becomes a NaN standard deviation.
+        self.variances = np.maximum(vals[order], 0.0).astype(np.float32)
         self._prev = comp.copy()
         return True
 

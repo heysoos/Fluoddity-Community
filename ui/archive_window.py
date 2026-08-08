@@ -221,6 +221,17 @@ class ArchiveWindowMixin:
         imgui.text(f"Regime: {st['regime']}")
         goal = st.get("goal") or "-"
         imgui.text(f"Goal: {goal}")
+        # Only while there is something to abandon - a permanently dead button
+        # would be noise on a panel this dense.
+        if st["regime"] == "expedition":
+            imgui.same_line()
+            if imgui.button("Cancel##expedition"):
+                ast.cancel_expedition_requested = True
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    "Abandon this goal and go back to novelty search.\n\n"
+                    "The next expedition is a full Expansion Between interval "
+                    "away, so cancelling does not immediately propose another.")
         imgui.text(f"Archive: {st['archive_size']}   "
                    f"threshold {st['threshold']:.3f}   "
                    f"admitting {100.0 * st['admission_rate']:.0f}%")
@@ -327,7 +338,10 @@ class ArchiveWindowMixin:
             "Expedition Sigma", ast.expedition_sigma, 0.01, 1.0)
         _, ast.latent_share = imgui.slider_float(
             "Latent Goal Share", ast.latent_share, 0.0, 1.0)
-        _, ast.beta = imgui.slider_float("Extrapolation (beta)", ast.beta, 0.0, 2.0)
+        # "Extrapolation (beta)" was here. The latent goal no longer
+        # extrapolates away from the centroid - it extrapolates in the archive's
+        # principal subspace, in whitened units, and no value of beta made the
+        # old construction work. See services/goal_source.py.
 
     # ---- the browser ---------------------------------------------------
 

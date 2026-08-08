@@ -162,3 +162,29 @@ Use this after large refactors or significant new features. Items roughly ordere
       it in the dropdown: a warning appears and nothing else changes.
 - [ ] Quit while a non-default archive is active; relaunch: the same archive is
       loaded.
+
+## 15. Expeditions
+
+The offline evidence for this change is all proxies on stored descriptors: it
+shows the landscape has a gradient built from achievable creatures, not that
+CMA-ES walks it in 50 generations at dim 80. These checks are the part that
+only the running app can answer.
+
+- [ ] Run Explore until the archive passes `seed_n` and an expedition starts.
+      The Explore status shows `Regime: expedition` and a goal label.
+- [ ] **Fitness moves off its starting value rather than decaying.** This is the
+      whole fix: previously the expedition seeded on the optimum of its own
+      objective, so the score could only fall. A flat or falling curve across a
+      whole expedition means it is not working.
+- [ ] A latent expedition (`Latent Goal Share` = 1.0) produces tiles that differ
+      from its seed rather than converging back onto it.
+- [ ] A text expedition (`Latent Goal Share` = 0.0, with goals in the list)
+      moves toward the phrase rather than toward noise.
+- [ ] **Cancel** appears next to the goal only during an expedition, ends it,
+      and the regime returns to `expansion`.
+- [ ] After cancelling, the next expedition does not start immediately - it is a
+      full `Expansion Between` interval away.
+- [ ] Chase a tile mid-expedition: the goal switches to that tile rather than
+      the expedition simply ending.
+- [ ] Switch to the Auto (CLIP) tab and confirm its prompt still works. Explore
+      must never call `scorer.set_prompt()`, which owns that tab's cache.

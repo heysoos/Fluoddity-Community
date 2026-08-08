@@ -151,6 +151,33 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   otherwise call `configure()` on the same object every frame, so each bails out
   when the other owns the driver.
 
+- **The expedition fitness is contrastive, and its logit scale is
+  per-modality.** `TEXT_LOGIT_SCALE` is CLIP's own 100; `IMAGE_LOGIT_SCALE` is
+  30. Image-image similarity sits above 0.9 where 100 is far too sharp - a +3sd
+  latent goal at scale 100 floors **59.6%** of tiles to zero, leaving 10.6 of a
+  16-tile generation distinguishable to a rank-based optimizer. `contrastive()`
+  has no default scale on purpose.
+
+- **`LATENT_DIMS` must stay small (8).** Two independent reasons, both measured:
+  whitening equalises the components, so a large d puts the push into
+  geometrically tiny directions (d=32 was a no-op, seed rank 0.1 against 41.3 at
+  d=8); and the goal lies wholly inside the d-dimensional subspace while entries
+  keep most of their energy outside it, an effect that scales with
+  `dim / LATENT_DIMS`. "Capture more variance" silently turns the push off.
+
+- **The descriptor and the expedition fitness are separate computations** over
+  the same per-snapshot embeddings. `descriptor()` renormalises the trajectory
+  centroid - right for novelty, which needs unit vectors - but `1/||m||` grows
+  as snapshots decorrelate, so using it as fitness paid a bonus for *changing*
+  rather than for *matching* (0.22 SD of the spread). Score per snapshot, then
+  average, as `PromptDriver` does.
+
+- **`Archive.nearest()` returns `argmax(embeddings @ goal)`**, so an expedition
+  always seeds on the archive's best entry under its own goal. That is fine only
+  if the goal leaves room past it. The old `g = b + beta*(b - c)` did not - over
+  200 trials the goal's nearest entry WAS its own seed 199 times - and no value
+  of beta fixed it. See `docs/superpowers/specs/2026-08-08-expedition-objective-design.md`.
+
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.
 - **Windows platform** — use forward slashes or `os.path`; use `rm` not `del` in bash commands.
 - **No test suite** — changes must be verified manually.

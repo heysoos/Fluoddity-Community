@@ -446,6 +446,7 @@ class CommandHandler:
         ast.move_goal_index = -1
         ast.move_goal_delta = 0
         ast.grid_changed = False
+        ast.cancel_expedition_requested = False
         ast.chase_tile = -1
         ast.pin_tile = -1
         ast.export_entry_id = -1
@@ -537,7 +538,7 @@ class CommandHandler:
         )
         for name in ("sigma_expand", "alpha", "k", "seed_n", "liveness_min",
                      "refresh_per_gen", "expansion_between", "expedition_gens",
-                     "expedition_sigma", "latent_share", "beta", "goal_order"):
+                     "expedition_sigma", "latent_share", "goal_order"):
             setattr(drv, name, getattr(ast, name))
         if self.archive is not None:
             self.archive.capacity = int(ast.capacity)
@@ -562,6 +563,10 @@ class CommandHandler:
             svc.reset()
         if ast.start_requested:
             svc.start()
+        # Before chase: a chase in the same frame is a request for a NEW
+        # expedition and must not be undone by the cancel.
+        if ast.cancel_expedition_requested:
+            drv.end_expedition()
         if ast.chase_tile >= 0 and not drv.chase(int(ast.chase_tile)):
             ast.warning = "nothing captured yet - chase needs one generation first"
         if (ast.refit_projection_requested and self.archive is not None
