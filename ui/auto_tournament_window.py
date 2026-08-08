@@ -94,22 +94,12 @@ class AutoTournamentWindowMixin:
         if ch:
             ats.algorithm = ALGORITHM_NAMES[idx]
 
-        ch, g = imgui.slider_int("Grid", ats.grid, 2, 8)
-        if ch and g != ats.grid:
-            ats.grid = g
-            ats.grid_changed = True
-        self._render_grid_hints(ats)
+        self._render_rollout_controls(ats)
 
         imgui.separator()
         self._render_transport(ats)
 
         imgui.separator()
-        _, ats.steps_per_gen = imgui.slider_int(
-            "Steps per Gen", ats.steps_per_gen, 50, 2000)
-        _, ats.sim_steps_per_frame = imgui.slider_int(
-            "Sim Steps per Frame", ats.sim_steps_per_frame, 1, 50)
-        _, ats.snapshots_per_gen = imgui.slider_int(
-            "Snapshots per Gen", ats.snapshots_per_gen, 1, 8)
         _, ats.sigma0 = imgui.slider_float("Initial Sigma", ats.sigma0, 0.05, 1.5)
 
         imgui.separator()
@@ -190,7 +180,29 @@ class AutoTournamentWindowMixin:
         else:
             imgui.text_disabled("no goal set")
 
-    def _render_grid_hints(self, ats):
+    def _render_rollout_controls(self, ats, grid_note=None):
+        """Grid and rollout timing. Shared verbatim by Auto and Explore - both
+        drive the same AutoTournamentService rollout machine, so duplicating
+        these widgets would let the two tabs disagree about what a generation
+        is.
+
+        grid_note overrides the last hint line because the consequence of a
+        grid change differs: Auto mode loses its accumulated covariance, while
+        Explore mode only ends any expedition in flight."""
+        ch, g = imgui.slider_int("Grid", ats.grid, 2, 8)
+        if ch and g != ats.grid:
+            ats.grid = g
+            ats.grid_changed = True
+        self._render_grid_hints(ats, grid_note)
+
+        _, ats.steps_per_gen = imgui.slider_int(
+            "Steps per Gen", ats.steps_per_gen, 50, 2000)
+        _, ats.sim_steps_per_frame = imgui.slider_int(
+            "Sim Steps per Frame", ats.sim_steps_per_frame, 1, 50)
+        _, ats.snapshots_per_gen = imgui.slider_int(
+            "Snapshots per Gen", ats.snapshots_per_gen, 1, 8)
+
+    def _render_grid_hints(self, ats, note=None):
         tiles = ats.grid * ats.grid
         src_px = 1024 // ats.grid
         imgui.text_disabled(f"population {tiles}   source {src_px}px/tile")
@@ -199,7 +211,7 @@ class AutoTournamentWindowMixin:
                 "  upscaled to 224 for CLIP - consider a larger canvas")
         if ats.grid == 2:
             imgui.text_disabled("  popsize 4 is small for 80-D CMA-ES")
-        imgui.text_disabled("changing the grid resets the optimizer")
+        imgui.text_disabled(note or "changing the grid resets the optimizer")
 
     def _render_transport(self, ats):
         if ats.running:
