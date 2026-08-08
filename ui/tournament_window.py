@@ -32,10 +32,20 @@ class TournamentWindowMixin:
         if imgui.begin_tab_bar("tournament_modes"):
             if imgui.begin_tab_item("Manual")[0]:
                 self.state.auto_tournament.enabled = False
+                self.state.archive.enabled = False
                 self._render_manual_tournament(state, selected)
                 imgui.end_tab_item()
             if imgui.begin_tab_item("Auto (CLIP)")[0]:
+                self.state.archive.enabled = False
                 self.render_auto_tournament_tab()
+                imgui.end_tab_item()
+            # Exactly one tab item is ever selected, and each branch disables
+            # the modes it is not - so no else-branch is needed to turn Explore
+            # off, and adding one would only fire in states a tab bar cannot
+            # reach.
+            if imgui.begin_tab_item("Explore (IMGEP)")[0]:
+                self.state.auto_tournament.enabled = False
+                self.render_explore_tab()
                 imgui.end_tab_item()
             imgui.end_tab_bar()
         imgui.end()

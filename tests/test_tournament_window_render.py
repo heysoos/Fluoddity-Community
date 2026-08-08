@@ -16,6 +16,7 @@ from services.auto_tournament_service import AutoTournamentService
 from services.run_logger import RunLogger
 from services.tournament_service import TournamentService
 from state import SimState
+from state.archive_state import ArchiveState
 from state.auto_tournament_state import AutoTournamentState
 from state.tournament_state import TournamentState
 from ui.auto_tournament_window import AutoTournamentWindowMixin
@@ -44,6 +45,11 @@ class _State:
     def __init__(self):
         self.tournament = TournamentState()
         self.auto_tournament = AutoTournamentState()
+        # Stands in for UIState, which gained this block with the Explore tab.
+        # The Manual and Auto branches of the tab bar clear it so exactly one
+        # mode is enabled; without the field they raise mid-frame and leave the
+        # ImGui stack unbalanced, which fails every later test in the file.
+        self.archive = ArchiveState()
         self.sim = SimState()
 
 

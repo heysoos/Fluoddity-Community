@@ -28,6 +28,7 @@ from .advanced_drawing_window import AdvancedDrawingWindowMixin
 from .field_loader_window import FieldLoaderWindowMixin
 from .tournament_window import TournamentWindowMixin
 from .auto_tournament_window import AutoTournamentWindowMixin
+from .archive_window import ArchiveWindowMixin
 
 
 @dataclass
@@ -50,6 +51,7 @@ class UI(
     FieldLoaderWindowMixin,
     TournamentWindowMixin,
     AutoTournamentWindowMixin,
+    ArchiveWindowMixin,
 ):
     """Passive UI - renders widgets, exposes state, handles no logic."""
 
@@ -687,6 +689,7 @@ class UI(
         # Render tournament window if enabled (hidden when windows toggled off)
         if self.show_sidebar:
             self.render_tournament_window()
+            self.render_archive_window()
 
         if self.show_demo_window:
             imgui.show_demo_window()
