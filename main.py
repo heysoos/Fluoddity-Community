@@ -134,6 +134,9 @@ class App:
             tournament_service=self.tournament_service,
             auto_service=None,  # set by _ensure_auto_service()
         )
+        # Archive switching is orchestration, so CommandHandler asks for it
+        # rather than reaching into App.
+        self.command_handler.switch_archive = self._switch_archive
         # Xbox controller (FPS camera for shader-driven field)
         self.controller_cam = ControllerCam()
         self.joystick_state = {'joystick_id': find_joystick(), 'prev_buttons': []}
@@ -217,7 +220,118 @@ class App:
         self.ui.auto_unavailable = ""
         return True
 
-    def _ensure_archive_service(self):
+    def _build_archive_set(self, path):
+        """(Re)build everything that hangs off ONE archive directory, and point
+        every holder at it.
+
+        The ImgepDriver instance is deliberately kept: sigma, alpha, the
+        expedition cadence and the rest are the user's settings, not the
+        archive's.
+        """
+        from services.archive import Archive
+        from services.archive_io import ArchiveStore
+        from services.archive_projection import Projection
+        from services.goal_source import GoalList
+        from services.thumb_cache import ThumbCache, gl_loader
+
+        store = ArchiveStore(path)
+        archive = Archive(store=store)
+        loaded, dropped = archive.load_from_store()
+        print(f"[archive] {path.name}: loaded {loaded} entries ({dropped} dropped)")
+
+        goals = GoalList(store=store)
+        goals.load()
+
+        self.archive_store = store
+        self.archive = archive
+        self.goal_list = goals
+        self.archive_projection = Projection()
+        self.archive_projection.fit(archive.embeddings)
+        self._last_projection_size = len(archive)
+        self.thumb_cache = ThumbCache(gl_loader(self.ctx, store), capacity=256)
+
+        if self.imgep_driver is not None:
+            self.imgep_driver.archive = archive
+            self.imgep_driver.goals = goals
+        self.ui.archive_obj = archive
+        self.ui.archive_goals = goals
+        self.ui.archive_projection = self.archive_projection
+        self.ui.thumb_cache = self.thumb_cache
+        self.command_handler.archive = archive
+        self.command_handler.goal_list = goals
+        self.command_handler.archive_projection = self.archive_projection
+
+    def _archive_path_for(self, name, ast):
+        """The directory for `name`, falling back to 'default' when it is gone.
+
+        A missing folder means the user deleted it outside the app or moved
+        their Documents. Substituting silently would have them exploring into a
+        different archive than the one the UI says is loaded.
+        """
+        from services.archive_library import create, resolve, safe_name
+        from utilities.paths import DEFAULT_ARCHIVE, get_archives_root
+
+        root = get_archives_root()
+        safe = safe_name(name) or DEFAULT_ARCHIVE
+        path = resolve(root, safe)
+        if path.is_dir():
+            return path
+        if safe != DEFAULT_ARCHIVE:
+            ast.warning = (f"Archive '{safe}' is gone; "
+                           f"loaded '{DEFAULT_ARCHIVE}' instead.")
+        create(root, DEFAULT_ARCHIVE)
+        return resolve(root, DEFAULT_ARCHIVE)
+
+    def _switch_archive(self, name, ui_state):
+        """Point the search at a different archive directory. -> success.
+
+        The order below is the whole content of this method. Flush before
+        closing the store, or the entries since the last 200-admission vector
+        flush are lost. Release the thumbnail cache before rebuilding, or the
+        new archive shows the old one's pictures - entry ids restart at 0 in
+        every archive.
+        """
+        from services.archive_library import list_archives, resolve, safe_name
+        from utilities.paths import get_archives_root
+
+        ast = ui_state.archive
+        root = get_archives_root()
+        safe = safe_name(name)
+        if not safe:
+            ast.warning = "That name has no usable characters."
+            return False
+        path = resolve(root, safe)
+        if not path.is_dir():
+            ast.warning = f"'{safe}' is no longer on disk."
+            ast.archive_list = list_archives(root)
+            return False
+
+        if self.auto_service is not None:
+            self.auto_service.pause()
+        ast.running = False
+        if self.imgep_driver is not None:
+            # The CMA-ES mean was seeded from a parent in the OUTGOING archive.
+            self.imgep_driver.end_expedition()
+        if self.archive is not None:
+            self.archive.maybe_flush(force=True)
+        if self.goal_list is not None:
+            self.goal_list.save()
+        if self.archive_store is not None:
+            self.archive_store.close()
+        if self.thumb_cache is not None:
+            self.thumb_cache.release()
+
+        self._build_archive_set(path)
+
+        ui_state.preferences.archive_name = safe
+        ast.archive_name = safe
+        ast.archive_list = list_archives(root)
+        ast.selected_entry_id = -1
+        # Deliberately NOT resumed: the user pressed a management button, not
+        # Start.
+        return True
+
+    def _ensure_archive_service(self, ui_state):
         """Build the archive, goal list and IMGEP driver on first use.
 
         Explore mode reuses the SAME AutoTournamentService instance - the
@@ -230,46 +344,27 @@ class App:
         if self.imgep_driver is not None:
             return True
 
-        from services.archive import Archive
-        from services.archive_io import ArchiveStore
-        from services.archive_projection import Projection
-        from services.goal_source import GoalList
+        from services.archive_library import list_archives
         from services.imgep_driver import ImgepDriver
-        from services.thumb_cache import ThumbCache, gl_loader
-        from utilities.paths import DEFAULT_ARCHIVE, get_archives_root
+        from utilities.paths import get_archives_root
 
-        store = ArchiveStore(get_archives_root() / DEFAULT_ARCHIVE)
-        archive = Archive(store=store)
-        loaded, dropped = archive.load_from_store()
-        print(f"[archive] loaded {loaded} entries ({dropped} dropped)")
+        ast = ui_state.archive
+        path = self._archive_path_for(ui_state.preferences.archive_name, ast)
+        self._build_archive_set(path)
 
-        goals = GoalList(store=store)
-        goals.load()
-
-        self.archive_store = store
-        self.archive = archive
-        self.goal_list = goals
         self.imgep_driver = ImgepDriver(
-            self.tournament_service, self.clip_scorer, archive, goals)
+            self.tournament_service, self.clip_scorer,
+            self.archive, self.goal_list)
         self.prompt_driver = self.auto_service.driver
 
-        self.archive_projection = Projection()
-        self.archive_projection.fit(archive.embeddings)
-        self._last_projection_size = len(archive)
-
-        self.thumb_cache = ThumbCache(gl_loader(self.ctx, store), capacity=256)
-        self.ui.thumb_cache = self.thumb_cache
+        ast.archive_name = path.name
+        ast.archive_list = list_archives(get_archives_root())
+        ui_state.preferences.archive_name = path.name
 
         self.ui.archive_driver = self.imgep_driver
-        self.ui.archive_obj = archive
-        self.ui.archive_goals = goals
         self.ui.archive_service = self.auto_service
-        self.ui.archive_projection = self.archive_projection
         self.ui.archive_unavailable = ""
         self.command_handler.imgep_driver = self.imgep_driver
-        self.command_handler.archive = archive
-        self.command_handler.goal_list = goals
-        self.command_handler.archive_projection = self.archive_projection
         return True
 
     def _capture_tiles(self):
@@ -429,7 +524,7 @@ class App:
         expl = ui_state.archive
         if expl.enabled and not self._explore_was_enabled:
             self._save_auto_overrides(ui_state)
-            if self._ensure_archive_service():
+            if self._ensure_archive_service(ui_state):
                 self.auto_service.driver = self.imgep_driver
                 self.auto_service.abort_generation()
         elif not expl.enabled and self._explore_was_enabled:
