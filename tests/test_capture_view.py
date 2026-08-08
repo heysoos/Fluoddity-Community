@@ -100,7 +100,11 @@ class _Cam:
 class _UI:
     def __init__(self):
         self.sim = type("S", (), {"watercolor_mode": False})()
-        self.preferences = type("P", (), {"bloom_enabled": False})()
+        self.preferences = type("P", (), {
+            "bloom_enabled": False, "bloom_threshold": 0.11,
+            "bloom_intensity": 0.23, "bloom_radius": 1.0,
+            "tonemap_softness": 2.5,
+        })()
 
 
 def view_at(camera, side=896):
@@ -207,3 +211,94 @@ def test_the_caller_s_dict_is_not_mutated():
     live = dict(camera_zoom=2.5, tiling_mode=True)
     CaptureView._capture_kwargs(live)
     assert live == {"camera_zoom": 2.5, "tiling_mode": True}
+
+
+# ---- per-tile bloom -----------------------------------------------------
+
+class _Blit:
+    def __init__(self):
+        self.calls = []
+
+    def draw(self, src, lo, hi):
+        self.calls.append((src, tuple(lo), tuple(hi)))
+
+
+class _Bloom:
+    def __init__(self):
+        self.inputs = []
+
+    def process(self, tex, *a, **kw):
+        self.inputs.append(tex)
+        return _Tex(tex.size)
+
+
+class _GridCtx(_Ctx):
+    """Adds the allocation the tile target needs."""
+
+    def texture(self, size, comps, dtype=None):
+        return _Tex(size)
+
+    def framebuffer(self, color_attachments=None):
+        return _Fbo()
+
+
+def grid_view(bloom_on=True):
+    cv = CaptureView(_GridCtx(), _Sim(), _Cam())
+    cv._bloom = _Bloom()
+    ui = _UI()
+    ui.preferences.bloom_enabled = bloom_on
+    return cv, ui
+
+
+def test_each_tile_is_bloomed_on_its_own():
+    """The whole point: the bloom pass cannot see outside the tile, so a bright
+    creature cannot glow into its neighbour's picture."""
+    cv, ui = grid_view()
+    cv.draw_grid(_Fbo(), _Tex((448, 448)), 2, _Blit(), ui, 224)
+    assert len(cv._bloom.inputs) == 4, "one bloom per tile"
+    assert all(t.size == (224, 224) for t in cv._bloom.inputs), \
+        "bloomed at tile size, not grid size"
+
+
+def test_the_source_rect_of_each_tile_is_its_own_quarter():
+    cv, ui = grid_view()
+    blit, grid_tex = _Blit(), _Tex((448, 448))
+    cv.draw_grid(_Fbo(), grid_tex, 2, blit, ui, 224)
+    # An extract reads the GRID texture; the write-back reads the bloomed tile.
+    # Filtering on the rect would drop tile 3, whose rect really is (0,0)-(1,1).
+    extracts = [c for c in blit.calls if c[0] is grid_tex]
+    assert len(extracts) == 4
+    rects = sorted((c[1], c[2]) for c in extracts)
+    assert rects == sorted([
+        ((0.0, 0.0), (0.5, 0.5)),   # tile 0, bottom-left
+        ((0.5, 0.0), (1.0, 0.5)),   # tile 1, bottom-right
+        ((0.0, 0.5), (0.5, 1.0)),   # tile 2, top-left
+        ((0.5, 0.5), (1.0, 1.0)),   # tile 3, top-right
+    ])
+
+
+def test_tile_zero_is_bottom_left_to_match_the_shader():
+    """tournament_home_tile() numbers tile 0 bottom-left; getting this backwards
+    would score every genome against a different tile's picture."""
+    cv, ui = grid_view()
+    blit, grid_tex = _Blit(), _Tex((448, 448))
+    cv.draw_grid(_Fbo(), grid_tex, 2, blit, ui, 224)
+    first_extract = next(c for c in blit.calls if c[0] is grid_tex)
+    assert first_extract[1] == (0.0, 0.0)
+
+
+def test_with_bloom_off_the_grid_is_copied_in_one_go():
+    """No per-tile work to do, so do not pay for it."""
+    cv, ui = grid_view(bloom_on=False)
+    blit = _Blit()
+    cv.draw_grid(_Fbo(), _Tex((448, 448)), 2, blit, ui, 224)
+    assert blit.calls == [(blit.calls[0][0], (0.0, 0.0), (1.0, 1.0))]
+    assert cv._bloom.inputs == []
+
+
+def test_watercolor_mode_skips_bloom_as_it_does_on_screen():
+    cv, ui = grid_view()
+    ui.sim.watercolor_mode = True
+    blit = _Blit()
+    cv.draw_grid(_Fbo(), _Tex((448, 448)), 2, blit, ui, 224)
+    assert cv._bloom.inputs == []

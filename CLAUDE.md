@@ -124,6 +124,12 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   validates any orientation bug you like. Test the capture crop with the camera
   *panned* — a mirrored rect displaces every tile by twice the pan.
 
+- **Bloom in the capture runs per tile, not over the grid.** It is a 5-level
+  mip chain reaching 30–60px, so blooming the whole grid put a quarter of a
+  tile's worth of neighbouring glow into every crop and the optimizer scored it
+  as the creature's. `CaptureView.draw_grid` splits first and blooms each tile
+  alone, which makes cross-tile bleed impossible rather than merely small.
+
 - **The tournament capture does not crop the window view — it re-renders the
   canvas** at `grid*224` with an identity camera (`services/capture_view.py`).
   Pan, zoom and window size cannot affect what the optimizer scores, and there

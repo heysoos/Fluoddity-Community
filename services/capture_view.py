@@ -41,6 +41,8 @@ class CaptureView:
         self._fbo = None
         self._assembler = None
         self._bloom = None
+        self._tile_tex = None
+        self._tile_fbo = None
 
     @property
     def side(self) -> int:
@@ -64,28 +66,75 @@ class CaptureView:
         self._assembler = FrameAssembler(self.ctx, self._tex)
 
     def render(self, ui_state, assemble_kwargs, side):
-        """-> the finished square texture, or None if it could not be built."""
+        """-> the assembled square texture, WITHOUT bloom, or None.
+
+        Bloom is deliberately not applied here: it has to run per tile, after
+        the grid is split, or a bright creature glows into its neighbours'
+        pictures. See draw_grid().
+        """
         self.resize(side)
         src = self._render_particles(ui_state)
         if src is None:
             return None
-
-        out = self._assembler.assemble_frame(
+        return self._assembler.assemble_frame(
             src, total_samples=1, current_sample_index=0,
             **self._capture_kwargs(assemble_kwargs))
-        if out is None:
-            return None
 
+    def draw_grid(self, fbo, src, grid, blit, ui_state, tile_px):
+        """Fill the bound capture framebuffer, blooming each tile ALONE.
+
+        Bloom reaches 30-60px at these sizes (a 5-level mip chain), so running
+        it over the whole grid put a quarter of a tile's worth of its
+        neighbours' glow into every crop - and the optimizer scored it as if it
+        belonged to the creature. Blooming a tile in isolation makes that
+        impossible by construction rather than by choosing a big enough gutter:
+        the pass cannot see anything outside the tile.
+
+        The total pixel count is unchanged - grid^2 tiles of tile_px^2 is the
+        whole grid - so the cost is the extra per-pass overhead, not extra
+        shading.
+        """
         prefs = ui_state.preferences
-        if prefs.bloom_enabled and not ui_state.sim.watercolor_mode:
-            if self._bloom is None:
-                from utilities.bloom import BloomProcessor
+        if not (prefs.bloom_enabled and not ui_state.sim.watercolor_mode):
+            blit.draw(src, (0.0, 0.0), (1.0, 1.0))
+            return
 
-                self._bloom = BloomProcessor(self.ctx)
-            out = self._bloom.process(
-                out, prefs.bloom_threshold, prefs.bloom_intensity,
-                prefs.bloom_radius, tonemap_softness=prefs.tonemap_softness)
-        return out
+        self._ensure_tile_target(tile_px)
+        for tile in range(grid * grid):
+            # Tile 0 is bottom-left, matching tournament_home_tile(), and both
+            # the source UVs and the destination viewport are bottom-up here.
+            # crop_bounds() applies the one flip, on readback.
+            tx, ty = tile % grid, tile // grid
+            lo = (tx / grid, ty / grid)
+            hi = ((tx + 1) / grid, (ty + 1) / grid)
+
+            self._tile_fbo.use()
+            self.ctx.viewport = (0, 0, tile_px, tile_px)
+            self.ctx.clear(0.0, 0.0, 0.0, 1.0)
+            blit.draw(src, lo, hi)
+
+            bloomed = self._bloom_of(
+                self._tile_tex, prefs, ui_state.sim.watercolor_mode)
+
+            fbo.use()
+            self.ctx.viewport = (tx * tile_px, ty * tile_px, tile_px, tile_px)
+            blit.draw(bloomed, (0.0, 0.0), (1.0, 1.0))
+
+    def _bloom_of(self, tex, prefs, watercolor):
+        if self._bloom is None:
+            from utilities.bloom import BloomProcessor
+
+            self._bloom = BloomProcessor(self.ctx)
+        return self._bloom.process(
+            tex, prefs.bloom_threshold, prefs.bloom_intensity,
+            prefs.bloom_radius, tonemap_softness=prefs.tonemap_softness)
+
+    def _ensure_tile_target(self, tile_px):
+        if self._tile_tex is not None and self._tile_tex.size == (tile_px, tile_px):
+            return
+        self._release_tile_target()
+        self._tile_tex = self.ctx.texture((tile_px, tile_px), 4, dtype="f4")
+        self._tile_fbo = self.ctx.framebuffer(color_attachments=[self._tile_tex])
 
     def _render_particles(self, ui_state):
         """The cam_brush pass with an IDENTITY camera.
@@ -160,8 +209,19 @@ class CaptureView:
                 pass
             self._assembler = None
 
+    def _release_tile_target(self) -> None:
+        for obj in (self._tile_fbo, self._tile_tex):
+            if obj is not None:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+        self._tile_fbo = None
+        self._tile_tex = None
+
     def release(self) -> None:
         self._release_target()
+        self._release_tile_target()
         self._side = 0
         if self._bloom is not None:
             try:

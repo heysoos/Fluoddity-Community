@@ -390,7 +390,8 @@ class App:
 
         self.tile_capture.resize(grid)
         crops = self.tile_capture.capture(
-            lambda fbo: self.capture_blit.draw(tex, (0.0, 0.0), (1.0, 1.0))
+            lambda fbo: self.capture_view.draw_grid(
+                fbo, tex, grid, self.capture_blit, ui_state, TILE_PX)
         )
         self.ctx.screen.use()
         width, height = glfw.get_framebuffer_size(self.window)
