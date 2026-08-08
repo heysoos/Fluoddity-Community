@@ -225,8 +225,8 @@ def test_the_pinned_only_filter_renders(gui):
     assert frame(h.render_archive_window) > host_only()
 
 
-def _button_labels(h, n=3):
-    """Every button label the window emits.
+def button_labels(fn, n=3):
+    """Every button label `fn` emits.
 
     Vertex counts cannot answer this: ImGui culls geometry for content below
     the fold, and the shared module context means this window's size is
@@ -242,10 +242,14 @@ def _button_labels(h, n=3):
 
     imgui.button = spy
     try:
-        frame(h.render_archive_window, n=n)
+        frame(fn, n=n)
     finally:
         imgui.button = real
     return seen
+
+
+def _button_labels(h, n=3):
+    return button_labels(h.render_archive_window, n=n)
 
 
 ACTIONS = {"Export as config", "Seed a run from here", "Delete"}
@@ -300,3 +304,78 @@ def test_the_pinned_only_filter_keeps_only_pins(gui):
     h.state.archive.pinned_only = True
     got = h._sorted_entries(h.state.archive, h.archive_obj)
     assert got and all(e.pinned for _, e in got)
+
+
+# ---- the map -----------------------------------------------------------
+
+def _spread(arc, seed=0):
+    """Give the fake archive embeddings with real structure, and a projection
+    fitted to them."""
+    from services.archive_projection import Projection
+
+    rng = np.random.default_rng(seed)
+    e = rng.normal(size=(len(arc.entries), 8)).astype(np.float32)
+    e[:, 0] *= 6.0
+    e[:, 1] *= 3.0
+    arc.embeddings = e / np.linalg.norm(e, axis=1, keepdims=True)
+    proj = Projection()
+    proj.fit(arc.embeddings)
+    return proj
+
+
+def test_the_map_says_so_when_there_is_nothing_to_project(gui):
+    """The guard message renders, but the scatter does not - "Refit projection"
+    only exists on the drawing path, so it is the precise signal."""
+    h = Harness(archive=_populated(n=2))
+    h.archive_projection = _spread(h.archive_obj)
+    labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
+    assert "Refit projection" not in labels
+
+
+def test_an_unfitted_projection_does_not_stack_every_point_at_the_origin(gui):
+    """Projection.transform returns zeros before it is fitted. Rendering that
+    would pile the whole archive in one corner and look like a bug rather than
+    an unbuilt map."""
+    from services.archive_projection import Projection
+
+    h = Harness(archive=_populated())
+    h.archive_projection = Projection()          # never fitted
+    assert h.archive_projection.fitted is False
+    labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
+    assert "Refit projection" not in labels
+
+
+def test_a_fitted_projection_does_draw_the_scatter(gui):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
+    assert "Refit projection" in labels
+
+
+def test_the_map_renders_a_fitted_archive(gui):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    assert frame(lambda: h._render_map(h.state.archive, h.archive_obj)) > host_only()
+
+
+def test_the_map_draws_the_goal_marker(gui):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    without = frame(lambda: h._render_map(h.state.archive, h.archive_obj))
+    h.archive_goal_point = h.archive_obj.embeddings[0].copy()
+    assert frame(lambda: h._render_map(h.state.archive, h.archive_obj)) > without
+
+
+def test_every_entry_source_has_a_colour(gui):
+    """A source with no colour silently falls back to the expansion green, so
+    expedition points would be indistinguishable from expansion ones."""
+    assert set(Harness._MAP_COLORS) >= {"bootstrap", "expansion", "expedition", "pin"}
+
+
+def test_the_map_renders_through_the_archive_window(gui):
+    """The Map tab is only reached via the tab bar, which is where a begin/end
+    imbalance in _render_map would corrupt the frame."""
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.show_browser = True
+    assert frame(h.render_archive_window) > host_only()

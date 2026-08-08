@@ -322,9 +322,15 @@ class App:
         # A refit every 500 admissions, not per frame. Projection.fit
         # sign-aligns to the previous components, so the map does not mirror
         # itself when this fires.
-        if self.archive is not None and self.archive_projection is not None:
-            if len(self.archive) - self._last_projection_size >= 500:
-                self.archive_projection.fit(self.archive.embeddings)
+        #
+        # The `not fitted` arm matters on a cold archive: the startup fit had
+        # nothing to fit, and without this the map would say "not enough
+        # entries" until the 500th admission rather than the 3rd.
+        proj = self.archive_projection
+        if self.archive is not None and proj is not None:
+            grown = len(self.archive) - self._last_projection_size
+            if grown >= 500 or (not proj.fitted and len(self.archive) > 2):
+                proj.fit(self.archive.embeddings)
                 self._last_projection_size = len(self.archive)
         if self.imgep_driver is not None:
             g = getattr(self.imgep_driver, "_goal", None)

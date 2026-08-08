@@ -6,6 +6,7 @@ disagree with the search about what is happening.
 """
 from __future__ import annotations
 
+import numpy as np
 from imgui_bundle import imgui
 
 _BAD = (1.0, 0.4, 0.3, 1.0)
@@ -281,6 +282,71 @@ class ArchiveWindowMixin:
             if imgui.button("Delete"):
                 ast.delete_entry_id = ast.selected_entry_id
 
+    _MAP_COLORS = {
+        "bootstrap": imgui.IM_COL32(120, 120, 130, 200),
+        "expansion": imgui.IM_COL32(90, 200, 120, 220),
+        "expedition": imgui.IM_COL32(255, 170, 60, 230),
+        "pin": imgui.IM_COL32(90, 170, 255, 255),
+    }
+
     def _render_map(self, ast, arc):
-        """Body arrives in Task 9."""
-        imgui.text_colored(imgui.ImVec4(*_DIM), "Not enough entries to project yet.")
+        proj = getattr(self, "archive_projection", None)
+        # proj.fitted, not just proj: an unfitted Projection transforms
+        # everything to the origin, which would stack the whole archive in one
+        # corner and read as a broken map rather than an unbuilt one.
+        if proj is None or not proj.fitted or len(arc) < 3:
+            imgui.text_colored(imgui.ImVec4(*_DIM),
+                               "Not enough entries to project yet.")
+            return
+        if imgui.button("Refit projection"):
+            ast.refit_projection_requested = True
+        imgui.same_line()
+        imgui.text_colored(imgui.ImVec4(*_DIM),
+                           "PCA of the CLIP embeddings. The map is a view - "
+                           "novelty is always measured in the full 512-d space.")
+
+        pts = proj.transform(arc.embeddings)
+        if not len(pts):
+            return
+        lo = pts.min(axis=0)
+        hi = pts.max(axis=0)
+        span = np.maximum(hi - lo, 1e-6)
+
+        size = imgui.ImVec2(imgui.get_content_region_avail().x, 320)
+        origin = imgui.get_cursor_screen_pos()
+        imgui.invisible_button("map_canvas", size)
+        hovering_canvas = imgui.is_item_hovered()
+        clicked_canvas = imgui.is_item_clicked()
+        draw = imgui.get_window_draw_list()
+        draw.add_rect_filled(origin,
+                             imgui.ImVec2(origin.x + size.x, origin.y + size.y),
+                             imgui.IM_COL32(20, 20, 24, 255))
+
+        mouse = imgui.get_mouse_pos()
+        hovered, best_d = None, 1e9
+        for i, e in enumerate(arc.entries):
+            u = (pts[i] - lo) / span
+            x = origin.x + 8.0 + float(u[0]) * (size.x - 16.0)
+            y = origin.y + 8.0 + (1.0 - float(u[1])) * (size.y - 16.0)
+            key = "pin" if e.pinned else e.source
+            draw.add_circle_filled(
+                imgui.ImVec2(x, y), 3.0,
+                self._MAP_COLORS.get(key, self._MAP_COLORS["expansion"]))
+            d = abs(mouse.x - x) + abs(mouse.y - y)
+            if d < best_d:
+                hovered, best_d = e, d
+
+        goal_pt = getattr(self, "archive_goal_point", None)
+        if goal_pt is not None:
+            u = (proj.transform(np.asarray(goal_pt)[None])[0] - lo) / span
+            gx = origin.x + 8.0 + float(u[0]) * (size.x - 16.0)
+            gy = origin.y + 8.0 + (1.0 - float(u[1])) * (size.y - 16.0)
+            draw.add_circle(imgui.ImVec2(gx, gy), 7.0,
+                            imgui.IM_COL32(255, 90, 90, 255), 0, 2.0)
+
+        if hovered is not None and best_d < 12.0 and hovering_canvas:
+            imgui.set_tooltip(f"#{hovered.id}  {hovered.source}\n"
+                              f"novelty {hovered.novelty:.3f}\n"
+                              f"goal: {hovered.goal or '-'}")
+            if clicked_canvas:
+                ast.selected_entry_id = hovered.id
