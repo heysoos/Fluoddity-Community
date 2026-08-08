@@ -9,6 +9,8 @@ from __future__ import annotations
 import numpy as np
 from imgui_bundle import imgui
 
+from services.archive_library import safe_name
+
 _BAD = (1.0, 0.4, 0.3, 1.0)
 _WARN = (1.0, 0.6, 0.2, 1.0)
 _OK = (0.4, 0.9, 0.5, 1.0)
@@ -32,6 +34,52 @@ ALPHA_TOOLTIP = (
     "to random archive mutation - E&E's own baseline, reachable here without a "
     "code change."
 )
+
+
+def archive_row_model(ast) -> dict:
+    """Everything the archive row draws, as data.
+
+    Pure, so the rules that matter - which archive is selected, whether Delete
+    is allowed - are assertable without an ImGui context.
+    """
+    names = [a["name"] for a in ast.archive_list] or [ast.archive_name]
+    try:
+        index = names.index(ast.archive_name)
+    except ValueError:
+        # The active folder was deleted outside the app. Pointing the combo at
+        # a stale index would name somebody else's archive.
+        index = 0
+    labels = [f"{a['name']}  ({a['entries']} entries)" for a in ast.archive_list]
+    if not labels:
+        labels = list(names)
+
+    active = next((a for a in ast.archive_list if a["name"] == ast.archive_name),
+                  None)
+    summary = (f"{active['entries']} entries · {active['size_mb']:.1f} MB"
+               if active else "not loaded yet")
+    return {
+        "names": names,
+        "labels": labels,
+        "index": index,
+        "entries": active["entries"] if active else 0,
+        "delete_enabled": len(ast.archive_list) > 1,
+        "summary": summary,
+    }
+
+
+def new_archive_status(ast) -> dict:
+    """Whether the typed name can become an archive, and what to say if not."""
+    typed = ast.new_archive_name
+    safe = safe_name(typed)
+    taken = any(a["name"] == safe for a in ast.archive_list)
+    if taken:
+        hint = f"An archive named '{safe}' already exists."
+    elif safe and safe != typed.strip():
+        hint = f"will be saved as: {safe}"
+    else:
+        hint = ""
+    return {"safe": safe, "taken": taken,
+            "can_create": bool(safe) and not taken, "hint": hint}
 
 
 class ArchiveWindowMixin:
@@ -62,6 +110,8 @@ class ArchiveWindowMixin:
                 "Manual mode is unaffected.")
             return
 
+        self._render_archive_row(ast)
+        imgui.separator()
         self._render_explore_status(ast)
         imgui.separator()
         self._render_explore_transport(ast)
@@ -77,6 +127,90 @@ class ArchiveWindowMixin:
         imgui.separator()
         if imgui.button("Open Archive Browser"):
             ast.show_browser = True
+
+    def _render_archive_row(self, ast):
+        """Which archive is active is an experimental variable, so it sits at
+        the top of the tab rather than in a menu."""
+        m = archive_row_model(ast)
+        imgui.set_next_item_width(240)
+        changed, idx = imgui.combo("Archive", m["index"], m["labels"])
+        if changed and 0 <= idx < len(m["names"]) and m["names"][idx] != ast.archive_name:
+            ast.switch_archive_name = m["names"][idx]
+        imgui.same_line()
+        if imgui.button("New##archive"):
+            ast.new_archive_name = ""
+            imgui.open_popup("New archive")
+        imgui.same_line()
+        if imgui.button("Empty##archive"):
+            imgui.open_popup("Empty archive")
+        imgui.same_line()
+        imgui.begin_disabled(not m["delete_enabled"])
+        if imgui.button("Delete##archive"):
+            ast.confirm_delete_text = ""
+            imgui.open_popup("Delete archive")
+        imgui.end_disabled()
+        imgui.same_line()
+        if imgui.button("Refresh##archive"):
+            ast.refresh_archive_list_requested = True
+
+        imgui.text_colored(imgui.ImVec4(*_DIM), m["summary"])
+        self._render_archive_modals(ast)
+
+    def _render_archive_modals(self, ast):
+        flags = imgui.WindowFlags_.always_auto_resize
+        if imgui.begin_popup_modal("New archive", flags=flags)[0]:
+            imgui.text("Name for the new archive:")
+            imgui.set_next_item_width(280)
+            _, ast.new_archive_name = imgui.input_text(
+                "##new_archive", ast.new_archive_name)
+            st = new_archive_status(ast)
+            if st["hint"]:
+                colour = _WARN if st["taken"] else _DIM
+                imgui.text_colored(imgui.ImVec4(*colour), st["hint"])
+            imgui.separator()
+            imgui.begin_disabled(not st["can_create"])
+            if imgui.button("Create", imgui.ImVec2(120, 0)):
+                ast.new_archive_requested = True
+                imgui.close_current_popup()
+            imgui.end_disabled()
+            imgui.same_line()
+            if imgui.button("Cancel##new_archive", imgui.ImVec2(120, 0)):
+                imgui.close_current_popup()
+            imgui.end_popup()
+
+        if imgui.begin_popup_modal("Empty archive", flags=flags)[0]:
+            m = archive_row_model(ast)
+            imgui.text_wrapped(
+                f"Empty '{ast.archive_name}'? Its {m['entries']} entries move "
+                f"to '{ast.archive_name}.cleared-<time>' and can be restored "
+                f"by renaming that folder back. Nothing is deleted.")
+            imgui.separator()
+            if imgui.button("Empty it", imgui.ImVec2(120, 0)):
+                ast.clear_archive_requested = True
+                imgui.close_current_popup()
+            imgui.same_line()
+            if imgui.button("Cancel##empty_archive", imgui.ImVec2(120, 0)):
+                imgui.close_current_popup()
+            imgui.end_popup()
+
+        if imgui.begin_popup_modal("Delete archive", flags=flags)[0]:
+            imgui.text_wrapped(
+                f"Permanently delete '{ast.archive_name}' - every entry, "
+                f"thumbnail and goal in it. This cannot be undone.")
+            imgui.text("Type the archive name to confirm:")
+            imgui.set_next_item_width(280)
+            _, ast.confirm_delete_text = imgui.input_text(
+                "##confirm_delete", ast.confirm_delete_text)
+            imgui.separator()
+            imgui.begin_disabled(ast.confirm_delete_text != ast.archive_name)
+            if imgui.button("Delete forever", imgui.ImVec2(140, 0)):
+                ast.delete_archive_requested = True
+                imgui.close_current_popup()
+            imgui.end_disabled()
+            imgui.same_line()
+            if imgui.button("Cancel##delete_archive", imgui.ImVec2(120, 0)):
+                imgui.close_current_popup()
+            imgui.end_popup()
 
     def _render_explore_status(self, ast):
         d = self.archive_driver
@@ -208,7 +342,10 @@ class ArchiveWindowMixin:
         # their size.
         imgui.set_next_window_size(imgui.ImVec2(760, 620),
                                    imgui.Cond_.first_use_ever)
-        expanded, opened = imgui.begin("Archive", True)
+        # The name is in the title, not the body: a screenshot of the gallery
+        # should say which archive it came from.
+        expanded, opened = imgui.begin(f"Archive - {ast.archive_name}###archive",
+                                       True)
         if not opened:
             ast.show_browser = False
             imgui.end()

@@ -419,3 +419,113 @@ def test_a_stale_selection_does_not_break_the_map(gui):
     h.archive_projection = _spread(h.archive_obj)
     h.state.archive.selected_entry_id = 9999
     assert frame(lambda: h._render_map(h.state.archive, h.archive_obj)) > host_only()
+
+
+# ---- the archive picker row --------------------------------------------
+
+from ui.archive_window import archive_row_model, new_archive_status  # noqa: E402
+
+TWO = [{"name": "default", "entries": 1511, "mtime": 0.0, "size_mb": 214.0},
+       {"name": "dense-trails", "entries": 12, "mtime": 0.0, "size_mb": 1.5}]
+
+
+def _ast(names=(), active="default", **over):
+    ast = ArchiveState()
+    ast.archive_list = list(names)
+    ast.archive_name = active
+    for k, v in over.items():
+        setattr(ast, k, v)
+    return ast
+
+
+def test_the_row_shows_the_active_archive_before_any_listing_exists():
+    """The listing is built by the orchestrator, so the very first frame has
+    none. The row must still name the archive being written to."""
+    m = archive_row_model(_ast())
+    assert m["names"] == ["default"]
+    assert m["index"] == 0
+
+
+def test_the_row_selects_the_active_archive():
+    m = archive_row_model(_ast(TWO, active="dense-trails"))
+    assert m["names"][m["index"]] == "dense-trails"
+
+
+def test_the_row_falls_back_to_the_first_entry_if_the_active_one_is_gone():
+    """The folder can vanish outside the app. A stale index would silently
+    point the combo at somebody else's archive."""
+    m = archive_row_model(_ast(TWO, active="deleted-elsewhere"))
+    assert m["index"] == 0
+
+
+def test_each_label_carries_its_entry_count():
+    m = archive_row_model(_ast(TWO))
+    assert "1511" in m["labels"][0]
+
+
+def test_the_summary_describes_the_active_archive_not_the_first():
+    m = archive_row_model(_ast(TWO, active="dense-trails"))
+    assert "12" in m["summary"] and "1.5" in m["summary"]
+    assert m["entries"] == 12
+
+
+def test_the_summary_says_so_when_nothing_is_loaded_yet():
+    m = archive_row_model(_ast())
+    assert m["summary"] == "not loaded yet"
+    assert m["entries"] == 0
+
+
+def test_delete_is_disabled_when_there_is_only_one_archive():
+    """There must always be something to load."""
+    assert archive_row_model(_ast(TWO))["delete_enabled"] is True
+    assert archive_row_model(_ast(TWO[:1]))["delete_enabled"] is False
+    assert archive_row_model(_ast())["delete_enabled"] is False
+
+
+def test_a_new_name_is_previewed_sanitised():
+    st = new_archive_status(_ast(TWO, new_archive_name="a/b"))
+    assert st["safe"] == "ab"
+    assert "ab" in st["hint"]
+
+
+def test_an_unchanged_name_needs_no_preview():
+    st = new_archive_status(_ast(TWO, new_archive_name="run-07"))
+    assert st["hint"] == ""
+    assert st["can_create"] is True
+
+
+def test_a_duplicate_name_cannot_be_created():
+    st = new_archive_status(_ast(TWO, new_archive_name="default"))
+    assert st["taken"] is True
+    assert st["can_create"] is False
+    assert "already exists" in st["hint"]
+
+
+def test_an_empty_name_cannot_be_created():
+    assert new_archive_status(_ast(TWO, new_archive_name="  "))["can_create"] is False
+    assert new_archive_status(_ast(TWO))["can_create"] is False
+
+
+def test_the_explore_tab_renders_the_row_with_a_listing(gui):
+    h = Harness(driver=_FakeDriver(), archive=_FakeArchive())
+    h.state.archive.archive_list = TWO
+    assert frame(h.render_explore_tab) > host_only()
+
+
+def test_the_explore_tab_renders_the_row_with_no_listing(gui):
+    h = Harness(driver=_FakeDriver(), archive=_FakeArchive())
+    assert frame(h.render_explore_tab) > host_only()
+
+
+def test_the_modals_render_when_open(gui):
+    """A modal left half-built corrupts the whole ImGui frame, so every window
+    in the app disappears at once. Completing the frame proves the stack
+    balances."""
+    h = Harness(driver=_FakeDriver(), archive=_FakeArchive())
+    h.state.archive.archive_list = TWO
+
+    def run():
+        imgui.open_popup("New archive")
+        h._render_archive_modals(h.state.archive)
+
+    assert frame(run) > host_only()
