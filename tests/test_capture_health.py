@@ -1,6 +1,10 @@
 import numpy as np
 
-from services.capture_health import check_capture, sweeping_parameters
+from services.capture_health import (
+    check_capture,
+    is_viable_tile,
+    sweeping_parameters,
+)
 from state import SimState
 
 
@@ -86,3 +90,38 @@ def test_jitter_alone_is_not_a_confound():
     s.parameter_sweeps_enabled = True
     s.jitters["AXIAL_FORCE"] = 0.5
     assert sweeping_parameters(s) == []
+
+
+# --- per-tile viability, for the exploration archive's admission gate -------
+
+
+def test_viable_tile_accepts_an_ordinary_crop():
+    crop = np.full((224, 224, 3), 128, dtype=np.uint8)
+    assert is_viable_tile(crop) is True
+
+
+def test_viable_tile_rejects_pure_black():
+    assert is_viable_tile(np.zeros((224, 224, 3), dtype=np.uint8)) is False
+
+
+def test_viable_tile_rejects_nearly_black():
+    crop = np.zeros((224, 224, 3), dtype=np.uint8)
+    crop[0, 0] = 255                      # max > 0 but the mean is ~0.02
+    assert is_viable_tile(crop) is False
+
+
+def test_viable_tile_rejects_blown_out():
+    assert is_viable_tile(np.full((224, 224, 3), 255, dtype=np.uint8)) is False
+
+
+def test_viable_tile_rejects_empty():
+    assert is_viable_tile(np.zeros((0, 224, 3), dtype=np.uint8)) is False
+
+
+def test_viable_tile_agrees_with_check_capture_on_single_tile_batches():
+    """One dead tile must be rejectable on its own; discarding the whole
+    generation would throw away 15 useful samples with it."""
+    for value in (0, 1, 128, 254, 255):
+        crop = np.full((224, 224, 3), value, dtype=np.uint8)
+        batch = crop[None, ...]
+        assert is_viable_tile(crop) == (check_capture(batch) is None), value

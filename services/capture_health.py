@@ -29,6 +29,21 @@ def check_capture(crops: np.ndarray) -> str | None:
     return None
 
 
+def is_viable_tile(crop: np.ndarray) -> bool:
+    """One tile's crop -> is it worth measuring at all?
+
+    Same thresholds as check_capture, applied per tile rather than per batch.
+    Novelty search must reject one dead tile on its own: discarding the whole
+    generation because a single genome died would throw away the other 15
+    useful samples with it.
+    """
+    if crop.size == 0:
+        return False
+    if int(crop.max()) == 0:
+        return False
+    return 2.0 <= float(crop.mean()) <= 253.0
+
+
 def sweeping_parameters(sim_state) -> list[str]:
     """Parameters whose value differs across tiles.
 
