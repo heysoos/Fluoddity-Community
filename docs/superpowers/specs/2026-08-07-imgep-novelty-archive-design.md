@@ -727,6 +727,34 @@ If this fails, the remedy is the same as before — adjust the eval image (color
 zoom) — or fall back to concatenating CLIP with a cheap hand-built descriptor. That fallback is
 **not** designed here; it would be its own spec.
 
+#### 12.1.1 Result, measured 2026-08-07 — PASSED
+
+Measured by `tools/capture_presets.py` (131 presets, 2000 steps each, headless through the
+production `FrameAssembler → TileCapture → CaptureBlit` path) then `tools/clip_spread_check.py`:
+
+| Sample | n | mean | std | p50 | verdict |
+|---|---|---|---|---|---|
+| All presets | 131 | 0.1924 | 0.0841 | 0.1786 | PASS |
+| **Viable presets only** | **97** | **0.1586** | **0.0627** | **0.1500** | **PASS** |
+
+**The viable-only row is the one that matters** — it is what the admission gate will actually
+admit. Removing the 34 near-black presets *lowers* the spread rather than raising it, because a
+black image is highly distinctive in CLIP space and was inflating the mean. The real margin is
+therefore ~6% over the bar, not ~28%.
+
+Consequence for §5.2.1: novelty operates in a compressed range, so the adaptive threshold is
+load-bearing rather than a convenience. A fixed threshold picked from the all-presets number
+would have been ~20% too high.
+
+**Rejected evidence.** `runs/*/frames/` was measured first and scored 0.1382 (FAIL). That sample
+was invalid twice over: 481 of its 635 images came from one converged run whose best tile had
+stopped changing (mean pairwise 0.043 among themselves, 57% of all pairs), and every run in it
+predated the NaN-isolation and cohort-colouring fixes. `spread_report` now returns
+`duplicate_dominated` to make the first failure mode self-announcing.
+
+Also recorded: **34 of 131 presets (26%) render near-black** at 2000 steps under default world
+settings. That is independent justification for the viability gate in §5.2.
+
 ### 12.2 Calibration, not features
 
 Three constants are stated as defaults but must be *measured* during implementation, exactly as
