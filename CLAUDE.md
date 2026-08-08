@@ -96,6 +96,33 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   bottom of the range: at density 0.5 the top half of the tournament grid would
   render empty.
 
+- **The archive stores decoded phenotypes, never `z`.** With physics search on,
+  `z` is relative to `physics_origin` — the preset loaded at the time. A `z`
+  archived under one preset decodes to a different creature under another. See
+  `tests/test_physics_origin_roundtrip.py`.
+
+- **`Archive.refresh()` is what makes eviction cheap.** Eviction drops the
+  lowest *stored* novelty, which is only meaningful because 64 entries per
+  generation are re-scored against the full archive. Turning `refresh_per_gen`
+  down to 0 silently degrades eviction into "drop whatever was least novel when
+  it was admitted".
+
+- **Novelty is measured against archive ∪ rejects ring.** The archive is gated,
+  so without the ring the search has no memory of the regions it just rejected
+  and re-explores them forever.
+
+- **Liveness is small and its scale is measured, not intuited.** Over all 131
+  presets at 2000 steps / 6 snapshots it runs 0.0034–0.0792 with median 0.0241,
+  so `liveness_min` is **0.002**. A "reasonable-looking" 0.02 rejects a third of
+  the curated preset library. Re-run `python -m tools.calibrate_imgep --liveness`
+  before changing it, and note that liveness is *higher* during the transient
+  after a reset than once a pattern settles into its attractor.
+
+- **Explore mode reuses Auto mode's `AutoTournamentService` instance**, swapping
+  only `.driver`. Both `_handle_auto_tournament` and `_handle_explore` would
+  otherwise call `configure()` on the same object every frame, so each bails out
+  when the other owns the driver.
+
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.
 - **Windows platform** — use forward slashes or `os.path`; use `rm` not `del` in bash commands.
 - **No test suite** — changes must be verified manually.

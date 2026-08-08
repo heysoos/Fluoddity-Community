@@ -112,3 +112,25 @@ Use this after large refactors or significant new features. Items roughly ordere
 - [ ] **c.** Help → Parameter Sweeps: info window opens
 - [ ] **d.** Help → Performance: opens
 - [ ] **e.** Help → Video Recording: shows recording status + all controls
+
+## 13. Explore (IMGEP) mode
+- [ ] Enabling Explore forces a 1:1 canvas; disabling restores the previous ratio
+- [ ] Start with an empty archive: regime reads `bootstrap`, archive grows by up to N^2 per generation
+- [ ] At `seed_n` the regime becomes `expansion` and the admission rate settles near the target
+- [ ] `Documents/Fluoddity/archive/index.jsonl` gains one line per admission; `thumbs/` fills
+- [ ] With `Expansion Between` = 3 and a goal in the list, an expedition fires and names the goal
+- [ ] With the goal list empty, every expedition reads `(latent)`
+- [ ] `Expansion Between` = 0 never expeditions
+- [ ] Right-click a tile: an expedition starts immediately with goal `(chase)`
+- [ ] Left-click a tile: it enters the archive as pinned, bypassing the gates
+- [ ] Reset Search keeps the archive; the size readout does not drop
+- [ ] Quit and relaunch: archive size and goal list are preserved
+- [ ] Kill the app mid-run (no clean quit): the archive reloads, reporting the dropped trailing entries
+- [ ] Archive browser: sorting, pinned-only filter, hover stats, Export writes a loadable config
+- [ ] Archive browser opens large enough to show the thumbnails AND the Export/Seed/Delete row
+- [ ] Map: the cloud grows outward; the goal marker sits outside it during a latent expedition
+- [ ] "Refit projection" does not mirror the layout
+- [ ] Switching Explore -> Auto -> Manual and back leaves each mode working
+- [ ] The Auto tab still has Grid, Steps per Gen, Sim Steps per Frame, Snapshots per Gen, Start/Reset and Initial Sigma
+- [ ] Toggling physics search mid-run ends any expedition without crashing
+- [ ] Changing the grid mid-expedition does not crash

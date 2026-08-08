@@ -170,8 +170,11 @@ class ArchiveWindowMixin:
         _, ast.k = imgui.slider_int("Neighbours (k)", ast.k, 1, 50)
         _, ast.seed_n = imgui.slider_int("Seed Entries", ast.seed_n, 64, 2048)
         _, ast.sigma0 = imgui.slider_float("Bootstrap Sigma", ast.sigma0, 0.05, 1.5)
+        # 0-0.1, not 0-0.5: measured preset liveness tops out at 0.079, so a
+        # 0.5 range would bury the entire useful span in the leftmost sixth of
+        # the slider.
         _, ast.liveness_min = imgui.slider_float(
-            "Liveness Floor", ast.liveness_min, 0.0, 0.5)
+            "Liveness Floor", ast.liveness_min, 0.0, 0.1, "%.4f")
         _, ast.target_rate = imgui.slider_float(
             "Target Admission Rate", ast.target_rate, 0.01, 1.0)
         _, ast.refresh_per_gen = imgui.slider_int(

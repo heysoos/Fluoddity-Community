@@ -67,6 +67,7 @@ Mixin-based architecture. The `UI` class in `core.py` inherits all mixins via mu
 | `preferences_window.py` | 232 | World size, physics frequency, mouse mode, view, appearance settings |
 | `config_browser.py` | 230 | Config file scanning, caching, hierarchical load submenu rendering |
 | `popup_modals.py` | 85 | Save/Overwrite/Delete confirmation dialogs |
+| `archive_window.py` | 355 | Explore (IMGEP) tab, archive gallery, and the 2-D semantic map |
 
 ### Simulation & Rendering
 | File | Lines | Description |
@@ -86,6 +87,23 @@ Stateless or near-stateless helpers owned by the orchestrator.
 | `rule_manager.py` | 60 | Rule history stack with push/pop/undo |
 | `video_recorder.py` | 45 | Thin facade over VidSaver for video recording |
 
+### Search and exploration (`services/`)
+Auto (CLIP) mode and Explore (IMGEP) mode share one rollout machine
+(`AutoTournamentService`) and differ only in their `SearchDriver`.
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `imgep_driver.py` | 361 | Bootstrap / expansion / expedition regimes; the archive admission call site |
+| `archive.py` | 377 | Admission gates, adaptive novelty threshold, capacity, novelty refresh |
+| `archive_io.py` | 183 | `index.jsonl` + atomic `vectors.npz` + thumbnails; degrades to a no-op on disk trouble |
+| `goal_source.py` | 174 | `Goal`, the user's text `GoalList`, and `latent_goal()` frontier extrapolation |
+| `prompt_driver.py` | 145 | Auto mode's driver: CMA-ES climbing a CLIP text prompt |
+| `novelty.py` | 131 | k-NN novelty, `NOV^alpha` parent sampling, the rejects ring |
+| `thumb_cache.py` | 79 | LRU of GL textures for gallery thumbnails, with explicit release |
+| `descriptor.py` | 63 | Trajectory-centroid behaviour descriptor and ASAL liveness |
+| `archive_projection.py` | 61 | 2-D PCA for the map view, sign-aligned across refits |
+| `search_driver.py` | 46 | The `SearchDriver` protocol both drivers implement |
+
 ### State (`state/`)
 Plain dataclasses. No logic, just fields with defaults.
 
@@ -94,6 +112,7 @@ Plain dataclasses. No logic, just fields with defaults.
 | `sim_state.py` | 113 | Physics parameters (ALL_CAPS), rule seed, view options, sweep config |
 | `preferences_state.py` | 86 | User preferences: motion blur, recording, mouse mode, keybindings |
 | `ui_state.py` | 72 | Combined state snapshot returned by `UI.get_state()` |
+| `archive_state.py` | 82 | Explore (IMGEP) settings, browser view state, and one-shot flags |
 | `multi_load_state.py` | 24 | Multi-load toggle and config list |
 | `camera_state.py` | 11 | Camera position + zoom |
 | `recording_state.py` | 7 | Recording active flag |

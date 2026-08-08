@@ -36,7 +36,12 @@ class ArchiveState:
     alpha: float = 4.0
     k: int = 10
     seed_n: int = 256
-    liveness_min: float = 0.02
+    # MEASURED 2026-08-07 over all 131 presets at 2000 steps / 6 snapshots:
+    # liveness runs 0.0034 (Branes2) to 0.0792 (Sandcrabs), median 0.0241. The
+    # originally guessed 0.02 sits just under that median and would have
+    # rejected 43 of 131 hand-curated presets. This floor clears the quietest
+    # of them by 1.7x while still rejecting a frozen canvas, which scores 0.
+    liveness_min: float = 0.002
     target_rate: float = 0.15
     capacity: int = 20000
     refresh_per_gen: int = 64

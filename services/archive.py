@@ -106,7 +106,7 @@ class ArchiveEntry:
 
 class Archive:
     def __init__(self, store=None, capacity: int = 20000, k: int = 10,
-                 liveness_min: float = 0.02, target_rate: float = 0.15,
+                 liveness_min: float = 0.002, target_rate: float = 0.15,
                  seed_n: int = 256, dim: int = 512):
         self.store = store
         self.capacity = int(capacity)

@@ -64,7 +64,7 @@ class ImgepDriver:
         self.alpha = 4.0
         self.k = 10
         self.seed_n = 256
-        self.liveness_min = 0.02
+        self.liveness_min = 0.002    # measured; see state/archive_state.py
         self.refresh_per_gen = 64
         self.flush_every = 200
 
