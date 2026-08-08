@@ -134,3 +134,29 @@ Use this after large refactors or significant new features. Items roughly ordere
 - [ ] The Auto tab still has Grid, Steps per Gen, Sim Steps per Frame, Snapshots per Gen, Start/Reset and Initial Sigma
 - [ ] Toggling physics search mid-run ends any expedition without crashing
 - [ ] Changing the grid mid-expedition does not crash
+
+## 14. Archive management
+
+- [ ] First launch after updating: the old `Documents/Fluoddity/archive/`
+      folder is gone and `Documents/Fluoddity/archives/default/` holds its
+      contents. Explore mode's archive count matches what it was before.
+- [ ] Explore tab: the Archive row names the active archive and its entry
+      count matches the Archive Browser's.
+- [ ] New -> type `a/b` -> the preview says it will be saved as `ab`; Create
+      makes `archives/ab/` and the row switches to it.
+- [ ] New -> type the name of an existing archive -> Create is disabled and the
+      reason is shown.
+- [ ] Switch archives while a search is running: it stops, the entry count
+      changes, the gallery shows the new archive's thumbnails (not the old
+      one's), and pressing Start explores into the new archive.
+- [ ] Switch back: the first archive's entries and goal list are exactly as
+      they were.
+- [ ] Empty -> confirm: the archive shows 0 entries and a
+      `<name>.cleared-<time>` folder appears beside it with the old contents.
+- [ ] Delete: the button is disabled when only one archive exists; otherwise it
+      requires typing the name, and afterwards the row switches to another
+      archive.
+- [ ] Delete an archive folder in Explorer while the app is running, then pick
+      it in the dropdown: a warning appears and nothing else changes.
+- [ ] Quit while a non-default archive is active; relaunch: the same archive is
+      loaded.

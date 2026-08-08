@@ -118,6 +118,16 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   before changing it, and note that liveness is *higher* during the transient
   after a reset than once a pattern settles into its attractor.
 
+- **Entry ids restart at 0 in every archive**, so `ThumbCache` must be released
+  on a switch — it is keyed by thumbnail filename, which is derived from the
+  entry id. Reusing it shows the previous archive's pictures under the new
+  archive's entries.
+
+- **`Archive.maybe_flush` only rewrites `vectors.npz` every 200 admissions.**
+  `index.jsonl` is flushed per entry, so anything that closes an archive —
+  quitting, or switching to another one — must call `maybe_flush(force=True)`
+  first or lose the trailing entries.
+
 - **Explore mode reuses Auto mode's `AutoTournamentService` instance**, swapping
   only `.driver`. Both `_handle_auto_tournament` and `_handle_explore` would
   otherwise call `configure()` on the same object every frame, so each bails out

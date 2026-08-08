@@ -67,7 +67,7 @@ Mixin-based architecture. The `UI` class in `core.py` inherits all mixins via mu
 | `preferences_window.py` | 232 | World size, physics frequency, mouse mode, view, appearance settings |
 | `config_browser.py` | 230 | Config file scanning, caching, hierarchical load submenu rendering |
 | `popup_modals.py` | 85 | Save/Overwrite/Delete confirmation dialogs |
-| `archive_window.py` | 355 | Explore (IMGEP) tab, archive gallery, and the 2-D semantic map |
+| `archive_window.py` | 528 | Explore (IMGEP) tab, archive picker, gallery, and the 2-D semantic map |
 
 ### Simulation & Rendering
 | File | Lines | Description |
@@ -96,6 +96,7 @@ Auto (CLIP) mode and Explore (IMGEP) mode share one rollout machine
 | `imgep_driver.py` | 361 | Bootstrap / expansion / expedition regimes; the archive admission call site |
 | `archive.py` | 377 | Admission gates, adaptive novelty threshold, capacity, novelty refresh |
 | `archive_io.py` | 183 | `index.jsonl` + atomic `vectors.npz` + thumbnails; degrades to a no-op on disk trouble |
+| `archive_library.py` | 207 | Named archive directories: safe names, listing, create / clear / delete |
 | `goal_source.py` | 174 | `Goal`, the user's text `GoalList`, and `latent_goal()` frontier extrapolation |
 | `prompt_driver.py` | 145 | Auto mode's driver: CMA-ES climbing a CLIP text prompt |
 | `novelty.py` | 131 | k-NN novelty, `NOV^alpha` parent sampling, the rejects ring |
@@ -104,15 +105,23 @@ Auto (CLIP) mode and Explore (IMGEP) mode share one rollout machine
 | `archive_projection.py` | 61 | 2-D PCA for the map view, sign-aligned across refits |
 | `search_driver.py` | 46 | The `SearchDriver` protocol both drivers implement |
 
+Archives live under `Documents/Fluoddity/archives/<name>/`, one directory per
+archive, each with the `index.jsonl` / `vectors.npz` / `goals.json` / `thumbs/`
+shape `ArchiveStore` writes. There is no registry file: the filesystem is the
+list, so a folder copied in from elsewhere just appears. `App._switch_archive`
+rebuilds the archive, goal list, projection and thumbnail cache and repoints
+every holder at the new directory; which archive is active is
+`preferences.archive_name`.
+
 ### State (`state/`)
 Plain dataclasses. No logic, just fields with defaults.
 
 | File | Lines | Description |
 |------|-------|-------------|
 | `sim_state.py` | 113 | Physics parameters (ALL_CAPS), rule seed, view options, sweep config |
-| `preferences_state.py` | 86 | User preferences: motion blur, recording, mouse mode, keybindings |
+| `preferences_state.py` | 122 | User preferences: motion blur, recording, mouse mode, keybindings, active archive |
 | `ui_state.py` | 72 | Combined state snapshot returned by `UI.get_state()` |
-| `archive_state.py` | 82 | Explore (IMGEP) settings, browser view state, and one-shot flags |
+| `archive_state.py` | 97 | Explore (IMGEP) settings, browser view state, and one-shot flags |
 | `multi_load_state.py` | 24 | Multi-load toggle and config list |
 | `camera_state.py` | 11 | Camera position + zoom |
 | `recording_state.py` | 7 | Recording active flag |

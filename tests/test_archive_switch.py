@@ -234,3 +234,50 @@ def test_switching_loads_the_target_archives_entries(roots):
     switch(app, "dense-trails", ui)
 
     assert len(app.archive) == 2
+
+
+def test_an_archive_is_untouched_by_a_round_trip(roots):
+    """Build A, switch to B, admit to B, come back to A. A must be exactly as
+    it was - this is the entire point of the feature."""
+    from services.archive import Archive
+    from services.archive_io import ArchiveStore
+
+    store = ArchiveStore(roots / "default")
+    a = Archive(store=store, seed_n=0, liveness_min=0.0)
+    _admit(a, 4)
+    a.maybe_flush(force=True)
+    store.close()
+
+    log = _Log()
+    app, ui = _FakeApp(log), _UIState()
+    ui.preferences.archive_name = "default"
+
+    switch(app, "default", ui)
+    assert len(app.archive) == 4
+
+    switch(app, "dense-trails", ui)
+    assert len(app.archive) == 0
+    _admit(app.archive, 2)
+    app.archive.maybe_flush(force=True)
+
+    switch(app, "default", ui)
+    assert len(app.archive) == 4, "A must not have seen B's entries"
+
+    switch(app, "dense-trails", ui)
+    assert len(app.archive) == 2, "B kept what was admitted to it"
+
+
+def test_goal_lists_do_not_leak_between_archives(roots):
+    """A goal list is part of the experiment, not a global preference."""
+    log = _Log()
+    app, ui = _FakeApp(log), _UIState()
+
+    switch(app, "default", ui)
+    app.goal_list.add("coral reef")
+    app.goal_list.save()
+
+    switch(app, "dense-trails", ui)
+    assert len(app.goal_list.items) == 0
+
+    switch(app, "default", ui)
+    assert [i["text"] for i in app.goal_list.items] == ["coral reef"]
