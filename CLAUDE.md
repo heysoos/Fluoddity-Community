@@ -118,6 +118,17 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   before changing it, and note that liveness is *higher* during the transient
   after a reset than once a pattern settles into its attractor.
 
+- **`canvas_view_rect` returns a GL texture coordinate (v=0 at the BOTTOM);
+  `tex_to_screen` returns top-down window coordinates.** The flip between them
+  cancels exactly when the canvas is centred in the window, so a centred camera
+  validates any orientation bug you like. Test the capture crop with the camera
+  *panned* — a mirrored rect displaces every tile by twice the pan.
+
+- **The tournament capture crops the window-shaped view texture, so anything
+  panned or zoomed off screen is genuinely not in it** and comes back black.
+  Keep the whole canvas on screen during Auto/Explore or the edge tiles lose a
+  band.
+
 - **Entry ids restart at 0 in every archive**, so `ThumbCache` must be released
   on a switch — it is keyed by thumbnail filename, which is derived from the
   entry id. Reusing it shows the previous archive's pictures under the new

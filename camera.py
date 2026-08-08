@@ -307,13 +307,25 @@ class Camera:
         The divisor is the TEXTURE size rather than the framebuffer size, and
         the two are not assumed equal: cam_brush_target only follows a window
         resize on the debounced reload, so for ~150ms they differ.
+
+        The result is a GL TEXTURE coordinate - v = 0 is the BOTTOM - because
+        that is what capture_blit samples with. tex_to_screen returns top-down
+        window coordinates, so y is flipped here. The two conventions cancel
+        exactly when the canvas is centred in the window, which is why a
+        centred camera looked perfect: any vertical pan mirrored the crop about
+        the window centre and displaced it by twice the pan. Measured on a real
+        4x4 run at pan 0.05, that put the top 20% of each tile's lower
+        neighbour into its crop and pushed the whole bottom row of tiles below
+        v = 0, where capture_blit paints black - so tiles 0-3 were rejected as
+        non-viable every single generation.
         """
         w, h = tex_size
         src = canvas_tex_size if canvas_tex_size is not None else self.sim.view_tex.size
         x0, y0 = self.tex_to_screen((0.0, 0.0), src, fb_size)
         x1, y1 = self.tex_to_screen((1.0, 1.0), src, fb_size)
-        return ((min(x0, x1) / w, min(y0, y1) / h),
-                (max(x0, x1) / w, max(y0, y1) / h))
+        # x needs no flip: window x and GL u both run left to right.
+        return ((min(x0, x1) / w, 1.0 - max(y0, y1) / h),
+                (max(x0, x1) / w, 1.0 - min(y0, y1) / h))
 
     def screen_to_tex(self, coord_tuple, tex_size: tuple = None):
         """

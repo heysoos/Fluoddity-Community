@@ -161,3 +161,83 @@ def test_a_fresh_camera_has_no_recorded_rect():
     cam.assembled_texture = None
     cam.assembled_view_rect = None
     assert cam.assembled_view_rect is None
+
+
+# ---- orientation: the rect is consumed as a GL texture coordinate --------
+
+def canvas_uv_of(cam, tex_xy, canvas, fb):
+    """Where a canvas point actually lands in the assembled texture, in GL
+    (bottom-up) coordinates - which is what capture_blit samples with."""
+    x, y = cam.tex_to_screen(tex_xy, canvas, fb)
+    return (x / fb[0], 1.0 - y / fb[1])
+
+
+def crop_maps(cam, canvas=(647, 647), fb=(1920, 1080)):
+    """How the blit maps canvas tex_y -> position within the captured square.
+
+    capture_blit does uv = mix(src_lo, src_hi, t) with t=0 at the BOTTOM of the
+    target, and the capture is read bottom-up, so t is the output's own
+    bottom-up coordinate. A correct crop has t == tex_y for every point.
+    """
+    lo, hi = cam.canvas_view_rect(fb, fb_size=fb)
+    out = []
+    for tex_y in (0.0, 0.25, 0.5, 0.75, 1.0):
+        _u, v = canvas_uv_of(cam, (0.5, tex_y), canvas, fb)
+        out.append((tex_y, (v - lo[1]) / (hi[1] - lo[1])))
+    return out
+
+
+def test_a_centred_camera_crops_the_canvas_exactly():
+    """The case every earlier test used - and the one where the bug hides."""
+    for tex_y, t in crop_maps(camera_at(position=(0.0, 0.0))):
+        assert t == pytest.approx(tex_y, abs=1e-6)
+
+
+@pytest.mark.parametrize("pan", [0.05, -0.05, 0.15, -0.2])
+def test_a_vertically_panned_camera_still_crops_the_canvas(pan):
+    """MEASURED 2026-08-08 from a real 4x4 run: every tile's crop carried the
+    top ~20% of the tile below it, and the whole bottom row of tiles came back
+    black and was never admitted.
+
+    canvas_view_rect built its rect from tex_to_screen, whose y is TOP-DOWN,
+    but capture_blit samples with GL texture coordinates, where v=0 is the
+    BOTTOM. The two cancel only when the canvas is centred in the window, so a
+    centred camera looks perfect and any vertical pan mirrors the crop about
+    the window centre - displacing it by twice the pan.
+    """
+    for tex_y, t in crop_maps(camera_at(position=(0.0, pan))):
+        assert t == pytest.approx(tex_y, abs=1e-6), f"tex_y {tex_y} -> {t}"
+
+
+def test_a_horizontally_panned_camera_is_unaffected():
+    """x needs no flip: screen x and GL u both run left to right."""
+    for tex_y, t in crop_maps(camera_at(position=(0.12, 0.0))):
+        assert t == pytest.approx(tex_y, abs=1e-6)
+
+
+def test_the_crop_begins_and_ends_where_the_canvas_does():
+    """Stated directly, in the coordinates capture_blit uses."""
+    fb, canvas = (1920, 1080), (647, 647)
+    cam = camera_at(position=(0.0, 0.05))
+    lo, hi = cam.canvas_view_rect(fb, fb_size=fb)
+    assert lo[1] == pytest.approx(canvas_uv_of(cam, (0.5, 0.0), canvas, fb)[1], abs=1e-6)
+    assert hi[1] == pytest.approx(canvas_uv_of(cam, (0.5, 1.0), canvas, fb)[1], abs=1e-6)
+
+
+def test_panning_off_screen_loses_the_edge_that_is_actually_off_screen():
+    """A pan large enough to push the canvas past the window edge DOES cost
+    those pixels - they were never rendered into the texture, and capture_blit
+    paints black outside 0..1. That is honest and check_capture flags it.
+
+    What the mirror did was lose the OPPOSITE edge: panning the canvas up
+    blacked out the bottom row of tiles, which are still perfectly on screen.
+    """
+    fb = (1920, 1080)
+    # position.y > 0 moves the canvas UP the window, so its top goes off first.
+    lo, hi = camera_at(position=(0.0, 0.05)).canvas_view_rect(fb, fb_size=fb)
+    assert hi[1] > 1.0, "the top of the canvas is off screen, so it is missing"
+    assert lo[1] >= -1e-6, "the bottom is still on screen and must be kept"
+
+    lo, hi = camera_at(position=(0.0, -0.05)).canvas_view_rect(fb, fb_size=fb)
+    assert lo[1] < 0.0, "panned the other way, the bottom is the missing edge"
+    assert hi[1] <= 1.0 + 1e-6, "the top is still on screen and must be kept"
