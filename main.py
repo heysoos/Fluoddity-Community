@@ -80,6 +80,16 @@ class App:
         self._auto_prev_speedmult = None
         self._auto_was_enabled = False
         self._last_crops = None
+        # Explore (IMGEP) mode, also lazy - it needs the same CLIP scorer.
+        self.imgep_driver = None
+        self.prompt_driver = None
+        self.archive = None
+        self.archive_store = None
+        self.goal_list = None
+        self.archive_projection = None
+        self.thumb_cache = None
+        self._last_projection_size = 0
+        self._explore_was_enabled = False
         self.advanced_drawing_processor = AdvancedDrawingProcessor(self.ctx)
         self.ui.multi_load_service = self.multi_load_service
         self.ui.tournament_service = self.tournament_service
@@ -188,6 +198,57 @@ class App:
         self.ui.auto_unavailable = ""
         return True
 
+    def _ensure_archive_service(self):
+        """Build the archive, goal list and IMGEP driver on first use.
+
+        Explore mode reuses the SAME AutoTournamentService instance - the
+        rollout machine is identical - and only swaps its driver. Imports stay
+        lazy: onnxruntime and cmaes must not be imported at startup.
+        """
+        if not self._ensure_auto_service():
+            self.ui.archive_unavailable = self.ui.auto_unavailable
+            return False
+        if self.imgep_driver is not None:
+            return True
+
+        from services.archive import Archive
+        from services.archive_io import ArchiveStore
+        from services.archive_projection import Projection
+        from services.goal_source import GoalList
+        from services.imgep_driver import ImgepDriver
+        from utilities.paths import get_archive_dir
+
+        store = ArchiveStore(get_archive_dir())
+        archive = Archive(store=store)
+        loaded, dropped = archive.load_from_store()
+        print(f"[archive] loaded {loaded} entries ({dropped} dropped)")
+
+        goals = GoalList(store=store)
+        goals.load()
+
+        self.archive_store = store
+        self.archive = archive
+        self.goal_list = goals
+        self.imgep_driver = ImgepDriver(
+            self.tournament_service, self.clip_scorer, archive, goals)
+        self.prompt_driver = self.auto_service.driver
+
+        self.archive_projection = Projection()
+        self.archive_projection.fit(archive.embeddings)
+        self._last_projection_size = len(archive)
+
+        self.ui.archive_driver = self.imgep_driver
+        self.ui.archive_obj = archive
+        self.ui.archive_goals = goals
+        self.ui.archive_service = self.auto_service
+        self.ui.archive_projection = self.archive_projection
+        self.ui.archive_unavailable = ""
+        self.command_handler.imgep_driver = self.imgep_driver
+        self.command_handler.archive = archive
+        self.command_handler.goal_list = goals
+        self.command_handler.archive_projection = self.archive_projection
+        return True
+
     def _capture_tiles(self):
         """Blit the assembled view's grid rectangle into the square capture FBO.
 
@@ -253,6 +314,18 @@ class App:
 
         svc = self.auto_service
         gen = svc.generation
+
+        # A refit every 500 admissions, not per frame. Projection.fit
+        # sign-aligns to the previous components, so the map does not mirror
+        # itself when this fires.
+        if self.archive is not None and self.archive_projection is not None:
+            if len(self.archive) - self._last_projection_size >= 500:
+                self.archive_projection.fit(self.archive.embeddings)
+                self._last_projection_size = len(self.archive)
+        if self.imgep_driver is not None:
+            g = getattr(self.imgep_driver, "_goal", None)
+            self.ui.archive_goal_point = g.embedding if g is not None else None
+
         log = svc.logger
         if log is None or not log.enabled:
             return
@@ -326,6 +399,33 @@ class App:
                 self.auto_service.pause()
         self._auto_was_enabled = auto.enabled
 
+        # Explore mode reuses Auto mode's rollout machine, canvas forcing and
+        # capture path; only the driver differs. Swapping on the edge - rather
+        # than constructing a second service - is what keeps abort-on-resize,
+        # snapshot scheduling and the capture wiring in exactly one place.
+        expl = ui_state.archive
+        if expl.enabled and not self._explore_was_enabled:
+            self._auto_prev_aspect = ui_state.preferences.canvas_aspect_ratio
+            self._auto_prev_speedmult = ui_state.preferences.speedmult
+            if ui_state.preferences.canvas_aspect_ratio != "1:1":
+                ui_state.preferences.canvas_aspect_ratio = "1:1"
+                ui_state.request_world_size_change = True
+            if self._ensure_archive_service():
+                self.auto_service.driver = self.imgep_driver
+                self.auto_service.abort_generation()
+        elif not expl.enabled and self._explore_was_enabled:
+            if self.auto_service is not None and self.prompt_driver is not None:
+                self.auto_service.pause()
+                self.auto_service.driver = self.prompt_driver
+            if self.archive is not None:
+                self.archive.maybe_flush(force=True)
+            if self._auto_prev_aspect and self._auto_prev_aspect != "1:1":
+                ui_state.preferences.canvas_aspect_ratio = self._auto_prev_aspect
+                ui_state.request_world_size_change = True
+            if self._auto_prev_speedmult is not None:
+                ui_state.preferences.speedmult = self._auto_prev_speedmult
+        self._explore_was_enabled = expl.enabled
+
         # 2. Process one-shot commands
         result = self.command_handler.process_commands(ui_state, tiling_mode)
         if result == 'screenshot_pending' and not self.screenshot_pending and not self.screenshot_in_progress:
@@ -390,10 +490,14 @@ class App:
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)
         _auto_svc = self.auto_service
+        # Explore mode drives the same service, so everything keyed on "an
+        # automatic search is running" must see it too. The two flags are
+        # mutually exclusive - the tab bar enables exactly one.
+        _auto_on = ui_state.auto_tournament.enabled or ui_state.archive.enabled
         _tile_mut = (
             _auto_svc.tile_mutation_strength
             if (_auto_svc is not None
-                and ui_state.auto_tournament.enabled
+                and _auto_on
                 and _auto_svc.tile_mutation_enabled)
             else 0.0
         )
@@ -404,8 +508,7 @@ class App:
             # Auto mode ranks tiles against each other, and cohort colouring
             # gives each tile a fixed palette decided by its slot rather than
             # its genome (29.5% of the fitness spread, measured).
-            plain_colour=(_auto_svc is not None
-                          and ui_state.auto_tournament.enabled),
+            plain_colour=(_auto_svc is not None and _auto_on),
             # Each tile reads its own physics block from the config SSBO.
             # It must cover EVERY tile: get_particle_config_index() returns the
             # home tile, so a tile with no block written reads a zeroed config -
@@ -413,11 +516,11 @@ class App:
             # happens whenever the grid grows between generations, since
             # tile_physics still holds the old, smaller population.
             physics=(_auto_svc is not None
-                     and ui_state.auto_tournament.enabled
+                     and _auto_on
                      and _auto_svc.physics_enabled
                      and len(_auto_svc.tile_physics) >= self.tournament_service.tiles),
         )
-        if _auto_svc is not None and ui_state.auto_tournament.enabled:
+        if _auto_svc is not None and _auto_on:
             # z=0 must mean "the preset as loaded", not the midpoint of every
             # slider - the midpoint has no axial force and no drag.
             from services.physics_genome import PHYSICS_PARAMS
@@ -470,7 +573,8 @@ class App:
 
         # Auto mode drives the physics step count via speedmult, which the
         # SimulationRunner already honours.
-        auto_running = (auto.enabled and self.auto_service is not None
+        auto_running = ((auto.enabled or ui_state.archive.enabled)
+                        and self.auto_service is not None
                         and ui_state.tournament.enabled)
         if auto_running:
             steps = self._drive_auto_tournament(ui_state)
@@ -652,6 +756,14 @@ class App:
         # Save preferences before cleanup
         ui_state = self.ui.get_state()
         self._restore_auto_overrides(ui_state)
+        if self.archive is not None:
+            self.archive.maybe_flush(force=True)
+        if self.goal_list is not None:
+            self.goal_list.save()
+        if self.archive_store is not None:
+            self.archive_store.close()
+        if self.thumb_cache is not None:
+            self.thumb_cache.release()
         save_preferences(ui_state.preferences)
 
         self.advanced_drawing_processor.cleanup()

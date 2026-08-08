@@ -29,6 +29,11 @@ class CommandHandler:
         self.tournament_service = tournament_service
         self.auto_service = auto_service
         self._auto_capture_warned = False
+        # Explore (IMGEP) mode; set by App._ensure_archive_service().
+        self.imgep_driver = None
+        self.archive = None
+        self.goal_list = None
+        self.archive_projection = None
 
         # Preview state
         self.preview_rule_active = False  # File->load preview
@@ -156,8 +161,19 @@ class CommandHandler:
         # Tournament mode
         self._handle_tournament(ui_state)
 
+        # In Explore mode a right-click on a tile means 'chase this' rather
+        # than 'save this tile as a config'. Redirected here, before
+        # _handle_auto_tournament clears the flag.
+        if ui_state.archive.enabled and self.imgep_driver is not None:
+            if ui_state.auto_tournament.save_tile_requested >= 0:
+                ui_state.archive.chase_tile = ui_state.auto_tournament.save_tile_requested
+                ui_state.auto_tournament.save_tile_requested = -1
+
         # Automatic (CLIP-guided) tournament mode
         self._handle_auto_tournament(ui_state)
+
+        # Explore (IMGEP) mode
+        self._handle_explore(ui_state)
 
         return None
 
@@ -364,6 +380,13 @@ class CommandHandler:
             self._clear_auto_flags(ats)
             return
 
+        # Explore mode drives this same service through a different driver.
+        # Letting Auto's settings through here would fight _handle_explore over
+        # steps_per_gen, sigma0 and the algorithm on every single frame.
+        if self.imgep_driver is not None and svc.driver is self.imgep_driver:
+            self._clear_auto_flags(ats)
+            return
+
         if ats.grid_changed and self.tournament_service is not None:
             # Applied at a generation boundary; resets the optimizer because
             # cmaes.CMA fixes popsize at construction.
@@ -405,6 +428,82 @@ class CommandHandler:
 
         ats.running = svc.phase.value == "rollout"
         self._clear_auto_flags(ats)
+
+    # ---- Explore (IMGEP) mode ------------------------------------------
+
+    @staticmethod
+    def _clear_explore_flags(ast):
+        ast.start_requested = False
+        ast.pause_requested = False
+        ast.reset_requested = False
+        ast.add_goal_requested = False
+        ast.remove_goal_index = -1
+        ast.move_goal_index = -1
+        ast.move_goal_delta = 0
+        ast.grid_changed = False
+        ast.chase_tile = -1
+        ast.pin_tile = -1
+        ast.export_entry_id = -1
+        ast.seed_entry_id = -1
+        ast.delete_entry_id = -1
+        ast.refit_projection_requested = False
+
+    def _handle_explore(self, ui_state):
+        ast = ui_state.archive
+        svc, drv = self.auto_service, self.imgep_driver
+        if drv is None or svc is None or svc.driver is not drv:
+            self._clear_explore_flags(ast)
+            return
+
+        if ast.grid_changed and self.tournament_service is not None:
+            self.tournament_service.set_grid(int(ast.grid))
+            svc.abort_generation()
+
+        svc.configure(
+            steps_per_gen=ast.steps_per_gen,
+            snapshots_per_gen=ast.snapshots_per_gen,
+            sim_steps_per_frame=ast.sim_steps_per_frame,
+            sigma0=ast.sigma0,
+            physics_enabled=ast.physics_enabled,
+            tile_mutation_enabled=ast.tile_mutation_enabled,
+            variants_per_tile=ast.variants_per_tile,
+            tile_mutation_strength=ast.tile_mutation_strength,
+        )
+        for name in ("sigma_expand", "alpha", "k", "seed_n", "liveness_min",
+                     "refresh_per_gen", "expansion_between", "expedition_gens",
+                     "expedition_sigma", "latent_share", "beta", "goal_order"):
+            setattr(drv, name, getattr(ast, name))
+        if self.archive is not None:
+            self.archive.capacity = int(ast.capacity)
+            self.archive.threshold.target_rate = float(ast.target_rate)
+
+        if self.goal_list is not None:
+            if ast.add_goal_requested and ast.new_goal_text.strip():
+                if self.goal_list.add(ast.new_goal_text):
+                    ast.new_goal_text = ""
+                self.goal_list.save()
+            if ast.remove_goal_index >= 0:
+                self.goal_list.remove(ast.remove_goal_index)
+                self.goal_list.save()
+            if ast.move_goal_index >= 0 and ast.move_goal_delta:
+                self.goal_list.move(ast.move_goal_index, ast.move_goal_delta)
+                self.goal_list.save()
+
+        if ast.pause_requested:
+            svc.pause()
+        if ast.reset_requested:
+            # Resets the SEARCH. The archive is the product and survives.
+            svc.reset()
+        if ast.start_requested:
+            svc.start()
+        if ast.chase_tile >= 0 and not drv.chase(int(ast.chase_tile)):
+            ast.warning = "nothing captured yet - chase needs one generation first"
+        if (ast.refit_projection_requested and self.archive is not None
+                and self.archive_projection is not None):
+            self.archive_projection.fit(self.archive.embeddings)
+
+        ast.running = svc.phase.value == "rollout"
+        self._clear_explore_flags(ast)
 
     def _start_model_download(self):
         import threading
