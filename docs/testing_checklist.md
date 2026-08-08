@@ -141,7 +141,9 @@ Use this after large refactors or significant new features. Items roughly ordere
       folder is gone and `Documents/Fluoddity/archives/default/` holds its
       contents. Explore mode's archive count matches what it was before.
 - [ ] Explore tab: the Archive row names the active archive and its entry
-      count matches the Archive Browser's.
+      count matches the Archive Browser's. (While a search is running the
+      browser can lead by up to 200 - the row counts what is on disk, and
+      `vectors.npz` is only rewritten every 200 admissions.)
 - [ ] New -> type `a/b` -> the preview says it will be saved as `ab`; Create
       makes `archives/ab/` and the row switches to it.
 - [ ] New -> type the name of an existing archive -> Create is disabled and the

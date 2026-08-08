@@ -141,6 +141,37 @@ def test_loose_files_in_the_root_are_ignored(tmp_path):
     assert [a["name"] for a in list_archives(tmp_path)] == ["runs"]
 
 
+def test_the_count_is_what_a_load_would_actually_yield(tmp_path):
+    """index.jsonl is APPEND-ONLY: Archive._remove never rewrites it, so after
+    an eviction or a user delete the row survives while the id is gone from
+    vectors.npz - and load_from_store keeps only the intersection. Counting
+    lines would have the dropdown drift above the browser's number forever."""
+    import numpy as np
+
+    d = make_archive(tmp_path, "evicted", entries=10)
+    with open(d / "vectors.npz", "wb") as fh:
+        np.savez(fh, format_version=np.array(1),
+                 ids=np.arange(4, dtype=np.int64),
+                 embeddings=np.zeros((4, 8), dtype=np.float16),
+                 brains=np.zeros((4, 10, 8), dtype=np.float32),
+                 physics=np.zeros((4, 8), dtype=np.float32))
+
+    assert list_archives(tmp_path)[0]["entries"] == 4
+
+
+def test_an_archive_that_has_never_flushed_falls_back_to_the_index(tmp_path):
+    """vectors.npz is only rewritten every 200 admissions, so a young archive
+    has rows and no arrays at all."""
+    make_archive(tmp_path, "young", entries=6)
+    assert list_archives(tmp_path)[0]["entries"] == 6
+
+
+def test_a_corrupt_vectors_file_falls_back_to_the_index(tmp_path):
+    d = make_archive(tmp_path, "broken", entries=3)
+    (d / "vectors.npz").write_bytes(b"not an npz")
+    assert list_archives(tmp_path)[0]["entries"] == 3
+
+
 def test_the_size_counts_the_thumbnails(tmp_path):
     """size_mb is dominated by thumbs/, which is the number the user needs when
     deciding what to delete."""

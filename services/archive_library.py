@@ -107,6 +107,32 @@ def list_archives(root) -> list[dict]:
 
 
 def _count_entries(path: Path) -> int:
+    """How many entries a load would actually yield.
+
+    vectors.npz is the honest source. index.jsonl is APPEND-ONLY - Archive
+    never rewrites it - so after an eviction or a user delete the row survives
+    while the id is gone from the arrays, and load_from_store keeps only the
+    intersection. Counting lines would have this number drift above the
+    browser's, without bound, once an archive reaches capacity.
+
+    The index is the fallback for an archive with no arrays yet: vectors.npz is
+    only rewritten every 200 admissions, so a young one has rows and no file.
+    """
+    vectors = path / "vectors.npz"
+    if vectors.is_file():
+        try:
+            # Local: this module is imported into ui/, and stays importable
+            # before numpy would otherwise be needed.
+            import numpy as np
+
+            with np.load(vectors, allow_pickle=False) as z:
+                return int(z["ids"].shape[0])
+        except (OSError, ValueError, KeyError):
+            pass                        # quarantined or truncated
+    return _count_index_rows(path)
+
+
+def _count_index_rows(path: Path) -> int:
     n = 0
     try:
         with open(path / "index.jsonl", "r", encoding="utf-8") as fh:
