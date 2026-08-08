@@ -1,7 +1,12 @@
 """The automatic tournament generation state machine.
 
-Holds an Optimizer, a CLIPScorer and a RunLogger, all injected. Contains no GL
-calls and no ImGui, so the whole loop is testable with fakes.
+Owns the ROLLOUT ONLY. Which genomes to run, and what the resulting images
+mean, both belong to an injected SearchDriver - PromptDriver for Auto (CLIP),
+ImgepDriver for Explore. The split exists because the rollout machine is
+identical for every search while the optimizer and scoring are not.
+
+Contains no GL calls, no ImGui, and - since the driver extraction - no CLIP,
+so the whole loop is testable with fakes.
 
 The rollout is spread across real application frames - update() returns one
 action per call and never loops internally. That is the mechanism by which the
@@ -13,9 +18,9 @@ from enum import Enum
 
 import numpy as np
 
-from services.genome_spec import BRAIN_PHYSICS_SPEC, BRAIN_SPEC, decode
+from services.genome_spec import BRAIN_PHYSICS_SPEC, BRAIN_SPEC
 from services.physics_genome import decode_physics
-from services.optimizers import make_optimizer
+from services.prompt_driver import PromptDriver
 
 
 class Action(str, Enum):
@@ -41,18 +46,22 @@ def snapshot_steps(steps_per_gen: int, n: int) -> list[int]:
 
 class AutoTournamentService:
     def __init__(self, tournament_service, scorer=None, logger=None,
-                 spec=BRAIN_SPEC, base_seed: int = 1000):
+                 spec=BRAIN_SPEC, base_seed: int = 1000, driver=None):
         self.tournament = tournament_service
-        self.scorer = scorer
         self.logger = logger
         self.spec = spec
         self.base_seed = int(base_seed)
+        # The service owns the rollout machine; the driver owns what to run and
+        # what the pictures mean. Injecting it is how Explore mode reuses this
+        # whole state machine rather than keeping a second copy of it.
+        self.driver = (driver if driver is not None
+                       else PromptDriver(tournament_service, scorer, spec))
 
+        self.algorithm = "CMA-ES"
+        self.sigma0 = 0.5
         self.steps_per_gen = 300
         self.snapshots_per_gen = 4
         self.sim_steps_per_frame = 10
-        self.sigma0 = 0.5
-        self.algorithm = "CMA-ES"
         self.physics_enabled = False
         self.tile_physics: list[dict] = []
         # Current physics, so z=0 decodes to the LOADED PRESET rather than the
@@ -69,14 +78,59 @@ class AutoTournamentService:
         self.generation = 0
         self.step_in_gen = 0
         self.fitness: np.ndarray | None = None
-        self.prompt = ""
-        self.optimizer = None
 
         self._z = None
         self._snaps: list[int] = []
         self._next_snap = 0
         self._buffer: list[np.ndarray] = []
         self._needs_write = False
+
+    # ---- delegated to the driver ---------------------------------------
+    # These exist so the service's public surface survived the extraction
+    # unchanged. command_handler.py and every pre-existing test reach through
+    # them; a rename here is a silent break there.
+
+    @property
+    def optimizer(self):
+        """Read-only on purpose: any leftover `self.optimizer = None` in this
+        file must fail loudly rather than silently shadow the driver's."""
+        return getattr(self.driver, "optimizer", None)
+
+    @property
+    def scorer(self):
+        return getattr(self.driver, "scorer", None)
+
+    @scorer.setter
+    def scorer(self, value):
+        self.driver.scorer = value
+
+    @property
+    def prompt(self) -> str:
+        return getattr(self.driver, "prompt", "")
+
+    @property
+    def sigma(self) -> float:
+        return float(getattr(self.driver, "sigma", self.sigma0))
+
+    @property
+    def run_id(self) -> str:
+        return getattr(self.logger, "run_id", "") if self.logger else ""
+
+    def set_prompt(self, text: str) -> None:
+        self.driver.set_prompt(text)
+
+    def set_x0(self, z) -> None:
+        self.driver.set_x0(z)
+
+    def _sync_driver(self) -> None:
+        """Push the UI-owned settings the driver understands, and the current
+        genome layout. Only attributes the driver already has are set, so a
+        driver may ignore settings that mean nothing to it."""
+        for k in ("algorithm", "sigma0", "base_seed",
+                  "physics_origin", "physics_enabled", "run_id"):
+            if hasattr(self.driver, k):
+                setattr(self.driver, k, getattr(self, k))
+        self.driver.set_spec(self.spec)
 
     # ---- configuration -------------------------------------------------
 
@@ -99,49 +153,19 @@ class AutoTournamentService:
         """This generation's search vectors, or None before the first ask."""
         return self._z
 
-    @property
-    def sigma(self) -> float:
-        return float(self.optimizer.sigma) if self.optimizer else self.sigma0
-
     def _resolve_spec(self) -> None:
-        """Point self.spec at the space the current settings imply.
-
-        Must run before the optimizer is built, not only in _begin_generation:
-        start() calls _ensure_optimizer() first, and an 80-D optimizer built
-        there would never be widened to hold the physics block.
-        """
+        """Point self.spec at the space the current settings imply."""
         want = BRAIN_PHYSICS_SPEC if self.physics_enabled else BRAIN_SPEC
         if self.spec is not want:
             self.spec = want
-            self.optimizer = None
-
-    def _ensure_optimizer(self, x0=None) -> None:
-        self._resolve_spec()
-        if self.optimizer is None:
-            self.optimizer = make_optimizer(
-                self.algorithm, self.spec.dim, self.popsize,
-                self.sigma0, self.base_seed, x0,
-            )
-
-    def set_prompt(self, text: str) -> None:
-        """Changing the prompt keeps the optimizer's learned covariance and
-        simply starts climbing a new landscape."""
-        self.prompt = text
-        if self.scorer is not None:
-            self.scorer.set_prompt(text)
-
-    def set_x0(self, z: np.ndarray) -> None:
-        """Load a genome as the search starting point. Discards optimizer
-        state; sigma, algorithm and grid come from the UI, not the file."""
-        self.optimizer = None
-        self._ensure_optimizer(np.asarray(z, dtype=np.float64))
 
     # ---- lifecycle -----------------------------------------------------
 
     def start(self, prompt: str | None = None) -> None:
         if prompt is not None:
             self.set_prompt(prompt)
-        self._ensure_optimizer()
+        self._resolve_spec()
+        self._sync_driver()
         if self.phase is Phase.IDLE:
             self._begin_generation()
         if self.phase in (Phase.IDLE, Phase.PAUSED):
@@ -156,7 +180,7 @@ class AutoTournamentService:
         # search's curve in front of the new one.
         if self.logger is not None:
             self.logger.start_new_run()
-        self.optimizer = None
+        self.driver.reset()
         self.generation = 0
         self.step_in_gen = 0
         self.fitness = None
@@ -177,15 +201,11 @@ class AutoTournamentService:
 
     def _begin_generation(self) -> None:
         # Turning physics search on or off changes the dimension of the search
-        # space, so the optimizer cannot be carried across the switch.
+        # space; _sync_driver hands the new spec to the driver, which discards
+        # any optimizer built for the old one.
         self._resolve_spec()
-        # The population size is fixed at optimizer construction (cmaes asserts
-        # on it in tell()). If the grid changed by any route that did not reset
-        # us, rebuild rather than crash on the next tell.
-        if self.optimizer is not None and self.optimizer.popsize != self.popsize:
-            self.optimizer = None
-        self._ensure_optimizer()
-        self._z = self.optimizer.ask(self.popsize)
+        self._sync_driver()
+        self._z = self.driver.ask(self.popsize)
         parts = [self.spec.decode(z) for z in self._z]
         self.tournament.population = [p["brain"] for p in parts]
         self.tile_physics = (
@@ -226,40 +246,18 @@ class AutoTournamentService:
     # ---- scoring -------------------------------------------------------
 
     def score_and_tell(self) -> np.ndarray:
-        n = self.popsize
-        if self.scorer is None or not self._buffer:
-            fit = np.zeros(n, dtype=np.float32)
-        else:
-            per_snap = [np.asarray(self.scorer.score(c), dtype=np.float32)
-                        for c in self._buffer]
-            fit = np.mean(np.stack(per_snap, axis=0), axis=0).astype(np.float32)
-
-        bad = ~np.isfinite(fit)
-        if bad.any():
-            finite = fit[~bad]
-            fit[bad] = float(finite.min()) if finite.size else 0.0
-
-        # Elite injection: selected tiles are already in this population, so
-        # this overwrites their fitness to force them to the top ranks.
-        selected = sorted(self.tournament.selected)
-        if selected:
-            top = float(fit.max())
-            for rank, tile in enumerate(selected):
-                if 0 <= tile < n:
-                    fit[tile] = top + 1e-3 * (len(selected) - rank)
-
-        self.optimizer.tell(self._z, fit)
+        fit = np.asarray(self.driver.tell(self._z, self._buffer), dtype=np.float32)
         self.fitness = fit
         self.generation += 1
-        self.tournament.selected.clear()
+        st = self.driver.status()
 
         if self.logger is not None:
             self.logger.log_generation({
                 "gen": self.generation,
-                "prompt": self.prompt,
-                "algorithm": self.algorithm,
-                "sigma": self.sigma,
-                "popsize": n,
+                "prompt": st.get("prompt", ""),
+                "algorithm": st.get("algorithm", self.algorithm),
+                "sigma": st.get("sigma", self.sigma),
+                "popsize": len(fit),
                 "grid": self.tournament.grid,
                 "seed": self.gen_seed,
                 "fit_best": float(fit.max()),
@@ -270,10 +268,11 @@ class AutoTournamentService:
                 "best_tile": int(np.argmax(fit)),
                 "steps_per_gen": self.steps_per_gen,
                 "snapshots": self.snapshots_per_gen,
-                "elites_injected": len(selected),
+                "elites_injected": int(st.get("elites_injected", 0)),
                 "tile_mutation": bool(self.tile_mutation_enabled),
                 "physics_search": bool(self.physics_enabled),
-                "nan_replaced": int(bad.sum()),
+                "nan_replaced": int(st.get("nan_replaced", 0)),
+                "driver": self.driver.name,
             })
 
         self._begin_generation()
@@ -283,16 +282,15 @@ class AutoTournamentService:
     # ---- checkpointing -------------------------------------------------
 
     def checkpoint_state(self) -> dict:
-        best_z, best_f = (self.optimizer.best() if self.optimizer
-                          else (np.zeros(self.spec.dim, np.float32), -np.inf))
+        d = self.driver.checkpoint_state()
         return {
             "genome_spec_signature": self.spec.signature(),
             "generation": self.generation,
-            "optimizer_name": self.algorithm,
-            "optimizer_state": self.optimizer.state_dict() if self.optimizer else {},
+            "optimizer_name": d.get("optimizer_name", self.algorithm),
+            "optimizer_state": d.get("optimizer_state", {}),
             "base_seed": self.base_seed,
-            "prompt": self.prompt,
-            "distractors": [],
+            "prompt": d.get("prompt", ""),
+            "distractors": d.get("distractors", []),
             "settings": {
                 "grid": self.tournament.grid,
                 "steps_per_gen": self.steps_per_gen,
@@ -306,8 +304,8 @@ class AutoTournamentService:
                 "tile_mutation_strength": self.tile_mutation_strength,
             },
             "history": self.logger.history() if self.logger else {},
-            "best_z": best_z,
-            "best_fitness": float(best_f) if np.isfinite(best_f) else 0.0,
+            "best_z": d.get("best_z", np.zeros(self.spec.dim, np.float32)),
+            "best_fitness": float(d.get("best_fitness", 0.0)),
         }
 
     def restore(self, state: dict) -> None:
@@ -329,11 +327,10 @@ class AutoTournamentService:
         )
         self.base_seed = int(state["base_seed"])
         self.generation = int(state["generation"])
-        self.optimizer = None
-        self._ensure_optimizer()
-        if state.get("optimizer_state"):
-            self.optimizer.load_state_dict(state["optimizer_state"])
+        self._resolve_spec()
+        self._sync_driver()
+        self.driver.reset()
+        self.driver.restore(state)
         if self.logger is not None and state.get("history"):
             self.logger.load_history(state["history"])
-        self.set_prompt(str(state["prompt"]))
         self.phase = Phase.PAUSED
