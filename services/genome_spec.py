@@ -79,6 +79,23 @@ class GenomeSpec:
             off += b.size
         return out
 
+    def split(self, z: np.ndarray) -> dict[str, np.ndarray]:
+        """The raw sub-vectors of z, undecoded.
+
+        decode() gives phenotypes; this gives the pieces of z itself, which is
+        what a caller needs when it hands one block to something that will
+        decode it again. Passing a whole 88-wide brain+physics vector to a
+        brain decoder is a reshape error, and inside a command handler that
+        takes the app down.
+        """
+        z = np.asarray(z, dtype=np.float32).reshape(-1)
+        out: dict[str, np.ndarray] = {}
+        off = 0
+        for b in self.blocks:
+            out[b.name] = z[off:off + b.size].copy()
+            off += b.size
+        return out
+
     def encode(self, parts: dict[str, np.ndarray]) -> np.ndarray:
         pieces = []
         for b in self.blocks:

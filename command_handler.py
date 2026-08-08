@@ -637,7 +637,10 @@ class CommandHandler:
         print(f"[auto] saved {path}")
 
     def _save_auto_genome(self, svc, ui_state, tile):
+        import copy
+
         from services.genome_io import export_genome
+        from services.physics_genome import decode_physics
 
         if tile is None:
             z = svc.optimizer.best()[0] if svc.optimizer is not None else None
@@ -649,11 +652,31 @@ class CommandHandler:
         if z is None:
             print("[auto] nothing to save yet")
             return
+
+        # With physics search on the genome is 88 wide: 80 brain genes then 8
+        # physics genes. export_genome decodes a BRAIN, so handing it the whole
+        # vector is a reshape error - and this runs inside orchestrate_frame,
+        # so it took the app down rather than printing a warning.
+        blocks = svc.spec.split(z)
+        brain_z = blocks["brain"]
+
+        # The physics half has to travel with the brain. Writing the brain
+        # against whatever the sliders currently say would save a file that
+        # does not reproduce what was on screen. Onto a COPY: pressing Save
+        # must not move the user's sliders.
+        sim_state = ui_state.sim
+        if "physics" in blocks:
+            sim_state = copy.copy(sim_state)
+            for field, value in decode_physics(blocks["physics"],
+                                               svc.physics_origin).items():
+                setattr(sim_state, field, float(value))
+
         canvas_px = self.sim.get_canvas_dimensions()[0]
         meta = {
             "generation": svc.generation,
             "prompt": svc.prompt,
             "algorithm": svc.algorithm,
+            "physics_search": "physics" in blocks,
             "evolved_at_canvas_px": int(canvas_px),
             "evolved_at_tile_px": 224,
             "evolved_with_tile_mutation": bool(svc.tile_mutation_enabled),
@@ -661,7 +684,7 @@ class CommandHandler:
             "variants_per_tile": int(svc.variants_per_tile),
         }
         path = self.user_configs_dir / name
-        export_genome(path, z, ui_state.sim, meta)
+        export_genome(path, brain_z, sim_state, meta)
         print(f"[auto] saved {path}")
 
     def _handle_sweep_click(self, ui_state, tiling_mode):
