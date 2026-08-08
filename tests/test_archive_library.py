@@ -146,3 +146,110 @@ def test_the_size_counts_the_thumbnails(tmp_path):
     deciding what to delete."""
     make_archive(tmp_path, "big", entries=1, thumb_bytes=2 * 1024 * 1024)
     assert list_archives(tmp_path)[0]["size_mb"] == pytest.approx(2.0, abs=0.1)
+
+
+from services.archive_library import clear, create, delete  # noqa: E402
+
+
+# ---- create -------------------------------------------------------------
+
+def test_create_makes_an_archive_shaped_directory(tmp_path):
+    res = create(tmp_path, "run-07")
+    assert res.ok and res.name == "run-07"
+    assert (tmp_path / "run-07" / "thumbs").is_dir()
+
+
+def test_create_sanitises_the_name_it_reports(tmp_path):
+    res = create(tmp_path, "a/b")
+    assert res.ok and res.name == "ab"
+    assert (tmp_path / "ab").is_dir()
+
+
+def test_create_refuses_an_unusable_name(tmp_path):
+    """Refuse rather than auto-generating 'archive-1'. A name the user did not
+    choose is a folder they will not find again."""
+    res = create(tmp_path, "   ")
+    assert not res.ok
+    assert "no usable characters" in res.message
+
+
+def test_create_refuses_a_duplicate_rather_than_suffixing(tmp_path):
+    """Silently creating 'run-2' when the user typed 'run' puts entries
+    somewhere they did not ask for."""
+    create(tmp_path, "run")
+    res = create(tmp_path, "run")
+    assert not res.ok
+    assert "already exists" in res.message
+    assert not (tmp_path / "run-2").exists()
+
+
+# ---- clear --------------------------------------------------------------
+
+def test_clear_moves_the_contents_aside_and_leaves_an_empty_archive(tmp_path):
+    make_archive(tmp_path, "runs", entries=5)
+    res = clear(tmp_path, "runs")
+    assert res.ok
+    assert (tmp_path / "runs" / "thumbs").is_dir()
+    assert list_archives(tmp_path)[0]["entries"] == 0
+
+
+def test_clear_deletes_nothing(tmp_path):
+    """The undo: the old contents are one rename away from being back."""
+    make_archive(tmp_path, "runs", entries=5)
+    clear(tmp_path, "runs")
+    aside = [p for p in tmp_path.iterdir() if CLEARED_MARK in p.name]
+    assert len(aside) == 1
+    assert sum(1 for _ in open(aside[0] / "index.jsonl", encoding="utf-8")) == 5
+
+
+def test_clearing_twice_in_one_second_does_not_collide(tmp_path):
+    """The snapshot name is timestamped to the second; two clicks in the same
+    second must not have the second rename fail onto the first."""
+    make_archive(tmp_path, "runs", entries=1)
+    assert clear(tmp_path, "runs").ok
+    (tmp_path / "runs" / "index.jsonl").write_text('{"id": 9}\n', encoding="utf-8")
+    assert clear(tmp_path, "runs").ok
+    assert len([p for p in tmp_path.iterdir() if CLEARED_MARK in p.name]) == 2
+
+
+def test_clearing_something_that_is_gone_is_a_warning_not_a_crash(tmp_path):
+    """The folder can be deleted outside the app between rendering the dropdown
+    and clicking the button."""
+    res = clear(tmp_path, "ghost")
+    assert not res.ok
+    assert "no longer on disk" in res.message
+
+
+# ---- delete -------------------------------------------------------------
+
+def test_delete_removes_the_whole_tree(tmp_path):
+    make_archive(tmp_path, "keep")
+    make_archive(tmp_path, "drop", entries=3, thumb_bytes=16)
+    assert delete(tmp_path, "drop").ok
+    assert not (tmp_path / "drop").exists()
+    assert (tmp_path / "keep").is_dir()
+
+
+def test_delete_refuses_the_last_archive(tmp_path):
+    """There must always be something to load."""
+    make_archive(tmp_path, "only", entries=3)
+    res = delete(tmp_path, "only")
+    assert not res.ok
+    assert "only archive" in res.message
+    assert (tmp_path / "only").is_dir()
+
+
+def test_deleting_something_that_is_gone_is_a_warning_not_a_crash(tmp_path):
+    make_archive(tmp_path, "real")
+    make_archive(tmp_path, "other")
+    res = delete(tmp_path, "ghost")
+    assert not res.ok
+    assert "no longer on disk" in res.message
+
+
+def test_a_cleared_snapshot_does_not_count_as_an_archive_for_delete(tmp_path):
+    """Snapshots are not archives, so having one does not make it safe to
+    delete the only real archive."""
+    make_archive(tmp_path, "only", entries=1)
+    make_archive(tmp_path, f"only{CLEARED_MARK}1700000000", entries=1)
+    assert not delete(tmp_path, "only").ok

@@ -16,6 +16,8 @@ search.
 """
 from __future__ import annotations
 
+import shutil
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -135,3 +137,71 @@ def _mtime(path: Path) -> float:
         return path.stat().st_mtime
     except OSError:
         return 0.0
+
+
+# ---- operations that change the disk ------------------------------------
+
+def create(root, name: str) -> Result:
+    base = Path(root)
+    safe = safe_name(name)
+    if not safe:
+        return Result(False, "", "That name has no usable characters.")
+    path = resolve(base, safe)
+    if path.exists():
+        return Result(False, safe, f"An archive named '{safe}' already exists.")
+    try:
+        (path / "thumbs").mkdir(parents=True)
+    except OSError as exc:
+        return Result(False, safe, f"Could not create '{safe}': {exc}")
+    return Result(True, safe)
+
+
+def clear(root, name: str) -> Result:
+    """Empty an archive WITHOUT deleting anything.
+
+    The contents move to <name>.cleared-<unix-ts> and the live directory comes
+    back empty. An archive is hours of exploration; 'empty it' should be one
+    rename away from being undone, not an rmtree. The snapshots are never
+    garbage-collected - they are the user's data, and the app does not get to
+    decide when their undo expires.
+    """
+    base = Path(root)
+    safe = safe_name(name)
+    if not safe:
+        return Result(False, "", "That name has no usable characters.")
+    path = resolve(base, safe)
+    if not path.is_dir():
+        return Result(False, safe, f"'{safe}' is no longer on disk.")
+
+    stamp = int(time.time())
+    aside = base / f"{safe}{CLEARED_MARK}{stamp}"
+    n = 1
+    while aside.exists():
+        # Two clicks inside one second must not rename onto each other.
+        n += 1
+        aside = base / f"{safe}{CLEARED_MARK}{stamp}-{n}"
+    try:
+        path.rename(aside)
+        (path / "thumbs").mkdir(parents=True)
+    except OSError as exc:
+        return Result(False, safe, f"Could not empty '{safe}': {exc}")
+    return Result(True, safe)
+
+
+def delete(root, name: str) -> Result:
+    """The only irreversible operation here. The UI puts it behind a
+    typed-name confirmation."""
+    base = Path(root)
+    safe = safe_name(name)
+    if not safe:
+        return Result(False, "", "That name has no usable characters.")
+    path = resolve(base, safe)
+    if not path.is_dir():
+        return Result(False, safe, f"'{safe}' is no longer on disk.")
+    if len(list_archives(base)) <= 1:
+        return Result(False, safe, "This is the only archive.")
+    try:
+        shutil.rmtree(path)
+    except OSError as exc:
+        return Result(False, safe, f"Could not delete '{safe}': {exc}")
+    return Result(True, safe)
