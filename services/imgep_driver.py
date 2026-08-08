@@ -4,12 +4,13 @@ Expedition & Expansion (arXiv:2509.03863) on a substrate that runs N^2 rollouts
 per generation. E&E's loop is serial - one theta, one rollout, one embedding -
 so one generation here is a batch of 4 to 64 IMGEP samples at no extra cost.
 
-Three regimes, checked in order:
+Three regimes, checked in this order:
 
+  EXPEDITION   an expedition is active: optimizer.ask, fitness <b, g>. First,
+               because a chase must pre-empt the cadence immediately.
   BOOTSTRAP    archive < seed_n, or empty. z ~ N(0, sigma0): a scattered
                population, and the archive admits on viability and liveness
                only (5.2.2).
-  EXPEDITION   an expedition is active: optimizer.ask, fitness <b, g>.
   EXPANSION    otherwise: per tile, sample a parent with p ~ NOV^alpha,
                re-encode it under the CURRENT physics origin, add Gaussian
                noise. No optimizer, no covariance, no shared state between
@@ -28,7 +29,9 @@ from services.archive import Candidate
 from services.capture_health import is_viable_tile
 from services.descriptor import descriptor, liveness, stack_snapshots
 from services.genome_spec import BRAIN_SPEC, encode
+from services.goal_source import Goal, latent_goal
 from services.novelty import sample_by_novelty
+from services.optimizers import make_optimizer
 from services.physics_genome import PHYSICS_DIM, PHYSICS_PARAMS, encode_physics
 
 
@@ -65,6 +68,21 @@ class ImgepDriver:
         self.refresh_per_gen = 64
         self.flush_every = 200
 
+        # expedition settings (spec 7.4)
+        self.expansion_between = 25      # 0 disables expeditions entirely
+        self.expedition_gens = 50        # E&E uses 350; that is ~16 min at 2000 steps
+        self.expedition_sigma = 0.1      # E&E's value; deliberately << sigma0
+        self.latent_share = 0.5
+        self.beta = 0.5                  # latent extrapolation distance
+        self.goal_order = "round_robin"  # or "least_matched"
+
+        self._optimizer = None
+        self._goal: Goal | None = None
+        self._remaining = 0
+        self._since_expedition = 0
+        self._x0_index: int | None = None
+        self._last_descriptors: np.ndarray | None = None
+
         self.gen = 0
         self._last_score_label = "novelty"
 
@@ -72,6 +90,8 @@ class ImgepDriver:
 
     @property
     def regime(self) -> str:
+        if self._remaining > 0 and self._goal is not None:
+            return "expedition"
         # max(1, ...): an empty archive has nothing to expand FROM, so it stays
         # in bootstrap whatever seed_n says. Without this, parent sampling
         # raises on the first ask when seed_n is 0.
@@ -81,15 +101,17 @@ class ImgepDriver:
 
     @property
     def optimizer(self):
-        return None
+        return self._optimizer
 
     @property
     def sigma(self) -> float:
+        if self._optimizer is not None:
+            return float(self._optimizer.sigma)
         return float(self.sigma_expand)
 
     @property
     def goal_label(self) -> str:
-        return ""
+        return self._goal.label if self._goal is not None else ""
 
     def status(self) -> dict:
         st = self.archive.stats()
@@ -110,18 +132,42 @@ class ImgepDriver:
     # ---- driver interface ----------------------------------------------
 
     def set_spec(self, spec) -> None:
-        self.spec = spec
+        if spec is not self.spec:
+            self.spec = spec
+            # The search dimension changed; an optimizer for the old one is
+            # meaningless, and the archive is unaffected because it stores
+            # phenotypes rather than z.
+            self.end_expedition()
 
     def reset(self) -> None:
         """Clears the SEARCH, never the archive. The archive is the product;
         Reset is about abandoning the current trajectory through it."""
         self.gen = 0
+        self._since_expedition = 0
+        self.end_expedition()
+
+    def end_expedition(self) -> None:
+        self._optimizer = None
+        self._goal = None
+        self._remaining = 0
+        self._x0_index = None
 
     def ask(self, n: int) -> np.ndarray:
         n = int(n)
+        if self.regime == "expedition":
+            return self._ask_expedition(n)
         if self.regime == "bootstrap":
             return self._ask_bootstrap(n)
         return self._ask_expansion(n)
+
+    def _ask_expedition(self, n: int) -> np.ndarray:
+        # The population size is fixed at construction (cmaes asserts on it in
+        # tell()). A grid change mid-expedition ends the expedition rather than
+        # crashing on the next tell.
+        if self._optimizer is not None and self._optimizer.popsize != n:
+            self.end_expedition()
+            return self._ask_expansion(n) if len(self.archive) else self._ask_bootstrap(n)
+        return self._optimizer.ask(n)
 
     def _ask_bootstrap(self, n: int) -> np.ndarray:
         return (self.sigma0 * self.rng.normal(size=(n, self.spec.dim))
@@ -153,6 +199,62 @@ class ImgepDriver:
             # entry is well-defined rather than an error.
             zp = np.zeros(PHYSICS_DIM, dtype=np.float32)
         return np.concatenate([zb, zp]).astype(np.float32)
+
+    # ---- expeditions ---------------------------------------------------
+
+    def start_expedition(self) -> bool:
+        """Draw a goal from the configured sources and begin. -> did it start?"""
+        goal = self._draw_goal()
+        if goal is None:
+            return False
+        return self.start_expedition_with(goal.embedding, goal.kind, goal.text)
+
+    def start_expedition_with(self, embedding, kind: str, text: str) -> bool:
+        """Begin an expedition toward a specific embedding. An expedition needs
+        a seed, so an empty archive falls back to expansion rather than
+        starting a search from nowhere."""
+        i = self.archive.nearest(np.asarray(embedding, dtype=np.float32))
+        if i is None or self.expedition_gens <= 0:
+            return False
+        self._goal = Goal(kind, text, np.asarray(embedding, dtype=np.float32))
+        self._x0_index = int(i)
+        self._remaining = int(self.expedition_gens)
+        self._since_expedition = 0
+        # A FRESH optimizer per goal: a covariance learned climbing toward
+        # "coral reef" is not informative about "lightning". sigma is
+        # deliberately much smaller than sigma0 - an expedition is a local
+        # refinement from an already-relevant seed, not a fresh search.
+        self._optimizer = make_optimizer(
+            self.algorithm, self.spec.dim, self.tournament.tiles,
+            self.expedition_sigma, self.base_seed + self.gen,
+            self._parent_z(self._x0_index).astype(np.float64),
+        )
+        return True
+
+    def _draw_goal(self) -> Goal | None:
+        want_latent = float(self.rng.random()) < float(self.latent_share)
+        text_goal = None
+        if self.goals is not None:
+            self.goals.ensure_embedded(self.scorer)
+            text_goal = (self.goals.least_matched(self.archive.embeddings)
+                         if self.goal_order == "least_matched"
+                         else self.goals.next_goal())
+        if want_latent or text_goal is None:
+            return latent_goal(self.archive, self.rng, self.alpha, self.beta) or text_goal
+        return text_goal
+
+    def chase(self, tile: int) -> bool:
+        """Start an expedition toward one tile's own descriptor.
+
+        The direct analogue of manual mode's 'more like that one', expressed as
+        a goal rather than a selection. The descriptor is already computed for
+        that generation, so this costs no extra CLIP work."""
+        d = self._last_descriptors
+        if d is None or not (0 <= int(tile) < len(d)):
+            return False
+        return self.start_expedition_with(d[int(tile)].copy(), "chase", "")
+
+    # ---- rollout -------------------------------------------------------
 
     def tell(self, z: np.ndarray, snapshots: list[np.ndarray]) -> np.ndarray:
         n = len(z)
@@ -210,9 +312,25 @@ class ImgepDriver:
             )
 
         self.tournament.selected.clear()
+        self._last_descriptors = b
         self.gen += 1
         self.archive.refresh(self.refresh_per_gen)
         self.archive.maybe_flush(every=self.flush_every)
+
+        if self.regime == "expedition":
+            fit = (b @ self._goal.embedding).astype(np.float32)
+            self._optimizer.tell(z, fit)
+            self._remaining -= 1
+            if self._remaining <= 0:
+                self.end_expedition()
+            self._last_score_label = "goal match"
+            return fit
+
+        self._since_expedition += 1
+        if (self.expansion_between > 0
+                and self._since_expedition >= self.expansion_between
+                and len(self.archive) >= self.seed_n):
+            self.start_expedition()
 
         self._last_score_label = "novelty"
         return np.asarray(nov, dtype=np.float32)
@@ -229,9 +347,15 @@ class ImgepDriver:
             "best_fitness": 0.0,
             "imgep_gen": int(self.gen),
             "imgep_threshold": float(self.archive.threshold.value),
+            "imgep_since_expedition": int(self._since_expedition),
         }
 
     def restore(self, d: dict) -> None:
+        # An expedition is deliberately NOT resumed: its optimizer is one
+        # goal's local refinement, and the archive - which is the thing worth
+        # preserving - is on disk independently of any checkpoint.
+        self.end_expedition()
         self.gen = int(d.get("imgep_gen", 0))
+        self._since_expedition = int(d.get("imgep_since_expedition", 0))
         if "imgep_threshold" in d:
             self.archive.threshold.value = float(d["imgep_threshold"])

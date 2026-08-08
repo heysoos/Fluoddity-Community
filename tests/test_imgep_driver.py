@@ -3,6 +3,7 @@ import pytest
 
 from services.archive import Archive
 from services.genome_spec import BRAIN_PHYSICS_SPEC, BRAIN_SPEC
+from services.goal_source import GoalList
 from services.imgep_driver import ImgepDriver
 from services.tournament_service import TournamentService
 
@@ -264,3 +265,190 @@ def test_status_reports_what_the_ui_needs():
     st = d.status()
     assert set(st) >= {"regime", "goal", "archive_size", "threshold",
                        "admission_rate", "score_label", "sigma"}
+
+
+# ---- expeditions -------------------------------------------------------
+
+def seeded(**kw):
+    """A driver past bootstrap, with 8 archive entries.
+
+    Tests that count expedition generations pass expansion_between=0 so the
+    cadence cannot fire during these two warm-up tells and quietly consume part
+    of the expedition they are trying to measure.
+    """
+    d, arc, ts = make(seed_n=4, **kw)
+    d.tell(d.ask(4), moving(4))
+    d.tell(d.ask(4), moving(4, base=100))
+    return d, arc, ts
+
+
+def test_no_expedition_fires_while_expansion_between_is_zero():
+    d, _, _ = seeded(expansion_between=0)
+    for _ in range(10):
+        d.tell(d.ask(4), moving(4))
+    assert d.regime == "expansion"
+
+
+def test_an_expedition_fires_after_expansion_between_generations():
+    d, _, _ = seeded(expansion_between=2, expedition_gens=5, latent_share=1.0)
+    for _ in range(3):
+        d.tell(d.ask(4), moving(4))
+    assert d.regime == "expedition"
+
+
+def test_an_expedition_lasts_exactly_expedition_gens_generations():
+    d, arc, _ = seeded(expansion_between=0, expedition_gens=3)
+    d.start_expedition_with(arc.embeddings[0].copy(), kind="latent", text="")
+    for _ in range(3):
+        assert d.regime == "expedition"
+        d.tell(d.ask(4), moving(4))
+    assert d.regime == "expansion"
+
+
+def test_an_expedition_builds_a_fresh_optimizer_per_goal():
+    d, arc, _ = seeded(expansion_between=0, expedition_gens=2)
+    d.start_expedition_with(arc.embeddings[0].copy(), kind="latent", text="")
+    first = d.optimizer
+    assert first is not None and first.popsize == 4
+    for _ in range(2):
+        d.tell(d.ask(4), moving(4))
+    assert d.regime == "expansion"
+    d.start_expedition_with(arc.embeddings[1].copy(), kind="latent", text="")
+    assert d.optimizer is not first, "a new goal must not inherit a covariance"
+
+
+def test_an_expedition_seeds_at_the_archive_entry_nearest_the_goal():
+    d, arc, _ = seeded(expansion_between=0)
+    goal = arc.embeddings[2].copy()
+    d.start_expedition_with(goal, kind="chase", text="")
+    assert d._x0_index == 2
+
+
+def test_expedition_fitness_is_alignment_with_the_goal():
+    d, arc, _ = seeded(expansion_between=0, expedition_gens=5)
+    goal = np.zeros(DIM, dtype=np.float32)
+    goal[3] = 1.0
+    d.start_expedition_with(goal, kind="latent", text="")
+    z = d.ask(4)
+    # FakeScorer puts tile i on axis (mean brightness % DIM); brightness 3 -> axis 3
+    out = d.tell(z, snaps(4, [[1, 2, 3, 4], [41, 42, 43, 44]]))
+    assert d.status()["score_label"] == "goal match"
+    assert int(np.argmax(out)) == 2, "the tile landing on the goal axis wins"
+
+
+def test_expedition_tiles_still_reach_the_archive():
+    """Deliberate deviation from E&E: the path to a goal is territory too."""
+    d, arc, _ = seeded(expansion_between=0, expedition_gens=5)
+    before = len(arc)
+    d.start_expedition_with(arc.embeddings[0].copy(), kind="latent", text="")
+    d.tell(d.ask(4), moving(4, base=150))
+    assert len(arc) > before
+    assert any(e.source == "expedition" for e in arc.entries)
+
+
+def test_latent_share_of_one_always_picks_a_latent_goal():
+    g = GoalList()
+    g.add("coral")
+    g.ensure_embedded(FakeScorer())
+    d, _, _ = seeded(expansion_between=0, latent_share=1.0)
+    d.goals = g
+    d.start_expedition()
+    assert d._goal.kind == "latent"
+
+
+def test_latent_share_of_zero_uses_the_text_goal_list():
+    g = GoalList()
+    g.add("coral")
+    g.ensure_embedded(FakeScorer())
+    d, _, _ = seeded(expansion_between=0, latent_share=0.0)
+    d.goals = g
+    d.start_expedition()
+    assert d._goal.kind == "text"
+    assert d._goal.text == "coral"
+
+
+def test_an_empty_goal_list_falls_back_to_latent():
+    d, _, _ = seeded(expansion_between=0, latent_share=0.0)
+    d.goals = GoalList()
+    d.start_expedition()
+    assert d._goal.kind == "latent"
+
+
+def test_goal_order_least_matched_is_selectable():
+    g = GoalList()
+    g.add("a")
+    g.add("b")
+    g.ensure_embedded(FakeScorer())
+    d, _, _ = seeded(expansion_between=0, latent_share=0.0)
+    d.goals = g
+    d.goal_order = "least_matched"
+    d.start_expedition()
+    assert d._goal.kind == "text"
+
+
+def test_an_expedition_on_an_empty_archive_falls_back_to_expansion():
+    d, arc, _ = make(seed_n=0)
+    d.goals = GoalList()
+    assert d.start_expedition() is False
+    assert d.regime == "bootstrap"
+
+
+def test_chase_starts_an_expedition_on_that_tiles_descriptor():
+    d, arc, _ = seeded(expansion_between=0)
+    d.tell(d.ask(4), snaps(4, [[1, 2, 3, 4], [41, 42, 43, 44]]))
+    assert d.chase(2) is True
+    assert d.regime == "expedition"
+    assert d._goal.kind == "chase"
+    assert float(d._goal.embedding[3]) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_chase_before_any_generation_is_refused():
+    d, _, _ = make()
+    assert d.chase(0) is False
+
+
+def test_chase_pre_empts_the_expansion_cadence():
+    d, _, _ = seeded(expansion_between=1000)
+    d.tell(d.ask(4), moving(4))
+    d.chase(0)
+    assert d.regime == "expedition"
+
+
+def test_the_goal_label_appears_in_status_and_on_entries():
+    g = GoalList()
+    g.add("coral reef")
+    g.ensure_embedded(FakeScorer())
+    d, arc, _ = seeded(expansion_between=0, latent_share=0.0, expedition_gens=5)
+    d.goals = g
+    d.start_expedition()
+    assert d.status()["goal"] == "coral reef"
+    d.tell(d.ask(4), moving(4, base=150))
+    assert any(e.goal == "coral reef" for e in arc.entries)
+
+
+def test_a_grid_change_ends_the_expedition_rather_than_crashing():
+    """cmaes fixes popsize at construction and asserts on it in tell()."""
+    d, arc, ts = seeded(expansion_between=0, expedition_gens=50)
+    d.start_expedition_with(arc.embeddings[0].copy(), kind="latent", text="")
+    d.ask(4)
+    ts.set_grid(4)
+    z = d.ask(16)
+    assert z.shape == (16, BRAIN_SPEC.dim)
+    d.tell(z, moving(16))          # must not raise
+
+
+def test_set_spec_ends_an_active_expedition():
+    d, arc, _ = seeded(expansion_between=0, expedition_gens=50)
+    d.start_expedition_with(arc.embeddings[0].copy(), kind="latent", text="")
+    d.set_spec(BRAIN_PHYSICS_SPEC)
+    assert d.regime != "expedition"
+    assert d.optimizer is None
+
+
+def test_reset_ends_an_expedition_but_keeps_the_archive():
+    d, arc, _ = seeded(expansion_between=0, expedition_gens=50)
+    n = len(arc)
+    d.start_expedition_with(arc.embeddings[0].copy(), kind="latent", text="")
+    d.reset()
+    assert d.regime != "expedition"
+    assert len(arc) == n
