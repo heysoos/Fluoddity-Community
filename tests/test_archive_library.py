@@ -253,3 +253,78 @@ def test_a_cleared_snapshot_does_not_count_as_an_archive_for_delete(tmp_path):
     make_archive(tmp_path, "only", entries=1)
     make_archive(tmp_path, f"only{CLEARED_MARK}1700000000", entries=1)
     assert not delete(tmp_path, "only").ok
+
+
+# ---- migration ----------------------------------------------------------
+
+from utilities.paths import (  # noqa: E402
+    DEFAULT_ARCHIVE, get_archives_root, migrate_legacy_archive,
+)
+
+
+def test_the_legacy_archive_becomes_default_with_its_contents(tmp_path):
+    """A move, not a copy: archives run to hundreds of megabytes of
+    thumbnails, and duplicating them to be tidy is worse than moving them."""
+    legacy = tmp_path / "archive"
+    (legacy / "thumbs").mkdir(parents=True)
+    (legacy / "index.jsonl").write_text('{"id": 1}\n{"id": 2}\n', encoding="utf-8")
+
+    root = migrate_legacy_archive(tmp_path)
+
+    assert root == tmp_path / "archives"
+    assert not legacy.exists(), "moved, not copied"
+    listed = list_archives(root)
+    assert [a["name"] for a in listed] == [DEFAULT_ARCHIVE]
+    assert listed[0]["entries"] == 2
+    assert (root / DEFAULT_ARCHIVE / "thumbs").is_dir()
+
+
+def test_a_first_launch_with_no_archive_at_all_gets_an_empty_default(tmp_path):
+    root = migrate_legacy_archive(tmp_path)
+    assert (root / DEFAULT_ARCHIVE / "thumbs").is_dir()
+    assert list_archives(root)[0]["entries"] == 0
+
+
+def test_an_existing_archives_root_is_never_touched(tmp_path):
+    """A user who has already migrated and then restores an old backup must not
+    have that backup swallowed into a directory that already has contents."""
+    make_archive(tmp_path / "archives", "default", entries=4)
+    legacy = tmp_path / "archive"
+    (legacy / "thumbs").mkdir(parents=True)
+    (legacy / "index.jsonl").write_text('{"id": 99}\n', encoding="utf-8")
+
+    root = migrate_legacy_archive(tmp_path)
+
+    assert legacy.is_dir(), "the legacy folder must be left alone"
+    assert list_archives(root)[0]["entries"] == 4
+
+
+def test_migration_is_idempotent(tmp_path):
+    (tmp_path / "archive" / "thumbs").mkdir(parents=True)
+    (tmp_path / "archive" / "index.jsonl").write_text('{"id": 1}\n', encoding="utf-8")
+    migrate_legacy_archive(tmp_path)
+    migrate_legacy_archive(tmp_path)
+    assert [a["name"] for a in list_archives(tmp_path / "archives")] == [DEFAULT_ARCHIVE]
+
+
+def test_a_failed_move_still_leaves_a_usable_default(tmp_path, monkeypatch):
+    """Migration failing must not stop the app from launching."""
+    import utilities.paths as paths
+
+    (tmp_path / "archive" / "thumbs").mkdir(parents=True)
+
+    def boom(src, dst):
+        raise OSError("locked")
+
+    monkeypatch.setattr(paths.os, "replace", boom)
+    root = migrate_legacy_archive(tmp_path)
+
+    assert (root / DEFAULT_ARCHIVE / "thumbs").is_dir()
+    assert (tmp_path / "archive").is_dir(), "the user's data is still there"
+
+
+def test_the_root_hangs_off_the_user_data_directory(tmp_path, monkeypatch):
+    import utilities.paths as paths
+
+    monkeypatch.setattr(paths, "get_user_data_dir", lambda: tmp_path)
+    assert get_archives_root() == tmp_path / "archives"

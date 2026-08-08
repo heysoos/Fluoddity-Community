@@ -73,9 +73,51 @@ def get_videos_dir() -> Path:
     return get_user_data_dir() / "Videos"
 
 
-def get_archive_dir() -> Path:
-    """Get path to the exploration archive (novelty search's growing library)."""
-    return get_user_data_dir() / "archive"
+DEFAULT_ARCHIVE = "default"
+
+
+def get_archives_root(user_dir=None) -> Path:
+    """Root of the named exploration archives (Documents/Fluoddity/archives).
+
+    Each subdirectory is one archive. There is no registry file: the filesystem
+    is the list, so an archive folder copied in from elsewhere just appears.
+    """
+    base = Path(user_dir) if user_dir is not None else get_user_data_dir()
+    return base / "archives"
+
+
+def migrate_legacy_archive(user_dir=None) -> Path:
+    """Move the pre-2026-08-08 single archive under archives/default.
+
+    A move, not a copy: archives run to hundreds of megabytes of thumbnails.
+
+    If archives/ already exists this does NOTHING - including to a legacy
+    archive/ folder sitting beside it. A user who has already migrated and then
+    restores an old backup should not have that backup swallowed into a
+    directory that already has contents.
+
+    -> the archives root, which is guaranteed to contain a 'default'.
+    """
+    base = Path(user_dir) if user_dir is not None else get_user_data_dir()
+    root = get_archives_root(base)
+    if root.exists():
+        return root
+
+    legacy = base / "archive"
+    if legacy.is_dir():
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            os.replace(legacy, root / DEFAULT_ARCHIVE)
+            print(f"[Fluoddity] archive moved to {root / DEFAULT_ARCHIVE}")
+            return root
+        except OSError as exc:
+            # Launching matters more than migrating. The old folder is left
+            # exactly where it is, so nothing is lost.
+            print(f"[Fluoddity] could not move the old archive ({exc}); "
+                  f"starting an empty '{DEFAULT_ARCHIVE}'")
+
+    (root / DEFAULT_ARCHIVE / "thumbs").mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def get_default_keyboard_controls_path() -> Path:
@@ -101,7 +143,7 @@ def initialize_user_data():
     get_user_physics_configs_dir().mkdir(exist_ok=True)
     get_screenshots_dir().mkdir(exist_ok=True)
     get_videos_dir().mkdir(exist_ok=True)
-    get_archive_dir().mkdir(exist_ok=True)
+    migrate_legacy_archive()
 
     # Copy default keyboard controls if user's doesn't exist
     user_keyboard = get_user_keyboard_controls_path()

@@ -236,9 +236,9 @@ class App:
         from services.goal_source import GoalList
         from services.imgep_driver import ImgepDriver
         from services.thumb_cache import ThumbCache, gl_loader
-        from utilities.paths import get_archive_dir
+        from utilities.paths import DEFAULT_ARCHIVE, get_archives_root
 
-        store = ArchiveStore(get_archive_dir())
+        store = ArchiveStore(get_archives_root() / DEFAULT_ARCHIVE)
         archive = Archive(store=store)
         loaded, dropped = archive.load_from_store()
         print(f"[archive] loaded {loaded} entries ({dropped} dropped)")
