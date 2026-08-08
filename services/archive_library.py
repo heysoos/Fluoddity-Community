@@ -1,0 +1,137 @@
+"""Named archive directories on disk.
+
+Which archive is loaded IS an experimental variable: novelty is measured
+against the archive, so its contents are the search's memory. This module owns
+the directory-level half of that - naming, listing, creating, emptying and
+deleting - and nothing else.
+
+It knows about folders, not about Archive, ImgepDriver or GL, which is what
+makes it testable against tmp_path with no GPU and no CLIP. It also imports
+nothing beyond the standard library, so it is safe to import at module scope
+anywhere, including in ui/ where onnxruntime must never be pulled in.
+
+Nothing here raises for a user error. Every operation returns a Result the
+orchestrator can put in front of the user; a disk problem must never stop the
+search.
+"""
+from __future__ import annotations
+
+import unicodedata
+from dataclasses import dataclass
+from pathlib import Path
+
+MAX_NAME = 64
+CLEARED_MARK = ".cleared-"
+
+# Windows-reserved punctuation plus both separators. Removing these is what
+# guarantees a name cannot change WHICH directory a path refers to.
+_FORBIDDEN = set('\\/:*?"<>|')
+
+
+@dataclass
+class Result:
+    ok: bool
+    name: str = ""
+    message: str = ""      # user-facing; empty when ok
+
+
+def safe_name(raw) -> str:
+    """A directory name that cannot redirect a path.
+
+    Case and unicode survive - 'Dense Trails' and 'gustoy' in Cyrillic are both
+    fine names. What is removed is separators, drive-letter colons, the
+    Windows-reserved punctuation, control characters, and leading or trailing
+    dots and spaces: Windows silently trims trailing dots and spaces from
+    directory names, so a name ending in one would not round-trip.
+
+    -> "" for anything that sanitises away to nothing. Callers treat "" as a
+    refusal rather than inventing a name.
+    """
+    if not isinstance(raw, str):
+        return ""
+    kept = [
+        ch for ch in raw
+        if ch not in _FORBIDDEN and unicodedata.category(ch)[0] != "C"
+    ]
+    name = "".join(kept).strip(" .")
+    # Truncation can expose a new trailing dot, so strip again after cutting.
+    return name[:MAX_NAME].strip(" .")
+
+
+def resolve(root, name: str) -> Path:
+    """The directory for `name` under `root`, guaranteed to be inside it.
+
+    Raises ValueError if it is not. Unreachable through the UI, because
+    safe_name has already run - but delete() rmtree's what this returns, so a
+    future caller that skips safe_name must fail loudly rather than quietly
+    outside archives/.
+    """
+    base = Path(root).resolve()
+    safe = safe_name(name)
+    if not safe:
+        raise ValueError(f"not a usable archive name: {name!r}")
+    path = (base / safe).resolve()
+    if base not in path.parents:
+        raise ValueError(f"{path} escapes {base}")
+    return path
+
+
+def list_archives(root) -> list[dict]:
+    """One dict per archive directory, sorted by name.
+
+    NOT cheap enough to call per frame: an archive with 4,800 thumbnails is
+    4,800 stat calls, and ImGui re-renders every frame. The orchestrator calls
+    this on demand and caches the result on ArchiveState.archive_list.
+    """
+    base = Path(root)
+    out: list[dict] = []
+    try:
+        children = sorted(base.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return out                      # no root yet is an empty list, not an error
+    for child in children:
+        try:
+            if not child.is_dir() or CLEARED_MARK in child.name:
+                continue
+        except OSError:
+            continue                    # one bad folder must not blank the dropdown
+        out.append({
+            "name": child.name,
+            "entries": _count_entries(child),
+            "mtime": _mtime(child),
+            "size_mb": _size_mb(child),
+        })
+    return out
+
+
+def _count_entries(path: Path) -> int:
+    n = 0
+    try:
+        with open(path / "index.jsonl", "r", encoding="utf-8") as fh:
+            for line in fh:
+                if line.strip():
+                    n += 1
+    except OSError:
+        return 0
+    return n
+
+
+def _size_mb(path: Path) -> float:
+    total = 0
+    try:
+        for p in path.rglob("*"):
+            try:
+                if p.is_file():
+                    total += p.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return 0.0
+    return total / (1024.0 * 1024.0)
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
