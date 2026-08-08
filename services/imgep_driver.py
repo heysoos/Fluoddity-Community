@@ -223,7 +223,7 @@ class ImgepDriver:
         """Begin an expedition toward a specific embedding. An expedition needs
         a seed, so an empty archive falls back to expansion rather than
         starting a search from nowhere."""
-        i = self.archive.nearest(np.asarray(embedding, dtype=np.float32))
+        i = self._seed_index(np.asarray(embedding, dtype=np.float32), str(kind))
         if i is None or self.expedition_gens <= 0:
             return False
         self._goal = Goal(kind, text, np.asarray(embedding, dtype=np.float32))
@@ -367,14 +367,44 @@ class ImgepDriver:
             return (descriptor(snaps) @ self._goal.embedding).astype(np.float32)
         return contrastive(snaps, self._goal.embedding, refs, logit_scale=scale)
 
-    def _references(self):
-        """-> (references, logit_scale) for the active goal.
+    def _seed_index(self, goal_emb: np.ndarray, kind: str) -> int | None:
+        """Where the expedition starts: the archive entry that best matches the
+        goal UNDER THE SAME OBJECTIVE the expedition will be scored on.
+
+        Not Archive.nearest(), which is argmax(embeddings @ goal). For a text
+        goal that ranking is degenerate, and its winner is a NOISE TEXTURE:
+        measured 2026-08-08 over 15 unrelated prompts - galaxy, flowing water, a
+        human face, ocean waves, fire, stained glass, smoke - raw cosine
+        returned just 6 distinct seeds, and one cyan static tile won 7 of them.
+        High-frequency noise has energy everywhere, so it carries a decent
+        cosine to every phrase, and the modality gap leaves nothing else to
+        separate entries by. The same 15 prompts give 14 distinct seeds here.
+
+        That is why a text expedition visibly started from a bad image and
+        climbed nowhere: the fitness was fixed, the STARTING POINT was not.
+        """
+        e = self.archive.embeddings
+        if len(e) == 0:
+            return None
+        refs, scale = self._references(kind)
+        if refs is None or len(refs) == 0:
+            return self.archive.nearest(goal_emb)
+        fit = contrastive(e[None, :, :], goal_emb, refs, logit_scale=scale)
+        return int(np.argmax(fit))
+
+    def _references(self, kind: str | None = None):
+        """-> (references, logit_scale) for a goal of this kind.
 
         The scale differs by MODALITY, not by taste: CLIP's 100 is tuned for the
         narrow band that text-image similarity occupies, and applying it to
         image-image similarity above 0.9 floors 59.6% of a generation to zero.
+
+        `kind` is explicit because seed selection has to ask this question
+        BEFORE self._goal is assigned.
         """
-        if self._goal is not None and self._goal.kind == "text":
+        if kind is None:
+            kind = self._goal.kind if self._goal is not None else ""
+        if kind == "text":
             return self._distractor_embeddings(), TEXT_LOGIT_SCALE
         c = self.archive.centroid()
         return (None if c is None else c[None, :]), IMAGE_LOGIT_SCALE

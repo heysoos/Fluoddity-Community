@@ -544,3 +544,75 @@ def test_reset_ends_an_expedition_but_keeps_the_archive():
     d.reset()
     assert d.regime != "expedition"
     assert len(arc) == n
+
+
+# ---- where an expedition STARTS ----------------------------------------
+
+def test_the_seed_is_chosen_by_the_same_objective_the_expedition_is_scored_on():
+    """Archive.nearest() is argmax(embeddings @ goal), and for a text goal that
+    ranking is degenerate: measured over 15 unrelated prompts on a real 4784-
+    entry archive it returned 6 distinct seeds, one cyan NOISE TEXTURE winning 7
+    of them. Noise carries a decent cosine to every phrase.
+    """
+    from services.expedition_fitness import contrastive
+
+    g = GoalList()
+    g.add("coral")
+    g.ensure_embedded(FakeScorer())
+    d, arc, _ = seeded_wide(expansion_between=0, latent_share=0.0)
+    d.goals = g
+    assert d.start_expedition() is True
+    assert d._goal.kind == "text"
+
+    refs, scale = d._references("text")
+    fit = contrastive(arc.embeddings[None, :, :], d._goal.embedding, refs,
+                      logit_scale=scale)
+    assert d._x0_index == int(np.argmax(fit))
+
+
+def test_a_noise_magnet_loses_the_seed_to_the_distractor_set():
+    """The failure in one line, and the mechanism that fixes it.
+
+    High-frequency noise carries a middling cosine to EVERY phrase, so it wins
+    argmax(e @ goal) for all of them - measured on the real archive, one cyan
+    static tile was the seed for 7 of 15 unrelated prompts. What rejects it is
+    that DEFAULT_DISTRACTORS contains "random noise" and "an abstract texture":
+    the decoy scores higher against those than against the goal, so its softmax
+    probability for the target collapses.
+
+    Real entries never match a prompt the way this fixture's one-hot vectors
+    match an axis, so the decoy has to out-align them on the goal too - that is
+    exactly the situation raw cosine loses in.
+    """
+    d, arc, _ = seeded_wide(expansion_between=0)
+    goal = np.eye(DIM, dtype=np.float32)[1]
+    noise_distractor = np.eye(DIM, dtype=np.float32)[7]
+    d._distractors = noise_distractor[None, :]
+
+    ordinary = np.zeros(DIM, np.float32); ordinary[0] = 1.0; ordinary[1] = 0.2
+    ordinary /= np.linalg.norm(ordinary)
+    decoy = np.zeros(DIM, np.float32); decoy[1] = 0.4; decoy[7] = 0.9
+    decoy /= np.linalg.norm(decoy)
+    for j in range(len(arc)):
+        arc._emb[j] = ordinary
+    arc._emb[0] = decoy
+
+    assert float(decoy @ goal) > float(ordinary @ goal),         "the decoy really does out-align everything on the goal"
+    assert arc.nearest(goal) == 0, "so raw cosine seeds on it"
+    assert d._seed_index(goal, "text") != 0,         "the distractor set has to see through it"
+
+
+def test_the_seed_falls_back_to_nearest_when_there_is_nothing_to_contrast():
+    d, arc, _ = seeded_wide(expansion_between=0)
+    goal = arc.embeddings[2].copy()
+    d.archive = type("A", (), {
+        "embeddings": arc.embeddings,
+        "centroid": staticmethod(lambda: None),
+        "nearest": staticmethod(lambda g: 2),
+    })()
+    assert d._seed_index(goal, "latent") == 2
+
+
+def test_an_empty_archive_has_no_seed():
+    d, _, _ = make()
+    assert d._seed_index(np.eye(DIM, dtype=np.float32)[0], "latent") is None

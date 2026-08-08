@@ -158,6 +158,15 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   16-tile generation distinguishable to a rank-based optimizer. `contrastive()`
   has no default scale on purpose.
 
+- **Seed selection must use the SAME objective as the fitness.**
+  `Archive.nearest()` is `argmax(embeddings @ goal)`, and for a text goal its
+  winner is a noise texture: high-frequency noise carries a middling cosine to
+  every phrase, so measured over 15 unrelated prompts it returned only 6
+  distinct seeds and one cyan static tile won 7 of them. Every text expedition
+  started from the same bad image. `ImgepDriver._seed_index` uses the
+  contrastive score instead (14/15 distinct); what rejects noise is that
+  `DEFAULT_DISTRACTORS` contains "random noise" and "an abstract texture".
+
 - **`LATENT_DIMS` must stay small (8).** Two independent reasons, both measured:
   whitening equalises the components, so a large d puts the push into
   geometrically tiny directions (d=32 was a no-op, seed rank 0.1 against 41.3 at
