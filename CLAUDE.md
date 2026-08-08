@@ -124,10 +124,11 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   validates any orientation bug you like. Test the capture crop with the camera
   *panned* — a mirrored rect displaces every tile by twice the pan.
 
-- **The tournament capture crops the window-shaped view texture, so anything
-  panned or zoomed off screen is genuinely not in it** and comes back black.
-  Keep the whole canvas on screen during Auto/Explore or the edge tiles lose a
-  band.
+- **The tournament capture does not crop the window view — it re-renders the
+  canvas** at `grid*224` with an identity camera (`services/capture_view.py`).
+  Pan, zoom and window size cannot affect what the optimizer scores, and there
+  is no crop rect to get wrong. Anything that needs the *displayed* image
+  (screenshots, video) still uses `camera.assembled_texture`.
 
 - **Entry ids restart at 0 in every archive**, so `ThumbCache` must be released
   on a switch — it is keyed by thumbnail filename, which is derived from the

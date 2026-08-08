@@ -126,6 +126,11 @@ class SimulationRunner:
             screen_aspect, mouse_screen_coords, tiling_mode, view_min, view_max
         )
 
+        # The tournament capture re-renders the canvas with these same
+        # settings but an identity camera, so it needs the dict that was
+        # actually used for this frame.
+        self.last_assemble_kwargs = assemble_kwargs
+
         if motion_blur:
             self._run_with_motion_blur(
                 ui_state, speedmult, draw_mode, mouse_tex_coords, draw_power_value,

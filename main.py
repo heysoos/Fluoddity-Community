@@ -93,6 +93,7 @@ class App:
         self.auto_service = None
         self.tile_capture = None
         self.capture_blit = None
+        self.capture_view = None
         self.clip_scorer = None
         self._auto_prev_aspect = None
         self._auto_prev_speedmult = None
@@ -190,6 +191,7 @@ class App:
         try:
             from services.auto_tournament_service import AutoTournamentService
             from services.capture_blit import CaptureBlit
+            from services.capture_view import CaptureView
             from services.clip_scorer import CLIPScorer
             from services.run_logger import RunLogger
             from services.tile_capture import TileCapture
@@ -210,6 +212,7 @@ class App:
 
         self.tile_capture = TileCapture(self.ctx, self.tournament_service.grid)
         self.capture_blit = CaptureBlit(self.ctx)
+        self.capture_view = CaptureView(self.ctx, self.sim, self.camera)
         self.auto_service = AutoTournamentService(
             self.tournament_service,
             scorer=self.clip_scorer,
@@ -367,27 +370,27 @@ class App:
         self.command_handler.imgep_driver = self.imgep_driver
         return True
 
-    def _capture_tiles(self):
-        """Blit the assembled view's grid rectangle into the square capture FBO.
+    def _capture_tiles(self, ui_state):
+        """Render the tournament grid into the square capture FBO.
 
-        The source rect comes from the camera's own tex_to_screen(), so the crop
-        is exact at any window size, zoom or pan - CLIP sees the same pixels the
-        user does.
+        The canvas is re-rendered for the capture at exactly grid*224 with an
+        identity camera, so there is NO crop rect: the whole texture is the
+        grid. Where the user is looking cannot change what the optimizer
+        scores, and the capture is identical at any window size.
         """
-        tex = self.camera.assembled_texture
-        rect = self.camera.assembled_view_rect
-        if tex is None or rect is None:
-            return None
-        # The rect recorded when this texture was rendered - NOT a fresh one.
-        # This texture is a frame old; recomputing here would crop it with a
-        # camera that has since moved, pulling each tile's neighbour into its
-        # crop. Measured at grid 8: 4px for a small pan, 43px for one scroll
-        # notch of zoom.
-        lo, hi = rect
+        from services.tile_capture import TILE_PX
 
-        self.tile_capture.resize(self.tournament_service.grid)
+        kwargs = getattr(self.sim_runner, "last_assemble_kwargs", None)
+        if kwargs is None:
+            return None            # nothing rendered yet this session
+        grid = self.tournament_service.grid
+        tex = self.capture_view.render(ui_state, kwargs, grid * TILE_PX)
+        if tex is None:
+            return None
+
+        self.tile_capture.resize(grid)
         crops = self.tile_capture.capture(
-            lambda fbo: self.capture_blit.draw(tex, lo, hi)
+            lambda fbo: self.capture_blit.draw(tex, (0.0, 0.0), (1.0, 1.0))
         )
         self.ctx.screen.use()
         width, height = glfw.get_framebuffer_size(self.window)
@@ -414,7 +417,7 @@ class App:
             self.sim.reset()
             return 0
         if action is Action.CAPTURE:
-            crops = self._capture_tiles()
+            crops = self._capture_tiles(ui_state)
             if crops is not None:
                 self._last_crops = crops
                 self.command_handler.report_capture_health(crops, ui_state)

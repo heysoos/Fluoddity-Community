@@ -296,6 +296,11 @@ class Camera:
     def canvas_view_rect(self, tex_size, fb_size=None, canvas_tex_size=None):
         """Where the canvas sits inside a screen-shaped texture, as a 0..1 rect.
 
+        NOT used by the tournament capture any more - see services/capture_view.py.
+        The capture renders the canvas directly at CLIP's resolution, so it has
+        no crop rect to get wrong. If you are here because a capture looks
+        misaligned, this is the wrong file.
+
         MUST be evaluated at the moment the texture is produced and stored
         alongside it - see assembled_view_rect. Recomputing it later crops one
         frame's pixels with another frame's camera: main.py applies camera state
