@@ -34,6 +34,8 @@ class CommandHandler:
         self.archive = None
         self.goal_list = None
         self.archive_projection = None
+        # App._switch_archive; None until Explore mode has been opened once.
+        self.switch_archive = None
 
         # Preview state
         self.preview_rule_active = False  # File->load preview
@@ -171,6 +173,9 @@ class CommandHandler:
 
         # Automatic (CLIP-guided) tournament mode
         self._handle_auto_tournament(ui_state)
+
+        # Archive management, before Explore so a switch lands this frame
+        self._handle_archive_management(ui_state)
 
         # Explore (IMGEP) mode
         self._handle_explore(ui_state)
@@ -447,6 +452,67 @@ class CommandHandler:
         ast.seed_entry_id = -1
         ast.delete_entry_id = -1
         ast.refit_projection_requested = False
+
+    @staticmethod
+    def _clear_archive_flags(ast):
+        ast.switch_archive_name = ""
+        ast.new_archive_requested = False
+        ast.clear_archive_requested = False
+        ast.delete_archive_requested = False
+        ast.refresh_archive_list_requested = False
+
+    def _handle_archive_management(self, ui_state):
+        """Create, empty, delete and switch archives.
+
+        Runs BEFORE _handle_explore so a switch lands on the same frame the
+        button was pressed, and so the settings push that follows goes to the
+        archive the user just chose.
+        """
+        from services.archive_library import (clear, create, delete,
+                                              list_archives)
+        from utilities.paths import get_archives_root
+
+        ast = ui_state.archive
+        if self.switch_archive is None:
+            self._clear_archive_flags(ast)
+            return
+
+        root = get_archives_root()
+        target = ""
+
+        if ast.new_archive_requested:
+            res = create(root, ast.new_archive_name)
+            if res.ok:
+                ast.new_archive_name = ""
+                target = res.name
+            else:
+                ast.warning = res.message
+        elif ast.clear_archive_requested:
+            res = clear(root, ast.archive_name)
+            if res.ok:
+                # Same name, now an empty directory: the in-memory archive must
+                # be rebuilt or it would keep serving entries that are gone.
+                target = res.name
+            else:
+                ast.warning = res.message
+        elif ast.delete_archive_requested:
+            res = delete(root, ast.archive_name)
+            if res.ok:
+                remaining = list_archives(root)
+                target = remaining[0]["name"] if remaining else ""
+            else:
+                ast.warning = res.message
+        elif ast.switch_archive_name:
+            target = ast.switch_archive_name
+
+        if target:
+            self.switch_archive(target, ui_state)
+        elif ast.refresh_archive_list_requested:
+            # A switch refreshes the listing itself, so this is only for the
+            # Refresh button on its own.
+            ast.archive_list = list_archives(root)
+
+        self._clear_archive_flags(ast)
 
     def _handle_explore(self, ui_state):
         ast = ui_state.archive
