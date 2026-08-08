@@ -67,3 +67,43 @@ def test_the_driver_settings_the_command_handler_pushes_all_exist():
     for name in pushed:
         assert name in names, f"ArchiveState has no {name}"
         assert name in driver_attrs, f"ImgepDriver has no {name}"
+
+
+# ---- archive management ----------------------------------------------------
+
+def test_the_active_archive_defaults_to_default():
+    assert ArchiveState().archive_name == "default"
+
+
+def test_the_cached_listing_starts_empty_and_is_per_instance():
+    a, b = ArchiveState(), ArchiveState()
+    a.archive_list.append({"name": "x"})
+    assert b.archive_list == []
+
+
+def test_the_management_one_shots_start_clear():
+    ast = ArchiveState()
+    assert ast.switch_archive_name == ""
+    assert ast.new_archive_requested is False
+    assert ast.clear_archive_requested is False
+    assert ast.delete_archive_requested is False
+    assert ast.refresh_archive_list_requested is False
+
+
+def test_the_modal_buffers_start_empty():
+    ast = ArchiveState()
+    assert ast.new_archive_name == ""
+    assert ast.confirm_delete_text == ""
+
+
+def test_the_active_archive_survives_a_preferences_round_trip(tmp_path):
+    """Without this, every launch reverts to 'default' regardless of what the
+    user was working in."""
+    from state.preferences_state import (PreferencesState, load_preferences,
+                                         save_preferences)
+
+    p = tmp_path / "prefs.json"
+    prefs = PreferencesState()
+    prefs.archive_name = "dense-trails"
+    save_preferences(prefs, p)
+    assert load_preferences(p).archive_name == "dense-trails"

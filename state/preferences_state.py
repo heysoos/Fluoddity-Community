@@ -79,6 +79,9 @@ class PreferencesState:
     # Parameter locks
     parameter_locks_enabled: bool = False  # Master toggle for parameter lock feature
 
+    # Exploration archive
+    archive_name: str = "default"  # which Documents/Fluoddity/archives/<name> Explore mode loads
+
 
 def save_preferences(prefs: PreferencesState, filepath: Path | str = None) -> None:
     """Save preferences to a JSON file."""

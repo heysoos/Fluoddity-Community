@@ -10,7 +10,7 @@ N=4, about 7 ms against 2800 ms of simulation.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -19,6 +19,12 @@ class ArchiveState:
     enabled: bool = False
     running: bool = False
     show_browser: bool = False
+
+    # which archive is loaded (mirrors preferences.archive_name, for display)
+    archive_name: str = "default"
+    # cached services.archive_library.list_archives(); NOT recomputed per frame -
+    # it stats every thumbnail, and ImGui re-renders this tab every frame.
+    archive_list: list = field(default_factory=list)
 
     # rollout (shared with Auto mode's widgets, own defaults)
     grid: int = 4
@@ -65,6 +71,10 @@ class ArchiveState:
     # editing buffer for the goal list
     new_goal_text: str = ""
 
+    # modal text buffers
+    new_archive_name: str = ""
+    confirm_delete_text: str = ""
+
     # one-shot request flags, cleared by CommandHandler
     start_requested: bool = False
     pause_requested: bool = False
@@ -80,3 +90,8 @@ class ArchiveState:
     seed_entry_id: int = -1
     delete_entry_id: int = -1
     refit_projection_requested: bool = False
+    switch_archive_name: str = ""
+    new_archive_requested: bool = False
+    clear_archive_requested: bool = False
+    delete_archive_requested: bool = False
+    refresh_archive_list_requested: bool = False
