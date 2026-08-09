@@ -65,6 +65,10 @@ class _FakeArchive:
     def __init__(self, n=0, dim=8):
         self.entries = []
         self.embeddings = np.zeros((n, dim), dtype=np.float32)
+        # The real Archive carries this and the browser caches against it. A
+        # fake without one would silently exercise the getattr fallback instead
+        # of the path that actually ships.
+        self.revision = 0
 
     def __len__(self):
         return len(self.entries)
@@ -642,3 +646,83 @@ def test_the_hover_card_renders_without_a_thumbnail(gui):
     h.thumb_cache = None
     entry = h.archive_obj.entries[0]
     assert frame(lambda: h._map_hover_card(entry)) > host_only()
+
+
+# ---- the browser must not redo O(n) work every frame --------------------
+#
+# Measured on the real archives before this cache existed: the map cost 9.78 ms
+# a frame at 4808 entries and 39.92 ms at the 20000 capacity, of which the
+# projection matmul alone was 3.7 ms and 15.9 ms. None of it was new work - the
+# archive changes once a generation, roughly every 2.8 s.
+
+
+def test_the_map_reuses_its_projection_between_frames():
+    h = Harness(archive=_populated())
+    proj = _spread(h.archive_obj)
+    h.archive_projection = proj
+    first = h._map_points(h.archive_obj, proj)
+    assert h._map_points(h.archive_obj, proj) is first
+
+
+def test_admitting_an_entry_invalidates_the_map():
+    """The revision is the whole contract: if it does not move when the
+    archive does, the map freezes on stale points and no test would notice."""
+    h = Harness(archive=_populated())
+    proj = _spread(h.archive_obj)
+    first = h._map_points(h.archive_obj, proj)
+    h.archive_obj.revision += 1
+    assert h._map_points(h.archive_obj, proj) is not first
+
+
+def test_refitting_the_projection_invalidates_the_map():
+    h = Harness(archive=_populated())
+    proj = _spread(h.archive_obj)
+    first = h._map_points(h.archive_obj, proj)
+    proj.fit(h.archive_obj.embeddings)          # bumps proj.version
+    assert h._map_points(h.archive_obj, proj) is not first
+
+
+def test_the_map_colours_pins_over_their_source():
+    h = Harness(archive=_populated())
+    proj = _spread(h.archive_obj)
+    _unit, _lo, _span, colors = h._map_points(h.archive_obj, proj)
+    for e, c in zip(h.archive_obj.entries, colors.tolist()):
+        want = ArchiveWindowMixin._MAP_COLORS["pin" if e.pinned else e.source]
+        assert c == want
+
+
+def test_the_gallery_reuses_its_sort_between_frames():
+    h = Harness(archive=_populated())
+    ast = h.state.archive
+    first = h._sorted_entries(ast, h.archive_obj)
+    assert h._sorted_entries(ast, h.archive_obj) is first
+
+
+def test_changing_the_sort_mode_invalidates_the_order():
+    h = Harness(archive=_populated())
+    ast = h.state.archive
+    ast.sort_by = "novelty"
+    first = h._sorted_entries(ast, h.archive_obj)
+    ast.sort_by = "liveness"
+    second = h._sorted_entries(ast, h.archive_obj)
+    assert second is not first
+    assert [e.id for _, e in second] != [e.id for _, e in first]
+
+
+def test_the_pinned_only_filter_invalidates_the_order():
+    h = Harness(archive=_populated())
+    ast = h.state.archive
+    everything = h._sorted_entries(ast, h.archive_obj)
+    ast.pinned_only = True
+    only_pins = h._sorted_entries(ast, h.archive_obj)
+    assert len(only_pins) < len(everything)
+    assert all(e.pinned for _, e in only_pins)
+
+
+def test_admitting_an_entry_invalidates_the_order():
+    h = Harness(archive=_populated())
+    ast = h.state.archive
+    first = h._sorted_entries(ast, h.archive_obj)
+    h.archive_obj.entries.append(h.archive_obj.entries[0])
+    h.archive_obj.revision += 1
+    assert len(h._sorted_entries(ast, h.archive_obj)) == len(first) + 1

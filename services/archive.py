@@ -126,6 +126,13 @@ class Archive:
         self._next_id = 0
         self._refresh_cursor = 0
         self._since_flush = 0
+        # Bumped by anything that changes what a viewer would draw: which
+        # entries exist, or their novelty. The browser derives a PCA projection
+        # and a sort order from those, both O(n) and both unchanged between
+        # generations - without a version to compare, the only way to know they
+        # are still valid is to recompute them every frame, which is what made
+        # the browser cost ~10x the frame time. Monotonic, never reset.
+        self.revision = 0
         self.n_nonfinite = 0
         self.n_rejected = 0
         self.n_evicted = 0
@@ -195,6 +202,7 @@ class Archive:
         for j, i in enumerate(idx):
             self.entries[int(i)].novelty = float(nov[j])
         self._refresh_cursor = int((start + n) % self._n)
+        self.revision += 1
         return n
 
     def rescore_all(self) -> int:
@@ -220,6 +228,7 @@ class Archive:
         for i, e in enumerate(self.entries):
             e.novelty = float(nov[i])
         self._refresh_cursor = 0
+        self.revision += 1
         return self._n
 
     def centroid(self) -> np.ndarray | None:
@@ -304,6 +313,7 @@ class Archive:
         if self.store is not None:
             self.store.append_index(asdict(entry))
         self._since_flush += 1
+        self.revision += 1
         return entry
 
     # ---- capacity ------------------------------------------------------
@@ -359,6 +369,7 @@ class Archive:
             self.entries[i] = self.entries[last]
         self.entries.pop()
         self._n -= 1
+        self.revision += 1
         if self._refresh_cursor > self._n:
             self._refresh_cursor = 0
 

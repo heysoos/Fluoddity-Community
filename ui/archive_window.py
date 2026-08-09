@@ -423,14 +423,27 @@ class ArchiveWindowMixin:
         imgui.end()
 
     def _sorted_entries(self, ast, arc):
+        """The gallery's display order, cached against the archive revision.
+
+        Sorting every entry to show 240 of them costs 1.5 ms at 4808 entries
+        and 8.0 ms at the 20000 capacity - per frame, for an order that only
+        changes when the archive does.
+        """
+        key = (ast.sort_by, ast.pinned_only, getattr(arc, "revision", None))
+        hit = getattr(self, "_sort_cache", None)
+        if hit is not None and hit[0] is arc and hit[1] == key:
+            return hit[2]
+
         entries = list(enumerate(arc.entries))
         if ast.pinned_only:
             entries = [(i, e) for i, e in entries if e.pinned]
-        key = {"novelty": lambda p: -p[1].novelty,
-               "liveness": lambda p: -p[1].liveness,
-               "recency": lambda p: -p[1].ts}.get(ast.sort_by,
-                                                  lambda p: -p[1].novelty)
-        return sorted(entries, key=key)
+        keyfn = {"novelty": lambda p: -p[1].novelty,
+                 "liveness": lambda p: -p[1].liveness,
+                 "recency": lambda p: -p[1].ts}.get(ast.sort_by,
+                                                    lambda p: -p[1].novelty)
+        out = sorted(entries, key=keyfn)
+        self._sort_cache = (arc, key, out)
+        return out
 
     def _render_gallery(self, ast, arc):
         modes = ["novelty", "recency", "liveness"]
@@ -514,12 +527,10 @@ class ArchiveWindowMixin:
         imgui.text_colored(imgui.ImVec4(*_DIM),
                            f"{ast.map_zoom:.1f}x - scroll to zoom, drag to pan")
 
-        pts = proj.transform(arc.embeddings)
-        if not len(pts):
+        cached = self._map_points(arc, proj)
+        if cached is None:
             return
-        lo = pts.min(axis=0)
-        span = np.maximum(pts.max(axis=0) - lo, 1e-6)
-        unit = (pts - lo) / span                    # whole archive in [0, 1]^2
+        unit, lo, span, colors = cached
 
         size = imgui.ImVec2(imgui.get_content_region_avail().x, 320)
         origin = imgui.get_cursor_screen_pos()
@@ -538,18 +549,21 @@ class ArchiveWindowMixin:
         # Only what is actually on the canvas: at 200x almost nothing is, and a
         # draw call per archive entry per frame is the cost otherwise.
         on = ((xs >= origin.x) & (xs <= far.x) & (ys >= origin.y) & (ys <= far.y))
-        mouse = imgui.get_mouse_pos()
+        sel = np.flatnonzero(on)
+        # .tolist() first: indexing a numpy array with a Python int inside the
+        # loop builds a scalar object per access, which costs more than the
+        # draw call it feeds.
+        px, py = xs[sel].tolist(), ys[sel].tolist()
+        pc = colors[sel].tolist()
+        for x, y, c in zip(px, py, pc):
+            draw.add_circle_filled(imgui.ImVec2(x, y), 3.0, c)
+
         best_i, best_d = -1, 1e9
-        for i in np.flatnonzero(on):
-            e = arc.entries[int(i)]
-            x, y = float(xs[i]), float(ys[i])
-            draw.add_circle_filled(
-                imgui.ImVec2(x, y), 3.0,
-                self._MAP_COLORS.get("pin" if e.pinned else e.source,
-                                     self._MAP_COLORS["expansion"]))
-            d = abs(mouse.x - x) + abs(mouse.y - y)
-            if d < best_d:
-                best_i, best_d = int(i), d
+        if hovering and len(sel):
+            mouse = imgui.get_mouse_pos()
+            d = np.abs(xs[sel] - mouse.x) + np.abs(ys[sel] - mouse.y)
+            j = int(np.argmin(d))
+            best_i, best_d = int(sel[j]), float(d[j])
 
         goal_pt = getattr(self, "archive_goal_point", None)
         if goal_pt is not None:
@@ -565,6 +579,40 @@ class ArchiveWindowMixin:
                 ast.selected_entry_id = arc.entries[best_i].id
 
         self._render_map_selection(ast, arc)
+
+    def _map_points(self, arc, proj):
+        """-> (unit-square positions, lo, span, per-entry colours), or None.
+
+        Cached against (archive revision, projection version), because neither
+        operand of the projection changes between generations while the map is
+        redrawn 60 times a second. Measured on the real archives: the transform
+        alone is 3.8 ms at 4808 entries, 5.8 ms at 8002 and 20 ms at the 20000
+        capacity - most of what the browser cost, and none of it new work.
+
+        Colours are resolved here too: the pin/source lookup is a dict hit and
+        a conditional per entry, which belongs with the rest of the per-entry
+        work rather than in the draw loop.
+        """
+        key = (getattr(arc, "revision", None), getattr(proj, "version", None),
+               len(arc))
+        hit = getattr(self, "_map_cache", None)
+        if hit is not None and hit[0] is arc and hit[1] is proj and hit[2] == key:
+            return hit[3]
+
+        pts = proj.transform(arc.embeddings)
+        if not len(pts):
+            return None
+        lo = pts.min(axis=0)
+        span = np.maximum(pts.max(axis=0) - lo, 1e-6)
+        unit = (pts - lo) / span                    # whole archive in [0, 1]^2
+        fallback = self._MAP_COLORS["expansion"]
+        colors = np.array(
+            [self._MAP_COLORS.get("pin" if e.pinned else e.source, fallback)
+             for e in arc.entries], dtype=np.int64)
+
+        out = (unit, lo, span, colors)
+        self._map_cache = (arc, proj, key, out)
+        return out
 
     @staticmethod
     def _map_home(ast) -> None:

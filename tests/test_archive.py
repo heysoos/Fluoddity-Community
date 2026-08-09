@@ -505,3 +505,51 @@ def test_an_archive_saved_before_novelty_was_persisted_still_loads(tmp_path):
     assert (loaded, dropped) == (12, 0)
     assert not (tmp_path / "vectors.npz").with_suffix(".npz.bad").exists()
     assert not any(e.novelty >= 0.999 for e in b.entries)
+
+
+# ---- revision ------------------------------------------------------------
+#
+# The browser derives a PCA projection and a sort order from the archive, both
+# O(n). Without a version to compare against, the only safe assumption is that
+# they are stale, so they were recomputed 60 times a second - 40 ms a frame at
+# the 20000 capacity. Every mutation below has to move it or the map freezes.
+
+
+def test_admission_moves_the_revision():
+    a = fresh(capacity=10, liveness_min=0.0)
+    before = a.revision
+    a.consider(cand([1, 0, 0, 0]), 1.0)
+    assert a.revision > before
+
+
+def test_a_rejected_candidate_does_not_move_the_revision():
+    """Nothing a viewer draws changed, so nothing it caches need be thrown
+    away."""
+    a = fresh(capacity=10, liveness_min=0.5)
+    a.consider(cand([1, 0, 0, 0]), 1.0)
+    before = a.revision
+    assert a.consider(cand([0, 1, 0, 0], liveness=0.01), 1.0) is None
+    assert a.revision == before
+
+
+def test_eviction_moves_the_revision():
+    a = fresh(capacity=2, liveness_min=0.0)
+    for i in range(3):
+        a.consider(cand([float(i), 1, 0, 0]), 1.0 - 0.1 * i)
+    before = a.revision
+    assert a.prune_to_capacity() == 1
+    assert a.revision > before
+
+
+def test_rescoring_moves_the_revision():
+    """Novelty is a displayed column and the gallery sorts on it, so a sweep
+    that leaves the revision alone shows the old order."""
+    a = fresh(capacity=10, liveness_min=0.0)
+    for i in range(4):
+        a.consider(cand([float(i), 1, 0, 0]), 1.0)
+    before = a.revision
+    a.rescore_all()
+    assert a.revision > before
+    partial = a.revision
+    a.refresh(2)
+    assert a.revision > partial

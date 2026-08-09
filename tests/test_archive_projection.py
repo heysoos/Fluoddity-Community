@@ -171,3 +171,23 @@ def test_the_dominant_component_carries_the_most_variance():
     p = Projection(n_components=2)
     p.fit(_structured(400, 10, rng))
     assert p.variances[0] > 2.0 * p.variances[1]
+
+
+def test_fitting_moves_the_version():
+    """The map caches transform()'s output against this. A refit that leaves
+    it alone would keep drawing the old components' layout."""
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(50, 16)).astype(np.float32)
+    p = Projection()
+    assert p.version == 0
+    assert p.fit(x) is True
+    first = p.version
+    assert first > 0
+    assert p.fit(x) is True
+    assert p.version > first
+
+
+def test_a_failed_fit_leaves_the_version_alone():
+    p = Projection()
+    assert p.fit(np.zeros((2, 16), dtype=np.float32)) is False
+    assert p.version == 0

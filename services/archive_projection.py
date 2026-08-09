@@ -23,6 +23,10 @@ class Projection:
         # along a dominant axis and a minor one. See goal_source.latent_goal.
         self.variances: np.ndarray | None = None
         self._prev: np.ndarray | None = None
+        # Bumped on every successful fit, so a view can cache transform()'s
+        # output - an (n, dim) @ (dim, 2) matmul - instead of redoing it per
+        # frame. See ArchiveWindowMixin._map_points.
+        self.version = 0
 
     @property
     def fitted(self) -> bool:
@@ -56,6 +60,7 @@ class Projection:
         # eigenvalue, and a negative variance becomes a NaN standard deviation.
         self.variances = np.maximum(vals[order], 0.0).astype(np.float32)
         self._prev = comp.copy()
+        self.version += 1
         return True
 
     def transform(self, embeddings: np.ndarray) -> np.ndarray:
