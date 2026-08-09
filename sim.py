@@ -108,8 +108,13 @@ class Sim:
         # Slot 0 is manual mode's brain, tournament mode indexes by tile, and
         # multi-load indexes by config - one buffer for all three. Fixed stride,
         # so a layout change never resizes it.
+        # Explicitly zeroed: ctx.buffer(reserve=) does NOT zero memory, and the
+        # shader's 'no brain loaded' probe reads slot 0 directly. Uninitialised
+        # garbage there would silently suppress the startup fallback. Measured:
+        # a bare reserve left 13 nonzero floats in this buffer.
         self.multi_load_rule_buffer = self.ctx.buffer(
             reserve=MAX_MULTI_LOAD_CONFIGS * MAX_BRAIN_FLOATS * 4)
+        self.multi_load_rule_buffer.clear()
 
         # Bind entity and rule buffers
         self.entities.bind_to_storage_buffer(0)

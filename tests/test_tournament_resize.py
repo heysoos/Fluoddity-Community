@@ -77,8 +77,8 @@ def test_shader_has_zero_rule_fallback():
     shaders = Path(__file__).resolve().parent.parent / "shaders"
 
     src = (shaders / "entity_update.glsl").read_text()
-    i = src.index("bool blank = brain_params[brain_base]")
-    block = src[i:i + 400]
+    i = src.index("bool blank =")
+    block = src[i:i + 600]
     assert "g_brain_fallback = true" in block, "a zeroed genome buffer is not detected"
 
     dispatch = (shaders / "brains" / "_dispatch.glsl").read_text()

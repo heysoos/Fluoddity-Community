@@ -531,7 +531,13 @@ void main() {
 
     //Same two-coefficient probe as the old all-zero Rule check: index 0 is the
     //first frequency component, index 40 the first amplitude of centre 5.
-    bool blank = brain_params[brain_base]==0.0 && brain_params[brain_base+40u]==0.0;
+    //
+    //Fourier only: the fallback generates a FourierCenter[10], so it is
+    //meaningful for no other layout. Every other modality relies on the host
+    //having uploaded a brain, which it does on every layout change.
+    bool blank = BRAIN_MODALITY == 0
+              && brain_params[brain_base]==0.0
+              && brain_params[brain_base+40u]==0.0;
     if(blank){
         g_brain_fallback = true;
         g_brain_seed = (TOURNAMENT_MODE == 1)
@@ -544,8 +550,29 @@ void main() {
     // the MUTATED values, which is why it goes through brain_at().
     if(WRITE_RULES) {
         uint out_base = index * uint(BRAIN_LEN);
-        for(int i = 0; i < BRAIN_LEN; i++) {
-            particle_brains[out_base + uint(i)] = brain_at(brain_base, i);
+        if(g_brain_fallback) {
+            // The particle is running a GENERATED rule; brain_params holds the
+            // blank buffer that triggered the fallback. Writing that instead
+            // makes click-to-adopt copy zeros, which re-blanks slot 0 on apply
+            // and flips every cohort onto its own random rule - most sluggish,
+            // a few lively. Write what the particle is actually using.
+            FourierCenter[10] fc = generate_random_centers(g_brain_seed);
+            for(int c = 0; c < 10; c++) {
+                if(c * 8 + 7 >= BRAIN_LEN) break;
+                uint o = out_base + uint(c * 8);
+                particle_brains[o + 0u] = fc[c].frequency.x;
+                particle_brains[o + 1u] = fc[c].frequency.y;
+                particle_brains[o + 2u] = fc[c].frequency.z;
+                particle_brains[o + 3u] = fc[c].frequency.w;
+                particle_brains[o + 4u] = fc[c].amplitude.x;
+                particle_brains[o + 5u] = fc[c].amplitude.y;
+                particle_brains[o + 6u] = fc[c].amplitude.z;
+                particle_brains[o + 7u] = fc[c].amplitude.w;
+            }
+        } else {
+            for(int i = 0; i < BRAIN_LEN; i++) {
+                particle_brains[out_base + uint(i)] = brain_at(brain_base, i);
+            }
         }
     }
 

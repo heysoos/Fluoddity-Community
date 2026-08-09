@@ -1,0 +1,88 @@
+"""Click-to-adopt must read back the brain the particle is ACTUALLY running.
+
+Needs a real GL context, so it skips where there is none (CI). It exists
+because the whole CPU-side suite passed while adoption copied zeros: the bug
+lived entirely in what the compute shader chose to write.
+"""
+import numpy as np
+import pytest
+
+moderngl = pytest.importorskip("moderngl")
+
+
+@pytest.fixture(scope="module")
+def ctx():
+    try:
+        c = moderngl.create_standalone_context(require=430)
+    except Exception as exc:                      # no GPU / no driver
+        pytest.skip(f"no standalone GL context: {exc}")
+    yield c
+
+
+@pytest.fixture(scope="module")
+def sim(ctx):
+    from sim import Sim
+
+    return Sim(ctx, world_size=1.0, canvas_aspect_ratio="1:1",
+               particle_density=0.01)
+
+
+def _adopt(sim, ctx, entity_id=0):
+    from state import SimState
+    from utilities.gl_helpers import readback_rule
+
+    st = SimState()
+    st.MUTATION_SCALE = 0.0
+    sim.request_rule_buffer_update(entity_id)
+    sim.apply_state(st)
+    sim.entity_update(ctx)
+    return readback_rule(sim.get_rule_buffer(), entity_id, sim.brain_layout)
+
+
+def test_adopting_a_loaded_brain_returns_it(sim, ctx):
+    from services.genome import random_genome
+
+    genome = random_genome(np.random.default_rng(0))
+    sim.apply_rule(genome)
+    assert np.allclose(_adopt(sim, ctx), genome, atol=1e-5)
+
+
+def test_adopting_while_the_fallback_is_active_does_not_return_zeros(sim, ctx):
+    """With no brain loaded the particle runs a generated per-cohort rule. The
+    readback must be THAT rule, not the blank buffer behind it.
+
+    Returning zeros re-blanks the buffer on apply, which flips every cohort to
+    its own random rule - most sluggish, a few lively. That was the reported
+    symptom.
+    """
+    sim.apply_rule(None)
+    rule = _adopt(sim, ctx)
+    assert not np.all(rule == 0.0), (
+        "adoption copied the blank buffer instead of the running fallback rule"
+    )
+    assert np.all(np.isfinite(rule))
+    assert np.abs(rule[:, :4]).max() <= 3.0 + 1e-4, "frequency out of range"
+    assert np.abs(rule[:, 4:]).max() <= 1.0 + 1e-4, "amplitude out of range"
+
+
+def test_adopting_the_fallback_is_stable_under_reapply(sim, ctx):
+    """Adopt, apply, adopt again -> the same rule. If the first adoption
+    returned zeros this oscillates between blank and generated forever."""
+    sim.apply_rule(None)
+    first = _adopt(sim, ctx)
+    sim.apply_rule(first)
+    second = _adopt(sim, ctx)
+    assert np.allclose(first, second, atol=1e-5)
+
+
+def test_the_brain_buffer_starts_zeroed(ctx):
+    """ctx.buffer(reserve=) does not zero memory. Slot 0 must be all-zero or
+    the 'no brain loaded' probe reads uninitialised garbage and the startup
+    fallback silently does not fire."""
+    from sim import Sim
+
+    s = Sim(ctx, world_size=1.0, canvas_aspect_ratio="1:1", particle_density=0.01)
+    raw = np.frombuffer(s.multi_load_rule_buffer.read(), dtype=np.float32)
+    assert np.all(raw == 0.0), (
+        f"{int(np.count_nonzero(raw))} uninitialised floats in the brain buffer"
+    )

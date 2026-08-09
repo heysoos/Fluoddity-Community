@@ -96,9 +96,24 @@ def test_particle_brains_are_written_only_when_requested():
     frame when click-to-adopt asks for it."""
     src = read("shaders/entity_update.glsl")
     i = src.index("if(WRITE_RULES)")
-    body = src[i:i + 300]
+    body = src[i:i + 1600]
     assert "particle_brains[" in body
     assert "BRAIN_LEN" in body
+
+
+def test_the_writeback_emits_the_fallback_rule_not_the_blank_buffer():
+    """When the fallback is active the particle runs a GENERATED rule while
+    brain_params still holds the blank buffer that triggered it. Writing the
+    buffer made click-to-adopt copy zeros, which re-blanked slot 0 and flipped
+    every cohort onto its own random rule. Guarded at source as well as on the
+    GPU (tests/test_brain_readback_gpu.py) because CI has no GPU."""
+    src = read("shaders/entity_update.glsl")
+    i = src.index("if(WRITE_RULES)")
+    body = src[i:i + 1600]
+    j = body.index("g_brain_fallback")
+    assert "generate_random_centers" in body[j:], (
+        "the fallback branch of the writeback does not emit the generated rule"
+    )
 
 
 def test_pack_brains_pads_each_brain_to_the_stride():
