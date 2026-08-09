@@ -167,9 +167,18 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   contrastive score instead (14/15 distinct); what rejects noise is that
   `DEFAULT_DISTRACTORS` contains "random noise" and "an abstract texture".
   The seed is then SAMPLED with `p ~ fit^alpha` - E&E's parent rule, same
-  alpha - so repeating a goal explores a different trajectory. Measured ESS at
-  alpha=4 is 47-1584 of 4808, and it self-adjusts: it concentrates when few
-  entries match the goal and stays broad when many do.
+  alpha - so repeating a goal explores a different trajectory.
+
+- **The seed pool is a BAND on effective sample size, never a target.** How
+  concentrated a goal's matches are is real information: measured over 20
+  prompts against 4784 entries, ESS at alpha=4 ran 3.1 ("a photograph of a
+  cat" - the archive genuinely holds almost nothing cat-like) to 1973 ("circuit
+  board traces" - it holds a great deal). Pinning ESS to a value would tell the
+  cat prompt it has 64 good seeds when it has three. `banded_alpha` only clips
+  the ends, leaving 6 of those 12 prompts untouched. Two further traps it
+  handles: the floor is capped at N/8, because a floor demands candidates that
+  may not exist; and `effective_sample_size` works in log space, because
+  `w**alpha` overflows float64 inside the bracket bisection explores.
 
 - **`LATENT_DIMS` must stay small (8).** Two independent reasons, both measured:
   whitening equalises the components, so a large d puts the push into

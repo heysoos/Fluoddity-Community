@@ -235,6 +235,13 @@ class ArchiveWindowMixin:
         imgui.text(f"Archive: {st['archive_size']}   "
                    f"threshold {st['threshold']:.3f}   "
                    f"admitting {100.0 * st['admission_rate']:.0f}%")
+        # The seed pool actually used, so the band is legible rather than a
+        # pair of numbers with no visible effect.
+        if st.get("seed_ess"):
+            imgui.text_colored(
+                imgui.ImVec4(*_DIM),
+                f"Seed pool: {st['seed_ess']:.0f} entries "
+                f"(alpha {st['seed_alpha']:.1f})")
         if st.get("blocked_by_pins"):
             imgui.text_colored(
                 imgui.ImVec4(*_WARN),
@@ -338,6 +345,25 @@ class ArchiveWindowMixin:
             "Expedition Sigma", ast.expedition_sigma, 0.01, 1.0)
         _, ast.latent_share = imgui.slider_float(
             "Latent Goal Share", ast.latent_share, 0.0, 1.0)
+        _, ast.seed_ess_min = imgui.slider_float(
+            "Seed Pool Min", ast.seed_ess_min, 1.0, 128.0)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Fewest archive entries effectively in the running as a "
+                "starting point.\n\nA floor stops a repeated goal retracing "
+                "one trajectory. It cannot invent candidates that do not "
+                "exist - it is capped at an eighth of the archive, so a goal "
+                "only two entries match stays concentrated on those two.")
+        _, ast.seed_ess_max = imgui.slider_float(
+            "Seed Pool Max", ast.seed_ess_max, 16.0, 4096.0)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Most archive entries effectively in the running.\n\nWithout "
+                "a ceiling this grows with the archive - a goal much of the "
+                "archive matches drifts from ~90 entries at 300 to ~1600 at "
+                "4800 - until the goal stops influencing the seed at all.\n\n"
+                "Between the two bounds the natural spread is left alone: how "
+                "concentrated a goal's matches are is real information.")
         # "Extrapolation (beta)" was here. The latent goal no longer
         # extrapolates away from the centroid - it extrapolates in the archive's
         # principal subspace, in whitened units, and no value of beta made the

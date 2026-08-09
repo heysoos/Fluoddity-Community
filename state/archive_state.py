@@ -58,6 +58,16 @@ class ArchiveState:
     expedition_sigma: float = 0.1
     latent_share: float = 0.5
     goal_order: str = "round_robin"  # or "least_matched"
+    # How many archive entries are effectively in the running as an expedition
+    # seed. A BAND, not a target: measured over 20 varied prompts against a
+    # 4784-entry archive, ESS at alpha=4 ran 3.1 ("a photograph of a cat" - the
+    # archive really does hold almost nothing cat-like) to 1973 ("circuit board
+    # traces" - it holds a great deal). That spread is signal. The band only
+    # stops the ends: too peaked repeats one trajectory, too flat ignores the
+    # goal, and ESS/N is roughly constant per goal so a diffuse goal drifts
+    # toward ~6600 as the archive fills to capacity.
+    seed_ess_min: float = 8.0
+    seed_ess_max: float = 512.0
 
     # browser view
     sort_by: str = "novelty"         # novelty | recency | liveness

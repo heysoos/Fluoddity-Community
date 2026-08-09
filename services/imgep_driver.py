@@ -36,7 +36,11 @@ from services.expedition_fitness import (
 )
 from services.genome_spec import BRAIN_SPEC, encode
 from services.goal_source import LATENT_DIMS, Goal, latent_goal
-from services.novelty import sample_by_novelty
+from services.novelty import (
+    banded_alpha,
+    effective_sample_size,
+    sample_by_novelty,
+)
 from services.optimizers import make_optimizer
 from services.physics_genome import PHYSICS_DIM, PHYSICS_PARAMS, encode_physics
 
@@ -80,6 +84,10 @@ class ImgepDriver:
         self.expedition_sigma = 0.1      # E&E's value; deliberately << sigma0
         self.latent_share = 0.5
         self.goal_order = "round_robin"  # or "least_matched"
+        # Band on the seed pool, not a target - the spread of ESS across goals
+        # is real information about the archive. See novelty.banded_alpha.
+        self.seed_ess_min = 8.0
+        self.seed_ess_max = 512.0
 
         # The search's OWN projection, separate from the map's 2-component one:
         # refitting between 2 and 8 components every frame would thrash both.
@@ -92,6 +100,8 @@ class ImgepDriver:
         self._since_expedition = 0
         self._x0_index: int | None = None
         self._last_descriptors: np.ndarray | None = None
+        self._last_seed_ess = 0.0
+        self._last_seed_alpha = 0.0
 
         self.gen = 0
         self._last_score_label = "novelty"
@@ -137,6 +147,8 @@ class ImgepDriver:
             "sigma": self.sigma,
             "algorithm": self.algorithm,
             "prompt": self.goal_label,
+            "seed_ess": float(self._last_seed_ess),
+            "seed_alpha": float(self._last_seed_alpha),
         }
 
     # ---- driver interface ----------------------------------------------
@@ -388,12 +400,9 @@ class ImgepDriver:
         every expedition toward a given goal from the identical entry, so
         repeating a goal could only ever retrace one trajectory.
 
-        Measured 2026-08-08 at alpha=4 over the real archive, the effective
-        sample size runs 47-1584 of 4808 entries, and it self-adjusts in the
-        right direction: a goal only a few entries match well concentrates
-        ("flowing water", ESS 47) while a goal much of the archive already
-        matches stays broad ("glowing coral", ESS 1584), which is exactly when
-        the choice of seed matters least.
+        alpha is then BANDED, not fixed and not solved to a target: see
+        novelty.banded_alpha. How concentrated a goal's matches are is real
+        information about the archive, so the band only clips the ends.
         """
         e = self.archive.embeddings
         if len(e) == 0:
@@ -402,9 +411,12 @@ class ImgepDriver:
         if refs is None or len(refs) == 0:
             return self.archive.nearest(goal_emb)
         fit = contrastive(e[None, :, :], goal_emb, refs, logit_scale=scale)
+        a = banded_alpha(fit, self.alpha, self.seed_ess_min, self.seed_ess_max)
+        self._last_seed_ess = effective_sample_size(fit, a)
+        self._last_seed_alpha = a
         # A goal every tile floors on leaves fit all-zero; sample_by_novelty
         # falls back to uniform there rather than dividing by zero.
-        return int(sample_by_novelty(fit, 1, self.rng, self.alpha)[0])
+        return int(sample_by_novelty(fit, 1, self.rng, a)[0])
 
     def _references(self, kind: str | None = None):
         """-> (references, logit_scale) for a goal of this kind.

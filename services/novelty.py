@@ -80,6 +80,106 @@ def knn_novelty(queries: np.ndarray, reference: np.ndarray, k: int = 10,
     )
 
 
+def effective_sample_size(weights: np.ndarray, alpha: float = 1.0) -> float:
+    """Kish ESS of p proportional to w^alpha: (sum w^a)^2 / sum w^(2a).
+
+    How many entries are EFFECTIVELY in the running. N means uniform - the
+    score is being ignored - and 1 means argmax. An all-zero weight vector is
+    uniform by convention, matching sample_by_novelty's own fallback.
+
+    Computed in log space. Naively, w**alpha overflows float64 well within the
+    alpha range bisection explores - w=21 at alpha=256 is already 1e338 - and an
+    inf makes the ratio NaN. Shifting by the maximum is exact here rather than
+    approximate: the shift contributes e^M to the numerator squared and e^(2M)
+    to the denominator, so it cancels identically.
+    """
+    w = np.clip(np.asarray(weights, dtype=np.float64).reshape(-1), 0.0, None)
+    n = w.size
+    if n == 0:
+        return 0.0
+    a = float(alpha)
+    if a <= 0.0:
+        return float(n)
+    pos = w > 0.0
+    if not pos.any():
+        return float(n)
+    ln = a * np.log(w[pos])
+    u = np.exp(ln - ln.max())
+    s1 = float(u.sum())
+    s2 = float(np.dot(u, u))
+    return float(s1 * s1 / s2) if s2 > 0.0 else float(n)
+
+
+def alpha_for_ess(weights, target: float, lo: float = 0.0, hi: float = 512.0,
+                  iters: int = 40) -> float:
+    """The alpha whose ESS is `target`, by bisection on [lo, hi].
+
+    Well posed because ESS is monotone NON-INCREASING in alpha for alpha >= 0.
+    Writing S(t) = log sum_i exp(t * log w_i), we have
+    log ESS(a) = 2 S(a) - S(2a), so d/da log ESS = 2[S'(a) - S'(2a)] <= 0:
+    log-sum-exp is convex, so S' is non-decreasing. A monotone function has at
+    most one crossing, so bisection cannot land on the wrong branch.
+    """
+    if effective_sample_size(weights, lo) <= target:
+        return float(lo)
+    if effective_sample_size(weights, hi) >= target:
+        return float(hi)
+    for _ in range(int(iters)):
+        mid = 0.5 * (lo + hi)
+        if effective_sample_size(weights, mid) > target:
+            lo = mid
+        else:
+            hi = mid
+    return float(0.5 * (lo + hi))
+
+
+# Bisection's upper bracket. 64 is not enough: a large archive whose scores
+# barely separate needs a very sharp exponent to bring ESS down, and the
+# bracket end binds silently. Safe at any size because ESS is computed in log
+# space - see effective_sample_size.
+ALPHA_CAP = 512.0
+
+
+def banded_alpha(weights, alpha: float, ess_min: float, ess_max: float,
+                 alpha_cap: float = ALPHA_CAP) -> float:
+    """`alpha`, adjusted ONLY if its ESS falls outside [ess_min, ess_max].
+
+    A band rather than a target, because the spread of ESS across goals is real
+    signal and a target would destroy it. Measured 2026-08-08 over 20 varied
+    prompts against a 4784-entry archive, ESS at alpha=4 ran 3.1 to 1973 - and
+    the ordering is semantic: the archive genuinely holds almost nothing like
+    "a photograph of a cat" (3.1) and a great deal that could pass for "circuit
+    board traces" (1973). Pinning ESS to 64 would tell the cat prompt it has 64
+    good seeds when it has three.
+
+    The band exists only to stop the degenerate ends: too peaked and a repeated
+    goal retraces one trajectory, too flat and the goal stops influencing the
+    seed at all. The latter is not hypothetical - ESS/N is roughly constant per
+    goal, so a diffuse goal drifts from ESS 92 at 300 entries to 1602 at 4808,
+    heading for ~6600 at the 20000 capacity.
+
+    This mirrors adaptive resampling in particle filters, which triggers on an
+    ESS THRESHOLD rather than steering ESS to a value.
+
+    The floor is capped at N/8, because a floor is a demand for candidates that
+    may not exist: asking for 8 out of a 12-entry archive forces two thirds of
+    it into the pool and makes the goal almost irrelevant. In the app an
+    expedition needs len(archive) >= seed_n = 256, where the default floor of 8
+    is 3% and the cap never binds - it is a guard for small archives, and for
+    anyone who raises the floor a long way.
+    """
+    n = int(np.asarray(weights).size)
+    ess_min = min(float(ess_min), n / 8.0)
+    e = effective_sample_size(weights, alpha)
+    if e > float(ess_max):
+        # ESS falls as alpha rises, so sharpen: search above the current alpha.
+        return alpha_for_ess(weights, float(ess_max), lo=float(alpha),
+                             hi=float(alpha_cap))
+    if e < float(ess_min):
+        return alpha_for_ess(weights, float(ess_min), lo=0.0, hi=float(alpha))
+    return float(alpha)
+
+
 def sample_by_novelty(novelty: np.ndarray, n: int, rng, alpha: float = 4.0):
     """Indices sampled with p proportional to NOV^alpha, with replacement.
 
