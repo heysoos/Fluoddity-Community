@@ -259,16 +259,19 @@ class RandomSearchOptimizer(_BaseOptimizer):
 class GAOptimizer(_BaseOptimizer):
     """Manual mode's operator, driven by CLIP instead of by a human.
 
-    Reuses services.genome.mutate/crossover, applied in z-space by reshaping to
-    the (10, 8) layout those operators expect.
+    For Fourier it reuses services.genome.mutate/crossover, applied in z-space
+    by reshaping to the (10, 8) layout those operators expect. Other modalities
+    have no such row structure and get a generic per-gene operator - see
+    _breed().
     """
 
     name = "GA"
     ELITES = 4
     MUT = 0.25
 
-    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None):
+    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
         super().__init__(dim, popsize, sigma0, seed, x0)
+        self._layout = layout
         self._rng = np.random.default_rng(seed)
         self._pop = self._fresh(popsize)
         self._told = False
@@ -297,12 +300,32 @@ class GAOptimizer(_BaseOptimizer):
         elites = z[order[: min(self.ELITES, n)]]
         nxt = [e.copy() for e in elites]
         while len(nxt) < n:
-            a = elites[self._rng.integers(len(elites))].reshape(-1, 8)
-            b = elites[self._rng.integers(len(elites))].reshape(-1, 8)
-            child = crossover(a, b, self._rng)
-            child = mutate(child, self.MUT, self._rng)
-            nxt.append(child.reshape(-1).astype(np.float32))
+            a = elites[self._rng.integers(len(elites))]
+            b = elites[self._rng.integers(len(elites))]
+            nxt.append(self._breed(a, b))
         self._pop = np.array(nxt[:n], dtype=np.float32)
+
+    def _breed(self, a, b):
+        """One child from two elites, in z-space.
+
+        Fourier keeps per-CENTRE crossover, because a centre is a unit: its
+        eight floats are one frequency vector and one amplitude, and splitting
+        them apart makes a child that is neither parent's feature. No other
+        modality has that row structure - Gabor is 14 floats, MLP is not a grid
+        - so they get uniform per-gene crossover, which is the honest generic
+        operator. Blending would be worse than either: it invents values neither
+        parent held.
+
+        reshape(-1, 8) was also a hard error for any length not divisible by 8,
+        which MLP at H=16 (148 floats) is.
+        """
+        if self._layout is None or self._layout.modality == "fourier":
+            child = crossover(a.reshape(-1, 8), b.reshape(-1, 8), self._rng)
+            return mutate(child, self.MUT, self._rng).reshape(-1).astype(np.float32)
+        take_a = self._rng.random(a.shape) < 0.5
+        child = np.where(take_a, a, b)
+        child = child + self.MUT * self._rng.normal(0, 1, a.shape)
+        return child.astype(np.float32)
 
     def state_dict(self) -> dict:
         d = self._base_state()
