@@ -3,18 +3,62 @@
 //
 // Layout, 8 floats per centre: frequency(4), amplitude(4).
 //
-// PURE: reads only brain_params (via brain_at), base, x and BRAIN_SHAPE. The
-// Brain Inspector calls this from a fragment pass, so it must not touch entity
-// state.
+// MUTATION LIVES HERE, not in the generic brain_add/brain_mul helpers, because
+// the original is STRUCTURED in ways a per-float helper cannot express:
+//
+//   - ONE scalar scales all four frequency components of a centre, so the
+//     frequency VECTOR keeps its direction and only changes magnitude.
+//     Jittering each component independently rotates it as well, which is a
+//     different function - measured at 56% mean deviation over a 4096-point
+//     input grid (scratchpad purefn.py), not a rounding difference.
+//   - amplitudes take a vec4 from ONE hash4() per centre, not four hash().
+//   - the seed is derived from the rule's CONTENT, so two cohorts holding
+//     different rules diverge even at the same cohort index.
+//
+// A modality owns its mutation the same way it owns decode().
+//
+// PURE: reads only brain_params, base, x and BRAIN_SHAPE. The Brain Inspector
+// calls this from a fragment pass, so it must not touch entity state.
+
+// The seed the original hashed: centers[4].frequency.xy + centers[7].amplitude.yx
+// + centers[1].frequency.zw, plus the cohort. The modulo keeps a short layout
+// (Centers < 8) in range; at the legacy 10 centres it is the identity.
+float fourier_mut_seed(uint base, int n) {
+    int m = max(n, 1);
+    uint c4 = uint(4 % m) * 8u;
+    uint c7 = uint(7 % m) * 8u;
+    uint c1 = uint(1 % m) * 8u;
+    vec2 a = vec2(brain_params[base + c4 + 0u], brain_params[base + c4 + 1u]);
+    vec2 b = vec2(brain_params[base + c7 + 5u], brain_params[base + c7 + 4u]);
+    vec2 c = vec2(brain_params[base + c1 + 2u], brain_params[base + c1 + 3u]);
+    return hash(a + b + c) + g_brain_cohort;
+}
+
+// One centre's mutation. Shared by the SSBO path, the writeback and the
+// fallback path so the three cannot drift apart - they must agree exactly or
+// click-to-adopt copies a rule the particle was never running.
+void fourier_mutate(inout vec4 freq, inout vec4 amp, int i, float mseed) {
+    amp += g_brain_mut * (-1.0 + 2.0 * hash4(-.5 + vec2(float(-i) + mseed, float(i))));
+    freq *= 1.0 + g_brain_mut * 0.5 * (hash(vec2(mseed, float(i))) - .5);
+}
+
+void fourier_load(uint base, int i, out vec4 freq, out vec4 amp) {
+    uint o = base + uint(i * 8);
+    freq = vec4(brain_params[o + 0u], brain_params[o + 1u],
+                brain_params[o + 2u], brain_params[o + 3u]);
+    amp  = vec4(brain_params[o + 4u], brain_params[o + 5u],
+                brain_params[o + 6u], brain_params[o + 7u]);
+}
+
 vec4 brain_fourier(uint base, vec4 x) {
     vec4 result = vec4(0.0);
     int n = BRAIN_SHAPE.x;
+    // Computed once from the UNMUTATED rule, as the original did before its loop.
+    float mseed = (g_brain_mut == 0.0) ? 0.0 : fourier_mut_seed(base, n);
     for (int i = 0; i < n; i++) {
-        // Frequencies SCALE under mutation, amplitudes OFFSET - the split the
-        // original mutate_rule() made, and the reason a near-zero frequency
-        // stays near zero instead of being jittered into chaos.
-        vec4 f = brain_mul4(base, i * 8);
-        vec4 a = brain_add4(base, i * 8 + 4);
+        vec4 f, a;
+        fourier_load(base, i, f, a);
+        if (g_brain_mut != 0.0) fourier_mutate(f, a, i, mseed);
         float phase = dot(x, f);
         float po = 2.0 * float(i) * 0.6283 + a.w * 3.14159;
         vec4 basis = vec4(
@@ -26,4 +70,18 @@ vec4 brain_fourier(uint base, vec4 x) {
         result += a * basis;
     }
     return result;
+}
+
+// The i-th float of this brain as the particle sees it, mutation included.
+// Click-to-adopt copies exactly this, so an adopted rule reproduces the
+// creature it was taken from rather than its unmutated ancestor.
+float fourier_param_at(uint base, int i) {
+    int c = i / 8;
+    int k = i - c * 8;
+    vec4 f, a;
+    fourier_load(base, c, f, a);
+    if (g_brain_mut != 0.0) {
+        fourier_mutate(f, a, c, fourier_mut_seed(base, BRAIN_SHAPE.x));
+    }
+    return (k < 4) ? f[k] : a[k - 4];
 }

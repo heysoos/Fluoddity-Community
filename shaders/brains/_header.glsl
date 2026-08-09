@@ -40,18 +40,22 @@ float brain_jit(int i) {
     return g_brain_mut * (2.0 * hash(vec2(g_brain_cohort, float(i))) - 1.0);
 }
 
-// Two mutation modes, because a modality knows which of its floats are SCALES
-// and which are OFFSETS, and the distinction matters: jittering a near-zero
-// frequency additively drags a smooth centre into a chaotic one, which the
-// original mutate_rule() avoided by scaling frequencies and offsetting
-// amplitudes. Each modality picks per field.
+// Generic per-float mutation, for modalities whose parameters mutate
+// INDEPENDENTLY of one another. Two modes, because a modality knows which of
+// its floats are SCALES and which are OFFSETS: jittering a near-zero frequency
+// additively drags a smooth centre into a chaotic one, whereas scaling leaves
+// it near zero.
+//
+// A modality whose mutation is STRUCTURED must not use these - it implements
+// its own and exposes a <modality>_param_at() for the writeback. Fourier does:
+// one scalar scales a whole frequency VECTOR, so the four components are not
+// independent, and mutating them separately is a measurably different function.
 float brain_add(uint base, int i) {   // offsets: amplitudes, biases, centres
     return brain_params[base + uint(i)] + brain_jit(i);
 }
 
-float brain_mul(uint base, int i) {   // scales: frequencies
-    // 0.25 reproduces the original `freq *= 1 + amount*0.5*(hash-0.5)`.
-    return brain_params[base + uint(i)] * (1.0 + 0.25 * brain_jit(i));
+float brain_mul(uint base, int i) {   // scales: widths, frequencies
+    return brain_params[base + uint(i)] * (1.0 + brain_jit(i));
 }
 
 vec4 brain_add4(uint base, int i) {
@@ -63,6 +67,3 @@ vec4 brain_mul4(uint base, int i) {
     return vec4(brain_mul(base, i), brain_mul(base, i + 1),
                 brain_mul(base, i + 2), brain_mul(base, i + 3));
 }
-
-// Kept so the generic writeback can dump a brain as the particle sees it.
-float brain_at(uint base, int i) { return brain_add(base, i); }

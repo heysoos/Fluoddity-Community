@@ -10,7 +10,7 @@ struct Entity {
     float padding[2];  // Align to 16-byte boundary for vec4
     vec4 color;
 };  // Total: 48 bytes (12 floats)
-// The brain buffer, its uniforms and brain_at() live in shaders/brains/_header.glsl,
+// The brain buffer and its uniforms live in shaders/brains/_header.glsl,
 // which is prepended ahead of every brain_*.glsl.
 layout(std430, binding = 0) buffer EntityBuffer {
     Entity entities[];
@@ -446,7 +446,8 @@ void reset(uint index){
 }
 
 // Per-particle brain mutation lives in shaders/brains/_header.glsl as
-// brain_at(); main() sets g_brain_mut and g_brain_cohort before evaluating.
+// the modality's own mutation; main() sets g_brain_mut and g_brain_cohort
+// before evaluating.
 
 
 //Used to enforce left-right symmetry in the local coordinates vec2(forward, left)
@@ -525,19 +526,29 @@ void main() {
 
     uint brain_base = get_particle_brain_base();
 
-    //Each cohort gets a random mutation, applied on read by brain_at().
+    //Each cohort gets a random mutation, applied on read by the modality.
     g_brain_mut = calculate_setting(get_particle_mutation_scale(),e.pos,cohort);
     g_brain_cohort = get_particle_rule_seed()+floor(cohort);
 
-    //Same two-coefficient probe as the old all-zero Rule check: index 0 is the
-    //first frequency component, index 40 the first amplitude of centre 5.
+    //The same eight floats the old all-zero Rule check tested:
+    //centers[0].frequency (0..3) and centers[5].amplitude (44..47). Probing
+    //fewer risks a live rule that happens to hold a zero there; probing index
+    //40 instead of 44 tests centre 5's FREQUENCY, which is a different rule.
+    //min() keeps a layout shorter than six centres in range.
     //
     //Fourier only: the fallback generates a FourierCenter[10], so it is
     //meaningful for no other layout. Every other modality relies on the host
     //having uploaded a brain, which it does on every layout change.
+    uint bprobe = brain_base + uint(min(5, max(BRAIN_SHAPE.x, 1) - 1) * 8);
     bool blank = BRAIN_MODALITY == 0
-              && brain_params[brain_base]==0.0
-              && brain_params[brain_base+40u]==0.0;
+              && brain_params[brain_base+0u]==0.0
+              && brain_params[brain_base+1u]==0.0
+              && brain_params[brain_base+2u]==0.0
+              && brain_params[brain_base+3u]==0.0
+              && brain_params[bprobe+4u]==0.0
+              && brain_params[bprobe+5u]==0.0
+              && brain_params[bprobe+6u]==0.0
+              && brain_params[bprobe+7u]==0.0;
     if(blank){
         g_brain_fallback = true;
         g_brain_seed = (TOURNAMENT_MODE == 1)
@@ -547,7 +558,7 @@ void main() {
 
     // Only write brains when explicitly requested (expensive - BRAIN_LEN floats
     // per particle). Click-to-adopt reads this back for one entity, and needs
-    // the MUTATED values, which is why it goes through brain_at().
+    // the MUTATED values, which is why it goes through brain_param_at().
     if(WRITE_RULES) {
         uint out_base = index * uint(BRAIN_LEN);
         if(g_brain_fallback) {
@@ -571,7 +582,7 @@ void main() {
             }
         } else {
             for(int i = 0; i < BRAIN_LEN; i++) {
-                particle_brains[out_base + uint(i)] = brain_at(brain_base, i);
+                particle_brains[out_base + uint(i)] = brain_param_at(brain_base, i);
             }
         }
     }
