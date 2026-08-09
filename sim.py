@@ -243,6 +243,16 @@ class Sim:
 
         # Only write rules to buffer when explicitly requested (avoids 192MB/frame cost)
         tryset(self.entity_update_program, 'WRITE_RULES', self._pending_rule_buffer_update)
+        # ...and only for the ONE particle that is about to be read back.
+        # readback_rule() takes a single entity's slice and nothing else ever
+        # reads this buffer, so writing all 600k was work thrown away. It is
+        # also no longer free: a brain now carries its mutation on read, so the
+        # write has to re-derive it per particle rather than store a struct that
+        # was already live in registers. Measured click cost 13.0 ms; 0.1 ms
+        # once only the adopted particle writes. -1 writes every particle.
+        tryset(self.entity_update_program, 'WRITE_RULES_INDEX',
+               -1 if self._pending_entity_id is None
+               else int(self._pending_entity_id))
 
         # Brain dispatch. BRAIN_SHAPE carries each modality's structural ints
         # (Fourier: centre count; MLP: hidden width and activation).
@@ -901,8 +911,21 @@ class Sim:
         self.multi_load_buffer.write(bytes(data))
 
     def write_tournament_rules(self, rule_bytes: bytes) -> None:
-        """Upload 16 packed genomes into the (reused) multi-load rule buffer."""
-        self.multi_load_rule_buffer.write(rule_bytes)
+        """Upload the tournament genomes into the (reused) flat brain buffer.
+
+        RE-STRIDES on the way in. The caller packs genomes back to back at the
+        LAYOUT length (80 floats for Fourier), but a slot in this buffer is
+        MAX_BRAIN_FLOATS. Writing the bytes raw put genome 1 inside slot 0's
+        padding and left slots 3..15 zeroed - which the shader reads as 'no
+        brain loaded', so 13 of 16 tiles ran the per-tile fallback rule. That
+        rule is a deterministic function of (rule_seed, tile), so the grid
+        showed the SAME patterns on every run.
+        """
+        n = self._brain_layout.length
+        flat = np.frombuffer(rule_bytes, dtype=np.float32)
+        genomes = [flat[i * n:(i + 1) * n] for i in range(len(flat) // n)]
+        self.multi_load_rule_buffer.write(
+            pack_brains(genomes, self._brain_layout))
 
     @property
     def brain_layout(self):

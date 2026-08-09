@@ -91,33 +91,48 @@ def test_per_particle_buffer_is_sized_by_brain_len_not_max():
     )
 
 
-def test_particle_brains_are_written_only_when_requested():
-    """Writing BRAIN_LEN floats per particle is expensive; it happens for one
-    frame when click-to-adopt asks for it."""
+def test_the_writeback_is_gated_and_scoped_to_one_particle():
+    """Two independent guards, and the second is not an optimisation.
+
+    WRITE_RULES keeps the writeback off except on the frame click-to-adopt asks
+    for it. WRITE_RULES_INDEX narrows it to the ONE particle that is read back -
+    readback_rule() takes a single entity's slice and nothing else reads the
+    buffer. Without it, all 600k particles re-derive their mutation to produce
+    bytes nobody looks at: measured 13 ms a click, a hitch you can feel.
+
+    Asserted on presence, not on surrounding syntax - anchoring these on exact
+    shader text has broken on four separate edits that changed nothing real.
+    """
     src = read("shaders/entity_update.glsl")
-    i = src.index("if(WRITE_RULES)")
-    body = src[i:i + 1600]
-    assert "particle_brains[" in body
-    assert "BRAIN_LEN" in body
+    assert "uniform int WRITE_RULES_INDEX" in src
+    assert "WRITE_RULES_INDEX < 0" in src, "the writeback is not scoped"
+    assert "brain_write(" in src
+
+    host = read("sim.py")
+    assert "'WRITE_RULES_INDEX'" in host, "the host never sets the scope"
+    assert "_pending_entity_id" in host
 
 
 def test_the_writeback_emits_the_fallback_rule_not_the_blank_buffer():
     """When the fallback is active the particle runs a GENERATED rule while
     brain_params still holds the blank buffer that triggered it. Writing the
     buffer made click-to-adopt copy zeros, which re-blanked slot 0 and flipped
-    every cohort onto its own random rule. Guarded at source as well as on the
-    GPU (tests/test_brain_readback_gpu.py) because CI has no GPU."""
-    src = read("shaders/entity_update.glsl")
-    i = src.index("if(WRITE_RULES)")
-    body = src[i:i + 1600]
-    j = body.index("g_brain_fallback")
-    assert "fallback_centers()" in body[j:], (
-        "the fallback branch of the writeback does not emit the generated rule"
-    )
-    # It must be the SAME helper the evaluation uses, mutation included, or the
-    # adopted rule is not the one the particle was running.
+    every cohort onto its own random rule.
+
+    The writeback must use the SAME helper the evaluation does, mutation
+    included, or the adopted rule is not the one the particle was running.
+    Behaviour is covered on the GPU (tests/test_brain_readback_gpu.py); this is
+    the CI-side guard, since CI has no GPU.
+    """
     dispatch = read("shaders/brains/_dispatch.glsl")
-    assert "fourier_noise(fallback_centers()" in dispatch
+    assert "fourier_noise(fallback_centers()" in dispatch, (
+        "the evaluation does not run the generated fallback rule"
+    )
+    i = dispatch.index("void brain_write")
+    body = dispatch[i:]
+    assert "g_brain_fallback" in body and "fourier_write_fallback" in body, (
+        "the writeback does not emit the generated rule when the fallback is on"
+    )
 
 
 def test_pack_brains_pads_each_brain_to_the_stride():

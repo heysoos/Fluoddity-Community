@@ -10,6 +10,17 @@ layout(std430, binding = 4) buffer BrainBuffer {
     float brain_params[];
 };
 
+// Per-particle brains, written only when WRITE_RULES is set (click-to-adopt).
+// Sized to BRAIN_LEN floats per particle by the host, NOT MAX_BRAIN_FLOATS: at
+// the max stride this would be ~1 KB per particle, about 600 MB.
+//
+// Declared here rather than in entity_update.glsl so brain_write() can live
+// beside the modalities - it is prepended ahead of the dispatch, whereas
+// entity_update's own declarations come after it.
+layout(std430, binding = 2) buffer BrainReadbackBuffer {
+    float particle_brains[];
+};
+
 uniform int   BRAIN_MODALITY;   // which brain_* function to call
 uniform int   BRAIN_LEN;        // active floats per brain; bounds every loop
 uniform ivec4 BRAIN_SHAPE;      // structural ints (n_centers, hidden width, ...)

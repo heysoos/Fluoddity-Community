@@ -72,9 +72,36 @@ vec4 brain_fourier(uint base, vec4 x) {
     return result;
 }
 
+// Bulk writeback: the whole brain as the particle sees it, mutation included.
+//
+// The seed and each centre's jitter are computed ONCE. Driving this from
+// fourier_param_at() per float instead recomputed fourier_mut_seed() - six SSBO
+// reads and a hash - plus the entire centre mutation for all 80 floats of every
+// one of 600k particles. Measured click cost 13.0 ms against the original's
+// 2.2 ms, which is the hitch you can feel; per centre it is back to 2.3 ms.
+void fourier_write(uint base, uint out_base) {
+    int n = BRAIN_SHAPE.x;
+    float mseed = (g_brain_mut == 0.0) ? 0.0 : fourier_mut_seed(base, n);
+    for (int i = 0; i < n; i++) {
+        if (i * 8 + 7 >= BRAIN_LEN) break;
+        vec4 f, a;
+        fourier_load(base, i, f, a);
+        if (g_brain_mut != 0.0) fourier_mutate(f, a, i, mseed);
+        uint o = out_base + uint(i * 8);
+        particle_brains[o + 0u] = f.x;
+        particle_brains[o + 1u] = f.y;
+        particle_brains[o + 2u] = f.z;
+        particle_brains[o + 3u] = f.w;
+        particle_brains[o + 4u] = a.x;
+        particle_brains[o + 5u] = a.y;
+        particle_brains[o + 6u] = a.z;
+        particle_brains[o + 7u] = a.w;
+    }
+}
+
 // The i-th float of this brain as the particle sees it, mutation included.
-// Click-to-adopt copies exactly this, so an adopted rule reproduces the
-// creature it was taken from rather than its unmutated ancestor.
+// The readable definition of what fourier_write() emits in bulk; the mutation
+// tests assert against this one, and the Brain Inspector reads single floats.
 float fourier_param_at(uint base, int i) {
     int c = i / 8;
     int k = i - c * 8;

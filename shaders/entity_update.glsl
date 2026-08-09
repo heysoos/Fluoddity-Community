@@ -15,12 +15,8 @@ struct Entity {
 layout(std430, binding = 0) buffer EntityBuffer {
     Entity entities[];
 };
-// Per-particle brains, written only when WRITE_RULES is set (click-to-adopt).
-// Sized to BRAIN_LEN floats per particle by the host, NOT MAX_BRAIN_FLOATS:
-// at the max stride this would be ~1 KB per particle, about 600 MB.
-layout(std430, binding = 2) buffer BrainReadbackBuffer {
-    float particle_brains[];
-};
+// The per-particle brain readback buffer (binding 2) is declared in
+// shaders/brains/_header.glsl, beside brain_write() which fills it.
 // SYNCHRONIZED: This struct must match canvas.frag
 // Locations to synchronize: shaders/entity_update.glsl, shaders/canvas.frag
 struct PhysicsSetting {
@@ -60,6 +56,7 @@ uniform int RESET_MODE; //0-1-2 == GRID-RANDOM-RING
 uniform int COHORTS; //each cohort gets its own rule and starting location
 uniform float RULE_SEED;
 uniform bool WRITE_RULES; // Set true for one frame when rule buffer readback is needed
+uniform int WRITE_RULES_INDEX; // Which particle to write; -1 writes all of them
 
 // Tournament mode: partition the canvas into a TOURNAMENT_GRID x TOURNAMENT_GRID grid
 uniform int TOURNAMENT_MODE;   // 0 = off, 1 = on
@@ -586,35 +583,12 @@ void main() {
             : get_particle_rule_seed()+floor(cohort);
     }
 
-    // Only write brains when explicitly requested (expensive - BRAIN_LEN floats
-    // per particle). Click-to-adopt reads this back for one entity, and needs
-    // the MUTATED values, which is why it goes through brain_param_at().
-    if(WRITE_RULES) {
-        uint out_base = index * uint(BRAIN_LEN);
-        if(g_brain_fallback) {
-            // The particle is running a GENERATED rule; brain_params holds the
-            // blank buffer that triggered the fallback. Writing that instead
-            // makes click-to-adopt copy zeros, which re-blanks slot 0 on apply
-            // and flips every cohort onto its own random rule - most sluggish,
-            // a few lively. Write what the particle is actually using.
-            FourierCenter[10] fc = fallback_centers();
-            for(int c = 0; c < 10; c++) {
-                if(c * 8 + 7 >= BRAIN_LEN) break;
-                uint o = out_base + uint(c * 8);
-                particle_brains[o + 0u] = fc[c].frequency.x;
-                particle_brains[o + 1u] = fc[c].frequency.y;
-                particle_brains[o + 2u] = fc[c].frequency.z;
-                particle_brains[o + 3u] = fc[c].frequency.w;
-                particle_brains[o + 4u] = fc[c].amplitude.x;
-                particle_brains[o + 5u] = fc[c].amplitude.y;
-                particle_brains[o + 6u] = fc[c].amplitude.z;
-                particle_brains[o + 7u] = fc[c].amplitude.w;
-            }
-        } else {
-            for(int i = 0; i < BRAIN_LEN; i++) {
-                particle_brains[out_base + uint(i)] = brain_param_at(brain_base, i);
-            }
-        }
+    // Only write brains when explicitly requested, and only for the particle
+    // being adopted - readback_rule() takes one entity's slice and nothing else
+    // reads this buffer. brain_write() applies the modality's mutation, so the
+    // adopted rule is the one the particle was running.
+    if(WRITE_RULES && (WRITE_RULES_INDEX < 0 || uint(WRITE_RULES_INDEX) == index)) {
+        brain_write(brain_base, index * uint(BRAIN_LEN));
     }
 
 

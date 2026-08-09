@@ -75,6 +75,29 @@ def test_adopting_the_fallback_is_stable_under_reapply(sim, ctx):
     assert np.allclose(first, second, atol=1e-5)
 
 
+def test_only_the_adopted_particle_is_written(sim, ctx):
+    """The writeback is scoped to the entity being read back.
+
+    Writing all 600k means every particle re-derives its mutation to produce
+    bytes nobody reads - 13 ms a click, against ~2 ms before brains carried
+    their mutation on read. Adoption itself must still be exact, which the
+    tests above cover; this pins the scope.
+    """
+    import numpy as np
+    from services.genome import random_genome
+
+    n = sim.brain_layout.length
+    sim.apply_rule(random_genome(np.random.default_rng(3)))
+    sim.get_rule_buffer().clear()
+    _adopt(sim, ctx, entity_id=7)
+
+    raw = np.frombuffer(sim.get_rule_buffer().read(), dtype=np.float32)
+    written = raw.reshape(-1, n).any(axis=1).nonzero()[0]
+    assert written.tolist() == [7], (
+        f"expected only entity 7 to be written, got {len(written)} entities"
+    )
+
+
 def test_the_brain_buffer_starts_zeroed(ctx):
     """ctx.buffer(reserve=) does not zero memory. Slot 0 must be all-zero or
     the 'no brain loaded' probe reads uninitialised garbage and the startup
