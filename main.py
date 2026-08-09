@@ -138,6 +138,7 @@ class App:
         # Archive switching is orchestration, so CommandHandler asks for it
         # rather than reaching into App.
         self.command_handler.switch_archive = self._switch_archive
+        self.command_handler.apply_brain_layout = self._apply_brain_layout
         # Xbox controller (FPS camera for shader-driven field)
         self.controller_cam = ControllerCam()
         self.joystick_state = {'joystick_id': find_joystick(), 'prev_buttons': []}
@@ -345,6 +346,64 @@ class App:
         ast.selected_entry_id = -1
         # Deliberately NOT resumed: the user pressed a management button, not
         # Start.
+        return True
+
+    def _apply_brain_layout(self, layout, ui_state) -> bool:
+        """Switch the brain layout. A hard reset of the search, never partial.
+
+        The teardown is _switch_archive's, for its reasons: flush before closing
+        the store or the entries since the last 200-admission vector flush are
+        lost, and release the thumbnail cache before rebuilding or the new
+        archive shows the old one's pictures - entry ids restart at 0 in every
+        archive.
+
+        The archive changes because its directory is keyed by the layout
+        signature, so a layout change IS an archive switch - to a sibling
+        directory under the same archive name.
+        """
+        from services.archive_library import resolve
+        from services.genome_spec import physics_spec_for, spec_for
+        from utilities.paths import get_archives_root
+
+        if layout == self.sim.brain_layout:
+            return False
+
+        if self.auto_service is not None:
+            self.auto_service.pause()
+        ui_state.archive.running = False
+        if self.imgep_driver is not None:
+            self.imgep_driver.end_expedition()
+        if self.archive is not None:
+            self.archive.maybe_flush(force=True)
+        if self.goal_list is not None:
+            self.goal_list.save()
+        if self.archive_store is not None:
+            self.archive_store.close()
+        if self.thumb_cache is not None:
+            self.thumb_cache.release()
+
+        # The GPU side first: the per-particle readback buffer is sized by the
+        # active length, and slot 0 is re-uploaded from whatever rule is live.
+        self.sim.realloc_brain_buffers(layout)
+        self.sim.apply_rule(None)      # the old genome means nothing here
+
+        # The optimizer searches a different number of dimensions now, so its
+        # covariance and population are meaningless. Reset rather than resize.
+        for drv in (getattr(self.auto_service, "driver", None),
+                    self.imgep_driver):
+            if drv is None:
+                continue
+            physics = bool(getattr(drv, "physics_enabled", False))
+            spec = physics_spec_for(layout) if physics else spec_for(layout)
+            if hasattr(drv, "set_spec"):
+                drv.set_spec(spec)
+            if hasattr(drv, "reset"):
+                drv.reset()
+
+        if self.archive is not None or self.archive_store is not None:
+            path = resolve(get_archives_root(),
+                           ui_state.preferences.archive_name)
+            self._build_archive_set(path)
         return True
 
     def _ensure_archive_service(self, ui_state):

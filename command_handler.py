@@ -36,6 +36,8 @@ class CommandHandler:
         self.archive_projection = None
         # App._switch_archive; None until Explore mode has been opened once.
         self.switch_archive = None
+        # App._apply_brain_layout, wired by the orchestrator at startup.
+        self.apply_brain_layout = None
 
         # Preview state
         self.preview_rule_active = False  # File->load preview
@@ -174,6 +176,10 @@ class CommandHandler:
                 ui_state.archive.chase_tile = ui_state.auto_tournament.save_tile_requested
                 ui_state.auto_tournament.save_tile_requested = -1
 
+        # Brain layout, before anything that runs a generation: it reallocates
+        # the GPU buffers and resets the optimizer.
+        self._handle_brain_layout(ui_state)
+
         # Automatic (CLIP-guided) tournament mode
         self._handle_auto_tournament(ui_state)
 
@@ -184,6 +190,24 @@ class CommandHandler:
         self._handle_explore(ui_state)
 
         return None
+
+    def _handle_brain_layout(self, ui_state):
+        """Apply a requested brain layout, and keep the window's readout live.
+
+        Reads and clears the one-shot flag; App._apply_brain_layout does the
+        work, because it owns the archive teardown and rebuild.
+        """
+        from ui.brain_window import layout_for
+
+        bst = ui_state.brain
+        bst.archive_entries = len(self.archive) if self.archive is not None else 0
+
+        if not bst.request_layout_change:
+            return
+        bst.request_layout_change = False
+        if self.apply_brain_layout is None:
+            return
+        self.apply_brain_layout(layout_for(bst.modality, bst.settings), ui_state)
 
     def _handle_world_size_change(self, ui_state):
         """Handle world size change request (also handles aspect ratio changes)."""
