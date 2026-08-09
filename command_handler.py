@@ -543,6 +543,7 @@ class CommandHandler:
             setattr(drv, name, getattr(ast, name))
         if self.archive is not None:
             self.archive.capacity = int(ast.capacity)
+            self.archive.min_separation = float(ast.min_separation)
 
         if self.goal_list is not None:
             if ast.add_goal_requested and ast.new_goal_text.strip():

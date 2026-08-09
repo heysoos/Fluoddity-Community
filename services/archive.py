@@ -31,6 +31,7 @@ from services.novelty import (
     RejectsRing,
     knn_distances,
     knn_novelty,
+    nearest_distance,
     novelty_from_distances,
 )
 
@@ -101,9 +102,39 @@ class ArchiveEntry:
     thumb: str = ""
 
 
+# Minimum cosine distance between two stored entries. 0 disables the rule.
+#
+# The unstructured-archive rule from quality-diversity (Cully & Mouret): store
+# nothing within `l` of something already stored, so the archive is a covering
+# of the space rather than a log of everything that happened. It is what stops a
+# converged expedition filling the archive with its own endpoint - measured on
+# the real archives, ONE goal had already contributed 25% of debug07 (3200 of
+# 12672) and 30% of debug05.
+#
+# 0.02 is measured, not chosen. Replaying each archive in insertion order:
+#
+#   archive    1-NN median   kept at l=0.02   of that flood   of the rest
+#   default        0.0162         2604/4808         33.3%         62.6%
+#   debug05        0.0113         2717/8002         20.6%         39.7%
+#   debug07        0.0074        1402/12672          8.3%         12.0%
+#
+# so it is selective - it always cuts the flood about twice as hard as the rest
+# - and it takes a generation's admissions from 16-64 down to 5-14. Larger
+# values are not a matter of taste: at 0.05 every archive keeps under 6%.
+#
+# Note what this is NOT. The adaptive novelty threshold removed 2026-08-08
+# failed because it was a feedback controller whose gain ran far ahead of its
+# measurement lag, and because a generation's tiles are correlated so they clear
+# or miss any bar together. Neither applies here: there is no controller and no
+# gain, and correlated tiles landing on top of each other is exactly the case
+# this is meant to reject. See AdmissionRate.
+DEFAULT_MIN_SEPARATION = 0.02
+
+
 class Archive:
     def __init__(self, store=None, capacity: int = 20000, k: int = 10,
-                 liveness_min: float = 0.002, dim: int = 512):
+                 liveness_min: float = 0.002, dim: int = 512,
+                 min_separation: float = DEFAULT_MIN_SEPARATION):
         # seed_n is gone from here: it existed only to hold the novelty gate
         # off during bootstrap, and there is no novelty gate. The DRIVER still
         # has one - it chooses bootstrap vs expansion - but that is a question
@@ -112,6 +143,7 @@ class Archive:
         self.capacity = int(capacity)
         self.k = int(k)
         self.liveness_min = float(liveness_min)
+        self.min_separation = float(min_separation)
         self._dim = int(dim)
 
         self.entries: list[ArchiveEntry] = []
@@ -135,6 +167,12 @@ class Archive:
         self.revision = 0
         self.n_nonfinite = 0
         self.n_rejected = 0
+        # Split by reason, because they mean opposite things. "Dead" rising is a
+        # fault - a black capture, a frozen preset, a liveness floor set too
+        # high. "Too close" rising is the separation rule working, and during a
+        # converged expedition it should be nearly every tile.
+        self.n_rejected_dead = 0
+        self.n_rejected_close = 0
         self.n_evicted = 0
         self.blocked_by_pins = False
 
@@ -162,11 +200,27 @@ class Archive:
             "admission_rate": self.admission.rate,
             "n_nonfinite": self.n_nonfinite,
             "n_rejected": self.n_rejected,
+            "n_rejected_dead": self.n_rejected_dead,
+            "n_rejected_close": self.n_rejected_close,
             "n_evicted": self.n_evicted,
             "n_pinned": sum(1 for e in self.entries if e.pinned),
             "blocked_by_pins": self.blocked_by_pins,
             "rejects_ring": len(self.rejects),
+            "min_separation": self.min_separation,
+            "mean_novelty": self.mean_novelty(),
         }
+
+    def mean_novelty(self) -> float:
+        """Mean stored kNN novelty: how far apart the archive's entries are.
+
+        With `size`, this is the pair that says whether exploration is still
+        finding new territory - a growing archive whose mean novelty is flat is
+        spreading, one whose mean novelty falls is filling in. Free, because
+        refresh() keeps the column current for its own reasons.
+        """
+        if not self.entries:
+            return 0.0
+        return float(np.mean([e.novelty for e in self.entries]))
 
     # ---- novelty -------------------------------------------------------
 
@@ -244,25 +298,42 @@ class Archive:
             return None
         return int(np.argmax(self.embeddings @ np.asarray(goal, np.float32)))
 
+    def separation_of(self, queries: np.ndarray) -> np.ndarray:
+        """Cosine distance from each query to the closest STORED entry.
+
+        Archive only, not archive union rejects: the question is "do we already
+        have one of these", and a rejected pattern is precisely one we do not.
+        """
+        return nearest_distance(queries, self.embeddings)
+
     # ---- admission -----------------------------------------------------
 
     def consider(self, cand: Candidate, novelty: float, *, pinned: bool = False,
-                 source: str = "expansion", thumb_crop=None) -> ArchiveEntry | None:
+                 source: str = "expansion", thumb_crop=None,
+                 separation: float | None = None,
+                 force: bool = False) -> ArchiveEntry | None:
         """Run the gates and add on success. Returns the entry, or None.
 
-        There is NO novelty gate. Admission asks only whether the tile is a
-        picture of something (finite, viable, moving); novelty decides what
-        gets thrown away later, in prune_to_capacity. Removed 2026-08-08 - see
-        AdmissionRate for why the adaptive one could not work, and note the
-        second, independent reason a gate misbehaves here: a generation's tiles
-        are not independent draws. All 16 or 64 share one parent sample or one
-        CMA-ES population, so they clear or miss any bar together. Simulated,
-        that correlation alone raises "every tile admitted" 12x at an unchanged
-        mean rate - so even a perfectly calm threshold would still be bursty.
+        Three gates, in order of what they mean:
 
-        Rejecting is the expensive mistake and admitting is the cheap one: a
-        rejected pattern is gone for good, while an admitted dud costs one slot
-        until something more novel evicts it.
+          finite/viable/alive   is this a picture of something at all
+          separation            do we already have one of these
+
+        There is still NO novelty gate, and the difference matters. A novelty
+        threshold asks "is this neighbourhood empty enough", which is a moving,
+        archive-wide judgement - that is what was removed 2026-08-08 and it is
+        not coming back (see AdmissionRate). Separation asks the local,
+        parameter-free question "is there already an entry within l of this
+        one", which is the unstructured-archive rule from quality-diversity.
+
+        `force` bypasses separation only. The caller uses it to keep the best
+        tile of every generation whatever happens, so a converged expedition
+        still leaves a trail rather than vanishing from the record entirely. It
+        does NOT bypass viability: forcing a black tile in would be worse than
+        keeping nothing.
+
+        `separation` is passed in because the caller has the whole batch and can
+        do one matmul for all of it; omitted, it is computed here.
         """
         if pinned:
             return self._add(cand, novelty, "pin", True, thumb_crop)
@@ -270,13 +341,30 @@ class Archive:
         if not np.isfinite(cand.embedding).all():
             self.n_nonfinite += 1
             self.n_rejected += 1
+            self.n_rejected_dead += 1
             self.admission.observe(False)
             return None
 
         if not cand.viable or cand.liveness < self.liveness_min:
+            self.n_rejected_dead += 1
             self._reject(cand)
             self.admission.observe(False)
             return None
+
+        if self.min_separation > 0.0 and not force:
+            d = (float(separation) if separation is not None
+                 else float(self.separation_of(cand.embedding[None, :])[0]))
+            if d < self.min_separation:
+                self.n_rejected += 1
+                self.n_rejected_close += 1
+                # Deliberately NOT added to the rejects ring. The ring exists so
+                # novelty remembers regions the search was refused; a
+                # separation rejection means the region is already IN the
+                # archive, which novelty measures against anyway. Feeding these
+                # in would evict the ring's real content - the dead regions -
+                # within a couple of generations at grid 8.
+                self.admission.observe(False)
+                return None
 
         entry = self._add(cand, novelty, source, False, thumb_crop)
         self.admission.observe(entry is not None)

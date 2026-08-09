@@ -306,51 +306,82 @@ class AutoTournamentWindowMixin:
         flattens the other. Each is normalised separately and the true range is
         printed next to its colour.
         """
+        self._render_series([(sigma, _SIGMA_COLOR, "sigma"),   # behind
+                             (best, _FIT_COLOR, "fitness")])   # in front
+
+    def _render_series(self, series, height=None):
+        """Overlay several series, each normalised against its OWN range.
+
+        `series` is [(values, rgba, label), ...], drawn back to front, with the
+        true range of each printed under the plot next to its colour. Separate
+        normalisation is the whole point: an archive size in the thousands and
+        a mean novelty around 0.02 share no axis, and forcing one on them shows
+        a flat line and a step.
+        """
+        h = float(height if height is not None else self._TRACE_H)
         w = max(120.0, imgui.get_content_region_avail().x)
         p0 = imgui.get_cursor_screen_pos()
-        imgui.dummy(imgui.ImVec2(w, self._TRACE_H))
+        imgui.dummy(imgui.ImVec2(w, h))
         dl = imgui.get_window_draw_list()
 
         x0, y0 = p0.x, p0.y
-        x1, y1 = x0 + w, y0 + self._TRACE_H
+        x1, y1 = x0 + w, y0 + h
         dl.add_rect_filled(imgui.ImVec2(x0, y0), imgui.ImVec2(x1, y1),
                            imgui.get_color_u32(imgui.ImVec4(0.09, 0.09, 0.11, 1.0)))
         dl.add_rect(imgui.ImVec2(x0, y0), imgui.ImVec2(x1, y1),
                     imgui.get_color_u32(imgui.ImVec4(0.30, 0.30, 0.34, 1.0)))
 
         pad = self._TRACE_PAD
-        iw, ih = w - 2 * pad, self._TRACE_H - 2 * pad
+        iw, ih = w - 2 * pad, h - 2 * pad
 
         def draw(values, color):
-            if not values:
+            vals = [float(v) for v in values]
+            if not vals:
                 return
-            norm = normalize_series(values)
-            # Never more points than the plot is wide.
-            if len(norm) > self._TRACE_MAX_PTS:
-                step = len(norm) / self._TRACE_MAX_PTS
-                norm = [norm[min(int(i * step), len(norm) - 1)]
+            # Subsample the RAW values, then normalise, so a NaN stays lined up
+            # with the point it belongs to.
+            if len(vals) > self._TRACE_MAX_PTS:
+                step = len(vals) / self._TRACE_MAX_PTS
+                vals = [vals[min(int(i * step), len(vals) - 1)]
                         for i in range(self._TRACE_MAX_PTS)]
+            norm = normalize_series(vals)
             col = imgui.get_color_u32(imgui.ImVec4(*color))
             n = len(norm)
             if n == 1:
-                dl.add_circle_filled(
-                    imgui.ImVec2(x0 + pad + iw * 0.5, y0 + pad + ih * 0.5), 2.5, col)
+                if vals[0] == vals[0]:
+                    dl.add_circle_filled(
+                        imgui.ImVec2(x0 + pad + iw * 0.5, y0 + pad + ih * 0.5),
+                        2.5, col)
                 return
-            pts = [imgui.ImVec2(x0 + pad + iw * i / (n - 1),
-                                y0 + pad + ih * (1.0 - v))
-                   for i, v in enumerate(norm)]
-            for a, b in zip(pts, pts[1:]):
-                dl.add_line(a, b, col, 1.6)
+            prev = None
+            for i, (raw, v) in enumerate(zip(vals, norm)):
+                # NaN marks a generation this series does not cover - fitness
+                # outside an expedition. Break the line rather than
+                # interpolating across it; the gap is the information.
+                if raw != raw:
+                    prev = None
+                    continue
+                p = imgui.ImVec2(x0 + pad + iw * i / (n - 1),
+                                 y0 + pad + ih * (1.0 - v))
+                if prev is not None:
+                    dl.add_line(prev, p, col, 1.6)
+                else:
+                    dl.add_circle_filled(p, 1.6, col)
+                prev = p
 
-        draw(sigma, _SIGMA_COLOR)     # behind
-        draw(best, _FIT_COLOR)        # in front - it is the thing being optimised
+        for values, color, _label in series:
+            draw(values, color)
 
-        imgui.text_colored(imgui.ImVec4(*_FIT_COLOR),
-                           f"fitness {min(best):.3f} - {max(best):.3f}")
-        if sigma:
-            imgui.same_line()
-            imgui.text_colored(imgui.ImVec4(*_SIGMA_COLOR),
-                               f"   sigma {min(sigma):.3f} - {max(sigma):.3f}")
+        first = True
+        for values, color, label in series:
+            finite = [v for v in values if v == v]
+            if not finite:
+                continue
+            if not first:
+                imgui.same_line()
+            first = False
+            imgui.text_colored(imgui.ImVec4(*color),
+                               f"{label} {min(finite):.4g} - {max(finite):.4g}  ")
 
     def _render_save_load(self, ats, svc):
         if imgui.button("Save best genome"):

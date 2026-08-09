@@ -105,6 +105,14 @@ class ImgepDriver:
 
         self.gen = 0
         self._last_score_label = "novelty"
+        self.trace = {k: [] for k in ("gen", "regime", "archive_size",
+                                      "mean_novelty", "admitted", "tiles",
+                                      "fit_best", "fit_mean")}
+
+    # One row per generation, ~2.8 s each, so this is about 8 hours of run. The
+    # plot subsamples anyway; the cap is only here so a machine left running
+    # over a weekend does not grow a list without bound.
+    TRACE_CAP = 10000
 
     # ---- state ---------------------------------------------------------
 
@@ -133,6 +141,36 @@ class ImgepDriver:
     def goal_label(self) -> str:
         return self._goal.label if self._goal is not None else ""
 
+    def phase(self) -> dict:
+        """What this regime is working toward, and how far along it is.
+
+        Every regime has a finish line, and none of them were visible: the tab
+        showed the regime's NAME and nothing about where in it the search was.
+        -> (label, done, total, note); total 0 means there is no finish line to
+        show, which is the honest answer when expeditions are switched off.
+        """
+        r = self.regime
+        if r == "expedition":
+            total = max(1, int(self.expedition_gens))
+            return {"label": f"expedition: {self.goal_label or 'latent goal'}",
+                    "done": total - int(self._remaining), "total": total,
+                    "unit": "generations",
+                    "note": f"{int(self._remaining)} left"}
+        if r == "bootstrap":
+            total = max(1, int(self.seed_n))
+            done = min(int(len(self.archive)), total)
+            return {"label": "bootstrap: scattering to fill the archive",
+                    "done": done, "total": total, "unit": "entries",
+                    "note": f"{total - done} more before expansion starts"}
+        if int(self.expansion_between) <= 0:
+            return {"label": "expansion: no expeditions (Expansion Between = 0)",
+                    "done": 0, "total": 0, "unit": "", "note": ""}
+        total = int(self.expansion_between)
+        done = min(int(self._since_expedition), total)
+        return {"label": "expansion: breeding from novel parents",
+                "done": done, "total": total, "unit": "generations",
+                "note": f"next expedition in {total - done}"}
+
     def status(self) -> dict:
         st = self.archive.stats()
         return {
@@ -144,12 +182,21 @@ class ImgepDriver:
             "admission_rate": st["admission_rate"],
             "n_pinned": st["n_pinned"],
             "blocked_by_pins": st["blocked_by_pins"],
+            "n_rejected_dead": st["n_rejected_dead"],
+            "n_rejected_close": st["n_rejected_close"],
+            "min_separation": st["min_separation"],
+            "mean_novelty": st["mean_novelty"],
             "score_label": self._last_score_label,
             "sigma": self.sigma,
             "algorithm": self.algorithm,
             "prompt": self.goal_label,
             "seed_ess": float(self._last_seed_ess),
             "seed_alpha": float(self._last_seed_alpha),
+            "phase": self.phase(),
+            "last_admitted": (self.trace["admitted"][-1]
+                              if self.trace["admitted"] else 0),
+            "last_tiles": (self.trace["tiles"][-1]
+                           if self.trace["tiles"] else 0),
         }
 
     # ---- driver interface ----------------------------------------------
@@ -304,6 +351,22 @@ class ImgepDriver:
         goal_text = self.goal_label
         parts = [self.spec.decode(zi) for zi in z]
 
+        viable = np.array([bool(is_viable_tile(last[i]))
+                           and float(live[i]) >= float(self.archive.liveness_min)
+                           for i in range(n)])
+        # One matmul for the whole batch instead of n matrix-vector products.
+        sep = self.archive.separation_of(b)
+        # ALWAYS TAKE ONE. The most novel tile that is a picture of something
+        # gets in whatever the separation rule says, so a converged expedition
+        # still leaves a trail through the archive and a generation is never
+        # silently absent from the record. If nothing is viable there is
+        # nothing worth forcing, and the whole generation is dropped.
+        keeper = -1
+        if viable.any():
+            cand_nov = np.where(viable, nov, -np.inf)
+            keeper = int(np.argmax(cand_nov))
+        admitted = 0
+
         for i in range(n):
             phys = parts[i].get("physics")
             if phys is not None and self.physics_enabled:
@@ -315,7 +378,7 @@ class ImgepDriver:
             else:
                 phys_vec = np.zeros(PHYSICS_DIM, dtype=np.float32)
 
-            self.archive.consider(
+            entry = self.archive.consider(
                 Candidate(
                     brain=np.asarray(parts[i]["brain"], dtype=np.float32),
                     physics=phys_vec,
@@ -332,7 +395,17 @@ class ImgepDriver:
                 pinned=(i in pinned),
                 source=source,
                 thumb_crop=last[i],
+                separation=float(sep[i]),
+                force=(i == keeper),
             )
+            if entry is not None:
+                admitted += 1
+                # The batch has to separate from ITSELF too. Without this, 64
+                # tiles that have all converged onto the same pattern would
+                # each measure against the pre-generation archive, find nothing
+                # within l, and all go in - which is the exact failure the rule
+                # exists to stop.
+                sep = np.minimum(sep, 1.0 - b @ b[i])
 
         self.tournament.selected.clear()
         self._last_descriptors = b
@@ -344,15 +417,17 @@ class ImgepDriver:
         self.archive.prune_to_capacity()
         self.archive.maybe_flush(every=self.flush_every)
 
-        if self.regime == "expedition":
+        if source == "expedition":
             fit = self._expedition_fitness(snaps)
             self._optimizer.tell(z, fit)
             self._remaining -= 1
+            self._record(source, admitted, n, fit)
             if self._remaining <= 0:
                 self.end_expedition()
             self._last_score_label = "goal match"
             return fit
 
+        self._record(source, admitted, n, None)
         self._since_expedition += 1
         if (self.expansion_between > 0
                 and self._since_expedition >= self.expansion_between
@@ -361,6 +436,57 @@ class ImgepDriver:
 
         self._last_score_label = "novelty"
         return np.asarray(nov, dtype=np.float32)
+
+    # ---- traces ---------------------------------------------------------
+
+    def _record(self, regime: str, admitted: int, tiles: int, fit) -> None:
+        """One row per generation, for the Explore tab's plots.
+
+        Two separate stories, deliberately in one buffer so they share an x
+        axis: what the ARCHIVE is doing (size and mean novelty - is the search
+        still finding new territory, or filling in ground it already has?) and
+        what the current EXPEDITION is doing (best and mean goal match - is it
+        still climbing, or has it converged and started producing the same tile
+        64 times?). Reading either one alone is what made a stalled expedition
+        invisible.
+
+        Fitness is NaN outside an expedition rather than absent, so the two
+        series stay index-aligned and a gap in the plot is a real gap.
+        """
+        t = self.trace
+        t["gen"].append(int(self.gen))
+        t["regime"].append(regime)
+        t["archive_size"].append(int(len(self.archive)))
+        t["mean_novelty"].append(float(self.archive.mean_novelty()))
+        t["admitted"].append(int(admitted))
+        t["tiles"].append(int(tiles))
+        if fit is None or not len(fit):
+            t["fit_best"].append(float("nan"))
+            t["fit_mean"].append(float("nan"))
+        else:
+            f = np.asarray(fit, dtype=np.float64)
+            t["fit_best"].append(float(np.nanmax(f)))
+            t["fit_mean"].append(float(np.nanmean(f)))
+        if len(t["gen"]) > self.TRACE_CAP:
+            for v in t.values():
+                del v[: len(v) - self.TRACE_CAP]
+
+    def expedition_trace(self) -> dict:
+        """The CURRENT expedition's fitness, or the last one if it has ended.
+
+        Kept after the expedition finishes rather than cleared: the question a
+        user asks is "did that get anywhere", and it is only askable afterwards.
+        """
+        reg = self.trace["regime"]
+        end = len(reg)
+        while end > 0 and reg[end - 1] != "expedition":
+            end -= 1
+        start = end
+        while start > 0 and reg[start - 1] == "expedition":
+            start -= 1
+        return {"best": self.trace["fit_best"][start:end],
+                "mean": self.trace["fit_mean"][start:end],
+                "gens": end - start}
 
     # ---- expedition fitness ---------------------------------------------
 

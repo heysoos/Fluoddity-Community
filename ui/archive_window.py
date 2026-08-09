@@ -208,19 +208,60 @@ class ArchiveWindowMixin:
                 imgui.close_current_popup()
             imgui.end_popup()
 
+    def _render_running_light(self, ast, running: bool):
+        """Whether the search is actually stepping, as a colour.
+
+        "Regime: expansion" reads identically whether the search is running or
+        paused, so the tab looked the same either way and there was no way to
+        tell a stalled run from a stopped one.
+        """
+        dl = imgui.get_window_draw_list()
+        p = imgui.get_cursor_screen_pos()
+        r = imgui.get_text_line_height() * 0.32
+        c = imgui.ImVec2(p.x + r + 2.0, p.y + imgui.get_text_line_height() * 0.5)
+        colour = _OK if running else _DIM
+        dl.add_circle_filled(c, r, imgui.get_color_u32(imgui.ImVec4(*colour)), 16)
+        imgui.dummy(imgui.ImVec2(2.0 * r + 8.0, imgui.get_text_line_height()))
+        imgui.same_line()
+        imgui.text_colored(imgui.ImVec4(*colour),
+                           "Exploring" if running else "Stopped")
+
+    def _render_phase_bar(self, ph):
+        """How far through the current phase, as a bar.
+
+        `total` of 0 means the phase has no finish line - expeditions switched
+        off - and drawing a full or empty bar there would both be lies.
+        """
+        imgui.text(ph["label"])
+        if ph["total"] <= 0:
+            imgui.text_colored(imgui.ImVec4(*_DIM), ph["note"] or "no end point")
+            return
+        frac = max(0.0, min(1.0, ph["done"] / float(ph["total"])))
+        imgui.progress_bar(
+            frac, imgui.ImVec2(-1.0, 0.0),
+            f"{ph['done']} / {ph['total']} {ph['unit']}")
+        if ph["note"]:
+            imgui.text_colored(imgui.ImVec4(*_DIM), ph["note"])
+
     def _render_explore_status(self, ast):
         d = self.archive_driver
         if d is None:
+            self._render_running_light(ast, False)
             imgui.text_colored(imgui.ImVec4(*_DIM), "Not started")
             return
         st = d.status()
-        imgui.text(f"Regime: {st['regime']}")
-        goal = st.get("goal") or "-"
-        imgui.text(f"Goal: {goal}")
+        self._render_running_light(ast, bool(ast.running))
+        # .get, like every other read here: the panel must render against
+        # whatever the driver chooses to report rather than requiring it.
+        phase = st.get("phase")
+        if phase:
+            self._render_phase_bar(phase)
+        else:
+            imgui.text(f"Regime: {st['regime']}")
+            imgui.text(f"Goal: {st.get('goal') or '-'}")
         # Only while there is something to abandon - a permanently dead button
         # would be noise on a panel this dense.
         if st["regime"] == "expedition":
-            imgui.same_line()
             if imgui.button("Cancel##expedition"):
                 ast.cancel_expedition_requested = True
             if imgui.is_item_hovered():
@@ -232,8 +273,16 @@ class ArchiveWindowMixin:
                    f"evicted {st['n_evicted']}")
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "Everything viable and alive is admitted, so near 100% is "
-                "healthy; well below means tiles are black or frozen.")
+                "A low rate is normal with Min Separation on - it means the "
+                "archive already holds those patterns.")
+        if st.get("last_tiles"):
+            imgui.text_colored(
+                imgui.ImVec4(*_DIM),
+                f"Last generation: kept {st.get('last_admitted', 0)} of "
+                f"{st['last_tiles']} tiles   "
+                f"({st.get('n_rejected_close', 0)} too close, "
+                f"{st.get('n_rejected_dead', 0)} dead, all-time)")
+        self._render_explore_traces(d)
         # The seed pool actually used, so the band is legible rather than a
         # pair of numbers with no visible effect.
         if st.get("seed_ess"):
@@ -267,6 +316,55 @@ class ArchiveWindowMixin:
         imgui.same_line()
         imgui.text_colored(imgui.ImVec4(*_DIM), "(Reset keeps the archive)")
         self._render_cycle_estimate(ast)
+
+    _SIZE_COLOR = (0.45, 0.70, 1.00, 1.0)      # blue, how much
+    _NOV_COLOR = (0.85, 0.55, 1.00, 1.0)       # violet, how different
+    _BEST_COLOR = (0.35, 0.85, 0.45, 1.0)      # green, climbing
+    _MEAN_COLOR = (0.45, 0.55, 0.50, 1.0)      # grey-green, the population
+
+    def _render_explore_traces(self, d):
+        """Two plots: what the archive is doing, and what the goal chase is.
+
+        Archive size alone cannot say whether exploration is working - it only
+        ever goes up. Size together with mean novelty can: both climbing is new
+        territory, size climbing while novelty falls is filling in ground the
+        archive already covers, and that is the state the separation rule
+        exists to prevent.
+
+        The expedition plot answers the other question, which was previously
+        unanswerable from the UI at all: is this goal chase still climbing, or
+        did it converge thirty generations ago and start handing the archive
+        sixty-four copies of the same tile?
+        """
+        t = getattr(d, "trace", None)
+        if not t or not t["gen"]:
+            imgui.text_colored(imgui.ImVec4(*_DIM), "no generations yet")
+            return
+
+        if imgui.tree_node_ex("Archive diversity",
+                              imgui.TreeNodeFlags_.default_open):
+            self._render_series(
+                [(t["archive_size"], self._SIZE_COLOR, "size"),
+                 (t["mean_novelty"], self._NOV_COLOR, "mean novelty")],
+                height=70.0)
+            imgui.tree_pop()
+
+        ex = d.expedition_trace()
+        if imgui.tree_node_ex("Expedition fitness",
+                              imgui.TreeNodeFlags_.default_open):
+            if not ex["gens"]:
+                imgui.text_colored(imgui.ImVec4(*_DIM),
+                                   "no expedition has run yet")
+            else:
+                self._render_series(
+                    [(ex["mean"], self._MEAN_COLOR, "mean"),
+                     (ex["best"], self._BEST_COLOR, "best")],
+                    height=70.0)
+                imgui.text_colored(
+                    imgui.ImVec4(*_DIM),
+                    f"{ex['gens']} generations - flat means converged, and a "
+                    f"converged expedition keeps proposing the same tile")
+            imgui.tree_pop()
 
     def _render_cycle_estimate(self, ast):
         """One expansion+expedition cycle in wall-clock, at the measured
@@ -343,11 +441,23 @@ class ArchiveWindowMixin:
             imgui.set_tooltip(
                 "Generations until every entry has been re-scored, i.e. how "
                 "stale novelty may get.")
+        # 0-0.05, because the measurement says the whole useful span is there:
+        # at 0.05 every real archive keeps under 6% of what it holds now.
+        _, ast.min_separation = imgui.slider_float(
+            "Min Separation", ast.min_separation, 0.0, 0.05, "%.4f")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Refuses anything this close to an entry already stored; 0 "
+                "stores everything.")
+        if ast.min_separation <= 0.0:
+            imgui.text_colored(
+                imgui.ImVec4(*_WARN),
+                "off - a converging expedition will store every tile it makes")
         _, ast.capacity = imgui.slider_int("Capacity", ast.capacity, 1000, 100000)
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "The only pruning rule: over capacity, the least novel "
-                "entries are evicted.")
+                "The long-run cap: over capacity, the least novel entries are "
+                "evicted.")
 
     def _render_expedition_settings(self, ast):
         _, ast.expansion_between = imgui.slider_int(

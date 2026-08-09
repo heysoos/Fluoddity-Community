@@ -199,7 +199,7 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   corner, which is why corners looked worst. Verified on the GPU in
   `tests/test_tile_isolation_gl.py`; the non-tournament path is bit-identical.
 
-- **The diffusion's tile guard must be the tile's uv BOX, never a tile index.**
+- **The diffusion's tile guard must be the tile's own BOX, never a tile index.**
   `tournament_tile_uv` derived the index with `clamp(uv, 0, 0.999999)`, so a
   neighbour probe that walked off the canvas clamped back into the *same* tile,
   the zero-flux substitution was skipped, and the tap fell through to the
@@ -209,6 +209,52 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   adjacent neighbours stayed at exactly 0, and it retained only **74.6%** of
   its own trail. Only tiles touching the canvas border leaked — 12 of 16 at
   grid 4, 28 of 64 at grid 8 — and corner tiles on two edges each.
+
+- **A tile owns a whole number of TEXELS, in INTEGER arithmetic, and `%` is
+  banned near a seam.** The canvas is `int(1024*sqrt(world_size))` — **647** at
+  the default world_size of 0.40 — and the grid slider is 2..8, so no canvas
+  size divides for every setting. Three independent defects came out of this at
+  grid 8, each of which alone reproduced "the middle rows and columns are not
+  toroidal":
+  1. *An equal share of the WORLD is not a whole number of texels.* 647/8 =
+     80.875, so seams ran through the middle of a texel. Column 4 retained
+     **25.7%** of its own trail and **39 of 64** tiles lit a tile they could not
+     legally reach.
+  2. *Float arithmetic decides a seam by its last bit.* GLSL does not require
+     division to be correctly rounded, and 647*4/8 is exactly 323.5 — this GPU
+     evaluates `floor((323.5/647)*8)` as **3** where the true answer is 4, so
+     texel 323 fell outside its own tile's box and bridged tiles 3 and 4.
+     Snapping alone made it **worse** (4.6%). `tile_lo_texel()` is integer
+     ceil-division.
+  3. *`%` is undefined in GLSL when either operand is negative*, and the south
+     and west probes are always at `lo - 1`. That cost **84%** of a tile's
+     trail at 647 and *nothing at all* at 1024, where the tile is 128 wide and
+     the compiler's bitmask happens to be right for negatives. **This is why
+     testing at a power-of-two resolution hides all three.**
+  One definition, repeated in `entity_update.glsl`, `canvas.frag` and
+  `brush.vert`, plus `services/tile_geometry.py` for the CPU (the capture crop
+  uses it too — an even split put ~1.4px of the neighbour into each 224px
+  tile). `tests/test_tile_isolation_gl.py` runs the whole grid at 647/8, 647/3
+  and 641/7 on purpose.
+
+- **Admission gates on SEPARATION, and that is not the novelty threshold coming
+  back.** `min_separation` (0.02, measured) refuses anything within that cosine
+  distance of an entry already stored — the unstructured-archive rule from
+  quality-diversity. Without it a converging expedition stores its own endpoint
+  64 times a generation: measured on the real archives, ONE goal had already
+  contributed **25%** of `debug07` (3200 of 12672) and **30%** of `debug05`.
+  Replaying each archive in insertion order at l=0.02 keeps 33.3% of `default`
+  and cuts that goal's share about twice as hard as everything else, taking a
+  generation from 16–64 admissions to 5–14. At 0.05 every archive keeps under
+  6%, so the useful span really is 0–0.05.
+  This differs from the threshold removed 2026-08-08 in both ways that killed
+  it: there is no feedback controller and no gain, and correlated tiles landing
+  on top of each other is the case it is *meant* to reject rather than a
+  pathology. Three things follow: the driver forces the generation's most novel
+  viable tile through (`force=True`) so a run always leaves a trail; `force`
+  never bypasses liveness; and a separation rejection is **not** added to the
+  rejects ring, because the ring is memory of regions the search was refused and
+  this region is in the archive already.
 
 - **Colour is genetic but, at the default hue gain, NOT HERITABLE — so no text
   goal naming a colour can work.** `e.color.x = HUE_SENSITIVITY * col_params.x`

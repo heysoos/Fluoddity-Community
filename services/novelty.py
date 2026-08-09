@@ -72,6 +72,32 @@ def knn_distances(queries: np.ndarray, reference: np.ndarray, k: int = 10,
     return np.ascontiguousarray(out, dtype=np.float32)
 
 
+def nearest_distance(queries: np.ndarray, reference: np.ndarray,
+                     block_elems: int = DISTANCE_BLOCK_ELEMS) -> np.ndarray:
+    """(n, dim) x (m, dim) -> (n,) cosine distance to the SINGLE closest row.
+
+    The k=10 mean that novelty uses answers "how empty is this neighbourhood";
+    this answers "is there already one of these", which is the question a
+    separation rule asks. They are not interchangeable: ten neighbours at 0.05
+    and one at 0.001 give a healthy-looking novelty of 0.045 for something the
+    archive already holds.
+
+    An empty reference gives inf - nothing is nearby because there is nothing.
+    """
+    q = np.asarray(queries, dtype=np.float32)
+    q = q.reshape(len(q), -1) if len(q) else q.reshape(0, -1)
+    r = np.asarray(reference, dtype=np.float32)
+    n, m = len(q), len(r)
+    if m == 0:
+        return np.full(n, np.inf, dtype=np.float32)
+    rows = max(1, int(block_elems) // m)
+    out = np.empty(n, dtype=np.float32)
+    for s in range(0, n, rows):
+        e = min(s + rows, n)
+        out[s:e] = 1.0 - (q[s:e] @ r.T).max(axis=1)
+    return out
+
+
 def novelty_from_distances(dists: list[np.ndarray], k: int = 10) -> np.ndarray:
     """Merge per-reference distance blocks into one novelty value per query.
 

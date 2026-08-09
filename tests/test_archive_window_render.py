@@ -94,6 +94,40 @@ class _FakeDriver:
         return dict(self._st)
 
 
+class _TracingDriver(_FakeDriver):
+    """A driver that reports the phase and the traces, so the progress bar and
+    both plots are actually drawn rather than skipped by their .get() guards."""
+
+    def __init__(self, gens=40, **over):
+        super().__init__(**over)
+        self._st.update(
+            phase={"label": "expedition: coral reef", "done": 12, "total": 50,
+                   "unit": "generations", "note": "38 left"},
+            last_tiles=64, last_admitted=3,
+            n_rejected_close=900, n_rejected_dead=7,
+            min_separation=0.02, mean_novelty=0.031)
+        self.trace = {
+            "gen": list(range(gens)),
+            # Half the run outside an expedition, so the NaN break in the
+            # fitness line is exercised too.
+            "regime": ["expansion"] * (gens // 2) + ["expedition"] * (gens - gens // 2),
+            "archive_size": [100 + 3 * i for i in range(gens)],
+            "mean_novelty": [0.05 - 0.0005 * i for i in range(gens)],
+            "admitted": [3] * gens,
+            "tiles": [64] * gens,
+            "fit_best": [float("nan")] * (gens // 2)
+                        + [0.2 + 0.01 * i for i in range(gens - gens // 2)],
+            "fit_mean": [float("nan")] * (gens // 2)
+                        + [0.1 + 0.005 * i for i in range(gens - gens // 2)],
+        }
+
+    def expedition_trace(self):
+        n = self.trace["regime"].count("expedition")
+        return {"best": self.trace["fit_best"][-n:] if n else [],
+                "mean": self.trace["fit_mean"][-n:] if n else [],
+                "gens": n}
+
+
 class Harness(ArchiveWindowMixin, AutoTournamentWindowMixin):
     """The two mixins under test, with only the attributes they reach for."""
 
@@ -124,6 +158,30 @@ def test_explore_tab_renders_with_a_live_driver(gui):
     goals.add("coral reef")
     goals.add("lightning")
     h = Harness(driver=_FakeDriver(), archive=_FakeArchive(), goals=goals)
+    assert frame(h.render_explore_tab) > host_only()
+
+
+def test_the_phase_bar_and_both_traces_render(gui):
+    """The status block used to be four lines of text that read identically
+    whether the search was running, stalled or stopped."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive())
+    h.state.archive.running = True
+    assert frame(h.render_explore_tab) > host_only()
+
+
+def test_the_traces_render_before_any_generation_has_run(gui):
+    d = _TracingDriver(gens=0)
+    d.trace = {k: [] for k in d.trace}
+    h = Harness(driver=d, archive=_FakeArchive())
+    assert frame(h.render_explore_tab) > host_only()
+
+
+def test_a_phase_with_no_finish_line_renders(gui):
+    """Expansion Between = 0. A progress bar needs an end; there is none."""
+    d = _TracingDriver()
+    d._st["phase"] = {"label": "expansion: no expeditions", "done": 0,
+                      "total": 0, "unit": "", "note": ""}
+    h = Harness(driver=d, archive=_FakeArchive())
     assert frame(h.render_explore_tab) > host_only()
 
 

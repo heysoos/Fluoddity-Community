@@ -52,8 +52,15 @@ def make(grid=2, **kw):
     ts.init_population()
     seed_n = kw.pop("seed_n", 4)
     liveness_min = kw.pop("liveness_min", 0.0)
-    arc = Archive(store=None, dim=DIM, 
-                  liveness_min=liveness_min, capacity=100)
+    # Off by default here. FakeScorer sends every tile of a generation to the
+    # same one-hot axis, so a batch is four IDENTICAL descriptors - the
+    # separation rule would correctly keep one of the four, and every test that
+    # counts archive entries would be measuring admission rather than the
+    # search logic it is about. test_archive_separation.py tests the rule.
+    min_separation = kw.pop("min_separation", 0.0)
+    arc = Archive(store=None, dim=DIM,
+                  liveness_min=liveness_min, capacity=100,
+                  min_separation=min_separation)
     d = ImgepDriver(ts, FakeScorer(), arc, rng=np.random.default_rng(0))
     # The DRIVER owns these two: tell() pushes them onto the archive every
     # generation, so setting them only on the archive is silently undone on the

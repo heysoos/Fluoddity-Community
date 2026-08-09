@@ -26,6 +26,11 @@ def cand(vec, liveness=1.0, viable=True, dim=4, spec="brain:80"):
 def fresh(**kw):
     kw.setdefault("dim", 4)
     kw.setdefault("capacity", 100)
+    # Off unless a test asks for it. Most fixtures here reuse a handful of
+    # basis vectors, so the separation rule would legitimately refuse the
+    # repeats and every test about eviction or refresh would be measuring
+    # admission instead. The rule has its own section below.
+    kw.setdefault("min_separation", 0.0)
     return Archive(store=None, **kw)
 
 

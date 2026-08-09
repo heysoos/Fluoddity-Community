@@ -48,9 +48,11 @@ class ArchiveState:
     # rejected 43 of 131 hand-curated presets. This floor clears the quietest
     # of them by 1.7x while still rejecting a frozen canvas, which scores 0.
     liveness_min: float = 0.002
-    # Capacity is now the ONLY pruning rule - admission does not gate on
-    # novelty, so this is what decides how much survives. See services/archive.
+    # Capacity is the long-run cap; min_separation is what stops a converged
+    # expedition filling it with its own endpoint. MEASURED - see
+    # services/archive.DEFAULT_MIN_SEPARATION for the table. 0 disables it.
     capacity: int = 20000
+    min_separation: float = 0.02
     # Generations for a full novelty sweep, NOT entries per generation: the
     # bound that matters is how stale novelty may get, and it has to hold as
     # the archive grows. See ImgepDriver._refresh_count.
