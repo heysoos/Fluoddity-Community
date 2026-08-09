@@ -827,16 +827,58 @@ class Sim:
     def apply_rule(self, rule: np.ndarray | None) -> None:
         """Apply a brain to slot 0, which is what manual mode reads.
 
-        Signature unchanged from when this set 20 individual uniforms: every
-        caller still hands it a (10, 8) Fourier genome or None. None writes
-        zeros, which the shader reads as 'no brain loaded' and answers with a
-        per-cohort random rule - the startup behaviour.
+        Signature unchanged from when this set 20 individual uniforms: callers
+        hand it a (10, 8) Fourier genome, a flat brain of the active layout, or
+        None.
+
+        A rule of the WRONG WIDTH is ignored rather than reinterpreted. Presets,
+        the undo history and the Z key all carry (10, 8) Fourier genomes, and
+        under another layout those 80 floats mean something else entirely -
+        before this guard they raised inside pack_brains and took the app down.
         """
         from utilities.gl_helpers import pack_brains
 
-        params = (np.zeros(self._brain_layout.length, dtype=np.float32)
-                  if rule is None else np.asarray(rule, dtype=np.float32).reshape(-1))
-        self.multi_load_rule_buffer.write(pack_brains([params], self._brain_layout))
+        layout = self._brain_layout
+        params = None
+        if rule is not None:
+            flat = np.asarray(rule, dtype=np.float32).reshape(-1)
+            if flat.size == layout.length:
+                params = flat
+            elif flat.any():
+                print(f"[brain] ignoring a {flat.size}-float rule under "
+                      f"{layout.signature()}, which wants {layout.length}")
+            # An all-zero rule of ANY width is the codebase's "no brain"
+            # marker - the Z key and the undo history both use the (10, 8)
+            # form - so it falls through silently rather than warning.
+        if params is None:
+            params = self._blank_brain(layout)
+        self.multi_load_rule_buffer.write(pack_brains([params], layout))
+
+    def _blank_brain(self, layout) -> np.ndarray:
+        """What 'no rule loaded' has to mean for this layout.
+
+        Fourier gets ZEROS, which the shader answers with a generated per-cohort
+        rule - the startup behaviour, and kept bit-exact.
+
+        NO OTHER MODALITY HAS THAT FALLBACK: it builds FourierCenters, so it is
+        meaningless for a Gabor or MLP brain. And their all-zero brain is not a
+        neutral starting point, it is SILENCE - every amplitude is zero, so the
+        output is identically zero for every input, no force reaches any
+        particle, and the canvas fades to black. That is what "changed to gabor
+        and the particles disappeared" was.
+
+        So they get a random brain of their own layout, which is the same
+        user-visible result the Fourier fallback gives. Seeded from rule_seed,
+        so pressing reset produces a NEW brain and the same seed reproduces it.
+        """
+        from services.brains import get
+
+        if layout.modality == "fourier":
+            return np.zeros(layout.length, dtype=np.float32)
+        seed = float(getattr(getattr(self, "_state", None), "rule_seed", 0.0) or 0.0)
+        rng = np.random.default_rng(int(abs(seed) * 1e9) % (2 ** 32))
+        return np.asarray(get(layout.modality).random(rng, layout),
+                          dtype=np.float32).reshape(-1)
 
     def apply_tournament(self, enabled: bool, grid: int = 4,
                          mutation: float = 0.0, plain_colour: bool = False,

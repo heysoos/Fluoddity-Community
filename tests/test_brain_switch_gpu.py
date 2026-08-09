@@ -83,6 +83,58 @@ def test_switching_back_and_forth_keeps_working(sim, ctx):
         assert float(np.linalg.norm(after - before, axis=1).mean()) > 1e-4, name
 
 
+@pytest.mark.parametrize("name", MODALITIES)
+def test_a_switch_leaves_a_brain_that_actually_RUNS(sim, ctx, name):
+    """The state the switch really produces, not the one the tests wanted.
+
+    _apply_brain_layout drops the old genome, because its floats mean something
+    else under a new layout. For Fourier the shader answers an all-zero brain
+    with a generated per-cohort rule. NO OTHER MODALITY HAS THAT - the fallback
+    builds FourierCenters - and their zero brain is not a fallback but silence:
+    a Gabor filter with amplitude 0 and envelope width 1e-3 returns 0 for every
+    input, so every particle stops and the canvas fades to black. Reported as
+    "changed to gabor and particles disappeared".
+    """
+    from services.brains import REGISTRY
+    from state import SimState
+
+    layout = REGISTRY[name].layout_from_settings({})
+    sim.realloc_brain_buffers(layout)
+    st = SimState()
+    st.MUTATION_SCALE = 0.0
+    st.rule_seed = 0.5
+    sim.apply_state(st)
+    sim.apply_rule(None)                    # exactly what the switch does
+    sim.reset_seed = 0.0
+    sim.reset()
+
+    before = np.frombuffer(sim.entities.read(), dtype=np.float32
+                           ).reshape(-1, 12)[: sim.entity_count, 0:2].copy()
+    for _ in range(60):
+        sim.apply_state(st)
+        sim.update(ctx)
+    after = np.frombuffer(sim.entities.read(), dtype=np.float32
+                          ).reshape(-1, 12)[: sim.entity_count, 0:2].copy()
+
+    assert np.all(np.isfinite(after)), name
+    assert float(np.linalg.norm(after - before, axis=1).mean()) > 1e-4, (
+        f"{name}: a fresh switch leaves the particles frozen"
+    )
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_a_rule_of_the_wrong_width_does_not_crash(sim, ctx, name):
+    """Presets, the undo history and the Z key all carry (10, 8) Fourier
+    genomes. Handing one to a 168-float layout raised inside pack_brains and
+    took the whole app down."""
+    from services.brains import REGISTRY
+
+    layout = REGISTRY[name].layout_from_settings({})
+    sim.realloc_brain_buffers(layout)
+    sim.apply_rule(np.zeros((10, 8), dtype=np.float32))     # must not raise
+    sim.apply_rule(np.zeros(512, dtype=np.float32))         # nor this
+
+
 def test_the_readback_buffer_is_resized_by_the_switch(sim, ctx):
     """It is BRAIN_LEN floats per particle. Left at the old width, a wider
     layout reads past the end of its own row on adopt."""

@@ -385,7 +385,12 @@ class App:
         # The GPU side first: the per-particle readback buffer is sized by the
         # active length, and slot 0 is re-uploaded from whatever rule is live.
         self.sim.realloc_brain_buffers(layout)
-        self.sim.apply_rule(None)      # the old genome means nothing here
+        # The old genome's floats mean something else under a new layout, so it
+        # is dropped. apply_rule(None) then seeds whatever "no rule" means here:
+        # zeros for Fourier (the shader generates a per-cohort rule), a random
+        # brain of the right layout for anything else, which has no such
+        # fallback and would otherwise sit silent.
+        self.sim.apply_rule(None)
 
         # The optimizer searches a different number of dimensions now, so its
         # covariance and population are meaningless. Reset rather than resize.
