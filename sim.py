@@ -75,12 +75,20 @@ class Sim:
         canvas_dim_x,canvas_dim_y = self.get_canvas_dimensions()
         canvas_shape = (canvas_dim_x, canvas_dim_y)
 
+        # Set before any brain buffer is sized: both allocations below derive
+        # from it. Preserved across setup_simulation_state calls so a canvas or
+        # world resize does not silently revert to the default layout.
+        from services.brains import MAX_BRAIN_FLOATS, default_layout
+        if getattr(self, '_brain_layout', None) is None:
+            self._brain_layout = default_layout()
+
         # Allocate state buffers
         self.entities = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_ENTITY_STRUCT)
         # Per-particle brains, for click-to-adopt. Sized to the ACTIVE brain
         # length, never MAX_BRAIN_FLOATS: at the max stride this would be ~1 KB
         # per particle, about 600 MB. realloc_brain_buffers resizes it.
-        self.rule_buffer = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_RULE_STRUCT)
+        self.rule_buffer = self.ctx.buffer(
+            reserve=self.entity_count * self._brain_layout.length * 4)
 
         # Multi-load config buffer. Each MultiLoadConfig is
         # 10 PhysicsSetting * 7 floats (280) + 6 ints (24) + 3 floats (12).
@@ -92,9 +100,8 @@ class Sim:
 
         # The flat brain buffer: 64 slots of MAX_BRAIN_FLOATS floats (128 KB).
         # Slot 0 is manual mode's brain, tournament mode indexes by tile, and
-        # multi-load indexes by config - one buffer for all three.
-        from services.brains import MAX_BRAIN_FLOATS, default_layout
-        self._brain_layout = default_layout()
+        # multi-load indexes by config - one buffer for all three. Fixed stride,
+        # so a layout change never resizes it.
         self.multi_load_rule_buffer = self.ctx.buffer(
             reserve=MAX_MULTI_LOAD_CONFIGS * MAX_BRAIN_FLOATS * 4)
 
@@ -883,6 +890,29 @@ class Sim:
     def write_tournament_rules(self, rule_bytes: bytes) -> None:
         """Upload 16 packed genomes into the (reused) multi-load rule buffer."""
         self.multi_load_rule_buffer.write(rule_bytes)
+
+    @property
+    def brain_layout(self):
+        """The active brain layout. Read by anything that needs the buffer
+        stride - click-to-adopt readback, in particular."""
+        return self._brain_layout
+
+    def realloc_brain_buffers(self, layout) -> None:
+        """Resize the per-particle brain buffer for a new layout.
+
+        It is BRAIN_LEN floats per particle, NOT MAX_BRAIN_FLOATS: at the max
+        stride this would be ~1 KB per particle, about 600 MB at the default
+        count. The flat brain buffer needs no resize - it is 64 fixed-stride
+        slots totalling 128 KB.
+
+        Called on every layout change, which already resets the optimizer and
+        switches archive, so the reallocation cost is invisible.
+        """
+        self._brain_layout = layout
+        self.rule_buffer.release()
+        self.rule_buffer = self.ctx.buffer(
+            reserve=self.entity_count * layout.length * 4)
+        self.rule_buffer.bind_to_storage_buffer(2)
 
     def get_entity_buffer(self) -> moderngl.Buffer:
         """Expose entity buffer for EntityPicker."""

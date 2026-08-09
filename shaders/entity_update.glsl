@@ -540,7 +540,14 @@ void main() {
     }
 
     // Only write brains when explicitly requested (expensive - BRAIN_LEN floats
-    // per particle). Restored in Task 5.
+    // per particle). Click-to-adopt reads this back for one entity, and needs
+    // the MUTATED values, which is why it goes through brain_at().
+    if(WRITE_RULES) {
+        uint out_base = index * uint(BRAIN_LEN);
+        for(int i = 0; i < BRAIN_LEN; i++) {
+            particle_brains[out_base + uint(i)] = brain_at(brain_base, i);
+        }
+    }
 
 
     //frame_count == 0 signals a simulation reset

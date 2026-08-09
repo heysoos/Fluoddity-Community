@@ -72,6 +72,35 @@ def test_fourier_glsl_is_pure():
         assert forbidden not in src, f"brain function is not pure: {forbidden}"
 
 
+def test_per_particle_buffer_is_sized_by_brain_len_not_max():
+    """MAX_BRAIN_FLOATS per particle would be ~600 MB at 600k particles. The
+    per-particle buffer must use the ACTIVE length.
+
+    Asserts on the reserve= expression rather than the whole function, because
+    the comment above it legitimately names MAX_BRAIN_FLOATS to explain why it
+    is not used.
+    """
+    src = read("sim.py")
+    i = src.index("def realloc_brain_buffers")
+    body = src[i:i + 1200]
+    j = body.index("reserve=")
+    alloc = body[j:body.index(")", j)]
+    assert "layout.length" in alloc, f"per-particle stride is wrong: {alloc!r}"
+    assert "MAX_BRAIN_FLOATS" not in alloc, (
+        f"per-particle buffer must not use the max stride: {alloc!r}"
+    )
+
+
+def test_particle_brains_are_written_only_when_requested():
+    """Writing BRAIN_LEN floats per particle is expensive; it happens for one
+    frame when click-to-adopt asks for it."""
+    src = read("shaders/entity_update.glsl")
+    i = src.index("if(WRITE_RULES)")
+    body = src[i:i + 300]
+    assert "particle_brains[" in body
+    assert "BRAIN_LEN" in body
+
+
 def test_pack_brains_pads_each_brain_to_the_stride():
     layout = default_layout()
     a = np.arange(layout.length, dtype=np.float32)
