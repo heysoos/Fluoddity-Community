@@ -40,51 +40,40 @@ def tryset(program:moderngl.Program,uniform,value):
         if MUTED_TRYSET_WARNINGS[uniform]<10:
             print('Warning: ',uniform,' not present in ',program)
 
-def readback_rule(rule_buffer, rule_index):
+def readback_rule(rule_buffer, rule_index, layout=None):
     """
-    Read back a single Rule from the buffer at the specified index.
-    
-    Structure:
-    - FourierCenter: vec4 frequency + vec4 amplitude = 8 floats = 32 bytes
-    - Rule: 10 RbfCenters = 10 * 32 = 320 bytes
-    """
-    
-    # Calculate the byte offset for the specific rule
-    rule_size_bytes = 320  # 10 centers * 32 bytes per center
-    offset = rule_index * rule_size_bytes
-    
-    # Read the specific rule from the buffer
-    rule_bytes = rule_buffer.read(size=rule_size_bytes, offset=offset)
-    
-    # Convert bytes to numpy array
-    # Each Rule contains 80 floats (10 centers * 8 floats per center)
-    rule_data = np.frombuffer(rule_bytes, dtype=np.float32)
-    
-    # Reshape to [10 centers, 8 floats per center]
-    rule_reshaped = rule_data.reshape(10, 8)
-    
-    return rule_reshaped
-def set_rule_uniform(program, rule_data):
-    """
-    Set a Rule as a uniform in the shader program.
+    Read back a single brain from the per-particle buffer.
 
-    Args:
-        example_prog: ModernGL program object
-        rule_data: numpy array of shape (10, 8) containing the rule data
+    The buffer's stride is the ACTIVE brain length, not MAX_BRAIN_FLOATS - see
+    Sim.realloc_brain_buffers for why. Fourier brains keep their (N, 8) shape
+    so click-to-adopt hands the rest of the app what it has always expected.
     """
+    from services.brains import default_layout
 
-    # Method 1: Set individual FourierCenter uniforms
-    for i in range(10):
-        center_data = rule_data[i]
-        frequency = center_data[:4]      # First 4 floats are frequency
-        amplitude = center_data[4:]      # Last 4 floats are amplitude
+    layout = layout or default_layout()
+    stride_bytes = layout.length * 4
+    offset = rule_index * stride_bytes
 
-        # Set uniforms (assuming uniform names like target_rule.centers[0].frequency, etc.)
-        try:
-            program[f'target_rule.centers[{i}].frequency'] = tuple(frequency)
-            program[f'target_rule.centers[{i}].amplitude'] = tuple(amplitude)
-        except Exception:
-            print('failed rule uniforms')
+    data = np.frombuffer(
+        rule_buffer.read(size=stride_bytes, offset=offset), dtype=np.float32)
+    if layout.modality == "fourier":
+        return data.reshape(layout.shape[0], 8)
+    return data.copy()
+
+
+def pack_brains(params_list, layout) -> bytes:
+    """Pack brains into the flat SSBO, each zero-padded to MAX_BRAIN_FLOATS.
+
+    std430 gives a float array a 4-byte stride with no padding, so this is a
+    straight memcpy - there is no struct alignment to get wrong.
+    """
+    from services.brains import MAX_BRAIN_FLOATS
+
+    out = np.zeros((len(params_list), MAX_BRAIN_FLOATS), dtype=np.float32)
+    for i, p in enumerate(params_list):
+        flat = np.asarray(p, dtype=np.float32).reshape(-1)
+        out[i, : layout.length] = flat[: layout.length]
+    return out.tobytes()
 
 def load_image_as_texture(ctx, image_path):
     """

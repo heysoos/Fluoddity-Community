@@ -66,11 +66,23 @@ def test_handler_without_tournament_service_still_resizes():
 
 
 def test_shader_has_zero_rule_fallback():
-    """Defence in depth: an all-zero tournament genome must not freeze the tile."""
+    """Defence in depth: an all-zero tournament genome must not freeze the tile.
+
+    The fallback now spans two files - entity_update.glsl detects the blank
+    brain and sets g_brain_fallback, and _dispatch.glsl answers it with a
+    per-cohort random rule - so both halves are asserted. Either one alone is a
+    frozen grid.
+    """
     from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "shaders" / "entity_update.glsl").read_text()
-    # Anchor on the rule-selection block specifically (not the reset-scatter block,
-    # which also tests TOURNAMENT_MODE).
-    i = src.index("current_rule = target_rules[htile]")
-    block = src[i:i + 500]
-    assert "generate_random_centers" in block, "no fallback for a zeroed genome buffer"
+    shaders = Path(__file__).resolve().parent.parent / "shaders"
+
+    src = (shaders / "entity_update.glsl").read_text()
+    i = src.index("bool blank = brain_params[brain_base]")
+    block = src[i:i + 400]
+    assert "g_brain_fallback = true" in block, "a zeroed genome buffer is not detected"
+
+    dispatch = (shaders / "brains" / "_dispatch.glsl").read_text()
+    j = dispatch.index("g_brain_fallback")
+    assert "generate_random_centers" in dispatch[j:j + 200], (
+        "no fallback rule for a zeroed genome buffer"
+    )

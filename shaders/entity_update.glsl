@@ -10,14 +10,16 @@ struct Entity {
     float padding[2];  // Align to 16-byte boundary for vec4
     vec4 color;
 };  // Total: 48 bytes (12 floats)
-struct Rule {
-    FourierCenter centers[10];
-};
+// The brain buffer, its uniforms and brain_at() live in shaders/brains/_header.glsl,
+// which is prepended ahead of every brain_*.glsl.
 layout(std430, binding = 0) buffer EntityBuffer {
     Entity entities[];
 };
-layout(std430, binding = 2) buffer RuleBuffer {
-    Rule rules[];
+// Per-particle brains, written only when WRITE_RULES is set (click-to-adopt).
+// Sized to BRAIN_LEN floats per particle by the host, NOT MAX_BRAIN_FLOATS:
+// at the max stride this would be ~1 KB per particle, about 600 MB.
+layout(std430, binding = 2) buffer BrainReadbackBuffer {
+    float particle_brains[];
 };
 // SYNCHRONIZED: This struct must match canvas.frag
 // Locations to synchronize: shaders/entity_update.glsl, shaders/canvas.frag
@@ -32,7 +34,6 @@ struct PhysicsSetting {
 };
 uniform float WORLD_SIZE;
 uniform int frame_count;
-uniform Rule target_rule;
 uniform sampler2D canvas; //trails canvas
 uniform sampler2D field_texture; // Force/Strafe field (.xy=force, .zw=strafe)
 uniform bool advanced_drawing_resources_initialized; // True when field_texture has valid data
@@ -111,10 +112,6 @@ layout(std430, binding = 3) buffer MultiLoadConfigBuffer {
     MultiLoadConfig configs[64];
 };
 
-// Multi-load target rules (separate buffer for cleaner organization)
-layout(std430, binding = 4) buffer MultiLoadRuleBuffer {
-    Rule target_rules[64];
-};
 
 ////////////////////////////CONSTANTS
 #define PI 3.1415926
@@ -338,9 +335,17 @@ float get_particle_rule_seed() {
     return idx >= 0 ? configs[idx].rule_seed : RULE_SEED;
 }
 
-Rule get_particle_target_rule() {
+// Which slot of brain_params this particle reads. Multi-load configs own
+// slots by config index; tournament mode by tile; otherwise slot 0.
+uint get_particle_brain_base() {
     int idx = get_particle_config_index();
-    return idx >= 0 ? target_rules[idx] : target_rule;
+    uint slot = 0u;
+    if (idx >= 0) {
+        slot = uint(idx);
+    } else if (TOURNAMENT_MODE == 1) {
+        slot = uint(tournament_home_tile(gl_GlobalInvocationID.x));
+    }
+    return slot * uint(MAX_BRAIN_FLOATS);
 }
 
 
@@ -440,17 +445,8 @@ void reset(uint index){
     entities[index]=Entity(pos,vel,size,cohort_val/float(cohorts),float[2](0,0),color);
 }
 
-//randomly change noise function parameters, scaled by parameter amount. 
-//Each cohort gets a unique mutation for any given rule
-void mutate_rule(inout Rule current_rule,float amount,float cohort){
-    float seed = hash(current_rule.centers[4].frequency.xy+current_rule.centers[7].amplitude.yx+current_rule.centers[1].frequency.zw)+cohort;
-
-    for(int i = 0; i < 10; i++) {
-        vec4 amp_mutation = amount * (-1.0 + 2.0 * hash4(-.5+vec2(-i+seed,i)));
-        current_rule.centers[i].amplitude += amp_mutation;
-        current_rule.centers[i].frequency *= 1 + amount * 0.5 * (hash(vec2(seed,i))-.5);
-    }
-}
+// Per-particle brain mutation lives in shaders/brains/_header.glsl as
+// brain_at(); main() sets g_brain_mut and g_brain_cohort before evaluating.
 
 
 //Used to enforce left-right symmetry in the local coordinates vec2(forward, left)
@@ -466,9 +462,10 @@ float edgeflect(float x){
 }
 
 //Somewhat arbitrary generator of functions with 4 float inputs and 4 float outputs,
-//varying rule should smoothly change the behavior of the function
-vec4 black_box(vec2 L,vec2 R,Rule rule){
-    return (fourier_noise(rule.centers, vec4(L,R)));
+//varying the brain should smoothly change the behavior of the function.
+//eval_brain() is the modality dispatch, in shaders/brains/_dispatch.glsl.
+vec4 black_box(vec2 L,vec2 R,uint base){
+    return eval_brain(base, vec4(L,R));
 }
 
 
@@ -479,14 +476,14 @@ vec4 black_box(vec2 L,vec2 R,Rule rule){
 //PARAMETERS:
 //--L and R: velocity field measurements from left sensor and right sensor.
 //--axis: forward vector that defines our orientation.
-//--rule: coefficients for the noise function that dictates entity behavior.
+//--base: offset of this particle's brain in brain_params.
 //--pos: entity position (for parameter sweeps)
 //--cohort: entity cohort (for parameter sweeps)
 //RETURNS:
 //--force: A "push" vector that will be added to entity.vel
 //--strafe: A "hop" vector that will be added to entity.pos and have no effect on velocity
 //--color: vec2 to be used as parameters in a coloring function
-void calculate_entity_behavior( vec2 L,vec2 R, vec2 axis, Rule rule, vec2 pos, float cohort, out vec2 force, out vec2 strafe, out vec2 color){
+void calculate_entity_behavior( vec2 L,vec2 R, vec2 axis, uint base, vec2 pos, float cohort, out vec2 force, out vec2 strafe, out vec2 color){
 
     //build a local coordinate frame where "axis" is forward.
     vec2 forward=safenorm(axis);
@@ -498,8 +495,8 @@ void calculate_entity_behavior( vec2 L,vec2 R, vec2 axis, Rule rule, vec2 pos, f
     R=vec2(dot(R,forward),dot(R,left));
 
     //calculate black box noise values
-    vec4 baseterm= black_box(L,R,rule);
-    vec4 mirrorterm=black_box(y_reflect(R),y_reflect(L),rule);
+    vec4 baseterm= black_box(L,R,base);
+    vec4 mirrorterm=black_box(y_reflect(R),y_reflect(L),base);
     if(DISABLE_SYMMETRY){mirrorterm = vec4(0);}//disable symmetry by zeroing the mirror term
 
     //Combine base and mirror terms
@@ -526,28 +523,26 @@ void main() {
     Entity e=entities[index];
     float cohort = get_cohort(index);
 
-    Rule current_rule=get_particle_target_rule();
-    if(TOURNAMENT_MODE == 1){
-        int htile = tournament_home_tile(index);
-        current_rule = target_rules[htile];
-        // Safety net: if the genome buffer was reallocated (canvas/world resize) and
-        // not yet re-uploaded, fall back to a generated rule so the tile still runs
-        // instead of freezing on an all-zero brain.
-        if(current_rule.centers[0].frequency==vec4(0) && current_rule.centers[5].amplitude==vec4(0)){
-            current_rule = Rule(generate_random_centers(get_particle_rule_seed()+float(htile)));
-        }
+    uint brain_base = get_particle_brain_base();
+
+    //Each cohort gets a random mutation, applied on read by brain_at().
+    g_brain_mut = calculate_setting(get_particle_mutation_scale(),e.pos,cohort);
+    g_brain_cohort = get_particle_rule_seed()+floor(cohort);
+
+    //Same two-coefficient probe as the old all-zero Rule check: index 0 is the
+    //first frequency component, index 40 the first amplitude of centre 5.
+    bool blank = brain_params[brain_base]==0.0 && brain_params[brain_base+40u]==0.0;
+    if(blank){
+        g_brain_fallback = true;
+        g_brain_seed = (TOURNAMENT_MODE == 1)
+            ? get_particle_rule_seed()+float(tournament_home_tile(index))
+            : get_particle_rule_seed()+floor(cohort);
     }
-    //if a few arbitrary coefficients are exactly 0, then assume target_rule is all 0s (no target) and generate a random rule instead.
-    else if(current_rule.centers[0].frequency==vec4(0) && current_rule.centers[5].amplitude==vec4(0)){
-        current_rule = Rule(generate_random_centers(get_particle_rule_seed()+floor(cohort)));
-    }
-    //Each cohort gets a random mutation
-    mutate_rule(current_rule,calculate_setting(get_particle_mutation_scale(),e.pos,cohort),get_particle_rule_seed()+floor(cohort));
-    // Only write rules when explicitly requested (expensive - 320 bytes per particle)
-    if(WRITE_RULES) {
-        rules[index] = current_rule;
-    }
-    
+
+    // Only write brains when explicitly requested (expensive - BRAIN_LEN floats
+    // per particle). Restored in Task 5.
+
+
     //frame_count == 0 signals a simulation reset
     if (frame_count==0||calculate_setting(get_particle_hazard_rate(),e.pos,cohort)>hash(vec2(float(index)/float(ACTIVE_COUNT),frame_count))){reset(index);return;}
 
@@ -597,7 +592,7 @@ void main() {
     vec2 strafe =vec2(0);
     vec2 force = vec2(0);
     vec2 col_params = vec2(0);
-    calculate_entity_behavior(ltap.xy,rtap.xy,orientation,current_rule,e.pos,cohort,force,strafe,col_params);
+    calculate_entity_behavior(ltap.xy,rtap.xy,orientation,brain_base,e.pos,cohort,force,strafe,col_params);
 
     //rescale output forces
     force *= 1./SQRT_WORLD_SIZE*calculate_setting(get_particle_global_force_mult(),e.pos,cohort)/400.;

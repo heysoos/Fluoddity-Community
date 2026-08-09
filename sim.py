@@ -2,7 +2,8 @@ import moderngl
 import time
 import math
 import numpy as np
-from utilities.gl_helpers import read_shader, shader_prepend, prepend_defines, tryset, set_rule_uniform
+from utilities.gl_helpers import read_shader, shader_prepend, prepend_defines, tryset, pack_brains
+from services.brains import get as get_brain_modality
 from state import SimState
 
 # Global constants
@@ -76,6 +77,9 @@ class Sim:
 
         # Allocate state buffers
         self.entities = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_ENTITY_STRUCT)
+        # Per-particle brains, for click-to-adopt. Sized to the ACTIVE brain
+        # length, never MAX_BRAIN_FLOATS: at the max stride this would be ~1 KB
+        # per particle, about 600 MB. realloc_brain_buffers resizes it.
         self.rule_buffer = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_RULE_STRUCT)
 
         # Multi-load config buffer. Each MultiLoadConfig is
@@ -86,8 +90,13 @@ class Sim:
         MAX_MULTI_LOAD_CONFIGS = 64
         self.multi_load_buffer = self.ctx.buffer(reserve=MAX_MULTI_LOAD_CONFIGS * MULTI_LOAD_CONFIG_SIZE)
 
-        # Multi-load rule buffer (64 rules * SIZE_OF_RULE_STRUCT bytes per rule)
-        self.multi_load_rule_buffer = self.ctx.buffer(reserve=MAX_MULTI_LOAD_CONFIGS * SIZE_OF_RULE_STRUCT)
+        # The flat brain buffer: 64 slots of MAX_BRAIN_FLOATS floats (128 KB).
+        # Slot 0 is manual mode's brain, tournament mode indexes by tile, and
+        # multi-load indexes by config - one buffer for all three.
+        from services.brains import MAX_BRAIN_FLOATS, default_layout
+        self._brain_layout = default_layout()
+        self.multi_load_rule_buffer = self.ctx.buffer(
+            reserve=MAX_MULTI_LOAD_CONFIGS * MAX_BRAIN_FLOATS * 4)
 
         # Bind entity and rule buffers
         self.entities.bind_to_storage_buffer(0)
@@ -137,6 +146,18 @@ class Sim:
 
         # 1. Entity update compute shader
         self.entity_update_source = read_shader('shaders/entity_update.glsl')
+        # shader_prepend inserts right after the #version line, so the LAST
+        # prepend ends up FIRST. Reading bottom-up, the resulting file order is:
+        #   fourier4_4, _header, fourier, gabor, lenia, mlp, _dispatch, entity_update
+        # which is what every declaration needs: hash() before _header uses it,
+        # the brain functions before _dispatch branches on them.
+        self.entity_update_source = shader_prepend(
+            self.entity_update_source, read_shader('shaders/brains/_dispatch.glsl'))
+        for _brain in ('mlp', 'lenia', 'gabor', 'fourier'):
+            self.entity_update_source = shader_prepend(
+                self.entity_update_source, read_shader(f'shaders/brains/{_brain}.glsl'))
+        self.entity_update_source = shader_prepend(
+            self.entity_update_source, read_shader('shaders/brains/_header.glsl'))
         self.entity_update_source = shader_prepend(self.entity_update_source, read_shader('shaders/fourier4_4.glsl'))
         self.entity_update_source = prepend_defines(self.entity_update_source, self.entity_count)
 
@@ -204,6 +225,16 @@ class Sim:
 
         # Only write rules to buffer when explicitly requested (avoids 192MB/frame cost)
         tryset(self.entity_update_program, 'WRITE_RULES', self._pending_rule_buffer_update)
+
+        # Brain dispatch. BRAIN_SHAPE carries each modality's structural ints
+        # (Fourier: centre count; MLP: hidden width and activation).
+        _bl = self._brain_layout
+        tryset(self.entity_update_program, 'BRAIN_MODALITY',
+               get_brain_modality(_bl.modality).modality_id)
+        tryset(self.entity_update_program, 'BRAIN_LEN', int(_bl.length))
+        tryset(self.entity_update_program, 'BRAIN_SHAPE',
+               (int(_bl.shape[0]),
+                int(_bl.shape[1]) if len(_bl.shape) > 1 else 0, 0, 0))
 
         # Multi-load mode: set uniform arrays for all loaded configs
         if multi_load_service and multi_load_service.is_active() and not is_preview_active:
@@ -750,25 +781,32 @@ class Sim:
         # Write config data to SSBO
         self.multi_load_buffer.write(bytes(data))
 
-        # Write rules to separate rule buffer
-        rule_data = bytearray()
+        # Write brains to the flat brain buffer, one MAX_BRAIN_FLOATS slot per
+        # config. A missing rule stays all-zero, which the shader reads as
+        # 'no brain loaded'.
+        brains = []
         for i in range(config_count):
             config = multi_load_service.get_config(i)
             if config is None or config.rule is None:
-                # Write zeros for missing rules
-                rule_data.extend(bytes(SIZE_OF_RULE_STRUCT))
+                brains.append(np.zeros(self._brain_layout.length, dtype=np.float32))
             else:
-                # Write rule as flat float32 array (10 centers * 8 floats = 80 floats)
-                rule_data.extend(config.rule.astype(np.float32).tobytes())
+                brains.append(config.rule.astype(np.float32).reshape(-1))
 
-        self.multi_load_rule_buffer.write(bytes(rule_data))
+        self.multi_load_rule_buffer.write(pack_brains(brains, self._brain_layout))
 
     def apply_rule(self, rule: np.ndarray | None) -> None:
-        """Apply a rule to the shader."""
-        if rule is None:
-            set_rule_uniform(self.entity_update_program, np.zeros((10, 8), dtype=np.float32))
-        else:
-            set_rule_uniform(self.entity_update_program, rule)
+        """Apply a brain to slot 0, which is what manual mode reads.
+
+        Signature unchanged from when this set 20 individual uniforms: every
+        caller still hands it a (10, 8) Fourier genome or None. None writes
+        zeros, which the shader reads as 'no brain loaded' and answers with a
+        per-cohort random rule - the startup behaviour.
+        """
+        from utilities.gl_helpers import pack_brains
+
+        params = (np.zeros(self._brain_layout.length, dtype=np.float32)
+                  if rule is None else np.asarray(rule, dtype=np.float32).reshape(-1))
+        self.multi_load_rule_buffer.write(pack_brains([params], self._brain_layout))
 
     def apply_tournament(self, enabled: bool, grid: int = 4,
                          mutation: float = 0.0, plain_colour: bool = False,
