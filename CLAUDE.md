@@ -274,6 +274,28 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   200 trials the goal's nearest entry WAS its own seed 199 times - and no value
   of beta fixed it. See `docs/superpowers/specs/2026-08-08-expedition-objective-design.md`.
 
+- **The sim does not reproduce itself run to run, so a trajectory diff cannot
+  validate a shader change.** Particles splat additively into a shared texture,
+  which races. Measured at 30k particles / 200 steps, the *same tree run twice*
+  moves 93.6% of particles by more than 1e-3 — as much as two genuinely
+  different shaders do. Aggregate velocity statistics are equally blind. Compare
+  a shader change by evaluating the affected function as a PURE function over a
+  fixed input grid (`purefn` pattern: one invocation per point, no shared
+  writes), which IS bit-reproducible. That is the only instrument that resolved
+  a 56%-of-signal mutation defect which parameter checksums had scored as
+  "within 1–3%".
+
+- **A brain's mutation belongs to its modality, not to a generic per-float
+  helper.** The Fourier mutation is structured: ONE scalar scales all four
+  components of a centre's frequency (so the frequency *vector* keeps its
+  direction and only changes length), amplitudes take a vec4 from a single
+  `hash4()` per centre, and the seed is hashed from the rule's own CONTENT plus
+  the cohort. Jittering the four frequency components independently rotates the
+  vector instead — a different function, 56% mean deviation, and it still looks
+  plausible on screen. A modality that mutates structurally implements it in its
+  own `.glsl` and exposes `<modality>_param_at()` so the click-to-adopt
+  writeback returns the rule the particle was actually running.
+
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.
 - **Windows platform** — use forward slashes or `os.path`; use `rm` not `del` in bash commands.
 - **No test suite** — changes must be verified manually.
