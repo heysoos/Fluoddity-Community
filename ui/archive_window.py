@@ -302,9 +302,18 @@ class ArchiveWindowMixin:
                 imgui.same_line()
                 imgui.text(item["text"])
 
-        _, ast.new_goal_text = imgui.input_text("##new_goal", ast.new_goal_text)
+        # enter_returns_true so a list can be typed straight through without
+        # reaching for the mouse between every entry.
+        submitted, ast.new_goal_text = imgui.input_text(
+            "##new_goal", ast.new_goal_text,
+            flags=imgui.InputTextFlags_.enter_returns_true)
+        entered = submitted and bool(ast.new_goal_text.strip())
+        if entered:
+            # Enter defocuses the box by default, which would make the second
+            # goal need a click after all. -1 is the item just submitted.
+            imgui.set_keyboard_focus_here(-1)
         imgui.same_line()
-        if imgui.button("Add Goal") and ast.new_goal_text.strip():
+        if (imgui.button("Add Goal") and ast.new_goal_text.strip()) or entered:
             ast.add_goal_requested = True
 
         order = ["round_robin", "least_matched"]

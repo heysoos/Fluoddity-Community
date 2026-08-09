@@ -529,3 +529,31 @@ def test_the_modals_render_when_open(gui):
         h._render_archive_modals(h.state.archive)
 
     assert frame(run) > host_only()
+
+
+# ---- adding goals ------------------------------------------------------
+
+def test_the_goal_box_submits_on_enter(gui):
+    """enter_returns_true, so a list of goals can be typed straight through
+    without reaching for the mouse between every entry."""
+    h = Harness(goals=GoalList())
+    h.state.archive.new_goal_text = "coral reef"
+    assert frame(h.render_explore_tab) > host_only()
+
+
+def test_the_goal_box_renders_with_the_focus_call_in_the_frame(gui):
+    """set_keyboard_focus_here targets the PREVIOUS item at -1. A wrong offset
+    or a stray call outside an item is an ImGui stack error, which corrupts the
+    whole frame rather than failing here - so rendering at all is the check."""
+    h = Harness(goals=GoalList())
+    for text in ("", "  ", "a goal"):
+        h.state.archive.new_goal_text = text
+        assert frame(h.render_explore_tab) > host_only()
+
+
+def test_an_empty_goal_box_never_requests_an_add(gui):
+    """Enter on a blank box must not append an empty goal."""
+    h = Harness(goals=GoalList())
+    h.state.archive.new_goal_text = "   "
+    frame(h.render_explore_tab)
+    assert h.state.archive.add_goal_requested is False
