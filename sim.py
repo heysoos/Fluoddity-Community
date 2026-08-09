@@ -3,7 +3,13 @@ import time
 import math
 import numpy as np
 from utilities.gl_helpers import read_shader, shader_prepend, prepend_defines, tryset, pack_brains
-from services.brains import get as get_brain_modality
+# NOTE: services.brains is imported LAZILY inside methods, never at module
+# scope. Importing it here pulls in services/__init__ -> config_saver ->
+# ui.physics_params -> ui/__init__ -> ui.core -> services.config_saver, a
+# pre-existing cycle that only resolves when `ui` is imported first. main.py
+# imports sim before ui, so a top-level import here fails at startup - and it
+# fails ONLY in the real app, because tests/conftest.py and
+# tools/shader_compile_check.py both prime `ui` first.
 from state import SimState
 
 # Global constants
@@ -235,6 +241,8 @@ class Sim:
 
         # Brain dispatch. BRAIN_SHAPE carries each modality's structural ints
         # (Fourier: centre count; MLP: hidden width and activation).
+        from services.brains import get as get_brain_modality
+
         _bl = self._brain_layout
         tryset(self.entity_update_program, 'BRAIN_MODALITY',
                get_brain_modality(_bl.modality).modality_id)
