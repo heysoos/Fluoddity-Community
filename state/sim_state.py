@@ -34,7 +34,7 @@ class SimState:
 
     # Appearance settings (saved with physics config)
     ink_weight: float = 1.0  # Watercolor mode: controls optical density in exp()
-    hue_sensitivity: float = 0.9
+    hue_sensitivity: float = 0.09
     # Cohort colouring REPLACES the brain's hue with hash(cohort), so a tile's
     # palette becomes a function of its slot rather than its genome. Off by
     # default. Old saves are unaffected: a config missing the key falls back in

@@ -163,3 +163,27 @@ def test_the_admitted_count_is_reported():
     d.tell(d.ask(4), converged(4))
     st = d.status()
     assert st["last_tiles"] == 4 and st["last_admitted"] == 1
+
+
+# ---- reset --------------------------------------------------------------
+
+def test_reset_clears_the_traces():
+    """The plots are drawn against a generation counter that restarts at 0
+    here. Keeping the old points would draw the new run on top of the old one
+    with no way to tell them apart."""
+    d, _a, _t = make(seed_n=4)
+    for _ in range(3):
+        d.tell(d.ask(4), moving(4))
+    assert d.trace["gen"]
+    d.reset()
+    assert all(v == [] for v in d.trace.values())
+    assert d.expedition_trace()["gens"] == 0
+
+
+def test_reset_does_not_clear_the_archive():
+    """Reset abandons the trajectory, not the product."""
+    d, arc, _t = make(seed_n=4)
+    d.tell(d.ask(4), moving(4))
+    n = len(arc)
+    d.reset()
+    assert len(arc) == n

@@ -22,10 +22,17 @@ class _Handler:
         from command_handler import CommandHandler
 
         self.switched = []
+        self.released = []
         self.switch_archive = lambda name, ui: (self.switched.append(name), True)[1]
-        # The method under test is called unbound, so its own helper has to be
-        # reachable through self. It is a staticmethod, so this is the real one.
+        # Emptying or deleting must happen with nothing holding the directory
+        # open: ArchiveStore keeps index.jsonl open for append, and Windows
+        # refuses to rename such a directory (WinError 5).
+        self.release_archive = lambda ui: self.released.append("release")
+        # The method under test is called unbound, so its own helpers have to
+        # be reachable through self.
         self._clear_archive_flags = CommandHandler._clear_archive_flags
+        self._release_current_archive = (
+            lambda ui: CommandHandler._release_current_archive(self, ui))
 
 
 def run(handler, ui_state):
@@ -96,7 +103,12 @@ def test_delete_refuses_the_last_archive(root, tmp_path):
 
     assert (root / "default").is_dir()
     assert "only archive" in ui.archive.warning
-    assert h.switched == []
+    # Reopened, not left closed. The store was released before the attempt so
+    # Windows would let the directory go; a refusal after that has to put the
+    # archive back, or persistence is silently dead for the rest of the session
+    # and the next admission goes nowhere.
+    assert h.released == ["release"]
+    assert h.switched == ["default"]
 
 
 def test_the_dropdown_selection_switches(root, tmp_path):
@@ -151,3 +163,42 @@ def test_nothing_happens_without_a_switch_callback(root, tmp_path):
 
     assert not (root / "run-07").exists()
     assert ui.archive.new_archive_requested is False
+
+
+# ---- letting go of the directory first ---------------------------------
+
+def test_empty_releases_the_archive_before_renaming_it(root, tmp_path):
+    """ArchiveStore keeps index.jsonl open for append, and Windows refuses to
+    rename a directory containing an open handle - WinError 5, "Access is
+    denied", which is what Empty was failing with every time."""
+    h, ui = _Handler(), _UIState()
+    ui.archive.clear_archive_requested = True
+
+    run(h, ui)
+
+    assert h.released == ["release"]
+    assert h.switched == ["default"], "and rebuilt afterwards"
+
+
+def test_delete_releases_the_archive_first_too(root, tmp_path):
+    (root / "keeper" / "thumbs").mkdir(parents=True)
+    h, ui = _Handler(), _UIState()
+    ui.archive.delete_archive_requested = True
+
+    run(h, ui)
+
+    assert h.released == ["release"]
+    assert not (root / "default").exists()
+
+
+def test_a_plain_switch_does_not_release_separately(root, tmp_path):
+    """_switch_archive releases as part of its own sequence; releasing here as
+    well would close the store twice and pause the search for no reason."""
+    (root / "other" / "thumbs").mkdir(parents=True)
+    h, ui = _Handler(), _UIState()
+    ui.archive.switch_archive_name = "other"
+
+    run(h, ui)
+
+    assert h.released == []
+    assert h.switched == ["other"]

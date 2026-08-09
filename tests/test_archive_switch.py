@@ -96,6 +96,13 @@ class _FakeApp:
 
         return App._build_archive_set(self, path)
 
+    def _release_archive(self, ui_state):
+        """Also the real one: it is the half of the switch that lets go of the
+        directory, and the order it does that in is what these tests check."""
+        from main import App
+
+        return App._release_archive(self, ui_state)
+
 
 class _UIState:
     def __init__(self):

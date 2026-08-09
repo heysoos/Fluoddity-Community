@@ -211,9 +211,16 @@ class ImgepDriver:
 
     def reset(self) -> None:
         """Clears the SEARCH, never the archive. The archive is the product;
-        Reset is about abandoning the current trajectory through it."""
+        Reset is about abandoning the current trajectory through it.
+
+        The traces go with it. They are plotted against a generation counter
+        that restarts at 0 here, so keeping them would draw the new run on top
+        of the old one with no way to tell which was which.
+        """
         self.gen = 0
         self._since_expedition = 0
+        for v in self.trace.values():
+            v.clear()
         self.end_expedition()
 
     def end_expedition(self) -> None:

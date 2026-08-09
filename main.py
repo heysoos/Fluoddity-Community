@@ -138,6 +138,7 @@ class App:
         # Archive switching is orchestration, so CommandHandler asks for it
         # rather than reaching into App.
         self.command_handler.switch_archive = self._switch_archive
+        self.command_handler.release_archive = self._release_archive
         # Xbox controller (FPS camera for shader-driven field)
         self.controller_cam = ControllerCam()
         self.joystick_state = {'joystick_id': find_joystick(), 'prev_buttons': []}
@@ -285,15 +286,37 @@ class App:
         create(root, DEFAULT_ARCHIVE)
         return resolve(root, DEFAULT_ARCHIVE)
 
-    def _switch_archive(self, name, ui_state):
-        """Point the search at a different archive directory. -> success.
+    def _release_archive(self, ui_state):
+        """Let go of the archive DIRECTORY: flush, save, close, drop textures.
 
-        The order below is the whole content of this method. Flush before
-        closing the store, or the entries since the last 200-admission vector
-        flush are lost. Release the thumbnail cache before rebuilding, or the
-        new archive shows the old one's pictures - entry ids restart at 0 in
-        every archive.
+        Separate from _switch_archive because emptying or deleting an archive
+        has to happen with nothing holding it. ArchiveStore keeps index.jsonl
+        open for append, and Windows refuses to rename or remove a directory
+        that contains an open handle - that is WinError 5, the "access is
+        denied" Empty was failing with.
+
+        Flush before closing the store, or the entries since the last
+        200-admission vector flush are lost. Release the thumbnail cache too:
+        entry ids restart at 0 in every archive, so a stale cache would show
+        the previous archive's pictures under the new archive's entries.
         """
+        ui_state.archive.running = False
+        if self.auto_service is not None:
+            self.auto_service.pause()
+        if self.imgep_driver is not None:
+            # The CMA-ES mean was seeded from a parent in the OUTGOING archive.
+            self.imgep_driver.end_expedition()
+        if self.archive is not None:
+            self.archive.maybe_flush(force=True)
+        if self.goal_list is not None:
+            self.goal_list.save()
+        if self.archive_store is not None:
+            self.archive_store.close()
+        if self.thumb_cache is not None:
+            self.thumb_cache.release()
+
+    def _switch_archive(self, name, ui_state):
+        """Point the search at a different archive directory. -> success."""
         from services.archive_library import list_archives, resolve, safe_name
         from utilities.paths import get_archives_root
 
@@ -309,21 +332,7 @@ class App:
             ast.archive_list = list_archives(root)
             return False
 
-        if self.auto_service is not None:
-            self.auto_service.pause()
-        ast.running = False
-        if self.imgep_driver is not None:
-            # The CMA-ES mean was seeded from a parent in the OUTGOING archive.
-            self.imgep_driver.end_expedition()
-        if self.archive is not None:
-            self.archive.maybe_flush(force=True)
-        if self.goal_list is not None:
-            self.goal_list.save()
-        if self.archive_store is not None:
-            self.archive_store.close()
-        if self.thumb_cache is not None:
-            self.thumb_cache.release()
-
+        self._release_archive(ui_state)
         self._build_archive_set(path)
 
         ui_state.preferences.archive_name = safe

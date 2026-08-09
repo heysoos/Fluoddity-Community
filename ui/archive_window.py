@@ -88,16 +88,13 @@ class ArchiveWindowMixin:
         ast = self.state.archive
         ast.enabled = True
 
-        if ast.warning:
-            imgui.text_colored(imgui.ImVec4(*_BAD), ast.warning)
-            imgui.same_line()
-            if imgui.button("Dismiss##explore"):
-                ast.warning = ""
-        if ast.notice:
-            imgui.text_colored(imgui.ImVec4(*_OK), ast.notice)
-            imgui.same_line()
-            if imgui.button("Dismiss##notice"):
-                ast.notice = ""
+        # Wrapped, and Dismiss on its OWN line. These carry OS error strings -
+        # "Could not empty 'default': [WinError 5] Access is denied: ..." with
+        # two full paths in it - and same_line() after text that long pushed
+        # the button off the right edge of the panel, so the banner could not
+        # be dismissed at all.
+        self._render_banner(ast, "warning", _BAD)
+        self._render_banner(ast, "notice", _OK)
 
         if self.archive_unavailable:
             imgui.text_colored(imgui.ImVec4(*_WARN), self.archive_unavailable)
@@ -108,21 +105,42 @@ class ArchiveWindowMixin:
 
         self._render_archive_row(ast)
         imgui.separator()
+        # Above the fold, always: which archive, what the search is doing, and
+        # the buttons that change it. Everything below is a setting you adjust
+        # occasionally, so it folds away - the tab was one unbroken column of
+        # twenty sliders and you had to scroll past all of them to reach the
+        # browser button.
         self._render_explore_status(ast)
         imgui.separator()
         self._render_explore_transport(ast)
         imgui.separator()
-        self._render_goal_list(ast)
-        imgui.separator()
-        self._render_rollout_controls(
-            ast, grid_note="changing the grid ends any expedition in flight")
-        imgui.separator()
-        self._render_exploration_settings(ast)
-        imgui.separator()
-        self._render_expedition_settings(ast)
+
+        if imgui.collapsing_header("Goals", imgui.TreeNodeFlags_.default_open):
+            self._render_goal_list(ast)
+        if imgui.collapsing_header("Rollout"):
+            self._render_rollout_controls(
+                ast, grid_note="changing the grid ends any expedition in flight")
+        if imgui.collapsing_header("Exploration"):
+            self._render_exploration_settings(ast)
+        if imgui.collapsing_header("Archive"):
+            self._render_archive_settings(ast)
+        if imgui.collapsing_header("Expeditions"):
+            self._render_expedition_settings(ast)
+
         imgui.separator()
         if imgui.button("Open Archive Browser"):
             ast.show_browser = True
+
+    def _render_banner(self, ast, field, colour):
+        """A dismissable message that may be arbitrarily long."""
+        text = getattr(ast, field)
+        if not text:
+            return
+        imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(*colour))
+        imgui.text_wrapped(text)
+        imgui.pop_style_color()
+        if imgui.button(f"Dismiss##{field}"):
+            setattr(ast, field, "")
 
     def _render_archive_row(self, ast):
         """Which archive is active is an experimental variable, so it sits at
@@ -422,6 +440,7 @@ class ArchiveWindowMixin:
             ast.goal_order = order[idx]
 
     def _render_exploration_settings(self, ast):
+        """How the search MOVES: where children come from and how far."""
         _, ast.sigma_expand = imgui.slider_float(
             "Expansion Sigma", ast.sigma_expand, 0.01, 1.0)
         _, ast.alpha = imgui.slider_float("Novelty Exponent", ast.alpha, 0.0, 8.0)
@@ -430,17 +449,19 @@ class ArchiveWindowMixin:
         _, ast.k = imgui.slider_int("Neighbours (k)", ast.k, 1, 50)
         _, ast.seed_n = imgui.slider_int("Seed Entries", ast.seed_n, 64, 2048)
         _, ast.sigma0 = imgui.slider_float("Bootstrap Sigma", ast.sigma0, 0.05, 1.5)
+
+    def _render_archive_settings(self, ast):
+        """What the archive KEEPS: the admission gates and the retention cap.
+
+        Split from the exploration settings because they answer a different
+        question. These four decide what survives; the others decide where the
+        search looks next.
+        """
         # 0-0.1, not 0-0.5: measured preset liveness tops out at 0.079, so a
         # 0.5 range would bury the entire useful span in the leftmost sixth of
         # the slider.
         _, ast.liveness_min = imgui.slider_float(
             "Liveness Floor", ast.liveness_min, 0.0, 0.1, "%.4f")
-        _, ast.refresh_sweep_gens = imgui.slider_int(
-            "Novelty Sweep (gens)", ast.refresh_sweep_gens, 1, 100)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Generations until every entry has been re-scored, i.e. how "
-                "stale novelty may get.")
         # 0-0.05, because the measurement says the whole useful span is there:
         # at 0.05 every real archive keeps under 6% of what it holds now.
         _, ast.min_separation = imgui.slider_float(
@@ -458,6 +479,12 @@ class ArchiveWindowMixin:
             imgui.set_tooltip(
                 "The long-run cap: over capacity, the least novel entries are "
                 "evicted.")
+        _, ast.refresh_sweep_gens = imgui.slider_int(
+            "Novelty Sweep (gens)", ast.refresh_sweep_gens, 1, 100)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Generations until every entry has been re-scored, i.e. how "
+                "stale novelty may get.")
 
     def _render_expedition_settings(self, ast):
         _, ast.expansion_between = imgui.slider_int(

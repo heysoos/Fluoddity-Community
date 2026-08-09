@@ -784,3 +784,35 @@ def test_admitting_an_entry_invalidates_the_order():
     h.archive_obj.entries.append(h.archive_obj.entries[0])
     h.archive_obj.revision += 1
     assert len(h._sorted_entries(ast, h.archive_obj)) == len(first) + 1
+
+
+def test_a_very_long_warning_still_renders_its_dismiss_button(gui):
+    """These banners carry raw OS error strings. With the button on same_line()
+    after the text, a message this long pushed it past the right edge of the
+    panel and the warning could not be dismissed at all."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive())
+    h.state.archive.warning = (
+        "Could not empty 'default': [WinError 5] Access is denied: "
+        r"'C:\Users\someone\Documents\Fluoddity\archives\default' -> "
+        r"'C:\Users\someone\Documents\Fluoddity\archives\default.cleared-1754800000'")
+    assert frame(h.render_explore_tab) > host_only()
+
+
+def test_every_settings_section_renders_when_opened(gui):
+    """The tab was one unbroken column of about twenty sliders with the browser
+    button below all of them. Folding them away is only safe if each section
+    still draws - a header whose body raises takes the whole frame with it."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+
+    def open_all():
+        # By storage rather than set_next_item_open(), which only reaches the
+        # NEXT item - it would open Goals five times and leave the rest shut,
+        # so the test would pass without ever drawing them.
+        store = imgui.get_state_storage()
+        for name in ("Goals", "Rollout", "Exploration", "Archive",
+                     "Expeditions"):
+            store.set_int(imgui.get_id(name), 1)
+        h.render_explore_tab()
+
+    closed = frame(h.render_explore_tab)
+    assert frame(open_all) > closed, "opening the headers drew nothing extra"

@@ -36,6 +36,9 @@ class CommandHandler:
         self.archive_projection = None
         # App._switch_archive; None until Explore mode has been opened once.
         self.switch_archive = None
+        # App._release_archive. Emptying or deleting an archive must happen
+        # with nothing holding the directory open - see _handle_archive_management.
+        self.release_archive = None
 
         # Preview state
         self.preview_rule_active = False  # File->load preview
@@ -489,20 +492,25 @@ class CommandHandler:
             else:
                 ast.warning = res.message
         elif ast.clear_archive_requested:
+            # LET GO FIRST. ArchiveStore keeps index.jsonl open for append, and
+            # Windows will not rename a directory that contains an open handle:
+            # that is WinError 5, the "access is denied" Empty kept failing
+            # with. Either outcome then needs a rebuild - on success because
+            # the directory is now empty, on failure because we just closed it.
+            self._release_current_archive(ui_state)
             res = clear(root, ast.archive_name)
-            if res.ok:
-                # Same name, now an empty directory: the in-memory archive must
-                # be rebuilt or it would keep serving entries that are gone.
-                target = res.name
-            else:
+            target = res.name if res.ok else ast.archive_name
+            if not res.ok:
                 ast.warning = res.message
         elif ast.delete_archive_requested:
+            self._release_current_archive(ui_state)
             res = delete(root, ast.archive_name)
             if res.ok:
                 remaining = list_archives(root)
                 target = remaining[0]["name"] if remaining else ""
             else:
                 ast.warning = res.message
+                target = ast.archive_name      # reopen what we just closed
         elif ast.switch_archive_name:
             target = ast.switch_archive_name
 
@@ -514,6 +522,17 @@ class CommandHandler:
             ast.archive_list = list_archives(root)
 
         self._clear_archive_flags(ast)
+
+    def _release_current_archive(self, ui_state):
+        """Close everything holding the active archive directory, if we can.
+
+        Optional so the handler still works in tests and in any wiring that
+        never set the callback; the clear/delete then behaves as it did before,
+        which on Windows means it may fail with a message rather than silently
+        corrupting anything.
+        """
+        if self.release_archive is not None:
+            self.release_archive(ui_state)
 
     def _handle_explore(self, ui_state):
         ast = ui_state.archive
