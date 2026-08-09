@@ -134,6 +134,25 @@ class ArchiveStore:
             return ""
         return name
 
+    def delete_thumb(self, name: str) -> bool:
+        """Remove one thumbnail. -> did a file go?
+
+        Load-bearing now that capacity is the only pruning rule: at 64 tiles a
+        generation a full archive evicts 64 entries every ~2.8 s, and an
+        orphaned 9 KB JPEG each would be ~12 MB a minute of files nothing can
+        ever reach again - index.jsonl is append-only and the entry is gone
+        from vectors.npz, so nothing on reload would even name them.
+        """
+        if not self.enabled or not name:
+            return False
+        try:
+            self.thumb_path(str(name)).unlink()
+            return True
+        except OSError:
+            # Already gone, or locked by the gallery's loader. Neither is worth
+            # interrupting a generation over.
+            return False
+
     def save_goals(self, items: list[dict]) -> None:
         if not self.enabled:
             return

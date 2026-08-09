@@ -28,7 +28,6 @@ def test_defaults_match_the_spec_table():
     assert s.expedition_sigma == 0.1
     assert s.latent_share == 0.5
     assert s.liveness_min == 0.002
-    assert s.target_rate == 0.15
     assert s.capacity == 20000
     assert s.refresh_per_gen == 64
     assert s.goal_order == "round_robin"

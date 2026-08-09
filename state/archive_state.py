@@ -48,7 +48,8 @@ class ArchiveState:
     # rejected 43 of 131 hand-curated presets. This floor clears the quietest
     # of them by 1.7x while still rejecting a frozen canvas, which scores 0.
     liveness_min: float = 0.002
-    target_rate: float = 0.15
+    # Capacity is now the ONLY pruning rule - admission does not gate on
+    # novelty, so this is what decides how much survives. See services/archive.
     capacity: int = 20000
     refresh_per_gen: int = 64
 

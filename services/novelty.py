@@ -15,8 +15,9 @@ merged.
 
 Scale note, measured 2026-08-07: over 97 viable presets the mean pairwise
 cosine distance is 0.159 with std 0.063, so novelty here lives in a compressed
-range. Nothing in this module assumes a scale - the adaptive threshold in
-services/archive.py is what adapts to it.
+range. Nothing in this module assumes a scale, and nothing downstream needs a
+threshold in these units either: novelty RANKS entries for eviction rather than
+gating admission, and a ranking is scale-free.
 """
 from __future__ import annotations
 

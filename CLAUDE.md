@@ -101,11 +101,31 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   archived under one preset decodes to a different creature under another. See
   `tests/test_physics_origin_roundtrip.py`.
 
-- **`Archive.refresh()` is what makes eviction cheap.** Eviction drops the
-  lowest *stored* novelty, which is only meaningful because 64 entries per
-  generation are re-scored against the full archive. Turning `refresh_per_gen`
-  down to 0 silently degrades eviction into "drop whatever was least novel when
-  it was admitted".
+- **Admission does not gate on novelty; capacity prunes.** Everything finite,
+  viable and alive is admitted, and `prune_to_capacity()` evicts the least
+  novel once over the cap — one bulk pass per generation, from `tell()`, AFTER
+  `refresh()`. The adaptive threshold that used to gate was removed 2026-08-08
+  for two independent measured reasons. Its `observe()` ran once per
+  *candidate* — 16 tiles a generation at grid 4, 64 at grid 8 — each
+  multiplying the threshold by 1.05 or 0.95, so it could move **2.18x** in one
+  generation (22.7x at grid 8) while steering on a rate averaged over ~6
+  generations; simulated on a *stationary* novelty distribution it admitted
+  nothing in 61% of generations at a rate std of 0.315 against a Bernoulli
+  floor of 0.089. And separately, a generation's tiles are not independent
+  draws — they share one parent sample or one CMA-ES population, so they clear
+  or miss any bar together, which alone raises "every tile admitted" 12x. No
+  gain fixes either. Do not reintroduce a novelty threshold without addressing
+  both.
+
+- **`Archive.refresh()` is what makes pruning meaningful.** Eviction ranks on
+  *stored* novelty, which is only current because `refresh_per_gen` entries are
+  re-scored against the full archive each generation. Turning it to 0 degrades
+  pruning into "drop whatever was least novel when it was admitted".
+
+- **`_remove()` deletes the entry's thumbnail.** Nothing could reach it
+  afterwards — `index.jsonl` is append-only and the id is gone from
+  `vectors.npz`, so the row is dropped on the next open. Without this a full
+  archive at grid 8 orphans 64 JPEGs every ~2.8 s, about 12 MB a minute.
 
 - **Novelty is a LIVE column, so `index.jsonl` cannot be its home.** The index
   is append-only; its `novelty` is forever the at-admission value, measured
@@ -119,8 +139,8 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   Skipping that rescore hands generation 0 — every tile stamped 1.0 by the
   no-reference convention — **100.0%** of the `p ~ novelty^4` parent weight
   (ESS 58 of 4808), and one of those entries is a black frame. Four things
-  read this column: expansion parents, `latent_goal`'s anchor, `_evict_one`,
-  and the browser sort.
+  read this column: expansion parents, `latent_goal`'s anchor,
+  `prune_to_capacity`, and the browser sort.
 
 - **`knn_distances` blocks over query rows.** Only k distances per query
   survive, so the (n, m) matrix is scratch — and a whole-archive rescore at

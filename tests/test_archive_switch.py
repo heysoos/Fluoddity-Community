@@ -224,7 +224,7 @@ def test_switching_loads_the_target_archives_entries(roots):
     from services.archive_io import ArchiveStore
 
     store = ArchiveStore(roots / "dense-trails")
-    arc = Archive(store=store, seed_n=0, liveness_min=0.0)
+    arc = Archive(store=store, liveness_min=0.0)
     _admit(arc, 2)
     arc.maybe_flush(force=True)
     store.close()
@@ -243,7 +243,7 @@ def test_an_archive_is_untouched_by_a_round_trip(roots):
     from services.archive_io import ArchiveStore
 
     store = ArchiveStore(roots / "default")
-    a = Archive(store=store, seed_n=0, liveness_min=0.0)
+    a = Archive(store=store, liveness_min=0.0)
     _admit(a, 4)
     a.maybe_flush(force=True)
     store.close()

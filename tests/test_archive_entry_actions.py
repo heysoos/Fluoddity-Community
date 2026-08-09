@@ -23,8 +23,7 @@ def _unit(a):
 
 
 def archive_with(n=3, spec="brain:80", physics=None):
-    arc = Archive(store=None, dim=4, seed_n=0, liveness_min=0.0, capacity=50)
-    arc.threshold.value = 0.0
+    arc = Archive(store=None, dim=4, liveness_min=0.0, capacity=50)
     rng = np.random.default_rng(0)
     for i in range(n):
         e = np.zeros(4, dtype=np.float32)

@@ -139,7 +139,8 @@ class ImgepDriver:
             "regime": self.regime,
             "goal": self.goal_label,
             "archive_size": st["size"],
-            "threshold": st["threshold"],
+            "capacity": st["capacity"],
+            "n_evicted": st["n_evicted"],
             "admission_rate": st["admission_rate"],
             "n_pinned": st["n_pinned"],
             "blocked_by_pins": st["blocked_by_pins"],
@@ -296,7 +297,6 @@ class ImgepDriver:
         self.archive.liveness_min = (
             float(self.liveness_min) if len(snapshots) >= 2 else 0.0)
         self.archive.k = int(self.k)
-        self.archive.seed_n = int(self.seed_n)
 
         last = snapshots[-1]
         pinned = set(self.tournament.selected)
@@ -338,6 +338,10 @@ class ImgepDriver:
         self._last_descriptors = b
         self.gen += 1
         self.archive.refresh(self.refresh_per_gen)
+        # AFTER refresh, so eviction ranks on the freshest novelty available,
+        # and once per generation rather than per admission - the whole point
+        # of admitting generously is that the ranking happens on the batch.
+        self.archive.prune_to_capacity()
         self.archive.maybe_flush(every=self.flush_every)
 
         if self.regime == "expedition":
@@ -460,7 +464,6 @@ class ImgepDriver:
             "best_z": np.zeros(self.spec.dim, dtype=np.float32),
             "best_fitness": 0.0,
             "imgep_gen": int(self.gen),
-            "imgep_threshold": float(self.archive.threshold.value),
             "imgep_since_expedition": int(self._since_expedition),
         }
 
@@ -471,5 +474,6 @@ class ImgepDriver:
         self.end_expedition()
         self.gen = int(d.get("imgep_gen", 0))
         self._since_expedition = int(d.get("imgep_since_expedition", 0))
-        if "imgep_threshold" in d:
-            self.archive.threshold.value = float(d["imgep_threshold"])
+        # "imgep_threshold" appears in checkpoints written before 2026-08-08.
+        # Ignored rather than rejected: there is no threshold to restore it to,
+        # and an old checkpoint is still perfectly good for gen and cadence.

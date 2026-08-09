@@ -70,15 +70,17 @@ class _FakeArchive:
         return len(self.entries)
 
     def stats(self):
-        return {"size": len(self.entries), "threshold": 0.05,
-                "admission_rate": 0.15, "n_nonfinite": 0, "n_rejected": 0,
-                "n_pinned": 0, "blocked_by_pins": False, "rejects_ring": 0}
+        return {"size": len(self.entries), "capacity": 20000,
+                "admission_rate": 0.98, "n_nonfinite": 0, "n_rejected": 0,
+                "n_evicted": 0, "n_pinned": 0, "blocked_by_pins": False,
+                "rejects_ring": 0}
 
 
 class _FakeDriver:
     def __init__(self, **over):
         self._st = {"regime": "expansion", "goal": "coral reef",
-                    "archive_size": 3, "threshold": 0.05, "admission_rate": 0.15,
+                    "archive_size": 3, "capacity": 20000, "n_evicted": 0,
+                    "admission_rate": 0.98,
                     "n_pinned": 0, "blocked_by_pins": False,
                     "score_label": "novelty", "sigma": 0.15,
                     "algorithm": "CMA-ES", "prompt": "coral reef"}

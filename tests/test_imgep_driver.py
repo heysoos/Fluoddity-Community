@@ -52,9 +52,8 @@ def make(grid=2, **kw):
     ts.init_population()
     seed_n = kw.pop("seed_n", 4)
     liveness_min = kw.pop("liveness_min", 0.0)
-    arc = Archive(store=None, dim=DIM, seed_n=seed_n,
+    arc = Archive(store=None, dim=DIM, 
                   liveness_min=liveness_min, capacity=100)
-    arc.threshold.value = 0.0
     d = ImgepDriver(ts, FakeScorer(), arc, rng=np.random.default_rng(0))
     # The DRIVER owns these two: tell() pushes them onto the archive every
     # generation, so setting them only on the archive is silently undone on the
@@ -138,7 +137,6 @@ def test_sigma_expand_controls_how_far_children_travel():
 
 def test_tell_admits_one_entry_per_viable_live_novel_tile():
     d, arc, _ = make(seed_n=0)
-    arc.threshold.value = 0.0
     d.tell(d.ask(4), moving(4))
     assert len(arc) == 4
 
@@ -271,8 +269,9 @@ def test_reset_clears_the_search_but_keeps_the_archive():
 def test_status_reports_what_the_ui_needs():
     d, _, _ = make()
     st = d.status()
-    assert set(st) >= {"regime", "goal", "archive_size", "threshold",
-                       "admission_rate", "score_label", "sigma"}
+    assert set(st) >= {"regime", "goal", "archive_size", "capacity",
+                       "n_evicted", "admission_rate", "score_label", "sigma"}
+    assert "threshold" not in st, "the adaptive threshold is gone"
 
 
 # ---- expeditions -------------------------------------------------------

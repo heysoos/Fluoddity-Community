@@ -1,21 +1,21 @@
 """The exploration archive: admission gates, capacity, and novelty bookkeeping.
 
-Three gates, all of which must pass:
+ADMIT GENEROUSLY, PRUNE AFTERWARDS. Two gates, and both ask only whether the
+tile is a picture of something:
+
   viable   - the tile is not black or blown out
   alive    - liveness >= liveness_min (ASAL Eq.3; a frozen canvas scores ~0)
-  novel    - kNN novelty >= an ADAPTIVE threshold
 
-The threshold adapts because a fixed one either floods a rich region or starves
-a barren one, and which happens depends on the preset the user loaded. Measured
-2026-08-07, this is load-bearing rather than a convenience: over 97 viable
-presets the mean pairwise cosine distance is 0.159, so novelty lives in a
-compressed range and a threshold guessed from a wider sample would be ~20% too
-high and admit nothing.
+Novelty is not a gate. It ranks, and capacity evicts the bottom of the ranking
+(prune_to_capacity). The asymmetry is the argument: a rejected pattern is gone
+for good and cost a full 2000-step rollout to produce, while an admitted dud
+costs one slot until something more novel displaces it.
 
-While the archive is below seed_n the novelty gate is OFF - bootstrap admits on
-viability and liveness only. With it on from a cold start, reaching 256 entries
-at a 15% target takes ~107 generations (five minutes at 2000 steps), and the
-threshold would be adapting against no distribution at all.
+There WAS a third gate, an adaptive kNN-novelty threshold driven to a target
+admission rate. It was removed 2026-08-08 for two independent reasons, both
+measured - the controller could not be stabilised at any gain, and a
+generation's tiles are not independent draws so they clear or miss any bar
+together. See AdmissionRate.
 
 Entries store the DECODED PHENOTYPE, never z. See
 tests/test_physics_origin_roundtrip.py for why.
@@ -35,18 +35,29 @@ from services.novelty import (
 )
 
 
-class AdaptiveThreshold:
-    """Lehman-Stanley dynamic novelty threshold, driven to a target rate."""
+class AdmissionRate:
+    """What fraction of recent candidates got in. A READOUT, not a controller.
 
-    def __init__(self, initial: float = 0.05, target_rate: float = 0.15,
-                 window: int = 100, lo: float = 1e-4, hi: float = 1.0,
-                 step: float = 0.05):
-        self.value = float(initial)
-        self.target_rate = float(target_rate)
+    It replaces AdaptiveThreshold, a Lehman-Stanley novelty gate driven to a
+    target rate, which was removed 2026-08-08 because it could not be made
+    stable on this substrate. Its `observe()` ran once per CANDIDATE - 16 tiles
+    a generation at grid 4, 64 at grid 8 - and each observation multiplied the
+    threshold by 1.05 or 0.95. All 16 pushing the same way moves it 2.18x in a
+    single generation (22.7x at grid 8), while the rate it steers on is
+    averaged over the last 100 observations, i.e. roughly six generations old.
+    Gain that far above the measurement lag is a limit cycle, not a controller:
+    simulated on a STATIONARY novelty distribution with no archive at all, it
+    admitted nothing in 61% of generations and ran an admission-rate standard
+    deviation of 0.315 against a Bernoulli noise floor of 0.089. That matched
+    the real archives, where admission was bimodal rather than near target.
+
+    Novelty now prunes instead of gating: everything viable and alive is
+    admitted, and capacity evicts the least novel. Rate is kept only so the
+    "nothing is getting in" warning still has something to look at.
+    """
+
+    def __init__(self, window: int = 100):
         self.window = int(window)
-        self.lo = float(lo)
-        self.hi = float(hi)
-        self.step = float(step)
         self._recent: list[int] = []
 
     @property
@@ -57,20 +68,6 @@ class AdaptiveThreshold:
         self._recent.append(1 if admitted else 0)
         if len(self._recent) > self.window:
             self._recent.pop(0)
-        if len(self._recent) < max(4, self.window // 10):
-            return          # too little evidence to steer on
-        if self.rate > self.target_rate:
-            self.value *= (1.0 + self.step)
-        elif self.rate < self.target_rate:
-            self.value *= (1.0 - self.step)
-        self.value = float(min(max(self.value, self.lo), self.hi))
-
-    def state_dict(self) -> dict:
-        return {"value": self.value, "recent": list(self._recent)}
-
-    def load_state_dict(self, d: dict) -> None:
-        self.value = float(d.get("value", self.value))
-        self._recent = [int(x) for x in d.get("recent", [])]
 
 
 @dataclass
@@ -106,17 +103,19 @@ class ArchiveEntry:
 
 class Archive:
     def __init__(self, store=None, capacity: int = 20000, k: int = 10,
-                 liveness_min: float = 0.002, target_rate: float = 0.15,
-                 seed_n: int = 256, dim: int = 512):
+                 liveness_min: float = 0.002, dim: int = 512):
+        # seed_n is gone from here: it existed only to hold the novelty gate
+        # off during bootstrap, and there is no novelty gate. The DRIVER still
+        # has one - it chooses bootstrap vs expansion - but that is a question
+        # about the search, not about admission.
         self.store = store
         self.capacity = int(capacity)
         self.k = int(k)
         self.liveness_min = float(liveness_min)
-        self.seed_n = int(seed_n)
         self._dim = int(dim)
 
         self.entries: list[ArchiveEntry] = []
-        self.threshold = AdaptiveThreshold(target_rate=target_rate)
+        self.admission = AdmissionRate()
         self.rejects = RejectsRing(dim=self._dim)
 
         self._emb = np.zeros((0, self._dim), dtype=np.float32)
@@ -129,6 +128,7 @@ class Archive:
         self._since_flush = 0
         self.n_nonfinite = 0
         self.n_rejected = 0
+        self.n_evicted = 0
         self.blocked_by_pins = False
 
     # ---- views ---------------------------------------------------------
@@ -151,10 +151,11 @@ class Archive:
     def stats(self) -> dict:
         return {
             "size": self._n,
-            "threshold": self.threshold.value,
-            "admission_rate": self.threshold.rate,
+            "capacity": self.capacity,
+            "admission_rate": self.admission.rate,
             "n_nonfinite": self.n_nonfinite,
             "n_rejected": self.n_rejected,
+            "n_evicted": self.n_evicted,
             "n_pinned": sum(1 for e in self.entries if e.pinned),
             "blocked_by_pins": self.blocked_by_pins,
             "rejects_ring": len(self.rejects),
@@ -181,7 +182,8 @@ class Archive:
         Full archive, not a subsample: a subsampled neighbour set inflates kNN
         distances, so subsampled and full novelty values sit on different
         scales and could not be ranked against each other for parent sampling
-        or eviction. This is also what makes eviction cheap - see _evict_one.
+        or eviction. This is also what makes eviction cheap - see
+        prune_to_capacity.
         """
         if n <= 0 or self._n == 0:
             return 0
@@ -237,37 +239,48 @@ class Archive:
 
     def consider(self, cand: Candidate, novelty: float, *, pinned: bool = False,
                  source: str = "expansion", thumb_crop=None) -> ArchiveEntry | None:
-        """Run the gates and add on success. Returns the entry, or None."""
+        """Run the gates and add on success. Returns the entry, or None.
+
+        There is NO novelty gate. Admission asks only whether the tile is a
+        picture of something (finite, viable, moving); novelty decides what
+        gets thrown away later, in prune_to_capacity. Removed 2026-08-08 - see
+        AdmissionRate for why the adaptive one could not work, and note the
+        second, independent reason a gate misbehaves here: a generation's tiles
+        are not independent draws. All 16 or 64 share one parent sample or one
+        CMA-ES population, so they clear or miss any bar together. Simulated,
+        that correlation alone raises "every tile admitted" 12x at an unchanged
+        mean rate - so even a perfectly calm threshold would still be bursty.
+
+        Rejecting is the expensive mistake and admitting is the cheap one: a
+        rejected pattern is gone for good, while an admitted dud costs one slot
+        until something more novel evicts it.
+        """
         if pinned:
             return self._add(cand, novelty, "pin", True, thumb_crop)
 
         if not np.isfinite(cand.embedding).all():
             self.n_nonfinite += 1
             self.n_rejected += 1
+            self.admission.observe(False)
             return None
 
         if not cand.viable or cand.liveness < self.liveness_min:
             self._reject(cand)
+            self.admission.observe(False)
             return None
 
-        if self._n >= self.seed_n:
-            ok = float(novelty) >= self.threshold.value
-            self.threshold.observe(ok)
-            if not ok:
-                self._reject(cand)
-                return None
-
-        return self._add(cand, novelty, source, False, thumb_crop)
+        entry = self._add(cand, novelty, source, False, thumb_crop)
+        self.admission.observe(entry is not None)
+        return entry
 
     def _reject(self, cand: Candidate) -> None:
         self.n_rejected += 1
         self.rejects.add(cand.embedding[None, :])
 
     def _add(self, cand, novelty, source, pinned, thumb_crop) -> ArchiveEntry | None:
-        if self._n >= self.capacity and not self._evict_one():
-            self.blocked_by_pins = True
-            return None
-
+        # Deliberately no eviction here. Pruning is a once-per-generation bulk
+        # pass (prune_to_capacity), so len() may exceed capacity by up to one
+        # generation - 64 entries at grid 8 - and never by more.
         self._grow(1)
         i = self._n
         self._emb[i] = cand.embedding
@@ -295,24 +308,49 @@ class Archive:
 
     # ---- capacity ------------------------------------------------------
 
-    def _evict_one(self) -> bool:
-        """Drop the least novel non-pinned entry. -> did anything go?
+    def prune_to_capacity(self) -> int:
+        """Drop the least novel entries until len <= capacity. -> how many went.
 
-        ASAL's illumination criterion (remove the least novel) applied as an
-        eviction rule. It is O(N) and free BECAUSE refresh() keeps stored
-        novelty current; a sampled nearest-neighbour pass here would be ~5
-        GFLOP and would fire on every admission once the cap is reached.
+        The ONLY pruning rule now that admission does not gate on novelty:
+        ASAL's illumination criterion as an eviction rule, so what survives is
+        the `capacity` most novel things the search has found. This is where
+        the compute the old threshold used to throw away gets spent instead -
+        every pattern is scored and kept, and only then ranked.
+
+        Bulk rather than one-at-a-time-on-admission: a generation adds 16-64
+        entries at once and one argpartition costs what one linear scan did.
+        It runs AFTER refresh() so it ranks on the freshest novelty available;
+        that is also why the persisted novelty column has to be live, since
+        eviction is only meaningful if the numbers it compares are.
         """
-        best, best_v = None, np.inf
-        for i, e in enumerate(self.entries):
-            if not e.pinned and e.novelty < best_v:
-                best, best_v = i, e.novelty
-        if best is None:
-            return False
-        self._remove(best)
-        return True
+        over = self._n - int(self.capacity)
+        if over <= 0:
+            self.blocked_by_pins = False
+            return 0
+
+        nov = np.array([e.novelty for e in self.entries], dtype=np.float64)
+        pinned = np.array([e.pinned for e in self.entries], dtype=bool)
+        nov[pinned] = np.inf
+        take = int(min(over, int((~pinned).sum())))
+        self.blocked_by_pins = take < over
+        if take <= 0:
+            return 0
+
+        victims = np.argpartition(nov, take - 1)[:take]
+        # Descending, because _remove swaps the LAST entry into the hole. Going
+        # highest-first means every entry moved down is one we are keeping, so
+        # no victim is ever relocated out from under the loop.
+        for i in sorted((int(v) for v in victims), reverse=True):
+            self._remove(i)
+        self.n_evicted += take
+        return take
 
     def _remove(self, i: int) -> None:
+        # The picture goes with the entry. Nothing could reach it afterwards
+        # anyway: index.jsonl is append-only and the id is gone from
+        # vectors.npz, so load_from_store drops the row on the next open.
+        if self.store is not None:
+            self.store.delete_thumb(self.entries[i].thumb)
         last = self._n - 1
         if i != last:
             self._emb[i] = self._emb[last]

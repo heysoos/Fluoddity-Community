@@ -232,9 +232,16 @@ class ArchiveWindowMixin:
                     "Abandon this goal and go back to novelty search.\n\n"
                     "The next expedition is a full Expansion Between interval "
                     "away, so cancelling does not immediately propose another.")
-        imgui.text(f"Archive: {st['archive_size']}   "
-                   f"threshold {st['threshold']:.3f}   "
-                   f"admitting {100.0 * st['admission_rate']:.0f}%")
+        imgui.text(f"Archive: {st['archive_size']} / {st['capacity']}   "
+                   f"admitting {100.0 * st['admission_rate']:.0f}%   "
+                   f"evicted {st['n_evicted']}")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Everything viable and alive is admitted. Novelty does not "
+                "gate - it ranks, and the least novel are evicted once the "
+                "archive is over capacity.\n\n"
+                "So 'admitting' near 100% is normal and healthy. Well below "
+                "it means tiles are coming back black or frozen.")
         # The seed pool actually used, so the band is legible rather than a
         # pair of numbers with no visible effect.
         if st.get("seed_ess"):
@@ -245,9 +252,11 @@ class ArchiveWindowMixin:
         if st.get("blocked_by_pins"):
             imgui.text_colored(
                 imgui.ImVec4(*_WARN),
-                "Archive is full and entirely pinned - nothing new can be added.")
-        # spec 10: a persistently zero admission rate is a broken capture or a
-        # dead preset, not a hard search.
+                "Archive is over capacity and entirely pinned - nothing can "
+                "be evicted, so it will keep growing.")
+        # A persistently zero admission rate now means the capture is broken or
+        # the preset is dead. It can no longer mean "the search is hard": there
+        # is no novelty gate left for a hard search to fail.
         if st["archive_size"] > 0 and st["admission_rate"] <= 0.0:
             imgui.text_colored(
                 imgui.ImVec4(*_WARN),
@@ -336,11 +345,20 @@ class ArchiveWindowMixin:
         # the slider.
         _, ast.liveness_min = imgui.slider_float(
             "Liveness Floor", ast.liveness_min, 0.0, 0.1, "%.4f")
-        _, ast.target_rate = imgui.slider_float(
-            "Target Admission Rate", ast.target_rate, 0.01, 1.0)
         _, ast.refresh_per_gen = imgui.slider_int(
             "Novelty Refresh / Gen", ast.refresh_per_gen, 0, 512)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Entries re-scored against the current archive each "
+                "generation, round robin.\n\n"
+                "Eviction ranks on these numbers, so 0 degrades pruning into "
+                "'drop whatever looked least novel when it was admitted'.")
         _, ast.capacity = imgui.slider_int("Capacity", ast.capacity, 1000, 100000)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "The only pruning rule. Everything viable and alive is "
+                "admitted; once the archive is over capacity the least novel "
+                "entries are evicted, so this is what the archive settles to.")
 
     def _render_expedition_settings(self, ast):
         _, ast.expansion_between = imgui.slider_int(
@@ -406,9 +424,9 @@ class ArchiveWindowMixin:
             return
 
         st = arc.stats()
-        imgui.text(f"{st['size']} entries   {st['n_pinned']} pinned   "
-                   f"threshold {st['threshold']:.3f}   "
-                   f"admitting {100.0 * st['admission_rate']:.0f}%")
+        imgui.text(f"{st['size']} / {st['capacity']} entries   "
+                   f"{st['n_pinned']} pinned   "
+                   f"{st['n_evicted']} evicted")
         imgui.separator()
 
         if imgui.begin_tab_bar("archive_views"):
