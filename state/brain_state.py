@@ -26,5 +26,13 @@ class BrainState:
     # Cleared by CommandHandler.
     request_layout_change: bool = False
 
+    # Inspector view settings. Display only - none of these touch the brain,
+    # they choose which 2D slice of the 4D sensor space is drawn and how it is
+    # scaled on screen.
+    preview_axes: int = 0        # index into services.brain_preview.AXES
+    preview_channel: int = 0     # index into services.brain_preview.CHANNELS
+    preview_range: float = 2.0   # half-extent of the swept axes
+    preview_gain: float = 1.0    # contrast only
+
     # Display only, pushed in by the orchestrator each frame.
     archive_entries: int = 0

@@ -25,20 +25,25 @@ vec4 lenia_v4(uint base, int i) {
                 lenia_param_at(base, i + 2), lenia_param_at(base, i + 3));
 }
 
+// ONE bump's contribution. The Brain Inspector draws exactly this.
+vec4 lenia_unit(uint base, int i, vec4 x) {
+    int o = i * 10;
+    vec4 w = lenia_v4(base, o);
+    vec4 a = lenia_v4(base, o + 4);
+    float mu = lenia_param_at(base, o + 8);
+    // Bands are narrow (decode floors sigma at 0.02); mutation scales it
+    // further, so guard against a zero denominator here too.
+    float sg = max(abs(lenia_param_at(base, o + 9)), 1e-3);
+    float u = dot(x, w) - mu;
+    float g = 2.0 * exp(-(u * u) / (2.0 * sg * sg)) - 1.0;
+    return a * g;
+}
+
 vec4 brain_lenia(uint base, vec4 x) {
     vec4 result = vec4(0.0);
     int n = BRAIN_SHAPE.x;
     for (int i = 0; i < n; i++) {
-        int o = i * 10;
-        vec4 w = lenia_v4(base, o);
-        vec4 a = lenia_v4(base, o + 4);
-        float mu = lenia_param_at(base, o + 8);
-        // Bands are narrow (decode floors sigma at 0.02); mutation scales it
-        // further, so guard against a zero denominator here too.
-        float sg = max(abs(lenia_param_at(base, o + 9)), 1e-3);
-        float u = dot(x, w) - mu;
-        float g = 2.0 * exp(-(u * u) / (2.0 * sg * sg)) - 1.0;
-        result += a * g;
+        result += lenia_unit(base, i, x);
     }
     return result;
 }

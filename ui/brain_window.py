@@ -114,7 +114,55 @@ class BrainWindowMixin:
         if frac >= 0.10:
             imgui.text_colored((1.0, 0.7, 0.2, 1.0),
                                "the search is losing dimensions")
+
+        self._render_brain_inspector(state, layout)
         imgui.end()
+
+    def _render_brain_inspector(self, state, layout) -> None:
+        """The response field of each unit, and of the whole brain.
+
+        The texture is rendered by the orchestrator from the SAME GLSL the
+        particles run - this only places it.
+        """
+        from services.brain_preview import AXES, CHANNELS
+
+        if not imgui.collapsing_header("Inspector")[0]:
+            return
+
+        ch, v = imgui.combo("Slice", state.preview_axes, [a[0] for a in AXES])
+        if ch:
+            state.preview_axes = v
+        ch, v = imgui.combo("Output", state.preview_channel, list(CHANNELS))
+        if ch:
+            state.preview_channel = v
+        ch, v = imgui.slider_float("Input Range", state.preview_range, 0.25, 8.0)
+        if ch:
+            state.preview_range = v
+        ch, v = imgui.slider_float("Contrast", state.preview_gain, 0.05, 8.0)
+        if ch:
+            state.preview_gain = v
+
+        preview = getattr(self, "brain_preview", None)
+        tex = getattr(self, "brain_preview_tex", None)
+        if preview is None or tex is None:
+            imgui.text_disabled("preview unavailable")
+            return
+
+        n = preview.unit_count(layout)
+        imgui.text(f"whole brain, then {n} units "
+                   f"(blue negative, orange positive)")
+        avail = max(imgui.get_content_region_avail().x, 64.0)
+        per_row = max(1, min(preview.grid, int(avail // 74)))
+        size = min(72.0, (avail - 8.0 * per_row) / per_row)
+        for slot in range(n + 1):
+            if slot % per_row:
+                imgui.same_line()
+            (u0, v0), (u1, v1) = preview.uv_for(slot)
+            imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(size, size),
+                        imgui.ImVec2(u0, v0), imgui.ImVec2(u1, v1))
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("whole brain" if slot == 0
+                                  else f"unit {slot - 1}")
 
     def _render_brain_layout_popup(self) -> None:
         """Changing the parameter count is not undoable in place - it resets the

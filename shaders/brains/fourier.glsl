@@ -50,24 +50,40 @@ void fourier_load(uint base, int i, out vec4 freq, out vec4 amp) {
                 brain_params[o + 6u], brain_params[o + 7u]);
 }
 
+// ONE centre's contribution, with the mutation seed passed in so the summing
+// loop can hoist it. The phase offset is derived from the centre INDEX, which
+// is why a unit cannot be previewed by pointing `base` at it and setting n=1:
+// centre 5 seen at index 0 is a different function from the one the particles
+// run.
+vec4 fourier_unit_at(uint base, int i, vec4 x, float mseed) {
+    vec4 f, a;
+    fourier_load(base, i, f, a);
+    if (g_brain_mut != 0.0) fourier_mutate(f, a, i, mseed);
+    float phase = dot(x, f);
+    float po = 2.0 * float(i) * 0.6283 + a.w * 3.14159;
+    vec4 basis = vec4(
+        sin(phase + po),
+        cos(phase + po * 0.7),
+        sin(phase * 2.0 + po * 1.3),
+        cos(phase * 2.0 + po * 0.5)
+    );
+    return a * basis;
+}
+
+// The same unit, for a caller with no seed to hand (the Brain Inspector).
+vec4 fourier_unit(uint base, int i, vec4 x) {
+    float mseed = (g_brain_mut == 0.0) ? 0.0 : fourier_mut_seed(base, BRAIN_SHAPE.x);
+    return fourier_unit_at(base, i, x, mseed);
+}
+
 vec4 brain_fourier(uint base, vec4 x) {
     vec4 result = vec4(0.0);
     int n = BRAIN_SHAPE.x;
-    // Computed once from the UNMUTATED rule, as the original did before its loop.
+    // Computed once from the UNMUTATED rule, as the original did before its
+    // loop - recomputing it per unit is six SSBO reads and a hash each time.
     float mseed = (g_brain_mut == 0.0) ? 0.0 : fourier_mut_seed(base, n);
     for (int i = 0; i < n; i++) {
-        vec4 f, a;
-        fourier_load(base, i, f, a);
-        if (g_brain_mut != 0.0) fourier_mutate(f, a, i, mseed);
-        float phase = dot(x, f);
-        float po = 2.0 * float(i) * 0.6283 + a.w * 3.14159;
-        vec4 basis = vec4(
-            sin(phase + po),
-            cos(phase + po * 0.7),
-            sin(phase * 2.0 + po * 1.3),
-            cos(phase * 2.0 + po * 0.5)
-        );
-        result += a * basis;
+        result += fourier_unit_at(base, i, x, mseed);
     }
     return result;
 }

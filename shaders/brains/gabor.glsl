@@ -25,22 +25,27 @@ vec4 gabor_v4(uint base, int i) {
                 gabor_param_at(base, i + 2), gabor_param_at(base, i + 3));
 }
 
+// ONE filter's contribution. The Brain Inspector draws exactly this.
+vec4 gabor_unit(uint base, int i, vec4 x) {
+    int o = i * 14;
+    vec4 c = gabor_v4(base, o);
+    vec4 f = gabor_v4(base, o + 4);
+    vec4 a = gabor_v4(base, o + 8);
+    // decode() floors sigma at 0.15, but mutation scales it afterwards, so the
+    // guard is here rather than only on the host. The sign is irrelevant - only
+    // sigma^2 is used - but zero is a division by zero.
+    float sg = max(abs(gabor_param_at(base, o + 12)), 1e-3);
+    float ph = gabor_param_at(base, o + 13);
+    vec4 d = x - c;
+    float env = exp(-dot(d, d) / (2.0 * sg * sg));
+    return a * (env * cos(dot(x, f) + ph));
+}
+
 vec4 brain_gabor(uint base, vec4 x) {
     vec4 result = vec4(0.0);
     int n = BRAIN_SHAPE.x;
     for (int i = 0; i < n; i++) {
-        int o = i * 14;
-        vec4 c = gabor_v4(base, o);
-        vec4 f = gabor_v4(base, o + 4);
-        vec4 a = gabor_v4(base, o + 8);
-        // decode() floors sigma at 0.15, but mutation scales it afterwards, so
-        // the guard is here rather than only on the host. The sign is
-        // irrelevant - only sigma^2 is used - but zero is a division by zero.
-        float sg = max(abs(gabor_param_at(base, o + 12)), 1e-3);
-        float ph = gabor_param_at(base, o + 13);
-        vec4 d = x - c;
-        float env = exp(-dot(d, d) / (2.0 * sg * sg));
-        result += a * (env * cos(dot(x, f) + ph));
+        result += gabor_unit(base, i, x);
     }
     return result;
 }

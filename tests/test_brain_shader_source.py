@@ -135,6 +135,40 @@ def test_the_writeback_emits_the_fallback_rule_not_the_blank_buffer():
     )
 
 
+def test_the_inspector_does_not_reimplement_the_brain():
+    """It calls eval_brain/eval_brain_unit, which are the same functions the
+    compute shader dispatches. A second implementation would drift, and the
+    picture would stop being evidence about what the particles do."""
+    src = read("shaders/brain_preview.frag")
+    assert "eval_brain_unit(" in src and "eval_brain(" in src
+    for fn in ("brain_fourier", "brain_gabor", "brain_lenia", "brain_mlp"):
+        assert fn not in src, f"the preview reaches past the dispatch to {fn}"
+
+
+def test_the_inspector_can_isolate_one_unit():
+    src = read("shaders/brain_preview.frag")
+    assert "PREVIEW_UNIT" in src
+
+
+def test_every_modality_exposes_a_per_unit_function():
+    """Needed because a unit cannot be isolated by pointing `base` at it:
+    Fourier's phase offset is derived from the centre INDEX, so centre 5 seen at
+    index 0 is a different function from the one the particles run."""
+    dispatch = read("shaders/brains/_dispatch.glsl")
+    for fn in ("fourier_unit", "gabor_unit", "lenia_unit", "mlp_unit"):
+        assert fn in dispatch, f"{fn} is not dispatched"
+        assert fn in read(f"shaders/brains/{fn.split('_')[0]}.glsl")
+
+
+def test_the_brain_window_passes_textures_the_way_this_imgui_wants():
+    """imgui_bundle needs ImTextureRef/ImVec2, not a raw int and a tuple. A
+    mismatch only shows when the window is opened, which no test does."""
+    src = read("ui/brain_window.py")
+    i = src.index("imgui.image(")
+    call = src[i:i + 200]
+    assert "ImTextureRef" in call and "ImVec2" in call
+
+
 def test_pack_brains_pads_each_brain_to_the_stride():
     layout = default_layout()
     a = np.arange(layout.length, dtype=np.float32)

@@ -55,6 +55,17 @@ void fourier_write_fallback(uint out_base) {
     }
 }
 
+// ONE unit's contribution to the response - one Fourier centre, one Gabor
+// filter, one Lenia bump, one MLP hidden unit. The Brain Inspector draws this,
+// and it is the SAME function the summing loop uses, so a tile shows what the
+// particles actually compute rather than a reimplementation of it.
+vec4 eval_brain_unit(uint base, int i, vec4 x) {
+    if (BRAIN_MODALITY == 0) return fourier_unit(base, i, x);
+    if (BRAIN_MODALITY == 1) return gabor_unit(base, i, x);
+    if (BRAIN_MODALITY == 2) return lenia_unit(base, i, x);
+    return mlp_unit(base, i, x);
+}
+
 // The i-th float of the active brain as the particle sees it. Each modality
 // owns this because each decides which of its floats are SCALES and which are
 // OFFSETS - a width that offsets can be walked through zero, and a direction

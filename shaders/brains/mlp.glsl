@@ -29,21 +29,32 @@ float mlp_param_at(uint base, int i) {
     return brain_add(base, i);
 }
 
+// ONE hidden unit's contribution: its activation times its output column.
+// Note a hidden unit is NOT contiguous in the buffer - its input weights, bias
+// and output column are three different regions - so the Inspector cannot
+// isolate it by shifting `base`, only by calling this.
+vec4 mlp_unit(uint base, int j, vec4 x) {
+    int h = BRAIN_SHAPE.x;
+    int r = j * 4;
+    vec4 w1 = vec4(mlp_param_at(base, r),     mlp_param_at(base, r + 1),
+                   mlp_param_at(base, r + 2), mlp_param_at(base, r + 3));
+    float a = mlp_act(dot(x, w1) + mlp_param_at(base, 4 * h + j));
+    int c = 5 * h + j;
+    return a * vec4(mlp_param_at(base, c),
+                    mlp_param_at(base, c + h),
+                    mlp_param_at(base, c + 2 * h),
+                    mlp_param_at(base, c + 3 * h));
+}
+
 vec4 brain_mlp(uint base, vec4 x) {
     int h = BRAIN_SHAPE.x;
     int b2 = 9 * h;
+    // The output bias belongs to no hidden unit, so it is added here and the
+    // Inspector's per-unit tiles do not include it.
     vec4 result = vec4(mlp_param_at(base, b2),     mlp_param_at(base, b2 + 1),
                        mlp_param_at(base, b2 + 2), mlp_param_at(base, b2 + 3));
     for (int j = 0; j < h; j++) {
-        int r = j * 4;
-        vec4 w1 = vec4(mlp_param_at(base, r),     mlp_param_at(base, r + 1),
-                       mlp_param_at(base, r + 2), mlp_param_at(base, r + 3));
-        float a = mlp_act(dot(x, w1) + mlp_param_at(base, 4 * h + j));
-        int c = 5 * h + j;
-        result += a * vec4(mlp_param_at(base, c),
-                           mlp_param_at(base, c + h),
-                           mlp_param_at(base, c + 2 * h),
-                           mlp_param_at(base, c + 3 * h));
+        result += mlp_unit(base, j, x);
     }
     return result;
 }

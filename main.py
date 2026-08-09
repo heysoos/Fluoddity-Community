@@ -108,6 +108,9 @@ class App:
         self.goal_list = None
         self.archive_projection = None
         self.thumb_cache = None
+        # Brain Inspector: None until the window is first opened, False if it
+        # could not be built (a diagnostic panel must not take the app down).
+        self.brain_preview = None
         self._last_projection_size = 0
         self._explore_was_enabled = False
         self.advanced_drawing_processor = AdvancedDrawingProcessor(self.ctx)
@@ -347,6 +350,47 @@ class App:
         # Deliberately NOT resumed: the user pressed a management button, not
         # Start.
         return True
+
+    def _render_brain_preview(self, ui_state) -> None:
+        """Draw the Inspector atlas, if the Brain window is open.
+
+        Built lazily and never rebuilt: the shader is fixed, only its uniforms
+        change with the layout. A failure here must never stop the app - it is a
+        diagnostic panel - so it degrades to no texture and the window says so.
+        """
+        bst = ui_state.brain
+        if not bst.enabled:
+            return
+        if self.brain_preview is None:
+            try:
+                from services.brain_preview import BrainPreview
+
+                self.brain_preview = BrainPreview(self.ctx)
+                self.ui.brain_preview = self.brain_preview
+            except Exception as exc:
+                print(f"[brain] inspector unavailable ({exc})")
+                self.brain_preview = False      # do not retry every frame
+                return
+        if self.brain_preview is False:
+            return
+
+        from services.brain_preview import AXES
+        from ui.brain_window import layout_for
+
+        axes = AXES[min(bst.preview_axes, len(AXES) - 1)][1]
+        try:
+            self.ui.brain_preview_tex = self.brain_preview.render(
+                layout_for(bst.modality, bst.settings),
+                self.sim.multi_load_rule_buffer,
+                axes=axes,
+                channel=bst.preview_channel,
+                value_range=bst.preview_range,
+                gain=bst.preview_gain,
+            )
+        except Exception as exc:
+            print(f"[brain] inspector render failed ({exc})")
+            self.ui.brain_preview_tex = None
+            self.brain_preview = False
 
     def _apply_brain_layout(self, layout, ui_state) -> bool:
         """Switch the brain layout. A hard reset of the search, never partial.
@@ -621,6 +665,11 @@ class App:
         result = self.command_handler.process_commands(ui_state, tiling_mode)
         if result == 'screenshot_pending' and not self.screenshot_pending and not self.screenshot_in_progress:
             self.screenshot_pending = True
+
+        # 2.5. Brain Inspector atlas. Rendered HERE rather than in the mixin
+        # because the UI is passive - it places the texture, it does not draw
+        # into GPU targets. Only while the window is open.
+        self._render_brain_preview(ui_state)
 
         # 3. Process continuous input (camera movement)
         current_time = time.time()
