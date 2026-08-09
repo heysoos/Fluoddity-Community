@@ -111,9 +111,13 @@ def test_the_writeback_emits_the_fallback_rule_not_the_blank_buffer():
     i = src.index("if(WRITE_RULES)")
     body = src[i:i + 1600]
     j = body.index("g_brain_fallback")
-    assert "generate_random_centers" in body[j:], (
+    assert "fallback_centers()" in body[j:], (
         "the fallback branch of the writeback does not emit the generated rule"
     )
+    # It must be the SAME helper the evaluation uses, mutation included, or the
+    # adopted rule is not the one the particle was running.
+    dispatch = read("shaders/brains/_dispatch.glsl")
+    assert "fourier_noise(fallback_centers()" in dispatch
 
 
 def test_pack_brains_pads_each_brain_to_the_stride():

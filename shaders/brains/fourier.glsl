@@ -10,8 +10,11 @@ vec4 brain_fourier(uint base, vec4 x) {
     vec4 result = vec4(0.0);
     int n = BRAIN_SHAPE.x;
     for (int i = 0; i < n; i++) {
-        vec4 f = brain_at4(base, i * 8);
-        vec4 a = brain_at4(base, i * 8 + 4);
+        // Frequencies SCALE under mutation, amplitudes OFFSET - the split the
+        // original mutate_rule() made, and the reason a near-zero frequency
+        // stays near zero instead of being jittered into chaos.
+        vec4 f = brain_mul4(base, i * 8);
+        vec4 a = brain_add4(base, i * 8 + 4);
         float phase = dot(x, f);
         float po = 2.0 * float(i) * 0.6283 + a.w * 3.14159;
         vec4 basis = vec4(

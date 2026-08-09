@@ -556,7 +556,7 @@ void main() {
             // makes click-to-adopt copy zeros, which re-blanks slot 0 on apply
             // and flips every cohort onto its own random rule - most sluggish,
             // a few lively. Write what the particle is actually using.
-            FourierCenter[10] fc = generate_random_centers(g_brain_seed);
+            FourierCenter[10] fc = fallback_centers();
             for(int c = 0; c < 10; c++) {
                 if(c * 8 + 7 >= BRAIN_LEN) break;
                 uint o = out_base + uint(c * 8);

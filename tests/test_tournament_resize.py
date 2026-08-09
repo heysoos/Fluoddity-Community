@@ -82,7 +82,10 @@ def test_shader_has_zero_rule_fallback():
     assert "g_brain_fallback = true" in block, "a zeroed genome buffer is not detected"
 
     dispatch = (shaders / "brains" / "_dispatch.glsl").read_text()
-    j = dispatch.index("g_brain_fallback")
-    assert "generate_random_centers" in dispatch[j:j + 200], (
+    assert "generate_random_centers" in dispatch, (
         "no fallback rule for a zeroed genome buffer"
+    )
+    j = dispatch.index("if (g_brain_fallback)")
+    assert "fallback_centers()" in dispatch[j:j + 200], (
+        "the fallback branch does not evaluate the generated rule"
     )
