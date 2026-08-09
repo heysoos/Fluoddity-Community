@@ -210,6 +210,34 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   its own trail. Only tiles touching the canvas border leaked — 12 of 16 at
   grid 4, 28 of 64 at grid 8 — and corner tiles on two edges each.
 
+- **Colour is genetic but, at the default hue gain, NOT HERITABLE — so no text
+  goal naming a colour can work.** `e.color.x = HUE_SENSITIVITY * col_params.x`
+  is an HSV hue, read modulo 1, while `col_params.x` is an unbounded Fourier
+  output. At `hue_sensitivity = 0.5` the product spans several whole turns, so
+  a mutation far too small to change the pattern still slides the colour
+  through multiple revolutions. Measured 2026-08-09 by rendering real archive
+  genomes headlessly (10 bases x 5 mutations, 2000 steps):
+
+  | condition | mean \|dhue\| | vs the 90 deg random baseline |
+  |---|---|---|
+  | same genome, new reset seed | 4.8 deg | 0.05 |
+  | sigma 0.10 (`expedition_sigma`) | 74.3 deg | **0.83** |
+  | sigma 0.30 | 88.9 deg | 0.99 |
+
+  The pattern survives that mutation (CLIP cosine 0.936 against a 0.895
+  random-pair baseline); only the colour does not. Lowering the gain fixes it,
+  and *raises* variety — at 0.15, `|dhue|` is 23.4 deg and the hue spread across
+  genomes is 107 deg, against 80.8 deg and 68.6 deg at 0.5. Selection response
+  (Spearman rho between the real "purple" contrastive fitness and measured
+  purpleness over 24 real mutants) goes 0.263 -> 0.507.
+
+  Not a bug in CLIP: on hue-rotated real tiles it picks the right rotation at
+  2.6x chance, and purple is already 5.9-9.5% of every archive. `hue_sensitivity`
+  is NOT in `PHYSICS_PARAMS`, so the search cannot fix this itself — it is a
+  preset value. Note also that `color_by_cohort` REPLACES the brain's hue with
+  `hash(cohort)`; tournament mode forces it off (`_tournament_plain_colour`), so
+  any colour experiment run outside tournament mode measures the wrong thing.
+
 - **Entry ids restart at 0 in every archive**, so `ThumbCache` must be released
   on a switch — it is keyed by thumbnail filename, which is derived from the
   entry id. Reusing it shows the previous archive's pictures under the new
