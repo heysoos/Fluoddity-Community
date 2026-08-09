@@ -19,6 +19,15 @@ uniform int TOURNAMENT_MODE;      // 0 = off, 1 = on
 uniform int TOURNAMENT_GRID;      // grid side length
 uniform float TOURNAMENT_ACTIVE;  // active particle count (matches ACTIVE_COUNT)
 
+// First texel of tile k along one axis. SYNCHRONIZED with entity_update.glsl
+// and canvas.frag - see the note there for why this is integer arithmetic.
+int tile_lo_texel(int k, int g, int res){
+    if(k <= 0) return 0;
+    if(k >= g) return res;
+    int b = 2 * g;
+    return (2 * k * res - g + b - 1) / b;        // ceil division, exact
+}
+
 out vec2 uv;
 out vec4 pos_vel;
 out vec4 view_col;
@@ -67,8 +76,18 @@ void main() {
         int n = TOURNAMENT_GRID * TOURNAMENT_GRID;
         int tile = clamp(int(floor(float(instance_id) / TOURNAMENT_ACTIVE * float(n))), 0, n - 1);
         vec2 half_extent = vec2(sqrt(ca), 1.0 / sqrt(ca));
-        vec2 cell = (2.0 * half_extent) / float(TOURNAMENT_GRID);
-        tile_lo = -half_extent + vec2(float(tile % TOURNAMENT_GRID), float(tile / TOURNAMENT_GRID)) * cell;
-        tile_hi = tile_lo + cell;
+        // Seams on texel edges, in integer arithmetic, matching
+        // tile_lo_texel() in entity_update.glsl and canvas.frag. An even
+        // division puts the seam inside a texel whenever the canvas does not
+        // divide by the grid, and at the default world size it is 647 texels
+        // across against a grid of up to 8.
+        ivec2 res = ivec2(canvas_resolution);
+        ivec2 k = ivec2(tile % TOURNAMENT_GRID, tile / TOURNAMENT_GRID);
+        vec2 lo_uv = vec2(tile_lo_texel(k.x, TOURNAMENT_GRID, res.x),
+                          tile_lo_texel(k.y, TOURNAMENT_GRID, res.y)) / canvas_resolution;
+        vec2 hi_uv = vec2(tile_lo_texel(k.x + 1, TOURNAMENT_GRID, res.x),
+                          tile_lo_texel(k.y + 1, TOURNAMENT_GRID, res.y)) / canvas_resolution;
+        tile_lo = (2.0 * lo_uv - 1.0) * half_extent;
+        tile_hi = (2.0 * hi_uv - 1.0) * half_extent;
     }
 }

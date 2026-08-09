@@ -113,51 +113,95 @@ vec4 getCan(vec2 p, sampler2D sam) {
     return texture(sam, uv);
 }
 
-// The uv box of the tile a texcoord belongs to.
-void tournament_tile_uv_box(vec2 uv, out vec2 lo, out vec2 hi){
-    float g = float(TOURNAMENT_GRID);
-    lo = floor(clamp(uv, 0.0, 0.999999) * g) / g;
-    hi = lo + 1.0 / g;
+// Tournament tiles, in TEXEL INDICES and INTEGER arithmetic.
+//
+// SYNCHRONIZED with tile_lo_texel() in entity_update.glsl and brush.vert. All
+// three have to agree on where a seam is to the last bit, or particles,
+// deposits and trails disagree about which tile a texel is in.
+//
+// Two separate things forced this, both measured 2026-08-09 at grid 8, wrap,
+// 400 diffusion steps, on the shipped shader:
+//
+//  1. A tile must own a WHOLE NUMBER of texels. The diffusion is a discrete
+//     5-tap stencil, and the canvas is 647 texels wide at the default
+//     world_size of 0.40 - 647/8 = 80.875, so evenly divided seams ran through
+//     the middle of a texel. The middle column retained 25.7% of its own trail
+//     and 39 of 64 tiles lit a tile they could not legally reach. At 1024,
+//     where 1024/8 = 128, every tile was exact. The grid slider is 2..8, so no
+//     canvas size makes this divide for every setting.
+//
+//  2. The arithmetic must be exact AT the seam. GLSL does not require division
+//     to be correctly rounded, and a seam is decided by the last bit: 647*4/8
+//     is exactly 323.5, and this GPU evaluated floor((323.5/647)*8) as 3 where
+//     the true value is 4. Texel 323 therefore sat outside its own tile's box
+//     and bridged tiles 3 and 4 - which made snapping alone WORSE, not better
+//     (the middle column fell to 4.6%). Integers cannot do that.
+int tile_of_texel(int t, int g, int res){
+    // Which tile owns texel t: the tile its CENTRE (t + 0.5) falls in, i.e.
+    // floor((2t+1)*g / 2res) done exactly.
+    return clamp(((2 * t + 1) * g) / (2 * res), 0, g - 1);
+}
+int tile_lo_texel(int k, int g, int res){
+    // First texel of tile k: the smallest t with (2t+1)*g >= 2*k*res.
+    if(k <= 0) return 0;
+    if(k >= g) return res;
+    int b = 2 * g;
+    return (2 * k * res - g + b - 1) / b;        // ceil division, exact
+}
+void tournament_tile_texel_box(ivec2 t, ivec2 res, out ivec2 lo, out ivec2 hi){
+    int g = TOURNAMENT_GRID;
+    ivec2 k = ivec2(tile_of_texel(t.x, g, res.x), tile_of_texel(t.y, g, res.y));
+    lo = ivec2(tile_lo_texel(k.x,     g, res.x), tile_lo_texel(k.y,     g, res.y));
+    hi = ivec2(tile_lo_texel(k.x + 1, g, res.x), tile_lo_texel(k.y + 1, g, res.y));
 }
 
 // One diffusion tap, kept inside the tile the centre sample belongs to.
-vec4 tile_tap(vec2 p, vec2 lo, vec2 hi, vec4 centre, sampler2D sam){
-    if(all(greaterThanEqual(p, lo)) && all(lessThan(p, hi))) return getCan(p, sam);
+// texelFetch, not texture(): a discrete stencil wants the texel itself, and no
+// filtering means no way to blend in a neighbour that belongs to another tile.
+vec4 tile_tap(ivec2 t, ivec2 lo, ivec2 hi, vec4 centre, sampler2D sam){
+    if(all(greaterThanEqual(t, lo)) && all(lessThan(t, hi)))
+        return texelFetch(sam, t, 0);
     // Wrap makes the tile a torus, so the tap comes from the opposite side of
-    // the SAME tile - one texel in, which lands on a texel centre whenever the
-    // tile edge is texel-aligned (1024/4, 1024/8). Under bounce or reset the
-    // seam is a wall, and substituting the centre value is zero net flux
-    // across it.
-    if(BOUNDARY_CONDITIONS_MODE == 2) return getCan(lo + mod(p - lo, hi - lo), sam);
+    // the SAME tile. Under bounce or reset the seam is a wall, and substituting
+    // the centre value is zero net flux across it.
+    if(BOUNDARY_CONDITIONS_MODE == 2){
+        // Folded by hand, NOT with %: GLSL leaves % undefined when either
+        // operand is negative, and the south and west probes are always at
+        // lo - 1. Measured, that cost the tile 84% of its trail at res 647 -
+        // and nothing at all at 1024, where the tile is 128 wide and the
+        // compiler can implement % as a bitmask that happens to be right for
+        // negatives. One step always suffices: the probe is one texel out.
+        ivec2 w = hi - lo;
+        ivec2 q = t - lo;
+        q += ivec2(lessThan(q, ivec2(0))) * w;
+        q -= ivec2(greaterThanEqual(q, w)) * w;
+        return texelFetch(sam, lo + q, 0);
+    }
     return centre;
 }
 
 vec4 getBlur(vec2 pos, sampler2D sam,float diffusion_constant) {
     ivec2 imsz = textureSize(sam, 0);
     vec3 off = vec3(1. / vec2(imsz), 0);
-    vec2 np = pos + off.zy;
-    vec2 sp = pos - off.zy;
-    vec2 wp = pos - off.xz;
-    vec2 ep = pos + off.xz;
     vec4 cc = getCan(pos, sam);
     vec4 nc, sc, wc, ec;
     if(TOURNAMENT_MODE == 1){
-        // The tile's own uv BOX decides what is out of bounds, not a tile
-        // index derived from clamp(uv). A probe that walks off the canvas
+        // The tile's own texel box decides what is out of bounds, never a tile
+        // index derived from clamp(uv). A probe that walked off the canvas
         // clamped back into the same tile, so the comparison silently passed
         // and the tap fell through to the sampler - which has repeat_x/y set,
-        // and duly returned the OPPOSITE EDGE OF THE CANVAS, i.e. a different
-        // tile. Only the outer ring leaked, and each corner tile on two edges.
-        vec2 tlo, thi; tournament_tile_uv_box(pos, tlo, thi);
-        nc = tile_tap(np, tlo, thi, cc, sam);
-        sc = tile_tap(sp, tlo, thi, cc, sam);
-        wc = tile_tap(wp, tlo, thi, cc, sam);
-        ec = tile_tap(ep, tlo, thi, cc, sam);
+        // and duly returned the OPPOSITE EDGE OF THE CANVAS.
+        ivec2 t = ivec2(pos * vec2(imsz));
+        ivec2 tlo, thi; tournament_tile_texel_box(t, imsz, tlo, thi);
+        nc = tile_tap(t + ivec2(0, 1), tlo, thi, cc, sam);
+        sc = tile_tap(t - ivec2(0, 1), tlo, thi, cc, sam);
+        wc = tile_tap(t - ivec2(1, 0), tlo, thi, cc, sam);
+        ec = tile_tap(t + ivec2(1, 0), tlo, thi, cc, sam);
     } else {
-        nc = getCan(np, sam);
-        sc = getCan(sp, sam);
-        wc = getCan(wp, sam);
-        ec = getCan(ep, sam);
+        nc = getCan(pos + off.zy, sam);
+        sc = getCan(pos - off.zy, sam);
+        wc = getCan(pos - off.xz, sam);
+        ec = getCan(pos + off.xz, sam);
     }
     float K = diffusion_constant;
     return (cc * K + nc + sc + wc + ec) / (4. + K);

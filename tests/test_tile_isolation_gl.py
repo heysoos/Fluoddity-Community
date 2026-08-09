@@ -66,8 +66,9 @@ void main(){ can_out = getBlur(texcoord, can_tex, K_TEST); }
 class Diffuser:
     """Ping-pong the real getBlur over a canvas, exactly as canvas.frag does."""
 
-    def __init__(self, ctx, boundary, tournament=1, grid=GRID):
+    def __init__(self, ctx, boundary, tournament=1, grid=GRID, res=RES):
         self.ctx = ctx
+        self.res = res
         self.prog = ctx.program(
             vertex_shader=QUAD_VERT,
             fragment_shader=_cut_main(read_shader("shaders/canvas.frag"))
@@ -75,13 +76,13 @@ class Diffuser:
         for name, value in (("BOUNDARY_CONDITIONS_MODE", boundary),
                             ("TOURNAMENT_MODE", tournament),
                             ("TOURNAMENT_GRID", grid),
-                            ("canvas_resolution", (RES, RES)),
+                            ("canvas_resolution", (res, res)),
                             # 4/(5^d - 1) at d=1, i.e. the strongest the slider
                             # reaches: one step moves half the mass.
                             ("K_TEST", 1.0)):
             if name in self.prog:
                 self.prog[name].value = value
-        self.tex = [ctx.texture((RES, RES), 4, dtype="f4") for _ in range(2)]
+        self.tex = [ctx.texture((res, res), 4, dtype="f4") for _ in range(2)]
         for t in self.tex:
             t.repeat_x = True                  # as sim.py sets them
             t.repeat_y = True
@@ -89,7 +90,7 @@ class Diffuser:
         self.vao = ctx.vertex_array(self.prog, [])
 
     def run(self, field: np.ndarray, steps: int) -> np.ndarray:
-        rgba = np.zeros((RES, RES, 4), dtype=np.float32)
+        rgba = np.zeros((self.res, self.res, 4), dtype=np.float32)
         rgba[..., 0] = field
         rgba[..., 3] = 1.0
         self.tex[0].write(rgba.tobytes())
@@ -102,7 +103,7 @@ class Diffuser:
             self.vao.render(moderngl.TRIANGLES, vertices=3)
             read, write = write, read
         out = np.frombuffer(self.fbo[read].read(components=4, dtype="f4"),
-                            dtype=np.float32).reshape(RES, RES, 4)
+                            dtype=np.float32).reshape(self.res, self.res, 4)
         return out[..., 0].copy()
 
     def release(self):
@@ -207,6 +208,91 @@ def test_tournament_off_leaves_the_canvas_alone(ctx):
     assert out[:, -1].mean() > 1e-3
 
 
+# ---- resolutions that do not divide by the grid --------------------------
+#
+# The default world_size of 0.40 makes the canvas 647 texels across, the grid
+# slider goes 2..8, and 647/8 = 80.875. Every tiling bug so far has been at a
+# seam, so the seams have to be tested where they are ugly rather than where
+# they are convenient. 128/4 is here as the control.
+
+
+from services.tile_geometry import lo_texel as _lo_texel  # noqa: E402
+
+
+def _slices(res, grid):
+    return [slice(_lo_texel(k, grid, res), _lo_texel(k + 1, grid, res))
+            for k in range(grid)]
+
+
+@pytest.mark.parametrize("res,grid", [(647, 8), (647, 4), (647, 3),
+                                      (641, 7), (128, 4)])
+def test_every_tile_is_a_torus_whatever_the_resolution(ctx, res, grid):
+    """Light every tile's left edge at once, with a value unique to the tile.
+
+    Three statements in one run, which is what makes it affordable at 64 tiles:
+
+      wrapped       each tile's own FAR edge lights up - the seam is not a wall
+      no brighter   no tile exceeds its own value, so nothing brighter bled in
+      conserved     each tile's mass is unchanged, so nothing dimmer did either
+
+    Measured against the pre-fix shader at 647/8, the middle column retained
+    25.7% of its trail and 39 of 64 tiles lit a tile they could not reach.
+    """
+    cols = _slices(res, grid)
+    field = np.zeros((res, res), dtype=np.float32)
+    values = {}
+    for tx in range(grid):
+        for ty in range(grid):
+            v = float(tx + ty * grid + 1)
+            values[(tx, ty)] = v
+            field[cols[ty], cols[tx].start:cols[tx].start + 2] = v
+
+    before = {k: float(field[cols[k[1]], cols[k[0]]].sum()) for k in values}
+    d = Diffuser(ctx, WRAP, grid=grid, res=res)
+    try:
+        out = d.run(field, steps=150)
+    finally:
+        d.release()
+
+    for (tx, ty), v in values.items():
+        own = out[cols[ty], cols[tx]]
+        assert float(own[:, -1].mean()) > 1e-4 * v, (
+            f"tile ({tx},{ty}) has a wall: its far edge never lit")
+        assert float(own.max()) <= v + 1e-4, (
+            f"tile ({tx},{ty}) peaks at {own.max()}, above its own {v} - a "
+            f"brighter tile bled in")
+        assert float(own.sum()) == pytest.approx(before[(tx, ty)], rel=2e-4), (
+            f"tile ({tx},{ty}) did not conserve its trail")
+
+
+@pytest.mark.parametrize("res,grid", [(647, 8), (647, 3), (641, 7)])
+def test_tiles_partition_the_texels_exactly(ctx, res, grid):
+    """No texel in two tiles, none in none. A tile owns a whole number of
+    texels, so widths differ by at most one - 647/8 gives seven of 81 and one
+    of 80. The one that used to fall through the cracks was texel 323, where
+    the float form of this evaluated floor((323.5/647)*8) as 3 rather than 4.
+    """
+    edges = [_lo_texel(k, grid, res) for k in range(grid + 1)]
+    assert edges[0] == 0 and edges[-1] == res
+    widths = np.diff(edges)
+    assert widths.min() >= 1
+    assert widths.max() - widths.min() <= 1
+
+    # And the shader agrees: a single lit texel either side of every seam must
+    # stay on its own side.
+    cols = _slices(res, grid)
+    d = Diffuser(ctx, WRAP, grid=grid, res=res)
+    try:
+        for k in range(1, grid):
+            field = np.zeros((res, res), dtype=np.float32)
+            field[:, edges[k] - 1] = 1.0        # last texel of tile k-1
+            out = d.run(field, steps=40)
+            assert float(out[:, cols[k]].max()) == 0.0, (
+                f"the texel below seam {k} leaked across it")
+    finally:
+        d.release()
+
+
 # ---- the particle side --------------------------------------------------
 
 PARTICLE_SRC = """#version 430
@@ -273,6 +359,41 @@ def _tile_of(i):
     """Buffer index that lands squarely in tile i, matching
     tournament_home_tile at ACTIVE_COUNT=1600, GRID=4."""
     return int((i + 0.5) * 1600 / (GRID * GRID))
+
+
+@pytest.mark.parametrize("res,grid", [(647, 8), (647, 3), (641, 7), (128, 4)])
+def test_the_particle_box_is_the_same_box_the_trails_use(ctx, res, grid):
+    """The particle's world box has to land on the SAME texel edges the
+    diffusion tiles on, or a particle sits in its own tile while the texel it
+    deposits into belongs to the next one. Boxes must abut exactly and cover
+    the canvas, and each edge must be a texel edge."""
+    prog = ctx.compute_shader(PARTICLE_SRC + _particle_helpers() + PARTICLE_MAIN)
+    active = 1600.0
+    prog["canvas_resolution"].value = (res, res)
+    prog["TOURNAMENT_MODE"].value = 1
+    prog["TOURNAMENT_GRID"].value = grid
+    prog["ACTIVE_COUNT_F"].value = active
+    prog["MODE"].value = WRAP
+    n = grid * grid
+    ids = np.array([int((i + 0.5) * active / n) for i in range(n)],
+                   dtype=np.uint32)
+    pts = np.zeros((n, 2), dtype=np.float32)
+    bufs = [ctx.buffer(pts.tobytes()), ctx.buffer(reserve=n * 16),
+            ctx.buffer(ids.tobytes())]
+    for i, b in enumerate(bufs):
+        b.bind_to_storage_buffer(i)
+    prog.run(group_x=(n + 63) // 64)
+    los = np.frombuffer(bufs[1].read(), dtype=np.float32).reshape(-1, 4)[:, 2:]
+    for b in bufs:
+        b.release()
+    prog.release()
+
+    xs = sorted({round(float(v), 6) for v in los[:, 0]})
+    assert len(xs) == grid, "tiles do not form a grid of columns"
+    # world = (2*uv - 1) * half_extent, half_extent = 1 for a square canvas
+    want = [2.0 * _lo_texel(k, grid, res) / res - 1.0 for k in range(grid)]
+    assert np.allclose(xs, want, atol=1e-5), (
+        "the particle box is not on the diffusion's texel edges")
 
 
 def test_the_tile_box_partitions_the_canvas(confine):

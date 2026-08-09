@@ -268,13 +268,16 @@ def test_the_source_rect_of_each_tile_is_its_own_quarter():
     # Filtering on the rect would drop tile 3, whose rect really is (0,0)-(1,1).
     extracts = [c for c in blit.calls if c[0] is grid_tex]
     assert len(extracts) == 4
+    # Not tx/grid: a tile owns a whole number of TEXELS, and the canvas is 647
+    # across at the default world size, so the seam is at 323/647 rather than
+    # at 0.5. Cropping on the even split puts a sliver of the neighbouring
+    # tile into the picture the optimizer scores. See services/tile_geometry.
+    from services.tile_geometry import tile_uv_box
+
     rects = sorted((c[1], c[2]) for c in extracts)
-    assert rects == sorted([
-        ((0.0, 0.0), (0.5, 0.5)),   # tile 0, bottom-left
-        ((0.5, 0.0), (1.0, 0.5)),   # tile 1, bottom-right
-        ((0.0, 0.5), (0.5, 1.0)),   # tile 2, top-left
-        ((0.5, 0.5), (1.0, 1.0)),   # tile 3, top-right
-    ])
+    assert rects == sorted([tile_uv_box(tx, ty, 2, (647, 647))
+                            for ty in range(2) for tx in range(2)])
+    assert all(r[0] != (0.5, 0.5) and r[1] != (0.5, 0.5) for r in rects)
 
 
 def test_tile_zero_is_bottom_left_to_match_the_shader():
@@ -287,12 +290,21 @@ def test_tile_zero_is_bottom_left_to_match_the_shader():
     assert first_extract[1] == (0.0, 0.0)
 
 
-def test_with_bloom_off_the_grid_is_copied_in_one_go():
-    """No per-tile work to do, so do not pay for it."""
+def test_with_bloom_off_the_tiles_still_come_from_their_own_texels():
+    """Bloom is the only per-tile PASS that can be skipped; the crop cannot.
+
+    This used to blit the whole grid in one go and let the even split of the
+    destination do the tiling, which is only correct when the canvas divides by
+    the grid. It is 647 texels across at the default world size.
+    """
     cv, ui = grid_view(bloom_on=False)
     blit = _Blit()
     cv.draw_grid(_Fbo(), _Tex((448, 448)), 2, blit, ui, 224)
-    assert blit.calls == [(blit.calls[0][0], (0.0, 0.0), (1.0, 1.0))]
+    from services.tile_geometry import tile_uv_box
+
+    assert sorted((c[1], c[2]) for c in blit.calls) == sorted(
+        [tile_uv_box(tx, ty, 2, (647, 647))
+         for ty in range(2) for tx in range(2)])
     assert cv._bloom.inputs == []
 
 

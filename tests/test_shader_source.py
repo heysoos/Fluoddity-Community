@@ -68,6 +68,34 @@ def test_diffusion_taps_are_bounded_by_the_tile_box():
     with repeat set. Measured, a lit tile put 64% of its brightness into the
     tile on the opposite side of the canvas."""
     src = read("shaders/canvas.frag")
-    assert "void tournament_tile_uv_box(" in src
+    assert "void tournament_tile_texel_box(" in src
     assert "tile_tap(" in src
     assert "tournament_tile_uv(np)" not in src, "the index comparison is back"
+
+
+def test_the_tile_is_a_whole_number_of_texels_everywhere():
+    """One rule for where a seam is, in integer arithmetic, in all three
+    shaders that need it. A tile divided evenly in world space cuts a texel in
+    half whenever the canvas does not divide by the grid - which is the normal
+    case, 647 texels against a grid of 2..8 - and float arithmetic gets the
+    tie at the middle seam wrong on real hardware."""
+    for path in ("shaders/entity_update.glsl", "shaders/canvas.frag",
+                 "shaders/brush.vert"):
+        src = read(path)
+        assert "int tile_lo_texel(int k, int g, int res)" in src, path
+        assert "(2 * k * res - g + b - 1) / b" in src, path
+    # The even division each of them used to do.
+    assert "vec2 cell = (2.0 * half_extent)" not in read("shaders/brush.vert")
+    assert "vec2 cell = (2.0 * half_extent)" not in read(
+        "shaders/entity_update.glsl")
+
+
+def test_the_wrap_tap_does_not_use_glsl_modulo():
+    """% is undefined in GLSL when either operand is negative, and the south
+    and west probes are always one texel below the tile's low edge. Measured,
+    that lost 84% of a tile's trail at a canvas width of 647 - and nothing at
+    1024, where the tile width is a power of two and the compiler's bitmask
+    happens to be right."""
+    src = read("shaders/canvas.frag")
+    assert "(t - lo) % w" not in src, "the undefined modulo is back"
+    assert "q += ivec2(lessThan(q, ivec2(0))) * w;" in src

@@ -164,15 +164,44 @@ int tournament_home_tile(uint index){
     int tile = int(floor(float(index) / float(ACTIVE_COUNT) * float(n)));
     return clamp(tile, 0, n - 1);
 }
+// First texel of tile k along one axis, in INTEGER arithmetic: the smallest t
+// with (2t+1)*g >= 2*k*res, i.e. the first texel whose centre is past the seam.
+//
+// SYNCHRONIZED with canvas.frag (tile_lo_texel) and brush.vert. All three have
+// to agree on where a seam is to the last bit, or particles, deposits and
+// trails disagree about which tile a texel is in.
+//
+// A tile owns a WHOLE NUMBER of texels rather than an equal share of the world,
+// because the canvas rarely divides by the grid: it is 647 texels wide at the
+// default world_size of 0.40 and the grid slider goes 2..8, so no canvas size
+// makes every setting divide. Measured 2026-08-09 at grid 8 with an evenly
+// divided seam, the middle column of the diffusion retained 25.7% of its own
+// trail and 39 of 64 tiles lit a tile they could not legally reach.
+//
+// Integers, not floats, because a seam is decided by the last bit and GLSL does
+// not require division to be correctly rounded: 647*4/8 is exactly 323.5, and
+// this GPU evaluated floor((323.5/647)*8) as 3 where the true value is 4.
+int tile_lo_texel(int k, int g, int res){
+    if(k <= 0) return 0;
+    if(k >= g) return res;
+    int b = 2 * g;
+    return (2 * k * res - g + b - 1) / b;        // ceil division, exact
+}
 // Entity-space bounding box [lo, hi] of a tile index.
 void tournament_tile_box(int tile, out vec2 lo, out vec2 hi){
     float ca = canvas_resolution.x / canvas_resolution.y;
     vec2 half_extent = vec2(sqrt(ca), 1.0 / sqrt(ca));
-    int tx = tile % TOURNAMENT_GRID;
-    int ty = tile / TOURNAMENT_GRID;
-    vec2 cell = (2.0 * half_extent) / float(TOURNAMENT_GRID);
-    lo = -half_extent + vec2(float(tx), float(ty)) * cell;
-    hi = lo + cell;
+    ivec2 res = ivec2(canvas_resolution);
+    int g = TOURNAMENT_GRID;
+    ivec2 k = ivec2(tile % g, tile / g);
+    // get_can() maps entity space to uv as p/(2*half_extent) + 0.5; this is
+    // that inverted, so the box edge is the texel edge the diffusion uses.
+    vec2 lo_uv = vec2(tile_lo_texel(k.x, g, res.x),
+                      tile_lo_texel(k.y, g, res.y)) / canvas_resolution;
+    vec2 hi_uv = vec2(tile_lo_texel(k.x + 1, g, res.x),
+                      tile_lo_texel(k.y + 1, g, res.y)) / canvas_resolution;
+    lo = (2.0 * lo_uv - 1.0) * half_extent;
+    hi = (2.0 * hi_uv - 1.0) * half_extent;
 }
 // The box a particle actually lives in: its tournament tile, or the whole
 // canvas. A TILE IS A SMALL WORLD - it gets the world's own boundary

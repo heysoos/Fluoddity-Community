@@ -94,19 +94,31 @@ class CaptureView:
         whole grid - so the cost is the extra per-pass overhead, not extra
         shading.
         """
-        prefs = ui_state.preferences
-        if not (prefs.bloom_enabled and not ui_state.sim.watercolor_mode):
-            blit.draw(src, (0.0, 0.0), (1.0, 1.0))
-            return
+        from services.tile_geometry import tile_uv_box
 
-        self._ensure_tile_target(tile_px)
+        prefs = ui_state.preferences
+        bloom = prefs.bloom_enabled and not ui_state.sim.watercolor_mode
+        res = self.sim.view_tex.size
+        if bloom:
+            self._ensure_tile_target(tile_px)
+
         for tile in range(grid * grid):
             # Tile 0 is bottom-left, matching tournament_home_tile(), and both
             # the source UVs and the destination viewport are bottom-up here.
             # crop_bounds() applies the one flip, on readback.
             tx, ty = tile % grid, tile // grid
-            lo = (tx / grid, ty / grid)
-            hi = ((tx + 1) / grid, (ty + 1) / grid)
+            # The tile's TEXEL box, not tx/grid: a tile owns a whole number of
+            # texels (see services/tile_geometry), so at 647/8 they are seven
+            # of 81 and one of 80. Cropping at the even split would put a
+            # sliver of the neighbour into the picture the optimizer scores.
+            lo, hi = tile_uv_box(tx, ty, grid, res)
+
+            if not bloom:
+                fbo.use()
+                self.ctx.viewport = (tx * tile_px, ty * tile_px,
+                                     tile_px, tile_px)
+                blit.draw(src, lo, hi)
+                continue
 
             self._tile_fbo.use()
             self.ctx.viewport = (0, 0, tile_px, tile_px)

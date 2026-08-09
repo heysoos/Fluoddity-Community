@@ -136,7 +136,7 @@
   "settings": {
     "disable_symmetry": false,
     "absolute_orientation": 0,
-    "boundary_conditions": 0,
+    "boundary_conditions": 2,
     "initial_conditions": 0,
     "num_cohorts": 64,
     "rule_seed": 0.42,
@@ -144,8 +144,8 @@
   },
   "appearance": {
     "ink_weight": 1.0,
-    "hue_sensitivity": 0.5,
-    "color_by_cohort": true,
+    "hue_sensitivity": 0.9,
+    "color_by_cohort": false,
     "watercolor_mode": false,
     "emboss_mode": 0,
     "emboss_intensity": 0.5,
