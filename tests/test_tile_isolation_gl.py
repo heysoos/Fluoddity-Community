@@ -1,0 +1,360 @@
+"""Tournament tiles must not see each other, on a real GPU.
+
+Every previous attempt at this was checked by eye, and every one of them left
+a leak that only showed on the outer ring of tiles - which is exactly where a
+4x4 grid puts most of its tiles, and where every corner lives. Reading the code
+is not enough: the last bug was that `clamp(uv, 0, 0.999999)` made an
+out-of-canvas probe look like it was still in the same tile, so the guard
+passed and the sampler (repeat_x/repeat_y) quietly returned the far side of the
+canvas.
+
+So this runs the SHIPPED shader text. Both files are read from disk and their
+main() replaced; everything above it - getCan, tile_tap, getBlur,
+particle_world_box, confine_sample - is the real thing, byte for byte.
+
+Skipped when no GL 4.3 context is available (CI, remote shells, no GPU).
+"""
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+moderngl = pytest.importorskip("moderngl")
+
+from utilities.gl_helpers import prepend_defines, read_shader  # noqa: E402
+
+GRID = 4
+RES = 128                      # divisible by GRID, so tile edges are texel-aligned
+TILE = RES // GRID
+
+BOUNCE, RESET, WRAP = 0, 1, 2
+
+
+@pytest.fixture(scope="module")
+def ctx():
+    try:
+        c = moderngl.create_standalone_context(require=430)
+    except Exception as exc:                    # no GPU, no display, no driver
+        pytest.skip(f"no GL 4.3 context: {exc}")
+    yield c
+    c.release()
+
+
+def _cut_main(src: str) -> str:
+    """Everything above `void main()`. The helpers are what is under test."""
+    i = src.index("void main()")
+    return src[:i]
+
+
+# ---- the trail diffusion ------------------------------------------------
+
+QUAD_VERT = """#version 430
+out vec2 texcoord;
+void main(){
+    vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    texcoord = p;
+    gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}
+"""
+
+BLUR_MAIN = """
+uniform float K_TEST;
+void main(){ can_out = getBlur(texcoord, can_tex, K_TEST); }
+"""
+
+
+class Diffuser:
+    """Ping-pong the real getBlur over a canvas, exactly as canvas.frag does."""
+
+    def __init__(self, ctx, boundary, tournament=1, grid=GRID):
+        self.ctx = ctx
+        self.prog = ctx.program(
+            vertex_shader=QUAD_VERT,
+            fragment_shader=_cut_main(read_shader("shaders/canvas.frag"))
+                            + BLUR_MAIN)
+        for name, value in (("BOUNDARY_CONDITIONS_MODE", boundary),
+                            ("TOURNAMENT_MODE", tournament),
+                            ("TOURNAMENT_GRID", grid),
+                            ("canvas_resolution", (RES, RES)),
+                            # 4/(5^d - 1) at d=1, i.e. the strongest the slider
+                            # reaches: one step moves half the mass.
+                            ("K_TEST", 1.0)):
+            if name in self.prog:
+                self.prog[name].value = value
+        self.tex = [ctx.texture((RES, RES), 4, dtype="f4") for _ in range(2)]
+        for t in self.tex:
+            t.repeat_x = True                  # as sim.py sets them
+            t.repeat_y = True
+        self.fbo = [ctx.framebuffer([t]) for t in self.tex]
+        self.vao = ctx.vertex_array(self.prog, [])
+
+    def run(self, field: np.ndarray, steps: int) -> np.ndarray:
+        rgba = np.zeros((RES, RES, 4), dtype=np.float32)
+        rgba[..., 0] = field
+        rgba[..., 3] = 1.0
+        self.tex[0].write(rgba.tobytes())
+        read, write = 0, 1
+        for _ in range(steps):
+            self.tex[read].use(location=1)
+            if "can_tex" in self.prog:
+                self.prog["can_tex"].value = 1
+            self.fbo[write].use()
+            self.vao.render(moderngl.TRIANGLES, vertices=3)
+            read, write = write, read
+        out = np.frombuffer(self.fbo[read].read(components=4, dtype="f4"),
+                            dtype=np.float32).reshape(RES, RES, 4)
+        return out[..., 0].copy()
+
+    def release(self):
+        for f in self.fbo:
+            f.release()
+        for t in self.tex:
+            t.release()
+        self.vao.release()
+        self.prog.release()
+
+
+def _tile(field, tx, ty):
+    return field[ty * TILE:(ty + 1) * TILE, tx * TILE:(tx + 1) * TILE]
+
+
+def _one_tile_lit(tx, ty, value=1.0):
+    f = np.zeros((RES, RES), dtype=np.float32)
+    f[ty * TILE:(ty + 1) * TILE, tx * TILE:(tx + 1) * TILE] = value
+    return f
+
+
+@pytest.mark.parametrize("boundary", [BOUNCE, RESET, WRAP])
+@pytest.mark.parametrize("tx,ty", [(0, 0), (3, 0), (0, 3), (3, 3),   # corners
+                                   (1, 0), (0, 2), (3, 1), (2, 3),   # edges
+                                   (1, 1), (1, 2), (2, 2)])          # interior
+def test_a_lit_tile_never_lights_its_neighbours(ctx, boundary, tx, ty):
+    """Measured against the old shader, every one of the twelve outer-ring
+    cases failed and all three interior ones passed - the leak was the canvas
+    border, so only tiles touching it were affected and corner tiles on two
+    edges each."""
+    d = Diffuser(ctx, boundary)
+    try:
+        out = d.run(_one_tile_lit(tx, ty), steps=200)
+    finally:
+        d.release()
+    for gy in range(GRID):
+        for gx in range(GRID):
+            if (gx, gy) == (tx, ty):
+                continue
+            peak = float(_tile(out, gx, gy).max())
+            assert peak == 0.0, f"tile ({gx},{gy}) lit to {peak} by ({tx},{ty})"
+
+
+@pytest.mark.parametrize("boundary", [BOUNCE, WRAP])
+def test_a_tile_conserves_its_own_trail(ctx, boundary):
+    """Both a torus and a zero-flux wall conserve mass exactly - the 5-tap
+    kernel is a weighted average, and every tap that leaves the tile is
+    replaced by one that stays. Mass going missing means the tile is losing
+    trail across the seam; mass appearing means it is stealing.
+    """
+    rng = np.random.default_rng(0)
+    field = np.zeros((RES, RES), dtype=np.float32)
+    blob = rng.random((TILE, TILE)).astype(np.float32)
+    field[0:TILE, 0:TILE] = blob              # corner tile again
+    d = Diffuser(ctx, boundary)
+    try:
+        out = d.run(field, steps=300)
+    finally:
+        d.release()
+    assert float(_tile(out, 0, 0).sum()) == pytest.approx(float(blob.sum()),
+                                                         rel=1e-4)
+
+
+def test_wrap_carries_trail_across_the_tile_seam(ctx):
+    """A torus has no edge, so a blob on the tile's left edge must reach its
+    right edge - within the SAME tile, without ever touching the next one."""
+    field = np.zeros((RES, RES), dtype=np.float32)
+    field[0:TILE, 0:2] = 1.0                  # left edge of tile (0,0)
+    d = Diffuser(ctx, WRAP)
+    try:
+        out = d.run(field, steps=60)
+    finally:
+        d.release()
+    tile00 = _tile(out, 0, 0)
+    assert tile00[:, -1].mean() > 1e-3, "the trail did not wrap round the tile"
+    assert float(_tile(out, 1, 0).max()) == 0.0, "it wrapped into the neighbour"
+
+
+def test_bounce_holds_the_trail_off_the_seam(ctx):
+    """The other half of the same statement: under bounce the seam IS a wall,
+    so the far edge must stay dark."""
+    field = np.zeros((RES, RES), dtype=np.float32)
+    field[0:TILE, 0:2] = 1.0
+    d = Diffuser(ctx, BOUNCE)
+    try:
+        out = d.run(field, steps=60)
+    finally:
+        d.release()
+    assert float(_tile(out, 0, 0)[:, -1].max()) < 1e-6
+
+
+def test_tournament_off_leaves_the_canvas_alone(ctx):
+    """The non-tournament path must be untouched: the whole canvas is one
+    domain and wrap wraps it, so a blob at x=0 reaches x=RES-1."""
+    field = np.zeros((RES, RES), dtype=np.float32)
+    field[:, 0:2] = 1.0
+    d = Diffuser(ctx, WRAP, tournament=0)
+    try:
+        out = d.run(field, steps=60)
+    finally:
+        d.release()
+    assert out[:, -1].mean() > 1e-3
+
+
+# ---- the particle side --------------------------------------------------
+
+PARTICLE_SRC = """#version 430
+layout(local_size_x = 64) in;
+uniform vec2 canvas_resolution;
+uniform int TOURNAMENT_MODE;
+uniform int TOURNAMENT_GRID;
+uniform float ACTIVE_COUNT_F;
+uniform int MODE;
+layout(std430, binding = 0) buffer In  { vec2 pts[]; };
+layout(std430, binding = 1) buffer Out { vec4 res[]; };
+layout(std430, binding = 2) buffer Idx { uint idx[]; };
+#define ACTIVE_COUNT ACTIVE_COUNT_F
+"""
+
+PARTICLE_MAIN = """
+void main(){
+    uint i = gl_GlobalInvocationID.x;
+    if(i >= pts.length()) return;
+    vec2 lo, hi; particle_world_box(idx[i], lo, hi);
+    res[i] = vec4(confine_sample(pts[i], lo, hi, MODE), lo);
+}
+"""
+
+
+def _particle_helpers() -> str:
+    """The real tournament_home_tile / tournament_tile_box /
+    particle_world_box / confine_sample block, lifted from entity_update."""
+    src = read_shader("shaders/entity_update.glsl")
+    start = src.index("int tournament_home_tile(uint index){")
+    end = src.index("//Entities with index > ACTIVE_COUNT", start)
+    return src[start:end]
+
+
+@pytest.fixture(scope="module")
+def confine(ctx):
+    prog = ctx.compute_shader(PARTICLE_SRC + _particle_helpers() + PARTICLE_MAIN)
+    prog["canvas_resolution"].value = (RES, RES)
+    prog["TOURNAMENT_MODE"].value = 1
+    prog["TOURNAMENT_GRID"].value = GRID
+    prog["ACTIVE_COUNT_F"].value = 1600.0
+
+    def run(points, indices, mode):
+        pts = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+        ids = np.asarray(indices, dtype=np.uint32).reshape(-1)
+        bin_ = ctx.buffer(pts.tobytes())
+        bout = ctx.buffer(reserve=len(pts) * 16)
+        bidx = ctx.buffer(ids.tobytes())
+        bin_.bind_to_storage_buffer(0)
+        bout.bind_to_storage_buffer(1)
+        bidx.bind_to_storage_buffer(2)
+        prog["MODE"].value = int(mode)
+        prog.run(group_x=(len(pts) + 63) // 64)
+        out = np.frombuffer(bout.read(), dtype=np.float32).reshape(-1, 4)
+        for b in (bin_, bout, bidx):
+            b.release()
+        return out[:, :2].copy(), out[:, 2:].copy()
+
+    yield run
+    prog.release()
+
+
+def _tile_of(i):
+    """Buffer index that lands squarely in tile i, matching
+    tournament_home_tile at ACTIVE_COUNT=1600, GRID=4."""
+    return int((i + 0.5) * 1600 / (GRID * GRID))
+
+
+def test_the_tile_box_partitions_the_canvas(confine):
+    """Every tile's box must abut its neighbour's exactly - a gap or an overlap
+    here is a strip of canvas that belongs to two tiles or to none."""
+    ids = [_tile_of(i) for i in range(GRID * GRID)]
+    _out, los = confine([[0.0, 0.0]] * len(ids), ids, WRAP)
+    xs = sorted({round(float(v), 5) for v in los[:, 0]})
+    assert len(xs) == GRID
+    step = xs[1] - xs[0]
+    assert np.allclose(np.diff(xs), step), "tile columns are not evenly spaced"
+
+
+def test_wrap_folds_a_sensor_back_into_its_own_tile(confine):
+    """The sensor used to be clamped, which pinned every reading past the wall
+    to the same texel. Under wrap it has to come out the other side."""
+    idx = _tile_of(5)
+    _lo_probe, los = confine([[0.0, 0.0]], [idx], WRAP)
+    lo = los[0]
+    span = 2.0 / GRID                          # square canvas, half_extent = 1
+    just_past = [lo[0] + span * 1.1, lo[1] + span * 0.5]
+    out, _ = confine([just_past], [idx], WRAP)
+    assert lo[0] <= out[0][0] <= lo[0] + span
+    assert out[0][0] == pytest.approx(lo[0] + span * 0.1, abs=1e-3)
+
+
+def test_wrap_keeps_two_sensors_past_the_wall_distinct(confine):
+    """The actual defect, stated as a test.
+
+    A particle heading INTO the wall has both sensors past it. Clamping sent
+    both to the same coordinate, so the left and right taps were equal and the
+    steering differential was exactly zero - in a band of width sample_dist
+    around every tile, and along both axes at once in a corner. That band is
+    the anisotropy; the corners are where two of them cross.
+
+    Under wrap there is no wall to be past, so the two stay as far apart as
+    they started.
+    """
+    idx = _tile_of(5)
+    _p, los = confine([[0.0, 0.0]], [idx], WRAP)
+    lo = los[0]
+    span = 2.0 / GRID
+    mid_y = lo[1] + span * 0.5
+    near = [lo[0] + span + 0.02, mid_y]        # both past the right wall,
+    far = [lo[0] + span + 0.08, mid_y]         # 0.06 apart
+
+    wrapped, _ = confine([near, far], [idx, idx], WRAP)
+    assert abs(wrapped[0][0] - wrapped[1][0]) == pytest.approx(0.06, abs=1e-3)
+
+    clamped, _ = confine([near, far], [idx, idx], BOUNCE)
+    assert clamped[0][0] == pytest.approx(clamped[1][0], abs=1e-6), (
+        "under bounce the wall is real, so both sensors stopping at it is "
+        "correct - the bug was doing this under wrap too")
+
+
+def test_wrap_keeps_a_corner_from_collapsing_both_axes(confine):
+    """A corner is where the band along x meets the band along y, so a clamp
+    there flattens the sample in both directions at once."""
+    idx = _tile_of(5)
+    _p, los = confine([[0.0, 0.0]], [idx], WRAP)
+    lo = los[0]
+    span = 2.0 / GRID
+    a = [lo[0] + span + 0.02, lo[1] + span + 0.02]
+    b = [lo[0] + span + 0.09, lo[1] + span + 0.05]
+
+    wrapped, _ = confine([a, b], [idx, idx], WRAP)
+    assert np.abs(wrapped[0] - wrapped[1]).min() > 1e-3
+
+    clamped, _ = confine([a, b], [idx, idx], BOUNCE)
+    assert np.allclose(clamped[0], clamped[1], atol=1e-6)
+
+
+@pytest.mark.parametrize("mode", [BOUNCE, RESET, WRAP])
+def test_a_sensor_never_leaves_its_tile(confine, mode):
+    """Whatever the boundary condition, a sample must stay inside the tile -
+    and inside it by half a texel, because get_can() samples bilinearly and a
+    coordinate on the seam blends the neighbouring tile's texels."""
+    rng = np.random.default_rng(1)
+    ids = [_tile_of(i % (GRID * GRID)) for i in range(256)]
+    pts = rng.uniform(-3.0, 3.0, size=(256, 2)).astype(np.float32)
+    out, los = confine(pts, ids, mode)
+    span = 2.0 / GRID
+    half_texel = 1.0 / RES
+    assert np.all(out >= los + half_texel - 1e-5)
+    assert np.all(out <= los + span - half_texel + 1e-5)

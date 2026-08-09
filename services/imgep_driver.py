@@ -75,7 +75,7 @@ class ImgepDriver:
         self.k = 10
         self.seed_n = 256
         self.liveness_min = 0.002    # measured; see state/archive_state.py
-        self.refresh_per_gen = 64
+        self.refresh_sweep_gens = 10
         self.flush_every = 200
 
         # expedition settings (spec 7.4)
@@ -139,7 +139,8 @@ class ImgepDriver:
             "regime": self.regime,
             "goal": self.goal_label,
             "archive_size": st["size"],
-            "threshold": st["threshold"],
+            "capacity": st["capacity"],
+            "n_evicted": st["n_evicted"],
             "admission_rate": st["admission_rate"],
             "n_pinned": st["n_pinned"],
             "blocked_by_pins": st["blocked_by_pins"],
@@ -296,7 +297,6 @@ class ImgepDriver:
         self.archive.liveness_min = (
             float(self.liveness_min) if len(snapshots) >= 2 else 0.0)
         self.archive.k = int(self.k)
-        self.archive.seed_n = int(self.seed_n)
 
         last = snapshots[-1]
         pinned = set(self.tournament.selected)
@@ -337,7 +337,11 @@ class ImgepDriver:
         self.tournament.selected.clear()
         self._last_descriptors = b
         self.gen += 1
-        self.archive.refresh(self.refresh_per_gen)
+        self.archive.refresh(self._refresh_count())
+        # AFTER refresh, so eviction ranks on the freshest novelty available,
+        # and once per generation rather than per admission - the whole point
+        # of admitting generously is that the ranking happens on the batch.
+        self.archive.prune_to_capacity()
         self.archive.maybe_flush(every=self.flush_every)
 
         if self.regime == "expedition":
@@ -359,6 +363,31 @@ class ImgepDriver:
         return np.asarray(nov, dtype=np.float32)
 
     # ---- expedition fitness ---------------------------------------------
+
+    def _refresh_count(self) -> int:
+        """How many entries to re-score this generation.
+
+        A FRACTION of the archive, not a fixed count, because the quantity that
+        matters is how many generations a full sweep takes - i.e. how stale
+        novelty is allowed to get - and that has to hold as the archive grows.
+        The old fixed 64 gave a sweep of 75 generations at 4808 entries and 312
+        (14.6 minutes) at the 20000 capacity, where 64 tiles a generation are
+        also being ADMITTED: the sweep took exactly as long as a complete
+        turnover, so an entry's novelty could be a whole archive-lifetime old.
+
+        Staleness is not symmetric, which is why it matters. Expansion breeds
+        locally, so new entries land near old ones and a true novelty only ever
+        falls; a stale value is therefore systematically too HIGH - 41-59% of
+        entries measured inflated - and an inflated novelty makes an entry both
+        likelier to be chosen as a parent and likelier to survive eviction.
+
+        Measured cost at sweep=10: 0.9% of a 2.8 s generation at 4808 entries,
+        12.7% at 20000.
+        """
+        g = int(self.refresh_sweep_gens)
+        if g <= 0:
+            return 0
+        return int(-(-len(self.archive) // g))     # ceil, so a sweep completes
 
     def _expedition_fitness(self, snaps: np.ndarray) -> np.ndarray:
         """Contrastive, from the PER-SNAPSHOT embeddings.
@@ -460,7 +489,6 @@ class ImgepDriver:
             "best_z": np.zeros(self.spec.dim, dtype=np.float32),
             "best_fitness": 0.0,
             "imgep_gen": int(self.gen),
-            "imgep_threshold": float(self.archive.threshold.value),
             "imgep_since_expedition": int(self._since_expedition),
         }
 
@@ -471,5 +499,6 @@ class ImgepDriver:
         self.end_expedition()
         self.gen = int(d.get("imgep_gen", 0))
         self._since_expedition = int(d.get("imgep_since_expedition", 0))
-        if "imgep_threshold" in d:
-            self.archive.threshold.value = float(d["imgep_threshold"])
+        # "imgep_threshold" appears in checkpoints written before 2026-08-08.
+        # Ignored rather than rejected: there is no threshold to restore it to,
+        # and an old checkpoint is still perfectly good for gen and cadence.

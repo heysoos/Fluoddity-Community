@@ -101,11 +101,60 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   archived under one preset decodes to a different creature under another. See
   `tests/test_physics_origin_roundtrip.py`.
 
-- **`Archive.refresh()` is what makes eviction cheap.** Eviction drops the
-  lowest *stored* novelty, which is only meaningful because 64 entries per
-  generation are re-scored against the full archive. Turning `refresh_per_gen`
-  down to 0 silently degrades eviction into "drop whatever was least novel when
-  it was admitted".
+- **Admission does not gate on novelty; capacity prunes.** Everything finite,
+  viable and alive is admitted, and `prune_to_capacity()` evicts the least
+  novel once over the cap — one bulk pass per generation, from `tell()`, AFTER
+  `refresh()`. The adaptive threshold that used to gate was removed 2026-08-08
+  for two independent measured reasons. Its `observe()` ran once per
+  *candidate* — 16 tiles a generation at grid 4, 64 at grid 8 — each
+  multiplying the threshold by 1.05 or 0.95, so it could move **2.18x** in one
+  generation (22.7x at grid 8) while steering on a rate averaged over ~6
+  generations; simulated on a *stationary* novelty distribution it admitted
+  nothing in 61% of generations at a rate std of 0.315 against a Bernoulli
+  floor of 0.089. And separately, a generation's tiles are not independent
+  draws — they share one parent sample or one CMA-ES population, so they clear
+  or miss any bar together, which alone raises "every tile admitted" 12x. No
+  gain fixes either. Do not reintroduce a novelty threshold without addressing
+  both.
+
+- **`Archive.refresh()` is what makes pruning meaningful, and its budget is a
+  FRACTION of the archive.** Parent choice and eviction both rank on *stored*
+  novelty, so what matters is how many generations a full sweep takes —
+  `refresh_sweep_gens`, default 10, from which `ImgepDriver._refresh_count()`
+  derives `ceil(len / gens)`. A fixed count does not hold as the archive grows:
+  the old 64/generation swept 4808 entries in 75 generations and 20000 in 312
+  (14.6 min) — and at grid 8 that is also 64 *admissions* a generation, so a
+  sweep took exactly one full turnover. Staleness is directional and therefore
+  self-reinforcing: patterns accumulate near each other so true novelty only
+  falls, a stale value is systematically too HIGH (41–59% of entries measured
+  inflated), and an inflated value makes an entry both likelier to be chosen as
+  a parent and likelier to survive eviction. Cost at sweep=10: 0.9% of a 2.8 s
+  generation at 4808 entries, 12.7% at 20000.
+
+- **`_remove()` deletes the entry's thumbnail.** Nothing could reach it
+  afterwards — `index.jsonl` is append-only and the id is gone from
+  `vectors.npz`, so the row is dropped on the next open. Without this a full
+  archive at grid 8 orphans 64 JPEGs every ~2.8 s, about 12 MB a minute.
+
+- **Novelty is a LIVE column, so `index.jsonl` cannot be its home.** The index
+  is append-only; its `novelty` is forever the at-admission value, measured
+  against however much archive existed at the time. Entry #50 was scored
+  against 49 neighbours and entry #4000 against 3999, and the search compares
+  them as if they were on one scale. Measured 2026-08-08, the stored column
+  correlates **0.075** with a correct rescore. It therefore lives in
+  `vectors.npz` (rewritten wholesale, and an OPTIONAL key so pre-existing
+  archives are not quarantined), and `load_from_store` calls `rescore_all()`
+  unconditionally — 0.42 s at 4808 entries, 4.3 s at the 20000 capacity.
+  Skipping that rescore hands generation 0 — every tile stamped 1.0 by the
+  no-reference convention — **100.0%** of the `p ~ novelty^4` parent weight
+  (ESS 58 of 4808), and one of those entries is a black frame. Four things
+  read this column: expansion parents, `latent_goal`'s anchor,
+  `prune_to_capacity`, and the browser sort.
+
+- **`knn_distances` blocks over query rows.** Only k distances per query
+  survive, so the (n, m) matrix is scratch — and a whole-archive rescore at
+  capacity would ask for 1.6 GB of it at once. Blocking caps it at 64 MB and
+  costs nothing measurable; the matmul is the same either way.
 
 - **Novelty is measured against archive ∪ rejects ring.** The archive is gated,
   so without the ring the search has no memory of the regions it just rejected
@@ -135,6 +184,31 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   Pan, zoom and window size cannot affect what the optimizer scores, and there
   is no crop rect to get wrong. Anything that needs the *displayed* image
   (screenshots, video) still uses `camera.assembled_texture`.
+
+- **A tournament tile is a SMALL WORLD, and gets the world's own boundary
+  condition.** It is not a box with walls. Three places enforce the tile edge —
+  the particle boundary block and the sensor confinement in
+  `entity_update.glsl`, and `getBlur` in `canvas.frag` — and all three must
+  agree with `BOUNDARY_CONDITIONS_MODE`. Under wrap a tile is a TORUS: it has
+  no edge, so nothing can pile up against one. Before 2026-08-09 the tile was
+  always a walled box, which produced exactly the artifacts it should:
+  particles stacked on a line (the old bounce SET the position to the wall
+  instead of reflecting by the overshoot), and a band of width `sample_dist`
+  around every tile where both sensors clamped to the same texel and the
+  steering differential was identically zero — along both axes at once in a
+  corner, which is why corners looked worst. Verified on the GPU in
+  `tests/test_tile_isolation_gl.py`; the non-tournament path is bit-identical.
+
+- **The diffusion's tile guard must be the tile's uv BOX, never a tile index.**
+  `tournament_tile_uv` derived the index with `clamp(uv, 0, 0.999999)`, so a
+  neighbour probe that walked off the canvas clamped back into the *same* tile,
+  the zero-flux substitution was skipped, and the tap fell through to the
+  sampler — which has `repeat_x/repeat_y` set and duly returned the opposite
+  edge of the canvas. Measured 2026-08-09: one lit tile at (3,0) put **64.4%**
+  of its brightness into tile (0,0) *and* into (3,3), while its genuinely
+  adjacent neighbours stayed at exactly 0, and it retained only **74.6%** of
+  its own trail. Only tiles touching the canvas border leaked — 12 of 16 at
+  grid 4, 28 of 64 at grid 8 — and corner tiles on two edges each.
 
 - **Entry ids restart at 0 in every archive**, so `ThumbCache` must be released
   on a switch — it is keyed by thumbnail filename, which is derived from the

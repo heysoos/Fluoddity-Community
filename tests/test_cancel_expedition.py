@@ -17,7 +17,7 @@ class _UIState:
 # seed_n 256 against an archive of 16 puts the driver straight back into
 # bootstrap, and the test would be measuring that instead of the cancel.
 _PUSHED = ("sigma_expand", "alpha", "k", "seed_n", "liveness_min",
-           "refresh_per_gen", "expansion_between", "expedition_gens",
+           "refresh_sweep_gens", "expansion_between", "expedition_gens",
            "expedition_sigma", "latent_share", "goal_order")
 
 

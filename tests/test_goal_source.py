@@ -42,8 +42,7 @@ class FakeScorer:
 
 
 def archive_with(vectors, dim=4, novelties=None):
-    a = Archive(store=None, dim=dim, seed_n=0, liveness_min=0.0, capacity=100)
-    a.threshold.value = 0.0
+    a = Archive(store=None, dim=dim, liveness_min=0.0, capacity=100)
     for j, v in enumerate(vectors):
         e = np.zeros(dim, dtype=np.float32)
         e[: len(v)] = v
@@ -218,8 +217,7 @@ def cone_archive(n=300, dim=256, seed=0):
     # Its own Archive rather than archive_with(): that helper caps capacity at
     # 100, which would silently evict two thirds of this fixture and quietly
     # weaken every measurement taken on it.
-    a = Archive(store=None, dim=dim, seed_n=0, liveness_min=0.0, capacity=n)
-    a.threshold.value = 0.0
+    a = Archive(store=None, dim=dim, liveness_min=0.0, capacity=n)
     for v in vecs:
         a.consider(
             Candidate(brain=np.zeros((10, 8), np.float32),
