@@ -77,3 +77,6 @@ def default_layout() -> BrainLayout:
 # to populate REGISTRY. Placed at the bottom because each module imports
 # BrainLayout/Setting/register from this one.
 from services.brains import fourier as _fourier  # noqa: E402,F401
+from services.brains import gabor as _gabor      # noqa: E402,F401
+from services.brains import lenia as _lenia      # noqa: E402,F401
+from services.brains import mlp as _mlp          # noqa: E402,F401

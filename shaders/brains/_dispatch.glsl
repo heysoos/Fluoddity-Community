@@ -55,16 +55,28 @@ void fourier_write_fallback(uint out_base) {
     }
 }
 
-// The whole active brain as the particle sees it, mutation included, so an
-// adopted rule is the one that was running.
+// The i-th float of the active brain as the particle sees it. Each modality
+// owns this because each decides which of its floats are SCALES and which are
+// OFFSETS - a width that offsets can be walked through zero, and a direction
+// that offsets per component is rotated rather than resized.
+float brain_param_at(uint base, int i) {
+    if (BRAIN_MODALITY == 0) return fourier_param_at(base, i);
+    if (BRAIN_MODALITY == 1) return gabor_param_at(base, i);
+    if (BRAIN_MODALITY == 2) return lenia_param_at(base, i);
+    return mlp_param_at(base, i);
+}
+
+// The whole active brain, mutation included, so an adopted rule is the one that
+// was running.
 //
-// Per MODALITY, not per float: a modality that mutates structurally (fourier
-// scales a frequency VECTOR by one scalar, from a seed hashed off the rule's
-// own content) would otherwise recompute all of that for every float it emits.
+// Fourier takes a bulk path because its mutation is structured: the seed is
+// hashed from the rule's own content, so a per-float loop would re-derive it 80
+// times per particle. The others mutate each float independently, which makes
+// the per-float loop the same work either way.
 void brain_write(uint base, uint out_base) {
     if (g_brain_fallback)     { fourier_write_fallback(out_base); return; }
     if (BRAIN_MODALITY == 0)  { fourier_write(base, out_base);    return; }
     for (int i = 0; i < BRAIN_LEN; i++) {
-        particle_brains[out_base + uint(i)] = brain_add(base, i);
+        particle_brains[out_base + uint(i)] = brain_param_at(base, i);
     }
 }
