@@ -121,7 +121,7 @@ def test_expansion_children_stay_near_their_parents():
     # every child decodes to a brain close to some archived parent
     for row in z:
         brain = BRAIN_SPEC.decode(row)["brain"]
-        gaps = np.abs(arc.brains - brain).max(axis=(1, 2))
+        gaps = np.abs(arc.brains - brain.reshape(-1)).max(axis=1)
         assert gaps.min() < 0.3
 
 

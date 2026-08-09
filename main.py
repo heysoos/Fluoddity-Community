@@ -237,10 +237,23 @@ class App:
         from services.goal_source import GoalList
         from services.thumb_cache import ThumbCache, gl_loader
 
-        store = ArchiveStore(path)
-        archive = Archive(store=store)
+        from services.archive_io import migrate_to_signature_dir
+
+        # An archive belongs to ONE brain layout: the floats it stores mean
+        # nothing without it. Entries live in <archive>/<signature>/, so
+        # switching modality moves to a sibling directory and both survive.
+        from services.brains import default_layout
+
+        migrate_to_signature_dir(path)
+        # From the sim when there is one. Falling back rather than requiring it
+        # keeps this callable before the sim exists, and from the switch path.
+        layout = (getattr(getattr(self, "sim", None), "brain_layout", None)
+                  or default_layout())
+        store = ArchiveStore(path, layout)
+        archive = Archive(store=store, layout=layout)
         loaded, dropped = archive.load_from_store()
-        print(f"[archive] {path.name}: loaded {loaded} entries ({dropped} dropped)")
+        print(f"[archive] {path.name}/{layout.signature()}: "
+              f"loaded {loaded} entries ({dropped} dropped)")
 
         goals = GoalList(store=store)
         goals.load()

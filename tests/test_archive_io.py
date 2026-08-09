@@ -15,9 +15,13 @@ def _arrays(n=3, dim=4):
 
 
 def test_creates_the_directory_layout(tmp_path):
+    """The store owns its own directory - one level below the named archive,
+    under the brain layout's signature. Tests ask it for paths rather than
+    rebuilding them, so the signature can change without touching them."""
     s = ArchiveStore(tmp_path / "archive")
     assert s.enabled
-    assert (tmp_path / "archive" / "thumbs").is_dir()
+    assert s.root.parent == tmp_path / "archive"
+    assert (s.root / "thumbs").is_dir()
     s.close()
 
 
@@ -26,7 +30,7 @@ def test_append_index_writes_one_json_object_per_line(tmp_path):
     s.append_index({"id": 0, "novelty": 0.5})
     s.append_index({"id": 1, "novelty": 0.6})
     s.close()
-    lines = (tmp_path / "index.jsonl").read_text(encoding="utf-8").splitlines()
+    lines = s.index_path.read_text(encoding="utf-8").splitlines()
     assert [json.loads(x)["id"] for x in lines] == [0, 1]
 
 
@@ -52,7 +56,7 @@ def test_vectors_roundtrip(tmp_path):
 def test_flush_leaves_no_temp_file(tmp_path):
     s = ArchiveStore(tmp_path)
     s.flush_vectors(*_arrays())
-    assert list(tmp_path.glob("*.tmp")) == []
+    assert list(s.root.glob("*.tmp")) == []
     s.close()
 
 
@@ -61,45 +65,45 @@ def test_a_failed_flush_leaves_the_previous_vectors_intact(tmp_path, monkeypatch
     s = ArchiveStore(tmp_path)
     ids, emb, brains, phys = _arrays()
     s.flush_vectors(ids, emb, brains, phys)
-    good = (tmp_path / "vectors.npz").read_bytes()
+    good = s.vectors_path.read_bytes()
 
     def boom(*a, **kw):
         raise OSError("disk full")
 
     monkeypatch.setattr("numpy.savez", boom)
     s.flush_vectors(ids, emb * 0, brains, phys)
-    assert (tmp_path / "vectors.npz").read_bytes() == good
+    assert s.vectors_path.read_bytes() == good
     s.close()
 
 
 def test_a_corrupt_vectors_file_is_quarantined_not_overwritten(tmp_path):
-    (tmp_path / "index.jsonl").write_text('{"id": 0}\n', encoding="utf-8")
-    (tmp_path / "vectors.npz").write_bytes(b"not an npz at all")
     s = ArchiveStore(tmp_path)
+    s.index_path.write_text('{"id": 0}\n', encoding="utf-8")
+    s.vectors_path.write_bytes(b"not an npz at all")
     rows, arrays = s.load()
     assert rows == [{"id": 0}]
     assert arrays == {}
-    assert not (tmp_path / "vectors.npz").exists()
-    assert list(tmp_path.glob("vectors.npz.bad-*")), "the bad file must be kept"
+    assert not s.vectors_path.exists()
+    assert list(s.root.glob("vectors.npz.bad-*")), "the bad file must be kept"
     s.close()
 
 
 def test_a_format_version_mismatch_is_quarantined(tmp_path):
+    s = ArchiveStore(tmp_path)
     ids, emb, brains, phys = _arrays()
-    with open(tmp_path / "vectors.npz", "wb") as fh:
+    with open(s.vectors_path, "wb") as fh:
         np.savez(fh, format_version=np.array(FORMAT_VERSION + 1), ids=ids,
                  embeddings=emb.astype(np.float16), brains=brains, physics=phys)
-    s = ArchiveStore(tmp_path)
     _rows, arrays = s.load()
     assert arrays == {}
-    assert list(tmp_path.glob("vectors.npz.bad-*"))
+    assert list(s.root.glob("vectors.npz.bad-*"))
     s.close()
 
 
 def test_a_torn_trailing_index_line_costs_one_entry_not_the_file(tmp_path):
-    (tmp_path / "index.jsonl").write_text(
-        '{"id": 0}\n{"id": 1}\n{"id": 2, "nov', encoding="utf-8")
     s = ArchiveStore(tmp_path)
+    s.index_path.write_text(
+        '{"id": 0}\n{"id": 1}\n{"id": 2, "nov', encoding="utf-8")
     rows, _ = s.load()
     assert [r["id"] for r in rows] == [0, 1]
     s.close()
