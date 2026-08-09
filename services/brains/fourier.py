@@ -36,7 +36,9 @@ class FourierModality:
 
     def layout_from_settings(self, s: dict) -> BrainLayout:
         n = int(s.get("centers", 10))
-        return BrainLayout("fourier", (n,), 8 * n)
+        return BrainLayout("fourier", (n,), 8 * n, scales=(
+            ("freq_scale", float(s.get("freq_scale", FREQ_SCALE))),
+        ))
 
     def decode(self, z: np.ndarray, layout: BrainLayout) -> np.ndarray:
         """(8N,) search vector -> (8N,) flat params in GPU order.
@@ -46,14 +48,15 @@ class FourierModality:
         """
         n = layout.shape[0]
         z = np.asarray(z, dtype=np.float32).reshape(n * 2, 4)
-        freq = FREQ_SCALE * np.tanh(z[:n])
+        freq = layout.scale("freq_scale", FREQ_SCALE) * np.tanh(z[:n])
         amp = AMP_SCALE * np.tanh(z[n:])
         return np.concatenate([freq, amp], axis=1).astype(np.float32).reshape(-1)
 
     def encode(self, params: np.ndarray, layout: BrainLayout):
         n = layout.shape[0]
         g = np.asarray(params, dtype=np.float32).reshape(n, 8)
-        raw = np.concatenate([g[:, :4] / FREQ_SCALE, g[:, 4:] / AMP_SCALE], axis=0)
+        fs = layout.scale("freq_scale", FREQ_SCALE)
+        raw = np.concatenate([g[:, :4] / fs, g[:, 4:] / AMP_SCALE], axis=0)
         n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))
         return z.reshape(-1).astype(np.float32), n_clamped

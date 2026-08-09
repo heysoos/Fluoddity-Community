@@ -975,6 +975,20 @@ class Sim:
         stride - click-to-adopt readback, in particular."""
         return self._brain_layout
 
+    def set_brain_scales(self, layout) -> None:
+        """Adopt a layout of the SAME width - a decode-scale change only.
+
+        Separate from realloc_brain_buffers because that releases and
+        reallocates the per-particle buffer, which is 192 MB at the default
+        count. A slider tick must not pay for that, and does not need to: the
+        GPU is handed decoded parameters, so a scale change never reaches it.
+        """
+        if layout.length != self._brain_layout.length:
+            raise ValueError(
+                f"set_brain_scales needs the same width: {layout.length} vs "
+                f"{self._brain_layout.length}; use realloc_brain_buffers")
+        self._brain_layout = layout
+
     def realloc_brain_buffers(self, layout) -> None:
         """Resize the per-particle brain buffer for a new layout.
 

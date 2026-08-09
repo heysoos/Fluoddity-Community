@@ -53,16 +53,27 @@ class LeniaModality:
 
     def layout_from_settings(self, s: dict) -> BrainLayout:
         n = int(s.get("bumps", 12))
-        return BrainLayout("lenia", (n,), FLOATS_PER_BUMP * n)
+        return BrainLayout("lenia", (n,), FLOATS_PER_BUMP * n, scales=(
+            ("mu_scale", float(s.get("mu_scale", MU_SCALE))),
+            ("sigma_max", float(s.get("sigma_max", SIGMA_MAX))),
+            ("w_scale", float(s.get("w_scale", W_SCALE))),
+        ))
+
+    @staticmethod
+    def _scales(layout: BrainLayout):
+        return (layout.scale("w_scale", W_SCALE),
+                layout.scale("mu_scale", MU_SCALE),
+                max(layout.scale("sigma_max", SIGMA_MAX), SIGMA_MIN * 2.0))
 
     def decode(self, z: np.ndarray, layout: BrainLayout) -> np.ndarray:
         n = layout.shape[0]
         z = np.asarray(z, dtype=np.float32).reshape(n, FLOATS_PER_BUMP)
         out = np.empty_like(z)
-        out[:, 0:4] = W_SCALE * np.tanh(z[:, 0:4])
+        ws, mus, s_hi = self._scales(layout)
+        out[:, 0:4] = ws * np.tanh(z[:, 0:4])
         out[:, 4:8] = AMP_SCALE * np.tanh(z[:, 4:8])
-        out[:, 8] = MU_SCALE * np.tanh(z[:, 8])
-        half = 0.5 * (SIGMA_MAX - SIGMA_MIN)
+        out[:, 8] = mus * np.tanh(z[:, 8])
+        half = 0.5 * (s_hi - SIGMA_MIN)
         out[:, 9] = SIGMA_MIN + half * (1.0 + np.tanh(z[:, 9]))
         return out.reshape(-1).astype(np.float32)
 
@@ -70,10 +81,11 @@ class LeniaModality:
         n = layout.shape[0]
         p = np.asarray(params, dtype=np.float32).reshape(n, FLOATS_PER_BUMP)
         raw = np.empty_like(p)
-        raw[:, 0:4] = p[:, 0:4] / W_SCALE
+        ws, mus, s_hi = self._scales(layout)
+        raw[:, 0:4] = p[:, 0:4] / ws
         raw[:, 4:8] = p[:, 4:8] / AMP_SCALE
-        raw[:, 8] = p[:, 8] / MU_SCALE
-        half = 0.5 * (SIGMA_MAX - SIGMA_MIN)
+        raw[:, 8] = p[:, 8] / mus
+        half = 0.5 * (s_hi - SIGMA_MIN)
         raw[:, 9] = (p[:, 9] - SIGMA_MIN) / half - 1.0
         n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))

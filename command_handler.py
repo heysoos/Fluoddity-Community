@@ -202,11 +202,14 @@ class CommandHandler:
         bst = ui_state.brain
         bst.archive_entries = len(self.archive) if self.archive is not None else 0
 
-        if not bst.request_layout_change:
-            return
         bst.request_layout_change = False
         if self.apply_brain_layout is None:
             return
+        # Called every frame, not only on the flag. A COUNT change is confirmed
+        # behind a modal and only reaches bst.settings once applied, but a SCALE
+        # slider commits immediately - and it still has to reach the decode.
+        # _apply_brain_layout early-returns when nothing differs and takes a
+        # light path when only the scales do.
         self.apply_brain_layout(layout_for(bst.modality, bst.settings), ui_state)
 
     def _handle_world_size_change(self, ui_state):

@@ -392,6 +392,26 @@ class App:
             self.ui.brain_preview_tex = None
             self.brain_preview = False
 
+    def _refresh_driver_specs(self, layout, reset: bool = False) -> None:
+        """Point every driver's genome spec at `layout`.
+
+        reset=True only when the WIDTH changed: a decode-scale change leaves the
+        search dimension and the archive intact, so throwing away the optimizer's
+        covariance would cost the run for nothing.
+        """
+        from services.genome_spec import physics_spec_for, spec_for
+
+        for drv in (getattr(self.auto_service, "driver", None),
+                    self.imgep_driver):
+            if drv is None:
+                continue
+            physics = bool(getattr(drv, "physics_enabled", False))
+            spec = physics_spec_for(layout) if physics else spec_for(layout)
+            if hasattr(drv, "set_spec"):
+                drv.set_spec(spec)
+            if reset and hasattr(drv, "reset"):
+                drv.reset()
+
     def _apply_brain_layout(self, layout, ui_state) -> bool:
         """Switch the brain layout. A hard reset of the search, never partial.
 
@@ -409,8 +429,17 @@ class App:
         from services.genome_spec import physics_spec_for, spec_for
         from utilities.paths import get_archives_root
 
-        if layout == self.sim.brain_layout:
-            return False
+        current = self.sim.brain_layout
+        if layout == current:
+            if tuple(layout.scales) == tuple(current.scales):
+                return False
+            # SCALES ONLY. What a z means changed, but not how wide it is, so
+            # the archive stays valid (it stores decoded brains) and the
+            # optimizer keeps its covariance. Refresh the decode and stop -
+            # no teardown, no reallocation.
+            self.sim.set_brain_scales(layout)
+            self._refresh_driver_specs(layout)
+            return True
 
         if self.auto_service is not None:
             self.auto_service.pause()
@@ -438,16 +467,7 @@ class App:
 
         # The optimizer searches a different number of dimensions now, so its
         # covariance and population are meaningless. Reset rather than resize.
-        for drv in (getattr(self.auto_service, "driver", None),
-                    self.imgep_driver):
-            if drv is None:
-                continue
-            physics = bool(getattr(drv, "physics_enabled", False))
-            spec = physics_spec_for(layout) if physics else spec_for(layout)
-            if hasattr(drv, "set_spec"):
-                drv.set_spec(spec)
-            if hasattr(drv, "reset"):
-                drv.reset()
+        self._refresh_driver_specs(layout, reset=True)
 
         if self.archive is not None or self.archive_store is not None:
             path = resolve(get_archives_root(),

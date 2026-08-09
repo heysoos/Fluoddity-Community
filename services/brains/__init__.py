@@ -8,7 +8,7 @@ See docs/superpowers/specs/2026-08-08-brain-modalities-design.md.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # The flat parameter buffer's stride. Sized so every UI-reachable layout fits:
 # Fourier 48*8=384, Gabor 36*14=504, Lenia 48*10=480, MLP H=48 -> 9*48+4=436.
@@ -20,6 +20,21 @@ class BrainLayout:
     modality: str
     shape: tuple[int, ...]
     length: int
+    # Decode SCALES: the settings that change what a z MEANS without changing
+    # how many floats it has - Fourier's freq scale, Gabor's envelope width,
+    # Lenia's band centre.
+    #
+    # compare=False, and absent from signature(), on purpose. They must not
+    # split the archive or force a search reset, and they safely cannot: the
+    # archive stores DECODED brains, so a creature already in it is unaffected
+    # by a later change here. Only how new z decode moves.
+    scales: tuple[tuple[str, float], ...] = field(default=(), compare=False)
+
+    def scale(self, key: str, default: float) -> float:
+        for k, v in self.scales:
+            if k == key:
+                return float(v)
+        return float(default)
 
     def __post_init__(self):
         if self.length > MAX_BRAIN_FLOATS:
