@@ -51,7 +51,10 @@ class ArchiveState:
     # Capacity is now the ONLY pruning rule - admission does not gate on
     # novelty, so this is what decides how much survives. See services/archive.
     capacity: int = 20000
-    refresh_per_gen: int = 64
+    # Generations for a full novelty sweep, NOT entries per generation: the
+    # bound that matters is how stale novelty may get, and it has to hold as
+    # the archive grows. See ImgepDriver._refresh_count.
+    refresh_sweep_gens: int = 10
 
     # expeditions
     expansion_between: int = 25      # 0 disables expeditions

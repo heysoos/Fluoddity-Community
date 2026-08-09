@@ -537,7 +537,7 @@ class CommandHandler:
             tile_mutation_strength=ast.tile_mutation_strength,
         )
         for name in ("sigma_expand", "alpha", "k", "seed_n", "liveness_min",
-                     "refresh_per_gen", "expansion_between", "expedition_gens",
+                     "refresh_sweep_gens", "expansion_between", "expedition_gens",
                      "expedition_sigma", "latent_share", "goal_order",
                      "seed_ess_min", "seed_ess_max"):
             setattr(drv, name, getattr(ast, name))

@@ -29,7 +29,7 @@ def test_defaults_match_the_spec_table():
     assert s.latent_share == 0.5
     assert s.liveness_min == 0.002
     assert s.capacity == 20000
-    assert s.refresh_per_gen == 64
+    assert s.refresh_sweep_gens == 10
     assert s.goal_order == "round_robin"
 
 
@@ -59,7 +59,7 @@ def test_the_driver_settings_the_command_handler_pushes_all_exist():
     from services.imgep_driver import ImgepDriver
 
     pushed = ("sigma_expand", "alpha", "k", "seed_n", "liveness_min",
-              "refresh_per_gen", "expansion_between", "expedition_gens",
+              "refresh_sweep_gens", "expansion_between", "expedition_gens",
               "expedition_sigma", "latent_share", "goal_order")
     names = {f.name for f in fields(ArchiveState)}
     driver_attrs = set(vars(ImgepDriver(None, None, [], rng=None)))

@@ -117,10 +117,19 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   gain fixes either. Do not reintroduce a novelty threshold without addressing
   both.
 
-- **`Archive.refresh()` is what makes pruning meaningful.** Eviction ranks on
-  *stored* novelty, which is only current because `refresh_per_gen` entries are
-  re-scored against the full archive each generation. Turning it to 0 degrades
-  pruning into "drop whatever was least novel when it was admitted".
+- **`Archive.refresh()` is what makes pruning meaningful, and its budget is a
+  FRACTION of the archive.** Parent choice and eviction both rank on *stored*
+  novelty, so what matters is how many generations a full sweep takes —
+  `refresh_sweep_gens`, default 10, from which `ImgepDriver._refresh_count()`
+  derives `ceil(len / gens)`. A fixed count does not hold as the archive grows:
+  the old 64/generation swept 4808 entries in 75 generations and 20000 in 312
+  (14.6 min) — and at grid 8 that is also 64 *admissions* a generation, so a
+  sweep took exactly one full turnover. Staleness is directional and therefore
+  self-reinforcing: patterns accumulate near each other so true novelty only
+  falls, a stale value is systematically too HIGH (41–59% of entries measured
+  inflated), and an inflated value makes an entry both likelier to be chosen as
+  a parent and likelier to survive eviction. Cost at sweep=10: 0.9% of a 2.8 s
+  generation at 4808 entries, 12.7% at 20000.
 
 - **`_remove()` deletes the entry's thumbnail.** Nothing could reach it
   afterwards — `index.jsonl` is append-only and the id is gone from

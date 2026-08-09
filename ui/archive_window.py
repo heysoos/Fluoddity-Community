@@ -345,14 +345,18 @@ class ArchiveWindowMixin:
         # the slider.
         _, ast.liveness_min = imgui.slider_float(
             "Liveness Floor", ast.liveness_min, 0.0, 0.1, "%.4f")
-        _, ast.refresh_per_gen = imgui.slider_int(
-            "Novelty Refresh / Gen", ast.refresh_per_gen, 0, 512)
+        _, ast.refresh_sweep_gens = imgui.slider_int(
+            "Novelty Sweep (gens)", ast.refresh_sweep_gens, 1, 100)
         if imgui.is_item_hovered():
             imgui.set_tooltip(
-                "Entries re-scored against the current archive each "
-                "generation, round robin.\n\n"
-                "Eviction ranks on these numbers, so 0 degrades pruning into "
-                "'drop whatever looked least novel when it was admitted'.")
+                "Generations for every entry to be re-scored against the "
+                "current archive. This is how stale novelty may get.\n\n"
+                "A fraction of the archive is refreshed each generation, so "
+                "the bound holds as the archive grows. At 10 that costs 0.9% "
+                "of a generation at 4800 entries and 12.7% at 20000.\n\n"
+                "Parent choice and eviction both rank on these numbers, and "
+                "stale ones are systematically too HIGH: patterns accumulate "
+                "near each other, so true novelty only ever falls.")
         _, ast.capacity = imgui.slider_int("Capacity", ast.capacity, 1000, 100000)
         if imgui.is_item_hovered():
             imgui.set_tooltip(

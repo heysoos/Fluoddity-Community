@@ -211,11 +211,39 @@ def test_entries_record_their_generation_tile_and_spec():
 
 
 def test_refresh_runs_every_generation():
-    d, arc, _ = make(seed_n=0, refresh_per_gen=4)
+    d, arc, _ = make(seed_n=0, refresh_sweep_gens=1)
     d.tell(d.ask(4), moving(4))
     before = [e.novelty for e in arc.entries]
     d.tell(d.ask(4), moving(4, base=100))
     assert [e.novelty for e in arc.entries[:4]] != before
+
+
+def test_the_refresh_count_is_a_fraction_of_the_archive():
+    """A fixed count means the sweep period grows with the archive, and at
+    grid 8 the old 64/generation matched the ADMISSION rate exactly - a sweep
+    took a full turnover."""
+    d, arc, _ = make(seed_n=0)
+    d.refresh_sweep_gens = 10
+
+    class _N:
+        def __init__(self, n):
+            self.n = n
+
+        def __len__(self):
+            return self.n
+
+    real = d.archive
+    for n, want in ((0, 0), (5, 1), (100, 10), (4808, 481), (20000, 2000)):
+        d.archive = _N(n)
+        assert d._refresh_count() == want, f"n={n}"
+    d.archive = real
+
+
+def test_a_sweep_of_zero_generations_refreshes_nothing():
+    """0 is off rather than a division by zero."""
+    d, _, _ = make(seed_n=0)
+    d.refresh_sweep_gens = 0
+    assert d._refresh_count() == 0
 
 
 # ---- physics -----------------------------------------------------------
