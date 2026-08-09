@@ -120,6 +120,7 @@ class ArchiveWindowMixin:
         if imgui.collapsing_header("Rollout"):
             self._render_rollout_controls(
                 ast, grid_note="changing the grid ends any expedition in flight")
+            self._render_view_setting(ast)
         if imgui.collapsing_header("Exploration"):
             self._render_exploration_settings(ast)
         if imgui.collapsing_header("Archive"):
@@ -438,6 +439,18 @@ class ArchiveWindowMixin:
         ch, idx = imgui.combo("Goal Order", idx, ["Round robin", "Least matched"])
         if ch:
             ast.goal_order = order[idx]
+
+    def _render_view_setting(self, ast):
+        _, ast.n_views = imgui.slider_int("CLIP Views", ast.n_views, 1, 8)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Random sub-crops averaged into each tile's embedding; more is "
+                "steadier but costs CLIP time.")
+        if ast.n_views <= 1:
+            imgui.text_colored(
+                imgui.ImVec4(*_WARN),
+                "1 view is the raw frame - a 16px shift then reads as a "
+                "different creature")
 
     def _render_exploration_settings(self, ast):
         """How the search MOVES: where children come from and how far."""

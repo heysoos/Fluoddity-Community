@@ -209,3 +209,38 @@ def test_embed_text_does_not_disturb_the_cached_prompt_embedding():
     assert out.shape == (2, 4)
     assert np.allclose(np.linalg.norm(out, axis=1), 1.0, atol=1e-5)
     assert s._text_emb is cached, "embed_text must not overwrite the score() cache"
+
+
+# ---- averaged views ----------------------------------------------------
+
+def test_embed_mean_returns_one_row_per_image():
+    """embed() returns B*v rows and does no reduction. Handing those to a
+    novelty archive would make three sub-crops of one tile into three
+    competing descriptors for one behaviour."""
+    s = _scorer_with_stubs()
+    out = s.embed_mean(np.zeros((4, 224, 224, 3), dtype=np.uint8), n_views=3)
+    assert out.shape[0] == 4 and out.ndim == 2
+
+
+def test_embed_mean_output_is_renormalised():
+    """A mean of unit vectors is not a unit vector, and everything downstream
+    treats a dot product as a cosine."""
+    s = _scorer_with_stubs()
+    out = s.embed_mean(np.zeros((3, 224, 224, 3), dtype=np.uint8), n_views=3)
+    assert np.allclose(np.linalg.norm(out, axis=1), 1.0, atol=1e-5)
+
+
+def test_embed_mean_at_one_view_is_the_plain_embedding():
+    """1 view must stay the raw frame and cost one pass, so turning the
+    setting down really does turn the feature off."""
+    s = _scorer_with_stubs()
+    imgs = np.zeros((5, 224, 224, 3), dtype=np.uint8)
+    a = s.embed_mean(imgs, n_views=1)
+    assert a.shape[0] == 5 and a.ndim == 2
+    assert sum(s._vision.batch_sizes) == 5, "one view must not expand the batch"
+
+
+def test_embed_mean_actually_runs_every_view():
+    s = _scorer_with_stubs()
+    s.embed_mean(np.zeros((5, 224, 224, 3), dtype=np.uint8), n_views=3)
+    assert sum(s._vision.batch_sizes) == 15

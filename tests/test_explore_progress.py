@@ -187,3 +187,58 @@ def test_reset_does_not_clear_the_archive():
     n = len(arc)
     d.reset()
     assert len(arc) == n
+
+
+# ---- averaged CLIP views -------------------------------------------------
+
+class _CountingScorer:
+    """A scorer that records the n_views it was asked for."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.mean_calls = []
+        self.plain_calls = 0
+
+    def embed(self, images, n_views=1):
+        self.plain_calls += 1
+        return self.inner.embed(images, n_views=n_views)
+
+    def embed_mean(self, images, n_views=3):
+        self.mean_calls.append(int(n_views))
+        return self.inner.embed(images, n_views=1)
+
+    def embed_text(self, prompts):
+        return self.inner.embed_text(prompts)
+
+    def set_prompt(self, text, distractors=None):
+        return self.inner.set_prompt(text, distractors)
+
+
+def test_the_driver_asks_for_averaged_views():
+    d, _a, _t = make(seed_n=4)
+    d.scorer = _CountingScorer(d.scorer)
+    d.n_views = 3
+    d.tell(d.ask(4), moving(4))
+    assert d.scorer.mean_calls == [3, 3], "one per snapshot"
+    assert d.scorer.plain_calls == 0
+
+
+def test_one_view_takes_the_plain_path():
+    """Turning the setting down has to cost one CLIP pass, not three with two
+    of them thrown away."""
+    d, _a, _t = make(seed_n=4)
+    d.scorer = _CountingScorer(d.scorer)
+    d.n_views = 1
+    d.tell(d.ask(4), moving(4))
+    assert d.scorer.mean_calls == []
+    assert d.scorer.plain_calls == 2
+
+
+def test_a_scorer_without_embed_mean_still_works():
+    """tools/ scripts and the test fakes pass a bare scorer; averaging must be
+    an upgrade, not a requirement."""
+    d, arc, _t = make(seed_n=4)
+    d.n_views = 3
+    assert not hasattr(d.scorer, "embed_mean")
+    d.tell(d.ask(4), moving(4))
+    assert len(arc) > 0

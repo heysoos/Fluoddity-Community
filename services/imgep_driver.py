@@ -75,6 +75,7 @@ class ImgepDriver:
         self.k = 10
         self.seed_n = 256
         self.liveness_min = 0.002    # measured; see state/archive_state.py
+        self.n_views = 3             # measured; see CLIPScorer.embed_mean
         self.refresh_sweep_gens = 10
         self.flush_every = 200
 
@@ -339,7 +340,7 @@ class ImgepDriver:
         if not snapshots:
             return np.zeros(n, dtype=np.float32)
 
-        per_snap = [np.asarray(self.scorer.embed(c, n_views=1), dtype=np.float32)
+        per_snap = [np.asarray(self._embed(c), dtype=np.float32)
                     for c in snapshots]
         snaps = stack_snapshots(per_snap)
         b = descriptor(snaps)
@@ -496,6 +497,18 @@ class ImgepDriver:
                 "gens": end - start}
 
     # ---- expedition fitness ---------------------------------------------
+
+    def _embed(self, crops):
+        """One embedding per tile, averaged over n_views random sub-crops.
+
+        Falls back to the plain call for any scorer without embed_mean (the
+        tests' fakes, and tools/ scripts), so this is not a hard dependency.
+        """
+        v = max(1, int(self.n_views))
+        fn = getattr(self.scorer, "embed_mean", None)
+        if fn is None or v == 1:
+            return self.scorer.embed(crops, n_views=1)
+        return fn(crops, v)
 
     def _refresh_count(self) -> int:
         """How many entries to re-score this generation.

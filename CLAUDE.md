@@ -237,6 +237,38 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   tile). `tests/test_tile_isolation_gl.py` runs the whole grid at 647/8, 647/3
   and 641/7 on purpose.
 
+- **CLIP is strongly POSITION-dependent, and CLIP time is not free.** Measured
+  2026-08-09 on real archive thumbnails, rolling one 16px on the torus moves
+  its embedding 0.078–0.088 — **2.5–2.7x** the distance to its nearest genuine
+  neighbour, and past the 0.02 separation bar for 100% of tiles. The dip at
+  exactly 32px (0.037) is ViT-B/32's patch stride, which is the mechanism.
+  Averaging random sub-crop views buys the invariance back:
+
+  | views | roll 16px | repeat noise | same/unrelated |
+  |---|---|---|---|
+  | 1 | 0.0784 | 0.0000 | 0.459 |
+  | **3** | **0.0319** | **0.0069** | 0.425 |
+  | 5 | 0.0236 | 0.0050 | 0.445 |
+
+  `repeat` is what averaging COSTS: views 1..n are random draws, so the same
+  image no longer embeds identically. At 3 the nuisance falls 0.046 and the new
+  noise is 0.007 — about 7:1 — and 0.0069 is a third of the separation bar, so
+  a duplicate still cannot pass on noise alone. Use `embed_mean()`, never
+  `embed()` directly: `embed()` returns `B*v` rows unreduced, and feeding those
+  to the archive makes three sub-crops of one tile into three descriptors.
+
+  **The old spec's "96 images at n_views=1 ≈ 7 ms" is wrong by ~40x.** Measured
+  on DirectML it is **~3.0 ms per image at any batch size**, so grid 8 with 6
+  snapshots is 384 images ≈ 1.2 s at 1 view and ≈ 3.6 s at 3 — i.e. CLIP
+  becomes larger than the 2.8 s simulation. At grid 4 (96 images) the same step
+  is 0.29 s → 0.87 s. Views are a slider for that reason.
+
+  **Centring on the centre of mass was measured first and rejected.** It cancels
+  a shift exactly, but 26–34% of tiles have no well-posed centre (resultant
+  R median 0.065–0.073) — these are space-filling textures, not localised
+  objects — so it pushed real same-goal near-duplicates APART by 15–19% in two
+  of three archives.
+
 - **Admission gates on SEPARATION, and that is not the novelty threshold coming
   back.** `min_separation` (0.02, measured) refuses anything within that cosine
   distance of an entry already stored — the unstructured-archive rule from

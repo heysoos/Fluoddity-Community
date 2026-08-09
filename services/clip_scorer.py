@@ -202,6 +202,45 @@ class CLIPScorer:
         v = self._n_views if n_views is None else int(n_views)
         return self._embed_images(augment(images, v, self._rng))
 
+    def embed_mean(self, images: np.ndarray, n_views: int = 3) -> np.ndarray:
+        """uint8 (B,224,224,3) -> float32 (B, 512): ONE embedding per image,
+        averaged over n_views and renormalised.
+
+        The averaging is the point. embed() returns the views un-reduced, and
+        handing those to a novelty archive would make three sub-crops of one
+        tile into three competing descriptors for one behaviour - which is why
+        the search used n_views=1 and took the raw frame.
+
+        But CLIP ViT-B/32 is strongly position-dependent: measured 2026-08-09 on
+        real archive thumbnails, shifting one 16px on the torus moves its
+        embedding 0.078-0.088, which is 2.5-2.7x the distance to its nearest
+        genuine neighbour and past the 0.02 separation bar for 100% of tiles.
+        Averaging over random sub-crops buys back some of that invariance:
+
+            views   roll 16px   repeat noise   same/unrelated
+                1      0.0784        0.0000            0.459
+                3      0.0319        0.0069            0.425
+                5      0.0236        0.0050            0.445
+                8      0.0197        0.0037            0.424
+
+        `repeat` is what the averaging COSTS - the same image embedded twice no
+        longer agrees, because views 1..n are random draws. At 3 views the
+        nuisance falls by 0.046 and the new noise is 0.007, so the trade is
+        about 7:1 in favour; and 0.0069 is a third of the separation bar, so a
+        true duplicate still cannot pass it on noise alone.
+
+        (Centring on the centre of mass was measured first and rejected: it
+        cancels a shift exactly, but 26-34% of tiles have no well-posed centre -
+        these are space-filling textures, not localised objects - so it pushed
+        real near-duplicates APART by 15-19%.)
+        """
+        b = np.asarray(images)
+        v = max(1, int(n_views))
+        e = self.embed(b, v)
+        if v == 1:
+            return e
+        return _l2(e.reshape(len(b), v, -1).mean(axis=1))
+
     def score(self, images: np.ndarray) -> np.ndarray:
         """uint8 (B,224,224,3) -> float32 (B,). Softmax probability of the
         target prompt against the distractor set, averaged over augmented views.
