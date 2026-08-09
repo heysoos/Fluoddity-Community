@@ -76,6 +76,15 @@ def test_export_writes_a_config_named_for_the_entry(tmp_path):
     assert path.is_file()
 
 
+def test_export_tells_the_user_where_the_file_went(tmp_path):
+    """The file lands in the configs folder, which is not on screen, so a
+    console print left the button looking like it had done nothing."""
+    arc = archive_with()
+    ui = UIState()
+    handler(tmp_path, arc)._export_archive_entry(ui, arc.entries[1].id)
+    assert f"archive_{arc.entries[1].id:06d}.json" in ui.archive.notice
+
+
 def test_the_exported_config_round_trips_to_the_same_brain(tmp_path):
     """The point of exporting: it must open in the normal single-simulation
     view as the creature that was archived."""
@@ -134,32 +143,49 @@ def test_exporting_an_unknown_id_writes_nothing(tmp_path):
 
 # ---- seed ---------------------------------------------------------------
 
+def _ast(entry_id):
+    from state.archive_state import ArchiveState
+
+    a = ArchiveState()
+    a.seed_entry_id = int(entry_id)
+    return a
+
+
 def test_seeding_sets_x0_on_a_driver_that_has_one(tmp_path):
     arc = archive_with()
     drv = _Driver()
     ch = handler(tmp_path, arc, auto_service=_Service(drv))
-    ch._seed_from_archive(arc.entries[2].id)
+    ast = _ast(arc.entries[2].id)
+    ch._seed_from_archive(ast)
     assert drv.x0 is not None and drv.x0.shape == (BRAIN_SPEC.dim,)
+    assert str(arc.entries[2].id) in ast.notice, "the user must be told it took"
 
 
-def test_seeding_is_refused_for_a_driver_with_no_x0(tmp_path, capsys):
+def test_seeding_is_refused_for_a_driver_with_no_x0(tmp_path):
     """IMGEP draws parents from the archive by novelty, so seeding has no
-    meaning there - it must say so rather than silently do nothing."""
+    meaning there - and saying so on the CONSOLE is not saying so at all."""
     arc = archive_with()
     ch = handler(tmp_path, arc, auto_service=_Service(_NoX0Driver()))
-    ch._seed_from_archive(arc.entries[0].id)
-    assert "Auto (CLIP) mode" in capsys.readouterr().out
+    ast = _ast(arc.entries[0].id)
+    ch._seed_from_archive(ast)
+    assert "Auto (CLIP)" in ast.warning
+    assert not ast.notice
 
 
 def test_seeding_with_no_service_is_harmless(tmp_path):
     arc = archive_with()
-    handler(tmp_path, arc)._seed_from_archive(arc.entries[0].id)
+    ast = _ast(arc.entries[0].id)
+    handler(tmp_path, arc)._seed_from_archive(ast)
+    assert not ast.notice and not ast.warning
 
 
 def test_seeding_an_unknown_id_does_nothing(tmp_path):
     drv = _Driver()
     ch = handler(tmp_path, archive_with(), auto_service=_Service(drv))
-    ch._seed_from_archive(999)
+    ast = _ast(999)
+    ch._seed_from_archive(ast)
+    assert drv.x0 is None
+    assert not ast.notice
     assert drv.x0 is None
 
 

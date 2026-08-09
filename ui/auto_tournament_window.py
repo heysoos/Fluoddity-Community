@@ -11,26 +11,16 @@ from services.cohort_tiling import cohorts_for, max_variants
 
 ALGORITHM_NAMES = ["CMA-ES", "Sep-CMA-ES", "GA", "Random Search"]
 
+# One sentence each. The reasoning lives in services/cohort_tiling.py and
+# services/physics_genome.py, where it can be as long as it needs to be.
 COHORT_TOOLTIP = (
-    "Particles are numbered in one long list. Both 'which tile' and 'which "
-    "cohort' are just slices of that list, so they nest: with 64 cohorts across "
-    "16 tiles, each tile contains 4 cohorts, and each cohort gets its own small "
-    "tweak of that tile's genome.\n\n"
-    "This is why cohorts must be a multiple of the tile count. If they were "
-    "equal, each tile would contain exactly one cohort - one tweak applied to "
-    "every particle - and the tile would still be uniform, just shifted. "
-    "Cohorts are set for you while this is enabled."
+    "Gives each tile several variants of its genome; the cohort count is set "
+    "for you."
 )
 
 PHYSICS_TOOLTIP = (
-    "Put the physics sliders into the search space alongside the brain.\n\n"
-    "With the brain alone, the loaded preset decides the overall look and the "
-    "brain only shapes local behaviour - so a run improves only when the preset "
-    "already sits near your goal. Measured over 25 generations: the default "
-    "config gained +0.225 on 'glowing coral', while the same optimizer on "
-    "HungryHungryHippos gained +0.008.\n\n"
-    "Each tile gets its own physics block, so tiles differ in physics as well "
-    "as brain. Toggling this resets the search - the space changes dimension."
+    "Searches the physics sliders as well as the brain; toggling it resets the "
+    "search."
 )
 
 _WARN = (1.0, 0.6, 0.2, 1.0)

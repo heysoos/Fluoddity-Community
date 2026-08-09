@@ -78,8 +78,18 @@ class ArchiveState:
     pinned_only: bool = False
     selected_entry_id: int = -1
 
+    # Map view. Pure display state, so the UI writes it directly - there is no
+    # command for "the user scrolled". Centre is in normalised projection
+    # units, where the whole archive spans [0, 1].
+    map_zoom: float = 1.0
+    map_center_x: float = 0.5
+    map_center_y: float = 0.5
+
     # persistent, not a one-shot: dismissed explicitly by the user
     warning: str = ""
+    # Same, for things that went RIGHT. Export writes a file somewhere the user
+    # cannot see, and a console print is not feedback in a GUI.
+    notice: str = ""
 
     # editing buffer for the goal list
     new_goal_text: str = ""

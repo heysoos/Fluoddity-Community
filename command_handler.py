@@ -576,7 +576,7 @@ class CommandHandler:
         if ast.export_entry_id >= 0:
             self._export_archive_entry(ui_state, ast.export_entry_id)
         if ast.seed_entry_id >= 0:
-            self._seed_from_archive(ast.seed_entry_id)
+            self._seed_from_archive(ast)
         if ast.delete_entry_id >= 0:
             self._delete_archive_entry(ast)
 
@@ -612,8 +612,11 @@ class CommandHandler:
         path = self.user_configs_dir / f"archive_{e.id:06d}.json"
         export_genome(path, z, sim_state, meta)
         print(f"[archive] saved {path}")
+        # A console print is not feedback in a GUI: the file lands somewhere the
+        # user cannot see, so the button looked like it did nothing.
+        ui_state.archive.notice = f"Exported to {path.name} in your configs folder."
 
-    def _seed_from_archive(self, entry_id):
+    def _seed_from_archive(self, ast):
         """Load an archive entry as a search starting point.
 
         Only Auto mode has an x0 - an IMGEP expansion draws its parents from the
@@ -622,15 +625,19 @@ class CommandHandler:
         """
         from services.genome_spec import encode
 
-        i = self._archive_index(entry_id)
+        i = self._archive_index(ast.seed_entry_id)
         if i is None or self.auto_service is None:
             return
         if not hasattr(self.auto_service.driver, "set_x0"):
-            print("[archive] seeding applies to Auto (CLIP) mode; "
-                  "Explore draws its parents from the archive already")
+            # This is the common case - the button lives in a tab whose own
+            # mode cannot use it - so it has to be said on screen, not printed.
+            ast.warning = ("'Seed a run from here' applies to the Auto (CLIP) "
+                           "tab; Explore picks its own parents from the archive.")
             return
         z, _ = encode(self.archive.brains[i])
         self.auto_service.set_x0(z)
+        ast.notice = (f"Auto mode's search will start from #{ast.seed_entry_id} "
+                      "on its next generation.")
 
     def _delete_archive_entry(self, ast):
         i = self._archive_index(ast.delete_entry_id)

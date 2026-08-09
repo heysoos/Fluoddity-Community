@@ -559,3 +559,86 @@ def test_an_empty_goal_box_never_requests_an_add(gui):
     h.state.archive.new_goal_text = "   "
     frame(h.render_explore_tab)
     assert h.state.archive.add_goal_requested is False
+
+
+# ---- map zoom, pan and hover -------------------------------------------
+
+def _origin_size():
+    return imgui.ImVec2(100.0, 200.0), imgui.ImVec2(500.0, 320.0)
+
+
+def test_home_resets_zoom_and_centre():
+    ast = ArchiveState()
+    ast.map_zoom, ast.map_center_x, ast.map_center_y = 17.0, 0.1, 0.9
+    ArchiveWindowMixin._map_home(ast)
+    assert (ast.map_zoom, ast.map_center_x, ast.map_center_y) == (1.0, 0.5, 0.5)
+
+
+def test_at_home_the_archive_spans_the_canvas():
+    """Unit 0 and 1 land on the padded edges, and y is flipped."""
+    h = Harness()
+    ast = ArchiveState()
+    origin, size = _origin_size()
+    pts = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    xs, ys = h._map_to_screen(ast, pts, origin, size)
+    pad = ArchiveWindowMixin._MAP_PAD
+    assert xs[0] == pytest.approx(origin.x + pad)
+    assert xs[1] == pytest.approx(origin.x + size.x - pad)
+    assert ys[0] == pytest.approx(origin.y + size.y - pad), "unit y=0 is BOTTOM"
+    assert ys[1] == pytest.approx(origin.y + pad)
+
+
+def test_zoom_keeps_the_centre_put_and_spreads_everything_else():
+    h = Harness()
+    ast = ArchiveState()
+    origin, size = _origin_size()
+    pts = np.array([[0.5, 0.5], [0.75, 0.5]], dtype=np.float32)
+    x1, _ = h._map_to_screen(ast, pts, origin, size)
+    ast.map_zoom = 4.0
+    x4, _ = h._map_to_screen(ast, pts, origin, size)
+    assert x4[0] == pytest.approx(x1[0]), "the centre must not move"
+    assert (x4[1] - x4[0]) == pytest.approx(4.0 * (x1[1] - x1[0]))
+
+
+def test_panning_the_centre_moves_the_points_the_other_way():
+    h = Harness()
+    ast = ArchiveState()
+    origin, size = _origin_size()
+    pts = np.array([[0.5, 0.5]], dtype=np.float32)
+    before, _ = h._map_to_screen(ast, pts, origin, size)
+    ast.map_center_x = 0.6      # look further right
+    after, _ = h._map_to_screen(ast, pts, origin, size)
+    assert after[0] < before[0], "the view moved right, so the point moves left"
+
+
+def test_the_map_renders_zoomed_in(gui):
+    """Zooming pushes most points off the canvas; they must be clipped rather
+    than drawn over the rest of the tab, and the frame must still balance."""
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.map_zoom = 40.0
+    h.state.archive.map_center_x = 0.2
+    labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
+    assert "Refit projection" in labels
+    assert "Home##map" in labels
+
+
+def test_the_hover_card_renders_with_a_thumbnail(gui):
+    h = Harness(archive=_populated())
+
+    class _Cache:
+        def get(self, name):
+            return _FakeTex()
+
+    h.thumb_cache = _Cache()
+    entry = h.archive_obj.entries[0]
+    assert frame(lambda: h._map_hover_card(entry)) > host_only()
+
+
+def test_the_hover_card_renders_without_a_thumbnail(gui):
+    """A missing picture must not leave begin_tooltip unbalanced - an
+    unbalanced tooltip stack takes the whole frame down, not just the card."""
+    h = Harness(archive=_populated())
+    h.thumb_cache = None
+    entry = h.archive_obj.entries[0]
+    assert frame(lambda: h._map_hover_card(entry)) > host_only()
