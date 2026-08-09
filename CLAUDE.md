@@ -257,11 +257,26 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   `embed()` directly: `embed()` returns `B*v` rows unreduced, and feeding those
   to the archive makes three sub-crops of one tile into three descriptors.
 
-  **The old spec's "96 images at n_views=1 ≈ 7 ms" is wrong by ~40x.** Measured
-  on DirectML it is **~3.0 ms per image at any batch size**, so grid 8 with 6
-  snapshots is 384 images ≈ 1.2 s at 1 view and ≈ 3.6 s at 3 — i.e. CLIP
-  becomes larger than the 2.8 s simulation. At grid 4 (96 images) the same step
-  is 0.29 s → 0.87 s. Views are a slider for that reason.
+  **The old spec's "96 images at n_views=1 ≈ 7 ms" is wrong by ~40x**, and
+  most of the real cost was never on the GPU. Measured 2026-08-09 per 64
+  images: `preprocess` 112.6 ms, DirectML 58.4 ms, `augment` 28 ms — CPU
+  normalisation was **54–58% of the whole CLIP path**. Two fixes, both in
+  `clip_scorer.py`:
+  - `preprocess` transposes while the data is still **uint8** (one byte per
+    element, not four) and folds the normalisation into one in-place
+    multiply-add: 112.6 → 48.7 ms, and exact in fp16.
+  - `_embed_images` **pipelines**: the next chunk is normalised on a worker
+    thread while the GPU runs the current one. The stages are now comparable
+    (48.7 ms vs 58.4 ms) and numpy drops the GIL, so they overlap — 1.39x at
+    1152 images. Lookahead is exactly one chunk; submitting all of them would
+    hold 345 MB preprocessed at grid 8. Only `preprocess` leaves the main
+    thread: `augment` draws from `self._rng`, and only one thread may call
+    `session.run`.
+
+  Grid 8 with 6 snapshots, end to end: 916 → **561 ms** at 1 view, 3136 →
+  **1802 ms** at 3. Views stay a slider because 3 views is still ~2x of 1.
+  Note DirectML device 0 is already the discrete GPU here (0.90 ms/image);
+  device 1 is the Intel iGPU at 63 ms/image, so never pin `device_id`.
 
   **Centring on the centre of mass was measured first and rejected.** It cancels
   a shift exactly, but 26–34% of tiles have no well-posed centre (resultant

@@ -244,3 +244,65 @@ def test_embed_mean_actually_runs_every_view():
     s = _scorer_with_stubs()
     s.embed_mean(np.zeros((5, 224, 224, 3), dtype=np.uint8), n_views=3)
     assert sum(s._vision.batch_sizes) == 15
+
+
+# ---- the fast paths ----------------------------------------------------
+
+def test_preprocess_is_exact_in_the_dtype_the_model_takes():
+    """The rewrite transposes while the data is still uint8 and folds the
+    normalisation into one in-place multiply-add - 2.3x faster.
+
+    It must not move the embeddings already in an archive. In fp16, the shipped
+    model's input dtype, it does not: not one value changes. In float32 it
+    differs on most values, but by a single ulp, because
+    `x*(1/std) + (-mean/std)` associates differently to `(x - mean)/std`.
+    """
+    from services.clip_scorer import CLIP_MEAN, CLIP_STD, preprocess
+
+    rng = np.random.default_rng(3)
+    crops = rng.integers(0, 256, size=(5, 224, 224, 3), dtype=np.uint8)
+
+    ref = crops.astype(np.float32) / 255.0
+    ref = (ref - CLIP_MEAN) / CLIP_STD
+    ref = np.ascontiguousarray(ref.transpose(0, 3, 1, 2))
+
+    got16 = preprocess(crops, np.float16)
+    assert got16.shape == ref.shape
+    assert got16.flags["C_CONTIGUOUS"], "ONNX Runtime needs a contiguous buffer"
+    assert np.array_equal(got16, ref.astype(np.float16))
+
+    got32 = preprocess(crops, np.float32)
+    assert np.abs(got32 - ref).max() < 1e-6
+
+
+class _EchoSession(_StubSession):
+    """Returns each row's own mean, so a reordered chunk is detectable."""
+
+    def run(self, _out_names, feed):
+        arr = next(iter(feed.values()))
+        self.batch_sizes.append(arr.shape[0])
+        emb = np.zeros((arr.shape[0], 4), dtype=np.float32)
+        emb[:, 0] = 1.0
+        emb[:, 1] = arr.reshape(len(arr), -1).mean(axis=1)
+        return [emb]
+
+
+def test_pipelined_chunking_preserves_order():
+    """Chunks are normalised on a worker thread while the GPU runs the previous
+    one. Overlapping them must not reorder the output: row i has to stay
+    image i, or every tile in a generation is scored against another tile's
+    genome."""
+    s = _scorer_with_stubs()
+    s._vision = _EchoSession("vision")
+    n = s.MAX_CHUNK * 3 + 7
+    imgs = np.zeros((n, 224, 224, 3), dtype=np.uint8)
+    imgs[:, 0, 0, 0] = np.arange(n) % 256          # a per-image signature
+
+    out = s.embed(imgs, n_views=1)
+    assert len(out) == n
+    single = _EchoSession("vision")
+    s2 = _scorer_with_stubs()
+    s2._vision = single
+    s2.MAX_CHUNK = n                                # one chunk, no pipeline
+    assert np.allclose(out, s2.embed(imgs, n_views=1), atol=1e-6)
+    assert sum(single.batch_sizes) == n
