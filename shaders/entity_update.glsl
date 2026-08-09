@@ -174,6 +174,36 @@ void tournament_tile_box(int tile, out vec2 lo, out vec2 hi){
     lo = -half_extent + vec2(float(tx), float(ty)) * cell;
     hi = lo + cell;
 }
+// The box a particle actually lives in: its tournament tile, or the whole
+// canvas. A TILE IS A SMALL WORLD - it gets the world's own boundary
+// condition, rather than a wall bolted on after the fact.
+void particle_world_box(uint index, out vec2 lo, out vec2 hi){
+    if(TOURNAMENT_MODE == 1){
+        tournament_tile_box(tournament_home_tile(index), lo, hi);
+        return;
+    }
+    float ca = canvas_resolution.x / canvas_resolution.y;
+    hi = vec2(sqrt(ca), 1.0 / sqrt(ca));
+    lo = -hi;
+}
+// Bring a sensor sample into a box the way the boundary condition would.
+//
+// Wrap folds it round, so the box is a torus and a particle at the seam sees
+// the far side of its own tile. This used to clamp unconditionally, which made
+// BOTH sensors return the same texel everywhere within sample_dist of a wall -
+// zero steering differential in a band around the whole tile, and both axes at
+// once in a corner. That band is the anisotropy, and the corners are where it
+// is worst.
+//
+// The trailing clamp is half a texel, i.e. the first texel CENTRE: get_can()
+// samples bilinearly, so a coordinate any nearer the seam blends in texels
+// belonging to the neighbouring tile.
+vec2 confine_sample(vec2 p, vec2 lo, vec2 hi, int boundary_mode){
+    if(boundary_mode == 2) p = lo + mod(p - lo, hi - lo);
+    float ca = canvas_resolution.x / canvas_resolution.y;
+    vec2 half_texel = vec2(sqrt(ca), 1.0 / sqrt(ca)) / canvas_resolution;
+    return clamp(p, lo + half_texel, hi - half_texel);
+}
                             //Entities with index > ACTIVE_COUNT aren't rendered or updated
 int get_particle_cohorts() {
     int idx = get_particle_config_index();
@@ -575,14 +605,10 @@ void main() {
     vec2 lsample = e.pos + left_sensor_offset;
     vec2 rsample = e.pos + right_sensor_offset;
     if(TOURNAMENT_MODE == 1){
-        vec2 tlo, thi; tournament_tile_box(tournament_home_tile(index), tlo, thi);
-        // Inset by one texel: get_can() samples bilinearly, so clamping exactly to
-        // the seam would still blend in texels belonging to the neighbouring tile.
-        float ca_s = canvas_resolution.x / canvas_resolution.y;
-        vec2 texel = 2.0 * vec2(sqrt(ca_s), 1.0/sqrt(ca_s)) / canvas_resolution;
-        tlo += texel; thi -= texel;
-        lsample = clamp(lsample, tlo, thi);
-        rsample = clamp(rsample, tlo, thi);
+        vec2 tlo, thi; particle_world_box(index, tlo, thi);
+        int smode = get_particle_boundary_conditions();
+        lsample = confine_sample(lsample, tlo, thi, smode);
+        rsample = confine_sample(rsample, tlo, thi, smode);
     }
     vec4 ltap = get_can(lsample);
     vec4 rtap = get_can(rsample);
@@ -629,41 +655,44 @@ void main() {
     e.pos += .01*strafe_field_strength*draw_sample.zw;
 
     //BOUNDARY_CONDITIONS_MODE:  0-1-2 == BOUNCE-RESET-WRAP
-    float ca = canvas_resolution.x / canvas_resolution.y;
-    float x_edge = sqrt(ca);
-    float y_edge = 1.0 / sqrt(ca);
+    //
+    // Applied to the particle's OWN world - its tournament tile, or the whole
+    // canvas (particle_world_box). Tournament mode used to run this against the
+    // canvas and then bolt an unconditional per-tile bounce on afterwards, so
+    // every tile was a hard-walled box whatever the preset asked for. Under
+    // wrap that is the wrong world outright: a torus has no boundary, so there
+    // is nothing for a pattern to pile up against, and the pile-up was the
+    // wall's doing rather than the physics'.
+    //
+    // The old tile bounce also SET the position to the wall (e.pos.x = tlo.x),
+    // which stacks every escaping particle on one line. Reflecting by the
+    // overshoot, as the canvas boundary always did, does not.
     int boundary_mode = get_particle_boundary_conditions();
+    vec2 wlo, whi; particle_world_box(index, wlo, whi);
+    vec2 wmid = 0.5 * (wlo + whi);
+    vec2 wrad = 0.5 * (whi - wlo);
     if(boundary_mode==0){
-        //reflect particles off canvas boundaries
-        if (e.pos.x < -x_edge || e.pos.x > x_edge){
+        //reflect particles off the boundary, by the distance they overshot it
+        vec2 q = (e.pos - wmid) / wrad;
+        if (q.x < -1.0 || q.x > 1.0){
             e.vel.x=-e.vel.x;
-            e.pos.x=edgeflect(e.pos.x/x_edge)*x_edge;
+            e.pos.x=wmid.x + edgeflect(q.x)*wrad.x;
         }
-        if (e.pos.y < -y_edge || e.pos.y > y_edge){
+        if (q.y < -1.0 || q.y > 1.0){
             e.vel.y=-e.vel.y;
-            e.pos.y=edgeflect(e.pos.y/y_edge)*y_edge;
+            e.pos.y=wmid.y + edgeflect(q.y)*wrad.y;
         }
     }
     else if(boundary_mode==1){
-        //reset to initial conditions
-        if(e.pos.x<-x_edge||e.pos.x>x_edge||e.pos.y<-y_edge||e.pos.y>y_edge){
+        //reset to initial conditions (reset() already places inside the tile)
+        if(any(lessThan(e.pos, wlo)) || any(greaterThan(e.pos, whi))){
             reset(index);
             return;//reset expects to be the last thing we do. It handles entity buffer storage
         }
     }
     else if(boundary_mode==2){
-        //wrap: X wraps [-x_edge,x_edge], Y wraps [-y_edge, y_edge]
-        e.pos.x = x_edge * 2.0 * (fract(e.pos.x / (x_edge * 2.0) - 0.5) - 0.5);
-        e.pos.y = y_edge * 2.0 * (fract(e.pos.y / (y_edge * 2.0) - 0.5) - 0.5);
-    }
-
-    //Tournament: override world boundaries with per-tile bounce so tiles stay isolated.
-    if(TOURNAMENT_MODE == 1){
-        vec2 tlo, thi; tournament_tile_box(tournament_home_tile(index), tlo, thi);
-        if(e.pos.x < tlo.x){ e.pos.x = tlo.x; e.vel.x = abs(e.vel.x); }
-        if(e.pos.x > thi.x){ e.pos.x = thi.x; e.vel.x = -abs(e.vel.x); }
-        if(e.pos.y < tlo.y){ e.pos.y = tlo.y; e.vel.y = abs(e.vel.y); }
-        if(e.pos.y > thi.y){ e.pos.y = thi.y; e.vel.y = -abs(e.vel.y); }
+        //wrap: the box is a torus, so it has no boundary to be seen at all
+        e.pos = wlo + mod(e.pos - wlo, whi - wlo);
     }
 
     // Non-finite guard. NaN fails <, > and == alike, so a NaN position walks

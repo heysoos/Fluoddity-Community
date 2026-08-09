@@ -185,6 +185,31 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   is no crop rect to get wrong. Anything that needs the *displayed* image
   (screenshots, video) still uses `camera.assembled_texture`.
 
+- **A tournament tile is a SMALL WORLD, and gets the world's own boundary
+  condition.** It is not a box with walls. Three places enforce the tile edge —
+  the particle boundary block and the sensor confinement in
+  `entity_update.glsl`, and `getBlur` in `canvas.frag` — and all three must
+  agree with `BOUNDARY_CONDITIONS_MODE`. Under wrap a tile is a TORUS: it has
+  no edge, so nothing can pile up against one. Before 2026-08-09 the tile was
+  always a walled box, which produced exactly the artifacts it should:
+  particles stacked on a line (the old bounce SET the position to the wall
+  instead of reflecting by the overshoot), and a band of width `sample_dist`
+  around every tile where both sensors clamped to the same texel and the
+  steering differential was identically zero — along both axes at once in a
+  corner, which is why corners looked worst. Verified on the GPU in
+  `tests/test_tile_isolation_gl.py`; the non-tournament path is bit-identical.
+
+- **The diffusion's tile guard must be the tile's uv BOX, never a tile index.**
+  `tournament_tile_uv` derived the index with `clamp(uv, 0, 0.999999)`, so a
+  neighbour probe that walked off the canvas clamped back into the *same* tile,
+  the zero-flux substitution was skipped, and the tap fell through to the
+  sampler — which has `repeat_x/repeat_y` set and duly returned the opposite
+  edge of the canvas. Measured 2026-08-09: one lit tile at (3,0) put **64.4%**
+  of its brightness into tile (0,0) *and* into (3,3), while its genuinely
+  adjacent neighbours stayed at exactly 0, and it retained only **74.6%** of
+  its own trail. Only tiles touching the canvas border leaked — 12 of 16 at
+  grid 4, 28 of 64 at grid 8 — and corner tiles on two edges each.
+
 - **Entry ids restart at 0 in every archive**, so `ThumbCache` must be released
   on a switch — it is keyed by thumbnail filename, which is derived from the
   entry id. Reusing it shows the previous archive's pictures under the new

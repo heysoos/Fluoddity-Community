@@ -113,11 +113,23 @@ vec4 getCan(vec2 p, sampler2D sam) {
     return texture(sam, uv);
 }
 
-// Which tile (in uv space) a texcoord belongs to. -1 when tournament is off.
-int tournament_tile_uv(vec2 uv){
-    if(TOURNAMENT_MODE != 1) return -1;
-    ivec2 t = ivec2(floor(clamp(uv, 0.0, 0.999999) * float(TOURNAMENT_GRID)));
-    return t.y * TOURNAMENT_GRID + t.x;
+// The uv box of the tile a texcoord belongs to.
+void tournament_tile_uv_box(vec2 uv, out vec2 lo, out vec2 hi){
+    float g = float(TOURNAMENT_GRID);
+    lo = floor(clamp(uv, 0.0, 0.999999) * g) / g;
+    hi = lo + 1.0 / g;
+}
+
+// One diffusion tap, kept inside the tile the centre sample belongs to.
+vec4 tile_tap(vec2 p, vec2 lo, vec2 hi, vec4 centre, sampler2D sam){
+    if(all(greaterThanEqual(p, lo)) && all(lessThan(p, hi))) return getCan(p, sam);
+    // Wrap makes the tile a torus, so the tap comes from the opposite side of
+    // the SAME tile - one texel in, which lands on a texel centre whenever the
+    // tile edge is texel-aligned (1024/4, 1024/8). Under bounce or reset the
+    // seam is a wall, and substituting the centre value is zero net flux
+    // across it.
+    if(BOUNDARY_CONDITIONS_MODE == 2) return getCan(lo + mod(p - lo, hi - lo), sam);
+    return centre;
 }
 
 vec4 getBlur(vec2 pos, sampler2D sam,float diffusion_constant) {
@@ -128,18 +140,24 @@ vec4 getBlur(vec2 pos, sampler2D sam,float diffusion_constant) {
     vec2 wp = pos - off.xz;
     vec2 ep = pos + off.xz;
     vec4 cc = getCan(pos, sam);
-    vec4 nc = getCan(np, sam);
-    vec4 sc = getCan(sp, sam);
-    vec4 wc = getCan(wp, sam);
-    vec4 ec = getCan(ep, sam);
-    // Tournament: zero-flux at tile borders — a neighbor in another tile is
-    // replaced by the center value so no trail energy crosses the seam.
+    vec4 nc, sc, wc, ec;
     if(TOURNAMENT_MODE == 1){
-        int ct = tournament_tile_uv(pos);
-        if(tournament_tile_uv(np) != ct) nc = cc;
-        if(tournament_tile_uv(sp) != ct) sc = cc;
-        if(tournament_tile_uv(wp) != ct) wc = cc;
-        if(tournament_tile_uv(ep) != ct) ec = cc;
+        // The tile's own uv BOX decides what is out of bounds, not a tile
+        // index derived from clamp(uv). A probe that walks off the canvas
+        // clamped back into the same tile, so the comparison silently passed
+        // and the tap fell through to the sampler - which has repeat_x/y set,
+        // and duly returned the OPPOSITE EDGE OF THE CANVAS, i.e. a different
+        // tile. Only the outer ring leaked, and each corner tile on two edges.
+        vec2 tlo, thi; tournament_tile_uv_box(pos, tlo, thi);
+        nc = tile_tap(np, tlo, thi, cc, sam);
+        sc = tile_tap(sp, tlo, thi, cc, sam);
+        wc = tile_tap(wp, tlo, thi, cc, sam);
+        ec = tile_tap(ep, tlo, thi, cc, sam);
+    } else {
+        nc = getCan(np, sam);
+        sc = getCan(sp, sam);
+        wc = getCan(wp, sam);
+        ec = getCan(ep, sam);
     }
     float K = diffusion_constant;
     return (cc * K + nc + sc + wc + ec) / (4. + K);
