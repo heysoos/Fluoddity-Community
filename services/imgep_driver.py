@@ -382,6 +382,18 @@ class ImgepDriver:
 
         That is why a text expedition visibly started from a bad image and
         climbed nowhere: the fitness was fixed, the STARTING POINT was not.
+
+        SAMPLED with p proportional to fit^alpha, not argmaxed - the same rule
+        E&E uses to pick a parent, and the same `alpha`. An argmax would send
+        every expedition toward a given goal from the identical entry, so
+        repeating a goal could only ever retrace one trajectory.
+
+        Measured 2026-08-08 at alpha=4 over the real archive, the effective
+        sample size runs 47-1584 of 4808 entries, and it self-adjusts in the
+        right direction: a goal only a few entries match well concentrates
+        ("flowing water", ESS 47) while a goal much of the archive already
+        matches stays broad ("glowing coral", ESS 1584), which is exactly when
+        the choice of seed matters least.
         """
         e = self.archive.embeddings
         if len(e) == 0:
@@ -390,7 +402,9 @@ class ImgepDriver:
         if refs is None or len(refs) == 0:
             return self.archive.nearest(goal_emb)
         fit = contrastive(e[None, :, :], goal_emb, refs, logit_scale=scale)
-        return int(np.argmax(fit))
+        # A goal every tile floors on leaves fit all-zero; sample_by_novelty
+        # falls back to uniform there rather than dividing by zero.
+        return int(sample_by_novelty(fit, 1, self.rng, self.alpha)[0])
 
     def _references(self, kind: str | None = None):
         """-> (references, logit_scale) for a goal of this kind.

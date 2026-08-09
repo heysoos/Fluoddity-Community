@@ -339,11 +339,18 @@ def test_an_expedition_builds_a_fresh_optimizer_per_goal():
     assert d.optimizer is not first, "a new goal must not inherit a covariance"
 
 
-def test_an_expedition_seeds_at_the_archive_entry_nearest_the_goal():
+def test_an_expedition_seeds_near_the_archive_entry_matching_the_goal():
+    """Sampled with p proportional to fit^alpha rather than argmaxed, so this is
+    a statement about the mode, not about one draw. The goal here IS entry 2's
+    own descriptor, so entry 2 should dominate."""
     d, arc, _ = seeded(expansion_between=0)
     goal = arc.embeddings[2].copy()
-    d.start_expedition_with(goal, kind="chase", text="")
-    assert d._x0_index == 2
+    picks = []
+    for _ in range(200):
+        d.start_expedition_with(goal, kind="chase", text="")
+        picks.append(d._x0_index)
+    assert max(set(picks), key=picks.count) == 2
+    assert picks.count(2) > 100, f"entry 2 must dominate, got {picks.count(2)}/200"
 
 
 def test_expedition_fitness_ranks_the_tile_that_matches_the_goal_first():
@@ -553,6 +560,9 @@ def test_the_seed_is_chosen_by_the_same_objective_the_expedition_is_scored_on():
     ranking is degenerate: measured over 15 unrelated prompts on a real 4784-
     entry archive it returned 6 distinct seeds, one cyan NOISE TEXTURE winning 7
     of them. Noise carries a decent cosine to every phrase.
+
+    Sampled, so pin the DISTRIBUTION: seeds must land well above what picking
+    uniformly would give.
     """
     from services.expedition_fitness import contrastive
 
@@ -567,7 +577,29 @@ def test_the_seed_is_chosen_by_the_same_objective_the_expedition_is_scored_on():
     refs, scale = d._references("text")
     fit = contrastive(arc.embeddings[None, :, :], d._goal.embedding, refs,
                       logit_scale=scale)
-    assert d._x0_index == int(np.argmax(fit))
+    picked = [fit[d._seed_index(d._goal.embedding, "text")] for _ in range(200)]
+    assert float(np.mean(picked)) > float(fit.mean()),         "sampling must prefer entries that match the goal"
+
+
+def test_the_seed_is_sampled_rather_than_argmaxed():
+    """E&E picks a parent with p proportional to NOV^alpha; the seed follows the
+    same rule and the same alpha. An argmax would send every expedition toward a
+    given goal from the identical entry, so repeating a goal could only ever
+    retrace one trajectory."""
+    d, arc, _ = seeded_wide(expansion_between=0)
+    goal = arc.embeddings[2].copy()
+    seen = {d._seed_index(goal, "latent") for _ in range(200)}
+    assert len(seen) > 1, "a deterministic seed makes a repeated goal pointless"
+
+
+def test_alpha_zero_makes_seeding_uniform():
+    """The Random-GA ablation, reachable from the UI without a second code path
+    - exactly as it is for parent sampling."""
+    d, arc, _ = seeded_wide(expansion_between=0)
+    d.alpha = 0.0
+    goal = arc.embeddings[2].copy()
+    seen = {d._seed_index(goal, "latent") for _ in range(300)}
+    assert len(seen) == len(arc), "every entry must be reachable at alpha 0"
 
 
 def test_a_noise_magnet_loses_the_seed_to_the_distractor_set():
@@ -599,7 +631,10 @@ def test_a_noise_magnet_loses_the_seed_to_the_distractor_set():
 
     assert float(decoy @ goal) > float(ordinary @ goal),         "the decoy really does out-align everything on the goal"
     assert arc.nearest(goal) == 0, "so raw cosine seeds on it"
-    assert d._seed_index(goal, "text") != 0,         "the distractor set has to see through it"
+    # Sampled, so state it as a rate: the decoy floors to ~0 fitness and must
+    # essentially never be drawn, rather than merely losing an argmax.
+    picks = [d._seed_index(goal, "text") for _ in range(200)]
+    assert picks.count(0) == 0, "the distractor set has to see through it"
 
 
 def test_the_seed_falls_back_to_nearest_when_there_is_nothing_to_contrast():

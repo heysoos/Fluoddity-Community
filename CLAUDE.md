@@ -166,6 +166,10 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   started from the same bad image. `ImgepDriver._seed_index` uses the
   contrastive score instead (14/15 distinct); what rejects noise is that
   `DEFAULT_DISTRACTORS` contains "random noise" and "an abstract texture".
+  The seed is then SAMPLED with `p ~ fit^alpha` - E&E's parent rule, same
+  alpha - so repeating a goal explores a different trajectory. Measured ESS at
+  alpha=4 is 47-1584 of 4808, and it self-adjusts: it concentrates when few
+  entries match the goal and stays broad when many do.
 
 - **`LATENT_DIMS` must stay small (8).** Two independent reasons, both measured:
   whitening equalises the components, so a large d puts the push into
