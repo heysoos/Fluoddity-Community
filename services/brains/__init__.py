@@ -71,3 +71,9 @@ def get(name: str):
 
 def default_layout() -> BrainLayout:
     return REGISTRY["fourier"].layout_from_settings({})
+
+
+# Registration happens on package import, so `import services.brains` is enough
+# to populate REGISTRY. Placed at the bottom because each module imports
+# BrainLayout/Setting/register from this one.
+from services.brains import fourier as _fourier  # noqa: E402,F401
