@@ -107,6 +107,26 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   down to 0 silently degrades eviction into "drop whatever was least novel when
   it was admitted".
 
+- **Novelty is a LIVE column, so `index.jsonl` cannot be its home.** The index
+  is append-only; its `novelty` is forever the at-admission value, measured
+  against however much archive existed at the time. Entry #50 was scored
+  against 49 neighbours and entry #4000 against 3999, and the search compares
+  them as if they were on one scale. Measured 2026-08-08, the stored column
+  correlates **0.075** with a correct rescore. It therefore lives in
+  `vectors.npz` (rewritten wholesale, and an OPTIONAL key so pre-existing
+  archives are not quarantined), and `load_from_store` calls `rescore_all()`
+  unconditionally — 0.42 s at 4808 entries, 4.3 s at the 20000 capacity.
+  Skipping that rescore hands generation 0 — every tile stamped 1.0 by the
+  no-reference convention — **100.0%** of the `p ~ novelty^4` parent weight
+  (ESS 58 of 4808), and one of those entries is a black frame. Four things
+  read this column: expansion parents, `latent_goal`'s anchor, `_evict_one`,
+  and the browser sort.
+
+- **`knn_distances` blocks over query rows.** Only k distances per query
+  survive, so the (n, m) matrix is scratch — and a whole-archive rescore at
+  capacity would ask for 1.6 GB of it at once. Blocking caps it at 64 MB and
+  costs nothing measurable; the matmul is the same either way.
+
 - **Novelty is measured against archive ∪ rejects ring.** The archive is gated,
   so without the ring the search has no memory of the regions it just rejected
   and re-explores them forever.

@@ -135,3 +135,36 @@ def test_sample_by_novelty_ignores_negative_novelty():
 def test_sample_by_novelty_on_an_empty_archive_raises():
     with pytest.raises(ValueError, match="empty"):
         sample_by_novelty(np.zeros(0, np.float32), 3, np.random.default_rng(0))
+
+
+# ---- blocking -----------------------------------------------------------
+# knn_distances keeps only k distances per query, so the (n, m) matrix is
+# scratch. It is computed in row blocks because a whole-archive rescore at the
+# 20000 capacity would otherwise ask for 1.6 GB of it at once.
+
+def test_blocking_does_not_change_the_result():
+    rng = np.random.default_rng(11)
+    ref = _unit(rng.normal(size=(120, 16)))
+    q = _unit(rng.normal(size=(37, 16)))
+    whole = knn_distances(q, ref, k=7, block_elems=10 ** 9)
+    for be in (16, 200, 1000):
+        assert knn_distances(q, ref, k=7, block_elems=be) == pytest.approx(
+            whole, abs=1e-6), f"block_elems={be} changed the answer"
+
+
+def test_blocking_holds_under_exclude_self():
+    rng = np.random.default_rng(12)
+    ref = _unit(rng.normal(size=(90, 12)))
+    whole = knn_novelty(ref, ref, k=10, exclude_self=True)
+    from services.novelty import novelty_from_distances as _nfd
+    blocked = _nfd([knn_distances(ref, ref, k=10, exclude_self=True,
+                                  block_elems=64)], 10)
+    assert blocked == pytest.approx(whole, abs=1e-6)
+
+
+def test_a_block_smaller_than_one_row_still_makes_progress():
+    """block_elems // m can floor to 0; the row count is clamped to 1."""
+    ref = _unit(np.eye(30))
+    d = knn_distances(ref[:5], ref, k=3, block_elems=1)
+    assert d.shape == (5, 3)
+    assert np.all(np.isfinite(d))

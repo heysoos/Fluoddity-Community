@@ -347,3 +347,118 @@ def test_an_archive_with_no_store_works_entirely_in_memory():
     assert a.consider(cand([1, 0, 0, 0]), novelty=1.0) is not None
     assert a.maybe_flush(force=True) is False
     assert a.load_from_store() == (0, 0)
+
+
+# ---- novelty is a LIVE column, not an at-admission stamp ----------------
+
+def _cone(rng, n, dim, spread=0.35):
+    """Vectors in a narrow cone, like real CLIP descriptors.
+
+    Independent gaussian directions in a low dimension are near-ORTHOGONAL, so
+    every kNN distance is ~1.0 and a stale 1.0 is indistinguishable from a
+    correct rescore - which makes such a fixture prove nothing here. Measured
+    over 4784 real descriptors the mean pairwise cosine is 0.897; this puts the
+    fixture in the same regime.
+    """
+    base = np.zeros(dim, dtype=np.float64)
+    base[0] = 1.0
+    return base + spread * rng.normal(size=(n, dim))
+
+
+def _scattered_store(tmp_path, n=40, dim=8, stamped=6):
+    """An archive whose first `stamped` entries carry novelty 1.0.
+
+    That is what a real generation 0 looks like: novelty_from_distances returns
+    1.0 by convention when there is no reference yet, so every tile of the
+    first generation is stamped maximally novel and index.jsonl keeps it.
+    """
+    rng = np.random.default_rng(4)
+    store = ArchiveStore(tmp_path)
+    a = Archive(store=store, dim=dim, seed_n=0, liveness_min=0.0, capacity=1000)
+    a.threshold.value = 0.0
+    for i, v in enumerate(_cone(rng, n, dim)):
+        a.consider(cand(v.tolist(), dim=dim), novelty=1.0 if i < stamped else 0.03)
+    return store, a
+
+
+def _parent_weights(archive, alpha=4.0):
+    """p ~ novelty^alpha - exactly what _ask_expansion and latent_goal use."""
+    w = np.clip(np.array([e.novelty for e in archive.entries], np.float64), 0, None)
+    w = w ** alpha
+    return w / w.sum()
+
+
+def test_rescore_all_replaces_every_stored_novelty():
+    a = fresh(dim=8, capacity=1000)
+    for v in _cone(np.random.default_rng(1), 30, 8):
+        a.consider(cand(v.tolist(), dim=8), novelty=1.0)
+    assert all(e.novelty == 1.0 for e in a.entries)
+
+    assert a.rescore_all() == 30
+    assert all(0.0 < e.novelty < 0.9 for e in a.entries), (
+        "a real kNN distance inside a cone cannot be the no-reference 1.0")
+
+
+def test_rescore_all_on_an_empty_archive_is_a_no_op():
+    assert fresh().rescore_all() == 0
+
+
+def test_a_reload_does_not_inherit_the_at_admission_novelty(tmp_path):
+    store, a = _scattered_store(tmp_path)
+    a.maybe_flush(force=True)
+    store.close()
+
+    b = Archive(store=ArchiveStore(tmp_path), dim=8)
+    b.load_from_store()
+    assert len(b) == 40
+    assert not any(e.novelty >= 0.999 for e in b.entries), (
+        "generation 0's 1.0 stamp must not survive a reload")
+
+
+def test_a_reload_does_not_hand_generation_zero_the_whole_parent_weight(tmp_path):
+    """The defect this whole change exists for.
+
+    novelty^4 turns a stamped 1.0 against a typical 0.03 into a million-to-one
+    weight, so on the default archive 100.0% of parent-selection probability
+    landed on the 58 entries of generation 0 - one of which is a black frame.
+    """
+    store, a = _scattered_store(tmp_path, stamped=6)
+    assert _parent_weights(a)[:6].sum() > 0.9999, (
+        "precondition: as stored, the stamped entries take everything")
+    a.maybe_flush(force=True)
+    store.close()
+
+    b = Archive(store=ArchiveStore(tmp_path), dim=8)
+    b.load_from_store()
+    # 6 of 40 entries is 15% of the archive; they may still be genuinely novel,
+    # but they cannot own the distribution.
+    assert _parent_weights(b)[:6].sum() < 0.6
+
+
+def test_a_flush_writes_the_current_novelty_not_the_admitted_one(tmp_path):
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    a.rescore_all()
+    live = [e.novelty for e in a.entries]
+    a.maybe_flush(force=True)
+    store.close()
+
+    with np.load(tmp_path / "vectors.npz", allow_pickle=False) as z:
+        assert "novelty" in z.files
+        assert z["novelty"] == pytest.approx(np.float32(live), abs=1e-6)
+
+
+def test_an_archive_saved_before_novelty_was_persisted_still_loads(tmp_path):
+    """vectors.npz gained the array on 2026-08-08. Older files must open."""
+    store, a = _scattered_store(tmp_path, n=12, stamped=12)
+    a.maybe_flush(force=True)
+    store.close()
+
+    with np.load(tmp_path / "vectors.npz", allow_pickle=False) as z:
+        old = {k: z[k] for k in z.files if k != "novelty"}
+    np.savez(tmp_path / "vectors.npz", **old)
+
+    b = Archive(store=ArchiveStore(tmp_path), dim=8)
+    loaded, dropped = b.load_from_store()
+    assert (loaded, dropped) == (12, 0)
+    assert not (tmp_path / "vectors.npz").with_suffix(".npz.bad").exists()
+    assert not any(e.novelty >= 0.999 for e in b.entries)

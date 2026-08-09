@@ -25,6 +25,11 @@ THUMB_PX = 160
 THUMB_QUALITY = 85
 
 _ARRAY_KEYS = ("ids", "embeddings", "brains", "physics")
+# Written since 2026-08-08, absent from every archive saved before it. NOT in
+# _ARRAY_KEYS and NOT a format_version bump on purpose: both would quarantine
+# every existing archive on first open. A file without it simply loads without
+# it, and Archive.load_from_store rescores from the embeddings anyway.
+_OPTIONAL_ARRAY_KEYS = ("novelty",)
 
 
 class ArchiveStore:
@@ -69,10 +74,19 @@ class ArchiveStore:
             self.enabled = False
             print(f"[Archive] index write failed ({exc}); persistence disabled")
 
-    def flush_vectors(self, ids, embeddings, brains, physics) -> None:
+    def flush_vectors(self, ids, embeddings, brains, physics,
+                      novelty=None) -> None:
         """Rewrite vectors.npz atomically. Embeddings go to disk as fp16 - half
         the bytes, and the precision loss is far below the scale any novelty
-        decision turns on."""
+        decision turns on.
+
+        novelty belongs HERE rather than in index.jsonl because it is the one
+        stored field that CHANGES after admission: refresh() re-scores entries
+        against the grown archive, and index.jsonl is append-only, so the index
+        can only ever hold the at-admission value. Measured 2026-08-08 on the
+        default archive, that value correlates 0.075 with the truth - which
+        made parent sampling, latent-goal anchoring and eviction all run on a
+        column that was very nearly noise."""
         if not self.enabled:
             return
         tmp = self.vectors_path.with_suffix(self.vectors_path.suffix + ".tmp")
@@ -88,6 +102,10 @@ class ArchiveStore:
                     embeddings=np.asarray(embeddings, dtype=np.float16),
                     brains=np.asarray(brains, dtype=np.float32),
                     physics=np.asarray(physics, dtype=np.float32),
+                    novelty=np.asarray(
+                        np.zeros(len(np.asarray(ids)))
+                        if novelty is None else novelty,
+                        dtype=np.float32),
                 )
             os.replace(tmp, self.vectors_path)
         except (OSError, ValueError) as exc:
@@ -161,6 +179,8 @@ class ArchiveStore:
                             f"vectors.npz format_version is {got}, "
                             f"this build expects {FORMAT_VERSION}")
                     arrays = {k: z[k] for k in _ARRAY_KEYS}
+                    arrays.update({k: z[k] for k in _OPTIONAL_ARRAY_KEYS
+                                   if k in z.files})
             except (OSError, ValueError, KeyError) as exc:
                 self._quarantine(exc)
                 arrays = {}

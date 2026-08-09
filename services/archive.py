@@ -195,6 +195,31 @@ class Archive:
         self._refresh_cursor = int((start + n) % self._n)
         return n
 
+    def rescore_all(self) -> int:
+        """Re-score EVERY entry against the whole archive. -> how many.
+
+        refresh() spreads this over generations, which is right during a run
+        but means a stored novelty is only ever as fresh as the last sweep -
+        and nothing at all after a reload, because the value on disk was
+        measured at admission time against however much archive existed then.
+        Entry #50 was scored against 49 neighbours and entry #4000 against
+        3999; those numbers are not on the same scale and the search compares
+        them as if they were. Measured 2026-08-08 on the default archive, the
+        stored column correlates 0.075 with a correct rescore.
+
+        The whole sweep is one blocked matmul - 0.23 s at 4808 entries, 4.3 s
+        at the 20000 capacity - so it is affordable on load, which is the one
+        moment the round-robin cannot cover.
+        """
+        if self._n == 0:
+            return 0
+        nov = knn_novelty(self.embeddings, self.embeddings, k=self.k,
+                          exclude_self=True)
+        for i, e in enumerate(self.entries):
+            e.novelty = float(nov[i])
+        self._refresh_cursor = 0
+        return self._n
+
     def centroid(self) -> np.ndarray | None:
         if self._n == 0:
             return None
@@ -323,7 +348,9 @@ class Archive:
         if not force and self._since_flush < int(every):
             return False
         ids = np.array([e.id for e in self.entries], dtype=np.int64)
-        self.store.flush_vectors(ids, self.embeddings, self.brains, self.physics)
+        nov = np.array([e.novelty for e in self.entries], dtype=np.float32)
+        self.store.flush_vectors(ids, self.embeddings, self.brains,
+                                 self.physics, nov)
         self._since_flush = 0
         return True
 
@@ -343,6 +370,13 @@ class Archive:
         emb = np.asarray(arrays["embeddings"], dtype=np.float32)
         brains = np.asarray(arrays["brains"], dtype=np.float32)
         phys = np.asarray(arrays["physics"], dtype=np.float32)
+        # vectors.npz is the authority for novelty when it carries it: the
+        # index row can only ever hold the at-admission value. Archives written
+        # before 2026-08-08 have no such array and fall back to the row.
+        nov = arrays.get("novelty")
+        nov = (np.asarray(nov, dtype=np.float32)
+               if nov is not None and len(np.asarray(nov)) == len(ids)
+               else None)
         keep = [j for j, i in enumerate(ids) if int(i) in by_id]
         dropped = (len(ids) - len(keep)) + (len(by_id) - len(keep))
 
@@ -358,7 +392,8 @@ class Archive:
             r = by_id[int(ids[j])]
             self.entries.append(ArchiveEntry(
                 id=int(r["id"]),
-                novelty=float(r.get("novelty", 0.0)),
+                novelty=(float(nov[j]) if nov is not None
+                         else float(r.get("novelty", 0.0))),
                 liveness=float(r.get("liveness", 0.0)),
                 pinned=bool(r.get("pinned", False)),
                 source=str(r.get("source", "expansion")),
@@ -371,6 +406,13 @@ class Archive:
                 thumb=str(r.get("thumb", "")),
             ))
         self._next_id = max((e.id for e in self.entries), default=-1) + 1
+        # Unconditional, even when the file carried a novelty array: the array
+        # is only as fresh as the last round-robin sweep, and load is the one
+        # moment a whole-archive pass is both affordable and necessary. This is
+        # what stops the search reopening on stale scores - notably generation
+        # 0, whose entries are all stamped 1.0 by the no-reference convention
+        # and would otherwise take 100% of the p ~ novelty^4 parent weight.
+        self.rescore_all()
         if dropped:
             print(f"[Archive] dropped {dropped} entries with no matching "
                   "index/vector row")
