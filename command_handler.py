@@ -558,7 +558,8 @@ class CommandHandler:
         for name in ("sigma_expand", "alpha", "k", "seed_n", "liveness_min",
                      "n_views",
                      "refresh_sweep_gens", "expansion_between", "expedition_gens",
-                     "expedition_sigma", "latent_share", "goal_order",
+                     "expedition_sigma", "latent_share", "novelty_share",
+                     "goal_order",
                      "seed_ess_min", "seed_ess_max"):
             setattr(drv, name, getattr(ast, name))
         if self.archive is not None:

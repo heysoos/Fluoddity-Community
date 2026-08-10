@@ -525,8 +525,24 @@ class ArchiveWindowMixin:
             "Expedition Gens", ast.expedition_gens, 5, 400)
         _, ast.expedition_sigma = imgui.slider_float(
             "Expedition Sigma", ast.expedition_sigma, 0.01, 1.0)
+        _, ast.novelty_share = imgui.slider_float(
+            "Novelty Goal Share", ast.novelty_share, 0.0, 1.0)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Expeditions with no target that climb novelty itself; always "
+                "well posed, unlike a point that may not be reachable.")
         _, ast.latent_share = imgui.slider_float(
             "Latent Goal Share", ast.latent_share, 0.0, 1.0)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Expeditions toward a point extrapolated past the archive's "
+                "frontier; your text goals take whatever these two leave.")
+        left = 1.0 - min(1.0, ast.novelty_share + ast.latent_share)
+        imgui.text_colored(
+            imgui.ImVec4(*_DIM),
+            f"goals: {100 * min(1.0, ast.novelty_share):.0f}% novelty, "
+            f"{100 * min(1.0, max(0.0, 1.0 - ast.novelty_share), ast.latent_share):.0f}% latent, "
+            f"{100 * left:.0f}% text")
         _, ast.seed_ess_min = imgui.slider_float(
             "Seed Pool Min", ast.seed_ess_min, 1.0, 128.0)
         if imgui.is_item_hovered():

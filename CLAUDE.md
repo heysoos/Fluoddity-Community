@@ -438,6 +438,47 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   afterwards; the expedition fitness therefore has to be computed BEFORE the
   admission loop rather than after it.
 
+- **A latent or chase goal has ONE reference, which makes its fitness a
+  monotone squash of raw cosine — and raw cosine to an arbitrary direction is
+  maximised by NOISE.** `contrastive` with a single reference is
+  `sigmoid(30·(⟨e,g⟩ − ⟨e,c⟩))`, so the latent path had no degenerate-image
+  defence at all; text goals were never exposed because
+  `DEFAULT_DISTRACTORS` carries "random noise" and "an abstract texture".
+  Measured 2026-08-10 against lag-1 spatial autocorrelation of the stored
+  thumbnails (validated: white noise 0.00, smooth ramp 0.99), the entry a
+  latent goal ranks FIRST is in its archive's roughest decile **30.2%
+  (default) / 19.8% (debug05)** of the time, against 10% by chance.
+  The answer is `capture_health.structure()` as a multiplicative factor on
+  every expedition fitness: **14.0% / 5.0%** after. It is deliberately NOT a
+  CLIP term — the distractors cannot simply join a latent goal's reference
+  set, because image-image similarity sits near 0.9 and image-text near 0.2,
+  so at one logit scale the text references contribute only a constant, which
+  a softmax is invariant to. It is applied to text goals too, where it barely
+  moves ranking (real entries score 0.93–0.98), because one rule beats two.
+  **The SEED was not the problem, and the obvious fix makes it worse.**
+  Seeding a latent expedition at the anchor it was extrapolated from measured
+  15.8% → **27.0%** on `default` (13.5% on debug05): `_seed_index` does not
+  argmax, it samples with `banded_alpha`, which already spreads the draw,
+  while `p ~ NOV^4` concentrates hard and novelty is itself mildly
+  rough-biased. Only `novelty_goal` sets `Goal.seed_index`, because it has no
+  embedding to score the archive against.
+
+- **A novelty expedition is the third goal kind, and the only thing that
+  optimises novelty WITHIN a generation.** Expansion samples parents by
+  novelty then mutates blindly; `novelty_goal` makes the generation a CMA-ES
+  hill-climb on the same kNN novelty that decides admission and parent choice,
+  with no target that might be unreachable. Its objective is deliberately
+  non-stationary — admitting entries during the expedition lowers the novelty
+  of everything near them, so the optimizer chases a receding target. That is
+  what an explorer should do, but it does mean the covariance is adapting on
+  shifting ground. `novelty_share` and `latent_share` are independent sliders
+  clamped rather than normalised (rescaling one because the other moved would
+  make neither mean what it says); text takes the remainder, and `_draw_goal`
+  falls THROUGH the kinds rather than failing, because an expedition that does
+  not start wastes a whole cadence interval. Novelty alone is not a noise cure
+  either — top-N by novelty is in the roughest decile 19.0% / 13.2% of the
+  time — which is why the coherence factor applies to it as well.
+
 - **The record book runs in EVERY regime, and it is measured against the
   ARCHIVE, not against the run.** A tile that matches any enabled text goal
   better than anything the archive holds is admitted — `source="record"`,

@@ -29,9 +29,17 @@ from services.novelty import sample_by_novelty
 
 @dataclass
 class Goal:
-    kind: str                 # "latent" | "text" | "chase"
+    kind: str                 # "latent" | "text" | "chase" | "novelty"
     text: str
-    embedding: np.ndarray     # (dim,) float32, unit norm
+    embedding: np.ndarray | None   # (dim,) float32 unit norm; None for novelty
+    # Where the expedition should START, for a goal that cannot be asked.
+    #
+    # Only a novelty goal sets this: it has no embedding, so there is nothing
+    # for _seed_index to score the archive against. Text, chase and latent
+    # goals all leave it None and go through _seed_index, which samples with a
+    # banded alpha - measured better than any shortcut tried here, including
+    # seeding a latent goal at its own anchor. See latent_goal.
+    seed_index: int | None = None
 
     @property
     def label(self) -> str:
@@ -230,4 +238,51 @@ def latent_goal(archive, rng, projection, alpha: float = 4.0,
     nrm = float(np.linalg.norm(g))
     if not np.isfinite(nrm) or nrm < 1e-6:
         return None
+    # NO seed_index, deliberately. Seeding at the anchor looks obviously right
+    # - it is the archive's nearest point to the goal by construction, and it
+    # was drawn by p ~ NOV^alpha rather than by matching an extrapolated
+    # direction. Measured 2026-08-10 against the fraction of seeds landing in
+    # the archive's roughest decile, it is a REGRESSION:
+    #
+    #                     default   debug05
+    #   _seed_index         15.8%     16.8%
+    #   the anchor          27.0%     13.5%
+    #
+    # because _seed_index does not argmax - it samples with banded_alpha, which
+    # already spreads the draw - while p ~ NOV^4 concentrates hard, and novelty
+    # is itself mildly rough-biased. The 34% figure that motivated this is the
+    # fitness ARGMAX, i.e. what the objective ranks first, not where the
+    # expedition starts. That half is answered by the coherence factor in
+    # ImgepDriver._expedition_fitness.
     return Goal("latent", "", (g / nrm).astype(np.float32))
+
+
+def novelty_goal(archive, rng, alpha: float = 4.0) -> Goal | None:
+    """An expedition with NO target: climb novelty itself.
+
+    Novelty search (Lehman & Stanley) as the inner loop, where E&E uses a
+    directed chase. It exists because a latent goal can be unreachable and its
+    objective cannot tell a genuinely new pattern from static, while novelty is
+    well-posed by construction - there is no point in embedding space that
+    might not be realisable, only a landscape defined by what the archive
+    already holds.
+
+    It is also the only thing in the search that optimises novelty WITHIN a
+    generation. Expansion samples parents by novelty and then mutates blindly;
+    this makes the 64 tiles of a generation a hill-climb on the same quantity
+    that decides admission and parent choice.
+
+    The objective is deliberately non-stationary: entries admitted during the
+    expedition raise the local density and lower the novelty of everything near
+    them, so the optimizer chases a receding target. For an explorer that is
+    the desired behaviour rather than a defect, but it does mean CMA-ES is
+    adapting a covariance on shifting ground.
+
+    Carries no embedding - there is nothing to point at. The seed is drawn the
+    same way expansion draws a parent.
+    """
+    if len(archive) == 0:
+        return None
+    nov = np.array([e.novelty for e in archive.entries], dtype=np.float32)
+    i = int(sample_by_novelty(nov, 1, rng, alpha)[0])
+    return Goal("novelty", "", None, seed_index=i)

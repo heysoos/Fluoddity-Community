@@ -27,7 +27,7 @@ import numpy as np
 
 from services.archive import Candidate
 from services.archive_projection import Projection
-from services.capture_health import is_viable_tile
+from services.capture_health import is_viable_tile, structure
 from services.descriptor import descriptor, liveness, stack_snapshots
 from services.expedition_fitness import (
     IMAGE_LOGIT_SCALE,
@@ -35,7 +35,12 @@ from services.expedition_fitness import (
     contrastive,
 )
 from services.genome_spec import BRAIN_SPEC, encode
-from services.goal_source import LATENT_DIMS, Goal, latent_goal
+from services.goal_source import (
+    LATENT_DIMS,
+    Goal,
+    latent_goal,
+    novelty_goal,
+)
 from services.novelty import (
     banded_alpha,
     effective_sample_size,
@@ -84,6 +89,8 @@ class ImgepDriver:
         self.expedition_gens = 50        # E&E uses 350; that is ~16 min at 2000 steps
         self.expedition_sigma = 0.1      # E&E's value; deliberately << sigma0
         self.latent_share = 0.5
+        # Text takes whatever novelty and latent leave. See _draw_goal.
+        self.novelty_share = 0.25
         self.goal_order = "round_robin"  # or "least_matched"
         # Band on the seed pool, not a target - the spread of ESS across goals
         # is real information about the archive. See novelty.banded_alpha.
@@ -301,16 +308,31 @@ class ImgepDriver:
         goal = self._draw_goal()
         if goal is None:
             return False
-        return self.start_expedition_with(goal.embedding, goal.kind, goal.text)
+        return self.start_expedition_with(goal.embedding, goal.kind, goal.text,
+                                          seed_index=goal.seed_index)
 
-    def start_expedition_with(self, embedding, kind: str, text: str) -> bool:
+    def start_expedition_with(self, embedding, kind: str, text: str,
+                              seed_index: int | None = None) -> bool:
         """Begin an expedition toward a specific embedding. An expedition needs
         a seed, so an empty archive falls back to expansion rather than
-        starting a search from nowhere."""
-        i = self._seed_index(np.asarray(embedding, dtype=np.float32), str(kind))
+        starting a search from nowhere.
+
+        `seed_index` is the goal's own answer to "where should this start". A
+        latent goal knows, because it was built by pushing past that entry, and
+        a novelty goal has no embedding to derive one from at all. Only a text
+        or chase goal has to go looking.
+        """
+        emb = (None if embedding is None
+               else np.asarray(embedding, dtype=np.float32))
+        if seed_index is not None and 0 <= int(seed_index) < len(self.archive):
+            i = int(seed_index)
+        elif emb is None:
+            return False            # nothing to point at and nowhere to start
+        else:
+            i = self._seed_index(emb, str(kind))
         if i is None or self.expedition_gens <= 0:
             return False
-        self._goal = Goal(kind, text, np.asarray(embedding, dtype=np.float32))
+        self._goal = Goal(kind, text, emb, seed_index=i)
         self._x0_index = int(i)
         self._remaining = int(self.expedition_gens)
         self._since_expedition = 0
@@ -332,17 +354,48 @@ class ImgepDriver:
         return True
 
     def _draw_goal(self) -> Goal | None:
-        want_latent = float(self.rng.random()) < float(self.latent_share)
+        """One of three kinds, by share. Text takes whatever is left over.
+
+        Ordered novelty, latent, text and falling THROUGH rather than failing:
+        each source can decline (no archive, unfittable projection, empty goal
+        list), and an expedition that does not start is a whole cadence
+        interval wasted.
+        """
+        u = float(self.rng.random())
+        nov_share = max(0.0, float(self.novelty_share))
+        lat_share = max(0.0, float(self.latent_share))
+        # Clamped rather than normalised: the two sliders are independent, and
+        # silently rescaling one because the other moved would make neither
+        # mean what it says.
+        if nov_share + lat_share > 1.0:
+            lat_share = max(0.0, 1.0 - nov_share)
+
         text_goal = None
         if self.goals is not None:
             self.goals.ensure_embedded(self.scorer)
             text_goal = (self.goals.least_matched(self.archive.embeddings)
                          if self.goal_order == "least_matched"
                          else self.goals.next_goal())
-        if want_latent or text_goal is None:
-            return (latent_goal(self.archive, self.rng, self.projection,
-                                self.alpha) or text_goal)
-        return text_goal
+
+        def latent():
+            return latent_goal(self.archive, self.rng, self.projection, self.alpha)
+
+        def novelty():
+            return novelty_goal(self.archive, self.rng, self.alpha)
+
+        if u < nov_share:
+            order = (novelty, latent, lambda: text_goal)
+        elif u < nov_share + lat_share:
+            order = (latent, novelty, lambda: text_goal)
+        elif text_goal is not None:
+            return text_goal
+        else:
+            order = (latent, novelty, lambda: None)
+        for make in order:
+            g = make()
+            if g is not None:
+                return g
+        return None
 
     def chase(self, tile: int) -> bool:
         """Start an expedition toward one tile's own descriptor.
@@ -419,7 +472,10 @@ class ImgepDriver:
         # Computed BEFORE the admission loop, not after it, so the summit
         # ratchet can see this generation's fitness. Gated on shows_something
         # rather than viable: see _summit.
-        fit = self._expedition_fitness(snaps) if source == "expedition" else None
+        # One pass over the crops, reused by the fitness for every goal kind.
+        coherence = structure(last)
+        fit = (self._expedition_fitness(snaps, nov, coherence)
+               if source == "expedition" else None)
         summit = self._summit(fit, shows_something)
         # Every regime, not just an expedition toward that goal: a run chasing
         # one phrase routinely produces the best thing the archive has ever
@@ -690,24 +746,46 @@ class ImgepDriver:
             return 0
         return int(-(-len(self.archive) // g))     # ceil, so a sweep completes
 
-    def _expedition_fitness(self, snaps: np.ndarray) -> np.ndarray:
-        """Contrastive, from the PER-SNAPSHOT embeddings.
+    def _expedition_fitness(self, snaps: np.ndarray, nov, coherence) -> np.ndarray:
+        """What the optimizer climbs, scaled by how much of it is a pattern.
 
-        Deliberately not `descriptor(snaps) @ goal`. That was the old objective
-        and it failed twice over: raw cosine saturates in a cone whose mean
-        pairwise similarity is 0.897, and descriptor() renormalises the
-        trajectory centroid, so 1/||m|| paid a bonus for decorrelated snapshots
-        rather than for matching the goal. The descriptor is still the right
-        thing to ARCHIVE - novelty needs unit vectors - it was only ever wrong
-        as a fitness.
+        Contrastive, from the PER-SNAPSHOT embeddings. Deliberately not
+        `descriptor(snaps) @ goal`. That was the old objective and it failed
+        twice over: raw cosine saturates in a cone whose mean pairwise
+        similarity is 0.897, and descriptor() renormalises the trajectory
+        centroid, so 1/||m|| paid a bonus for decorrelated snapshots rather
+        than for matching the goal. The descriptor is still the right thing to
+        ARCHIVE - novelty needs unit vectors - it was only ever wrong as a
+        fitness.
+
+        A NOVELTY expedition has no goal to match, so its fitness is the kNN
+        novelty already computed for admission this generation. That makes the
+        expedition climb exactly the quantity the archive ranks on.
+
+        Everything is then multiplied by `coherence`, which is ~0.95 for a real
+        pattern and ~0 for static. See capture_health.structure: a latent or
+        chase goal contrasts against a single reference, which makes its
+        fitness a monotone squash of raw cosine, and raw cosine to an arbitrary
+        direction is maximised by noise. Measured, latent goals put their top
+        pick in the archive's roughest decile 34.0% of the time against a 10%
+        baseline. Applied to text goals too even though DEFAULT_DISTRACTORS
+        already defends them: at 0.93-0.98 for real entries it barely moves
+        their ranking, and one rule is easier to reason about than two.
         """
+        c = np.asarray(coherence, dtype=np.float32)
+        if self._goal is not None and self._goal.kind == "novelty":
+            return (np.asarray(nov, dtype=np.float32) * c).astype(np.float32)
+
         refs, scale = self._references()
         if refs is None or len(refs) == 0:
             # No centroid means an empty archive, which cannot happen inside an
             # expedition. Fall back to raw alignment rather than raising in the
             # middle of a generation.
-            return (descriptor(snaps) @ self._goal.embedding).astype(np.float32)
-        return contrastive(snaps, self._goal.embedding, refs, logit_scale=scale)
+            base = (descriptor(snaps) @ self._goal.embedding).astype(np.float32)
+        else:
+            base = contrastive(snaps, self._goal.embedding, refs,
+                               logit_scale=scale)
+        return (base * c).astype(np.float32)
 
     def _seed_index(self, goal_emb: np.ndarray, kind: str) -> int | None:
         """Where the expedition starts: the archive entry that best matches the

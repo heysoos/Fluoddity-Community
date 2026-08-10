@@ -66,6 +66,9 @@ class ArchiveState:
     expedition_gens: int = 50
     expedition_sigma: float = 0.1
     latent_share: float = 0.5
+    # Three kinds of expedition goal: novelty, latent, and text with
+    # whatever is left. See ImgepDriver._draw_goal.
+    novelty_share: float = 0.25
     goal_order: str = "round_robin"  # or "least_matched"
     # How many archive entries are effectively in the running as an expedition
     # seed. A BAND, not a target: measured over 20 varied prompts against a
