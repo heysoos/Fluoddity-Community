@@ -75,6 +75,15 @@ class ArchiveState:
     pinned_only: bool = False
     selected_entry_id: int = -1
 
+    # Live preview: run an archive entry in the single sim, the way hovering
+    # File > Load previews a preset. Only outside tournament mode, where the
+    # canvas is one simulation rather than a grid of them.
+    live_preview: bool = False
+    # CONTINUOUS, not a one-shot: the entry under the pointer right now, or -1.
+    # CommandHandler compares it against what it is already showing, so the UI
+    # does not have to track transitions itself.
+    preview_entry_id: int = -1
+
     # Map view. Pure display state, so the UI writes it directly - there is no
     # command for "the user scrolled". Centre is in normalised projection
     # units, where the whole archive spans [0, 1].
@@ -123,6 +132,8 @@ class ArchiveState:
     # comes back as UIState.request_save_file with kind "archive_entry".
     seed_entry_id: int = -1
     delete_entry_id: int = -1
+    # Commit what is being previewed, so it survives the pointer leaving.
+    load_entry_id: int = -1
     refit_projection_requested: bool = False
     switch_archive_name: str = ""
     new_archive_requested: bool = False
@@ -196,7 +207,7 @@ PERSISTED_FIELDS = (
     # browser and map view: per-archive, and restoring where you were looking
     # is most of what "open it in its last state" means once the archive is
     # large enough that the map does not fit on screen.
-    "show_browser", "sort_by", "pinned_only",
+    "show_browser", "sort_by", "pinned_only", "live_preview",
     "map_zoom", "map_center_x", "map_center_y",
     "map_color_by", "map_filter", "map_render",
     "map_recent_gens", "map_novel_pct", "map_filter_goal", "map_filter_source",

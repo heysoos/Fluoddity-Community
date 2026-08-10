@@ -232,3 +232,16 @@ only the running app can answer.
 - [ ] Scrolling with the pointer over the map zooms the map and does NOT scroll the panel behind it
 - [ ] Scrolling with the pointer anywhere else in the tab scrolls the panel and does NOT zoom the map
 - [ ] Zoom still centres on the point under the cursor, and drag-to-pan still works
+
+## 20. Live preview from the archive browser
+- [ ] Open the Explore tab, open the Archive Browser, then CLOSE the Tournament window: the canvas goes back to one simulation, not a grid
+- [ ] "Live preview" is disabled while the Tournament window is open, and says why
+- [ ] With it on, hovering a gallery thumbnail runs that creature in the live sim
+- [ ] Moving the pointer off the gallery puts your own creature back, unchanged
+- [ ] Hovering across many entries in a row and then leaving still restores the original (nothing accumulates)
+- [ ] Clicking an entry keeps it after the pointer leaves, and says which one it loaded
+- [ ] The same works by hovering and clicking dots on the Map tab
+- [ ] An entry saved from a physics-search run brings its physics sliders, and leaving puts your sliders back
+- [ ] Toggling Live preview off while hovering restores immediately
+- [ ] Deleting the entry you are hovering does not crash
+- [ ] The toggle's state is remembered per archive across a relaunch

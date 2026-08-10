@@ -22,6 +22,13 @@ class TournamentWindowMixin:
     def render_tournament_window(self):
         state = self.state.tournament
         if not state.enabled:
+            # A closed window must leave its sub-modes off. Only the tab that
+            # is drawn sets its own mode, so with the window shut nothing would
+            # ever clear them and the app would keep applying Auto/Explore's
+            # overrides - forced grid, square tiles, no motion blur - to what
+            # the user sees as an ordinary single simulation.
+            self.state.auto_tournament.enabled = False
+            self.state.archive.enabled = False
             return
 
         svc = getattr(self, "tournament_service", None)

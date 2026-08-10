@@ -488,6 +488,26 @@ mechanics these caveats assume.
   showing a "Dismiss" button would otherwise collide on the ImGui id, per the
   caveat below.
 
+- **A closed Tournament window must turn its sub-modes OFF, and only the tab
+  that is drawn can do that.** `render_tournament_window` returns early when
+  the window is shut, so neither tab runs and neither clears its own
+  `enabled` — leaving the app applying Auto/Explore's overrides (forced grid,
+  square tiles, no motion blur) to what the user sees as an ordinary single
+  simulation. The early-return branch clears both. This is what makes the
+  archive browser usable as a plain browser with the tournament closed.
+
+- **The browser's live preview pushes onto the SAME rule stack as
+  File > Load's preview, and `pop_rule()` returns `(None, None)` when the
+  popped rule was the only one.** Handing that `None` to `sim.apply_rule` is
+  not a restore. `preview_entry_id` is deliberately a CONTINUOUS field, not a
+  one-shot: the UI writes whatever the pointer is over each frame (`-1` for
+  nothing, set before every early return in `render_archive_window`) and
+  `CommandHandler` diffs it against what it is already showing. A one-shot
+  would need the UI to track transitions itself, and a browser that stops
+  being drawn would strand the preview. Physics are snapshotted before the
+  FIRST push and restored whole — restoring per-entry would put back the
+  previous *entry's* sliders rather than the user's.
+
 - **A wheel event reaches the zoom AND the scrollbar, unless a child eats it.**
   ImGui scrolls the hovered window during `NewFrame`, so a canvas that reads
   `io.mouse_wheel` to zoom also scrolls the panel it sits in — which reads as

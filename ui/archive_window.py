@@ -504,6 +504,10 @@ class ArchiveWindowMixin:
 
     def render_archive_window(self):
         ast = self.state.archive
+        # The pointer is over nothing until a widget claims it this frame. Set
+        # before every early return below: a closed or empty browser must not
+        # leave a preview running with no way to end it.
+        ast.preview_entry_id = -1
         if not ast.show_browser:
             return
         # Without an explicit size ImGui auto-fits smaller than its own content
@@ -530,6 +534,7 @@ class ArchiveWindowMixin:
         imgui.text_wrapped(f"{st['size']} / {st['capacity']} entries   "
                            f"{st['n_pinned']} pinned   "
                            f"{st['n_evicted']} evicted")
+        self._render_live_preview_toggle(ast)
         imgui.separator()
 
         if imgui.begin_tab_bar("archive_views"):
@@ -541,6 +546,27 @@ class ArchiveWindowMixin:
                 imgui.end_tab_item()
             imgui.end_tab_bar()
         imgui.end()
+
+    def _render_live_preview_toggle(self, ast):
+        """Run the hovered entry in the live sim, like hovering File > Load.
+
+        Only outside tournament mode: there the canvas is a grid of
+        simulations, so there is no single sim for an entry to run in.
+        """
+        busy = ast.enabled or self.state.auto_tournament.enabled
+        imgui.begin_disabled(busy)
+        _, ast.live_preview = imgui.checkbox("Live preview", ast.live_preview)
+        imgui.end_disabled()
+        if not busy and imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Hover an entry to run it; click to keep it.")
+        if busy:
+            imgui.same_line()
+            imgui.text_disabled("(close the Tournament window first)")
+        elif ast.live_preview:
+            imgui.same_line()
+            imgui.text_colored(imgui.ImVec4(*_OK),
+                               "hover to try, click to keep")
 
     def _sorted_entries(self, ast, arc):
         """The gallery's display order, cached against the archive revision.
@@ -595,8 +621,11 @@ class ArchiveWindowMixin:
                 imgui.set_tooltip(
                     f"#{e.id}  {e.source}\nnovelty {e.novelty:.3f}\n"
                     f"liveness {e.liveness:.3f}\ngoal: {e.goal or '-'}")
+                ast.preview_entry_id = e.id
             if imgui.is_item_clicked():
                 ast.selected_entry_id = e.id
+                if ast.live_preview:
+                    ast.load_entry_id = e.id
             if n % per_row != per_row - 1:
                 imgui.same_line()
         imgui.end_child()
@@ -675,8 +704,11 @@ class ArchiveWindowMixin:
 
         if entry is not None:
             self._map_hover_card(entry)
+            ast.preview_entry_id = entry.id
             if clicked:
                 ast.selected_entry_id = entry.id
+                if ast.live_preview:
+                    ast.load_entry_id = entry.id
 
         self._render_map_legend(ast, len(pts.idx), len(arc))
         self._render_map_selection(ast, arc)

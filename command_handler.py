@@ -42,6 +42,10 @@ class CommandHandler:
         # Preview state
         self.preview_rule_active = False  # File->load preview
         self._preview_rule_was_pushed = False  # Whether we actually pushed a rule (vs blocked by lock)
+        # Archive browser live preview: which entry is on the GPU right now.
+        self._archive_preview_id = -1
+        self._archive_preview_pushed = False
+        self._archive_preview_physics = None
         self.clipboard_preview_active = False  # Config clipboard preview
         self._clipboard_rule_was_pushed = False  # Whether clipboard preview actually pushed a rule
         self._clipboard_cached_config = None  # Full config saved before clipboard preview
@@ -181,6 +185,11 @@ class CommandHandler:
 
         # Explore (IMGEP) mode
         self._handle_explore(ui_state)
+
+        # Live preview from the archive browser. AFTER _handle_explore, which
+        # is what clears the browser's other one-shots, and after both mode
+        # handlers so it sees this frame's enabled flags.
+        self._handle_archive_preview(ui_state)
 
         return None
 
@@ -604,6 +613,91 @@ class CommandHandler:
             if e.id == int(entry_id):
                 return i
         return None
+
+    # ---- live preview of an archive entry -----------------------------
+
+    def _handle_archive_preview(self, ui_state):
+        """Run the hovered archive entry in the live sim, and commit a click.
+
+        Outside tournament mode only - there the canvas is a grid of
+        simulations and swapping one rule into it would mean nothing.
+
+        Runs on its own rather than inside _handle_explore, which bails as soon
+        as the Explore driver is detached; the browser stays usable after that
+        and this is the whole point of it.
+        """
+        ast = ui_state.archive
+        tournament = ast.enabled or ui_state.auto_tournament.enabled
+        if self.archive is None or tournament:
+            self._end_archive_preview(ui_state)
+            ast.load_entry_id = -1
+            return
+
+        if ast.load_entry_id >= 0:
+            # The previewed rule is already on the GPU and on the rule stack;
+            # committing is dropping the restore point, not applying anything.
+            entry_id = ast.load_entry_id
+            ast.load_entry_id = -1
+            if self._archive_preview_id != entry_id:
+                self._show_archive_preview(ui_state, entry_id)
+            self._archive_preview_id = -1
+            self._archive_preview_physics = None
+            self._archive_preview_pushed = False
+            ast.notice = f"Loaded #{entry_id}."
+            return
+
+        want = int(ast.preview_entry_id) if ast.live_preview else -1
+        if want == self._archive_preview_id:
+            return
+        self._end_archive_preview(ui_state)
+        if want >= 0:
+            self._show_archive_preview(ui_state, want)
+
+    def _show_archive_preview(self, ui_state, entry_id):
+        """Push entry `entry_id`'s brain, and its physics if it carries any."""
+        from services.physics_genome import PHYSICS_PARAMS
+
+        i = self._archive_index(entry_id)
+        if i is None:
+            return
+        sim_state = ui_state.sim
+        # Snapshotted before the first push and restored as a whole, because a
+        # genome searched with physics on is not the same creature under the
+        # sliders that happen to be set.
+        if "physics" in self.archive.entries[i].spec:
+            self._archive_preview_physics = {
+                name: getattr(sim_state, name)
+                for name, _g, _lo, _hi in PHYSICS_PARAMS}
+            for j, (name, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
+                setattr(sim_state, name, float(self.archive.physics[i][j]))
+
+        rule = np.asarray(self.archive.brains[i], dtype=np.float32)
+        pls = self.param_lock_service
+        if not (pls and pls.should_block_rule_push()):
+            self.rule_manager.push_rule(rule, sim_state.rule_seed)
+            self.sim.apply_rule(rule)
+            self._archive_preview_pushed = True
+        self._archive_preview_id = int(entry_id)
+
+    def _end_archive_preview(self, ui_state):
+        """Put back whatever was running before the preview."""
+        if self._archive_preview_id < 0:
+            return
+        if self._archive_preview_pushed:
+            prev_rule, prev_seed = self.rule_manager.pop_rule()
+            if prev_seed is not None:
+                ui_state.sim.rule_seed = prev_seed
+            # (None, None) means the preview was the only rule on the stack:
+            # there is nothing to go back to, and handing that None to the GPU
+            # is not a restore.
+            if prev_rule is not None:
+                self.sim.apply_rule(prev_rule)
+        if self._archive_preview_physics is not None:
+            for name, value in self._archive_preview_physics.items():
+                setattr(ui_state.sim, name, value)
+        self._archive_preview_id = -1
+        self._archive_preview_physics = None
+        self._archive_preview_pushed = False
 
     def _export_archive_entry(self, ui_state, entry_id, filename):
         """Write an archive entry as an ordinary Fluoddity config, so it opens

@@ -320,6 +320,24 @@ def _button_labels(h, n=3):
     return button_labels(h.render_archive_window, n=n)
 
 
+def checkbox_labels(fn, n=3):
+    """Every checkbox label `fn` emits. Same reasoning as button_labels: a
+    disabled or below-the-fold widget still runs our Python."""
+    seen = []
+    real = imgui.checkbox
+
+    def spy(label, *a, **kw):
+        seen.append(label)
+        return real(label, *a, **kw)
+
+    imgui.checkbox = spy
+    try:
+        frame(fn, n=n)
+    finally:
+        imgui.checkbox = real
+    return seen
+
+
 ACTIONS = {"Save as config...", "Seed a run from here", "Delete"}
 
 
@@ -1194,3 +1212,51 @@ def test_the_auto_tab_keeps_its_buttons_at_the_minimum_width(gui):
     for want in ("Set", "Reset", "Save best genome...", "Save checkpoint",
                  "Load genome", "Load checkpoint"):
         assert want in labels, f"{want} missing at {layout.MIN_PANEL_WIDTH}px"
+
+
+# ---- live preview ----------------------------------------------------------
+
+def _browser(h):
+    h.state.archive.show_browser = True
+    return lambda: h.render_archive_window()
+
+
+def test_the_browser_offers_a_live_preview_toggle(gui):
+    h = Harness(archive=_populated())
+    labels = checkbox_labels(_browser(h))
+    assert "Live preview" in labels
+
+
+def test_a_closed_browser_reports_no_hover(gui):
+    """preview_entry_id is continuous, not a one-shot - so a browser that is
+    not drawn must still say the pointer is over nothing, or the preview it
+    started keeps running with no way to end it."""
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = False
+    h.state.archive.preview_entry_id = 3
+    frame(h.render_archive_window)
+    assert h.state.archive.preview_entry_id == -1
+
+
+def test_a_drawn_browser_with_the_pointer_elsewhere_reports_no_hover(gui):
+    """The mouse is not over the gallery in a headless frame, so nothing may
+    claim the preview."""
+    h = Harness(archive=_populated())
+    h.state.archive.preview_entry_id = 3
+    frame(_browser(h))
+    assert h.state.archive.preview_entry_id == -1
+
+
+def test_the_toggle_survives_an_archive_with_no_entries(gui):
+    h = Harness(archive=_FakeArchive())
+    h.state.archive.preview_entry_id = 2
+    frame(_browser(h))
+    assert h.state.archive.preview_entry_id == -1
+
+
+@pytest.mark.parametrize("mode", ["archive", "auto_tournament"])
+def test_the_toggle_renders_disabled_during_tournament_mode(gui, mode):
+    h = Harness(archive=_populated())
+    getattr(h.state, mode).enabled = True
+    assert frame(_browser(h)) > host_only()
+    assert "Live preview" in checkbox_labels(_browser(h))

@@ -293,3 +293,38 @@ def test_the_dismiss_button_does_not_collide_with_the_explore_tab(gui):
         imgui.end()
         imgui.render()
     assert ids[0] != ids[1]
+
+
+# ---- a closed window must leave its sub-modes off -------------------------
+
+def test_closing_the_window_turns_off_auto_and_explore():
+    """Only the tab that is drawn sets its own mode. With the window shut
+    nothing runs, so a mode left enabled keeps the app applying the tournament
+    overrides - forced grid, square tiles, no motion blur - to what the user
+    sees as an ordinary single simulation."""
+    h = Harness()
+    h.state.tournament.enabled = False
+    h.state.auto_tournament.enabled = True
+    h.state.archive.enabled = True
+
+    h.render_tournament_window()          # returns before begin(); no frame
+
+    assert not h.state.auto_tournament.enabled
+    assert not h.state.archive.enabled
+
+
+def test_a_closed_window_keeps_them_off_on_later_frames():
+    h = Harness()
+    h.state.tournament.enabled = False
+    for _ in range(3):
+        h.render_tournament_window()
+    assert not h.state.auto_tournament.enabled
+    assert not h.state.archive.enabled
+
+
+def test_the_open_window_still_enables_the_tab_that_is_showing(gui):
+    """The close path must not fight the tab bar."""
+    h = Harness()
+    h.state.tournament.enabled = True
+    frame(h.render_tournament_window)
+    assert h.state.tournament.enabled
