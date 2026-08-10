@@ -110,9 +110,9 @@ class BrainWindowMixin:
 
         frac = saturation_fraction(getattr(self, "brain_best_z", None))
         imgui.text(f"saturated params: {frac:.0%}")
-        imgui.progress_bar(frac, (-1.0, 0.0))
+        imgui.progress_bar(frac, imgui.ImVec2(-1.0, 0.0))
         if frac >= 0.10:
-            imgui.text_colored((1.0, 0.7, 0.2, 1.0),
+            imgui.text_colored(imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
                                "the search is losing dimensions")
 
         self._render_brain_inspector(state, layout)
@@ -126,7 +126,9 @@ class BrainWindowMixin:
         """
         from services.brain_preview import AXES, CHANNELS
 
-        if not imgui.collapsing_header("Inspector")[0]:
+        # One-arg collapsing_header returns a bare bool; only the p_visible
+        # overload returns a tuple. begin_popup_modal below really is a tuple.
+        if not imgui.collapsing_header("Inspector"):
             return
 
         ch, v = imgui.combo("Slice", state.preview_axes, [a[0] for a in AXES])
