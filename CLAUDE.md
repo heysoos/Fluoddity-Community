@@ -438,6 +438,26 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   afterwards; the expedition fitness therefore has to be computed BEFORE the
   admission loop rather than after it.
 
+- **Liveness is a FLOOR on the bulk, never a veto over a chosen entry, and it
+  ranks nothing.** It appears in exactly two functional places — the archive's
+  admission gate and the `viable`/`shows_something` split in
+  `ImgepDriver.tell` — and `descriptor()`, the expedition fitness and parent
+  sampling all ignore it. A hard floor is infinite priority, though, so
+  `consider(ignore_liveness=True)` drops the CHANGE half of the alive gate for
+  the summit and nothing else: `cand.viable` (black or blown-out frame) still
+  has to hold. The reason is in the liveness caveat above — liveness is
+  *higher* during the post-reset transient than once a pattern settles, so a
+  converging expedition's endpoint, the very thing the chase is for, scores
+  low on it. `keeper` KEEPS the veto, because it fires every generation
+  forever and a dead preset would otherwise deposit one frozen tile per
+  generation without bound.
+  Measured 2026-08-10 over the three real archives, the floor is close to
+  inert on real content anyway: the 1st percentile of admitted liveness is
+  0.0062–0.0078, three to four times the 0.002 floor, and only 0.1–0.5% of
+  entries sit within 2x of it. Its rank correlation with novelty is small and
+  inconsistent in sign (+0.251, −0.077, +0.139), so it is not skewing the
+  archive's contents either.
+
 - **Expansion draws one parent PER TILE, independently and with replacement,
   so the grid sets the number of draws and not the number of parents.**
   `_ask_expansion` samples `p ~ novelty^alpha`, re-encodes each parent's

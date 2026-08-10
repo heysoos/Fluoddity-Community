@@ -311,7 +311,8 @@ class Archive:
     def consider(self, cand: Candidate, novelty: float, *, pinned: bool = False,
                  source: str = "expansion", thumb_crop=None,
                  separation: float | None = None,
-                 force: bool = False) -> ArchiveEntry | None:
+                 force: bool = False,
+                 ignore_liveness: bool = False) -> ArchiveEntry | None:
         """Run the gates and add on success. Returns the entry, or None.
 
         Three gates, in order of what they mean:
@@ -328,9 +329,19 @@ class Archive:
 
         `force` bypasses separation only. The caller uses it to keep the best
         tile of every generation whatever happens, so a converged expedition
-        still leaves a trail rather than vanishing from the record entirely. It
-        does NOT bypass viability: forcing a black tile in would be worse than
-        keeping nothing.
+        still leaves a trail rather than vanishing from the record entirely.
+
+        `ignore_liveness` drops the CHANGE half of the alive gate, and nothing
+        else - `cand.viable` (is this a black or blown-out frame) still has to
+        hold. Exactly one caller passes it: the expedition summit. Liveness is
+        a floor on the bulk of the archive, not a veto over a chosen entry, and
+        it is measurably the wrong test for this one - liveness is HIGHER
+        during the transient after a reset than once a pattern settles into its
+        attractor, so a settled attractor, which is precisely what a converging
+        expedition produces, scores low on it. Measured over the three real
+        archives the floor is nearly inert anyway: the 1st percentile of
+        admitted liveness is 0.0062-0.0078, three to four times 0.002, and
+        0.1-0.5% of entries sit within 2x of it.
 
         `separation` is passed in because the caller has the whole batch and can
         do one matmul for all of it; omitted, it is computed here.
@@ -345,7 +356,8 @@ class Archive:
             self.admission.observe(False)
             return None
 
-        if not cand.viable or cand.liveness < self.liveness_min:
+        alive = ignore_liveness or cand.liveness >= self.liveness_min
+        if not cand.viable or not alive:
             self.n_rejected_dead += 1
             self._reject(cand)
             self.admission.observe(False)

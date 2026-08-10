@@ -88,20 +88,43 @@ def test_summits_do_not_happen_outside_an_expedition():
     assert "summit" not in sources(arc)
 
 
-def test_a_dead_generation_produces_no_summit():
-    """force bypasses separation, never liveness. A frozen tile that happens
-    to align with the goal is still not a picture of anything."""
-    d, arc, _ = make(seed_n=4, min_separation=0.9, liveness_min=0.5,
-                     expedition_gens=10)
-    for i in range(2):                       # seed with LIVE generations
-        d.archive.liveness_min = 0.0
-        d.liveness_min = 0.0
+def test_a_settled_pattern_is_still_a_summit():
+    """Liveness does NOT gate the summit.
+
+    Liveness is higher during the transient after a reset than once a pattern
+    settles into its attractor - so a converged chase, which is the thing an
+    expedition is for, scores low on it. A floor on the bulk of the archive is
+    not a veto over the one entry that was chosen.
+    """
+    d, arc, _ = make(seed_n=4, min_separation=0.9, expedition_gens=10)
+    for i in range(2):                       # seed while the floor is off
         d.tell(d.ask(4), moving(4, base=30 * i + 10))
-    d.liveness_min = 0.5
+    d.liveness_min = 0.5                     # far above anything real
     start(d)
     before = len(arc)
     d.tell(d.ask(4), snaps(4, [[10] * 4, [10] * 4]))     # identical frames
+    assert sources(arc)[before:] == ["summit"], "the settled endpoint was lost"
+
+
+def test_a_blank_generation_still_produces_no_summit():
+    """Viability is not liveness and keeps its veto. A black frame is not a
+    result whatever it scores against the goal."""
+    d, arc, _ = make(seed_n=4, min_separation=0.9, expedition_gens=10)
+    seed(d)
+    start(d)
+    before = len(arc)
+    d.tell(d.ask(4), snaps(4, [[0] * 4, [0] * 4]))       # black
     assert sources(arc)[before:] == []
+
+
+def test_the_keeper_still_respects_liveness():
+    """Only the summit loses the veto. keeper fires every generation forever,
+    so a dead preset would otherwise deposit one frozen tile per generation
+    without bound - the debug05 pattern."""
+    d, arc, _ = make(seed_n=4, min_separation=0.9, liveness_min=0.5,
+                     expansion_between=0)
+    d.tell(d.ask(4), snaps(4, [[10] * 4, [10] * 4]))     # alive-but-frozen
+    assert len(arc) == 0
 
 
 def test_a_new_expedition_starts_from_a_clean_mark():

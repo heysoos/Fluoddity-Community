@@ -392,9 +392,14 @@ class ImgepDriver:
         goal_text = self.goal_label
         parts = [self.spec.decode(zi) for zi in z]
 
-        viable = np.array([bool(is_viable_tile(last[i]))
-                           and float(live[i]) >= float(self.archive.liveness_min)
-                           for i in range(n)])
+        # Two different questions, and the summit answers only the first.
+        # `shows_something` is "is this a picture at all" - not black, not
+        # blown out. `viable` adds "and it is still changing", which is what
+        # the archive's ordinary admission gate applies.
+        shows_something = np.array([bool(is_viable_tile(last[i]))
+                                    for i in range(n)])
+        alive = np.asarray(live, dtype=np.float64) >= float(self.archive.liveness_min)
+        viable = shows_something & alive
         # One matmul for the whole batch instead of n matrix-vector products.
         sep = self.archive.separation_of(b)
         # ALWAYS TAKE ONE. The most novel tile that is a picture of something
@@ -407,9 +412,10 @@ class ImgepDriver:
             cand_nov = np.where(viable, nov, -np.inf)
             keeper = int(np.argmax(cand_nov))
         # Computed BEFORE the admission loop, not after it, so the summit
-        # ratchet can see this generation's fitness.
+        # ratchet can see this generation's fitness. Gated on shows_something
+        # rather than viable: see _summit.
         fit = self._expedition_fitness(snaps) if source == "expedition" else None
-        summit = self._summit(fit, viable)
+        summit = self._summit(fit, shows_something)
         admitted = 0
 
         for i in range(n):
@@ -442,6 +448,7 @@ class ImgepDriver:
                 thumb_crop=last[i],
                 separation=float(sep[i]),
                 force=(i == keeper or i == summit),
+                ignore_liveness=(i == summit),
             )
             if entry is not None:
                 admitted += 1
@@ -481,7 +488,7 @@ class ImgepDriver:
         self._last_score_label = "novelty"
         return np.asarray(nov, dtype=np.float32)
 
-    def _summit(self, fit, viable) -> int:
+    def _summit(self, fit, shows_something) -> int:
         """The tile that sets a new best fitness for this expedition, or -1.
 
         A RATCHET, and the point is that separation and fitness rank tiles by
@@ -501,13 +508,21 @@ class ImgepDriver:
         generation - expedition_gens, 50 by default - against the 64 a
         generation that flooding would produce.
 
-        Never bypasses liveness or viability: `viable` gates the argmax, for
-        the same reason `keeper` does. A frozen tile that happens to score well
-        against a goal is still not a picture of anything.
+        LIVENESS DOES NOT GATE THIS, and viability still does. A tile that is
+        black or blown out is not a result whatever it scores, so
+        `shows_something` gates the argmax - but "is it still changing" is the
+        wrong question to ask of an expedition's endpoint. Liveness is measured
+        HIGHER during the transient after a reset than once a pattern settles
+        into its attractor, and a settled attractor is exactly what a
+        converging chase produces, so a liveness veto here discriminates
+        against the thing the expedition was for. It is a floor on the bulk of
+        the archive, not a veto over a chosen entry: `keeper` still respects
+        it, because keeper fires every generation forever and a dead preset
+        would otherwise deposit one frozen tile per generation without bound.
         """
-        if fit is None or not len(fit) or not np.any(viable):
+        if fit is None or not len(fit) or not np.any(shows_something):
             return -1
-        f = np.where(viable, np.asarray(fit, dtype=np.float64), -np.inf)
+        f = np.where(shows_something, np.asarray(fit, dtype=np.float64), -np.inf)
         i = int(np.argmax(f))
         if not np.isfinite(f[i]) or float(f[i]) <= self._expedition_best:
             return -1
