@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.brains import BrainLayout, Setting, register
+from services.brains import (BrainLayout, Setting, register,
+                             unit_scale_mask)
 
 FLOATS_PER_BUMP = 10
 W_SCALE = 3.0
@@ -58,6 +59,19 @@ class LeniaModality:
             ("sigma_max", float(s.get("sigma_max", SIGMA_MAX))),
             ("w_scale", float(s.get("w_scale", W_SCALE))),
         ))
+
+    # One bump is 10 floats: projection(4), amplitude(4), mu, sigma. The
+    # projection and sigma SCALE - see lenia.glsl's lenia_param_at. mu does NOT:
+    # it is a LOCATION on the u axis, and scaling would pin a band centred near
+    # zero at zero forever.
+    UNIT_FLOATS = FLOATS_PER_BUMP
+    SCALE_OFFSETS = frozenset({0, 1, 2, 3, 9})
+
+    def unit_floats(self, layout: BrainLayout):
+        return self.UNIT_FLOATS
+
+    def scale_mask(self, layout: BrainLayout):
+        return unit_scale_mask(layout, self.UNIT_FLOATS, self.SCALE_OFFSETS)
 
     @staticmethod
     def _scales(layout: BrainLayout):

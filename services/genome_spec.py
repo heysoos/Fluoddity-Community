@@ -31,18 +31,34 @@ def _active(layout: BrainLayout | None):
     return get(layout.modality), layout
 
 
-def decode(z: np.ndarray, layout: BrainLayout | None = None) -> np.ndarray:
-    """(dim,) -> params.
+def present(flat, layout: BrainLayout) -> np.ndarray:
+    """The shape callers expect a brain of this modality to arrive in.
 
-    Shape (10, 8) is preserved for the Fourier default so legacy callers that
-    reshape or index by centre are unaffected. Other modalities have no such
-    2D structure and return the flat vector.
+    Shape (N, 8) is preserved for Fourier so legacy callers that reshape or
+    index by centre are unaffected. Other modalities have no such 2D structure
+    and stay flat.
     """
-    m, layout = _active(layout)
-    flat = m.decode(z, layout)
+    flat = np.asarray(flat, dtype=np.float32).reshape(-1)
     if layout.modality == "fourier":
         return flat.reshape(layout.shape[0], 8)
     return flat
+
+
+def decode(z: np.ndarray, layout: BrainLayout | None = None) -> np.ndarray:
+    """(dim,) -> params."""
+    m, layout = _active(layout)
+    return present(m.decode(z, layout), layout)
+
+
+def random_genome_for(rng, layout: BrainLayout | None = None) -> np.ndarray:
+    """A fresh brain of `layout`, in the same presentation decode() produces.
+
+    The generic replacement for services.genome.random_genome, which is
+    hardcoded to Fourier's (10, 8) and was what the interactive tournament bred
+    whatever modality was selected.
+    """
+    m, layout = _active(layout)
+    return present(m.random(rng, layout), layout)
 
 
 def encode(genome: np.ndarray, layout: BrainLayout | None = None):

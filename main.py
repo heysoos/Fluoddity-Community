@@ -445,6 +445,7 @@ class App:
             # optimizer keeps its covariance. Refresh the decode and stop -
             # no teardown, no reallocation.
             self.sim.set_brain_scales(layout)
+            self.tournament_service.set_layout(layout)
             self._refresh_driver_specs(layout)
             return True
 
@@ -466,11 +467,14 @@ class App:
         # active length, and slot 0 is re-uploaded from whatever rule is live.
         self.sim.realloc_brain_buffers(layout)
         # The old genome's floats mean something else under a new layout, so it
-        # is dropped. apply_rule(None) then seeds whatever "no rule" means here:
-        # zeros for Fourier (the shader generates a per-cohort rule), a random
-        # brain of the right layout for anything else, which has no such
-        # fallback and would otherwise sit silent.
+        # is dropped. apply_rule(None) then seeds what "no rule" means: one
+        # generated brain per cohort, for every modality alike.
         self.sim.apply_rule(None)
+
+        # The interactive tournament breeds genomes of the layout it is told
+        # about; without this it keeps producing the old width and the tiles are
+        # uploaded into slots that expect the new one.
+        self.tournament_service.set_layout(layout)
 
         # The optimizer searches a different number of dimensions now, so its
         # covariance and population are meaningless. Reset rather than resize.

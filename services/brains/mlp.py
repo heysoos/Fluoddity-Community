@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.brains import BrainLayout, Setting, register
+from services.brains import (BrainLayout, Setting, register,
+                             unit_scale_mask)
 
 ACTIVATIONS = ("tanh", "sin", "gelu")
 W_SCALE = 2.0
@@ -42,6 +43,20 @@ class MLPModality:
         h = int(s.get("hidden", 16))
         act = int(s.get("activation", 0))
         return BrainLayout("mlp", (h, act), 9 * h + 4)
+
+    # No unit and no scales, both for the same reason: a hidden unit's input
+    # weights, bias and output column are three separate regions of the buffer
+    # (W2 is output-major), so nothing is contiguous to cross over, and every
+    # float is an independent weight or bias - the standard perturbation.
+    # mlp.glsl's mlp_param_at is brain_add for every index.
+    UNIT_FLOATS = None
+    SCALE_OFFSETS = frozenset()
+
+    def unit_floats(self, layout: BrainLayout):
+        return self.UNIT_FLOATS
+
+    def scale_mask(self, layout: BrainLayout):
+        return unit_scale_mask(layout, self.UNIT_FLOATS, self.SCALE_OFFSETS)
 
     def decode(self, z: np.ndarray, layout: BrainLayout) -> np.ndarray:
         h = layout.shape[0]

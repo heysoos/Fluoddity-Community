@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.brains import BrainLayout, Setting, register
+from services.brains import (BrainLayout, Setting, register,
+                             unit_scale_mask)
 
 FREQ_SCALE = 3.0
 AMP_SCALE = 1.0
@@ -40,6 +41,17 @@ class FourierModality:
             ("freq_scale", float(s.get("freq_scale", FREQ_SCALE))),
             ("low_freq_bias", float(s.get("low_freq_bias", 0.0))),
         ))
+
+    # One centre is 8 floats: frequency(4) then amplitude(4). Frequency SCALES -
+    # see fourier.glsl's fourier_param_at, which is the same split per particle.
+    UNIT_FLOATS = 8
+    SCALE_OFFSETS = frozenset({0, 1, 2, 3})
+
+    def unit_floats(self, layout: BrainLayout):
+        return self.UNIT_FLOATS
+
+    def scale_mask(self, layout: BrainLayout):
+        return unit_scale_mask(layout, self.UNIT_FLOATS, self.SCALE_OFFSETS)
 
     @staticmethod
     def _bias(t, b):

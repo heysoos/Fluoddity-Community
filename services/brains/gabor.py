@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.brains import BrainLayout, Setting, register
+from services.brains import (BrainLayout, Setting, register,
+                             unit_scale_mask)
 
 FLOATS_PER_FILTER = 14
 
@@ -80,6 +81,17 @@ class GaborModality:
             Setting("envelope_width", "Envelope Width", "float", 0.2, 2.0, 1.0),
             Setting("phase_spread", "Phase Spread", "float", 0.0, 3.1416, 3.1416),
         ]
+
+    # One filter is 14 floats: centre(4), frequency(4), amplitude(4), sigma,
+    # phase. Frequency and sigma SCALE - see gabor.glsl's gabor_param_at.
+    UNIT_FLOATS = FLOATS_PER_FILTER
+    SCALE_OFFSETS = frozenset({4, 5, 6, 7, 12})
+
+    def unit_floats(self, layout: BrainLayout):
+        return self.UNIT_FLOATS
+
+    def scale_mask(self, layout: BrainLayout):
+        return unit_scale_mask(layout, self.UNIT_FLOATS, self.SCALE_OFFSETS)
 
     def layout_from_settings(self, s: dict) -> BrainLayout:
         n = int(s.get("filters", 12))

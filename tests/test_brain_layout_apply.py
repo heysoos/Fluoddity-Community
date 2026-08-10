@@ -47,6 +47,19 @@ class _StubSim:
         self.calls.append("apply_rule")
 
 
+class _StubTournament:
+    """The interactive tournament is NOT optional - it exists for the whole life
+    of the app, so unlike the others it is never None here."""
+
+    def __init__(self, layout):
+        self._layout = layout
+        self.layouts: list = []
+
+    def set_layout(self, layout):
+        self._layout = layout
+        self.layouts.append(layout)
+
+
 class _StubApp:
     """App's collaborators, all absent - _apply_brain_layout guards each with
     `is not None`, so this exercises the real control flow."""
@@ -55,7 +68,9 @@ class _StubApp:
     goal_list = archive_store = thumb_cache = None
 
     def __init__(self, layout=None):
-        self.sim = _StubSim(layout or default_layout())
+        layout = layout or default_layout()
+        self.sim = _StubSim(layout)
+        self.tournament_service = _StubTournament(layout)
         self.specs: list[tuple] = []
 
     def _refresh_driver_specs(self, layout, reset: bool = False):
@@ -116,6 +131,17 @@ def test_a_switch_settles_on_the_very_next_frame(modality):
     assert app.sim.calls == [], f"{modality} re-applies every frame"
     if modality != "fourier":
         assert first is True, "a real switch should have reported a change"
+
+
+@pytest.mark.parametrize("modality", ["gabor", "lenia", "mlp"])
+def test_the_switch_reaches_the_interactive_tournament(modality):
+    """It breeds genomes of the layout it is told about and nothing else tells
+    it. Without this the manual tournament keeps producing the old width, and
+    sim.write_tournament_rules re-slices that upload at the NEW length."""
+    app, ui_state = _StubApp(), _ui(modality)
+    layout = layout_for(modality, ui_state.brain.settings)
+    app.apply(layout, ui_state)
+    assert app.tournament_service.layouts == [layout]
 
 
 @pytest.mark.parametrize("modality,key,value", [

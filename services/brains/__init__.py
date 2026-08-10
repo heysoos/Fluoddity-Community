@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
+
 # The flat parameter buffer's stride. Sized so every UI-reachable layout fits:
 # Fourier 48*8=384, Gabor 36*14=504, Lenia 48*10=480, MLP H=48 -> 9*48+4=436.
 MAX_BRAIN_FLOATS = 512
@@ -109,12 +111,76 @@ def generated_brains(layout: BrainLayout, seed: float, count: int):
     frequency scaled by 1+2h^2, amplitudes 2h-1 - so the family of rules is
     identical and only the particular draws differ.
     """
-    import numpy as np
-
     m = get(layout.modality)
     rng = np.random.default_rng(int(abs(float(seed)) * 1e9) % (2 ** 32))
     return [np.asarray(m.random(rng, layout), dtype=np.float32).reshape(-1)
             for _ in range(max(int(count), 1))]
+
+
+def unit_scale_mask(layout: BrainLayout, stride, scale_offsets) -> np.ndarray:
+    """Which floats SCALE rather than offset, given one unit's field map.
+
+    A modality calls this from scale_mask() with the same split its GLSL
+    `<modality>_param_at` uses. Widths and directions scale; amplitudes, biases
+    and locations offset. See services/brains/gabor.py for why that is not
+    cosmetic.
+    """
+    if stride is None:
+        return np.zeros(layout.length, dtype=bool)
+    return np.isin(np.arange(layout.length) % int(stride),
+                   sorted(scale_offsets))
+
+
+def mutate(genome, strength: float, rng, layout: BrainLayout) -> np.ndarray:
+    """Jitter a DECODED brain, respecting which of its floats are widths.
+
+    Scales take a multiplicative jitter and offsets an additive one, which is
+    what `<modality>_param_at` does per particle on the GPU. The magnitudes are
+    the Fourier operator's, generalised: a scale stays inside
+    [1 - strength/4, 1 + strength/4] and an offset moves by at most `strength`.
+
+    Sign is preserved on every scaled float by construction - at strength 1.0
+    the factor floor is 0.75 - so a width cannot be walked through zero however
+    many generations it survives, and the envelope that divides by its square
+    cannot blow up.
+
+    The input shape is preserved: Fourier arrives as (N, 8) and must leave that
+    way, because callers index it by centre.
+    """
+    g = np.asarray(genome, dtype=np.float32)
+    if strength == 0.0:
+        return g.copy()
+    flat = g.reshape(-1)
+    mask = get(layout.modality).scale_mask(layout)
+    u = rng.random(flat.shape)
+    out = np.where(mask,
+                   flat * (1.0 + 0.5 * strength * (u - 0.5)),
+                   flat + strength * (2.0 * u - 1.0))
+    return out.astype(np.float32).reshape(g.shape)
+
+
+def crossover(a, b, rng, layout: BrainLayout) -> np.ndarray:
+    """Uniform crossover at the modality's UNIT.
+
+    A Fourier centre, a Gabor filter and a Lenia bump are each one feature, so
+    they cross whole - splitting a filter's centre from its frequency makes a
+    child that is neither parent's feature. MLP crosses per gene: a hidden unit
+    is three separate regions of the buffer (input weights, bias, output
+    column), so there is no contiguous unit to keep together.
+
+    Never blends. An averaged float is a value neither parent held, which is a
+    mutation wearing a crossover's name.
+    """
+    a = np.asarray(a, dtype=np.float32)
+    fa = a.reshape(-1)
+    fb = np.asarray(b, dtype=np.float32).reshape(-1)
+    stride = get(layout.modality).unit_floats(layout)
+    if stride:
+        units = -(-fa.size // int(stride))          # ceil, for a ragged tail
+        take = np.repeat(rng.random(units) < 0.5, int(stride))[:fa.size]
+    else:
+        take = rng.random(fa.size) < 0.5
+    return np.where(take, fa, fb).astype(np.float32).reshape(a.shape)
 
 
 # Registration happens on package import, so `import services.brains` is enough
