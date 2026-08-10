@@ -10,15 +10,36 @@ import pytest
 
 from services.brains import REGISTRY, BrainLayout, default_layout
 
-# (modality, setting, a value that must change the decode)
-SCALE_SETTINGS = [
-    ("fourier", "freq_scale", 1.0),
-    ("gabor", "freq_scale", 1.0),
-    ("gabor", "envelope_width", 0.3),
-    ("gabor", "phase_spread", 0.5),
-    ("lenia", "mu_scale", 0.5),
-    ("lenia", "sigma_max", 0.1),
-]
+def _scale_settings():
+    """Every non-count setting every modality declares, paired with a value far
+    from its default.
+
+    DERIVED from settings_schema rather than listed by hand. The hand-written
+    list silently lost its coverage the moment a setting was renamed - which is
+    the same way the sliders became decorative in the first place, so the test
+    for it must not be able to go stale.
+    """
+    out = []
+    for name, m in sorted(REGISTRY.items()):
+        for s in m.settings_schema():
+            if s.kind != "float":
+                continue          # counts change the width; tested separately
+            far = s.lo if abs(s.default - s.lo) > abs(s.default - s.hi) else s.hi
+            out.append(pytest.param(name, s.key, float(far),
+                                    id=f"{name}-{s.key}"))
+    return out
+
+
+SCALE_SETTINGS = _scale_settings()
+
+
+def test_every_modality_with_settings_is_covered():
+    """Guards the guard: if _scale_settings ever returns nothing for a modality
+    that has float settings, every test below would vacuously pass."""
+    covered = {name for name, *_ in (p.values for p in SCALE_SETTINGS)}
+    expected = {n for n, m in REGISTRY.items()
+                if any(s.kind == "float" for s in m.settings_schema())}
+    assert covered == expected and covered
 
 
 @pytest.mark.parametrize("name,key,value", SCALE_SETTINGS)

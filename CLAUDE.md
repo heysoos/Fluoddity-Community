@@ -285,6 +285,37 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   a 56%-of-signal mutation defect which parameter checksums had scored as
   "within 1–3%".
 
+- **The brain's input scale is a property of the PRESET, and it varies ~900x.**
+  Measured over all 23 of `physics_configs/Core` by
+  `tools/brain_input_scale.py`, the median `|input|` per preset runs **0.0016**
+  (Searching) to **1.43** (Bubbles), median 0.057, median p90 0.36, median p99
+  0.68. No constant can suit all of them, which is why Gabor's `Input Scale` is
+  a setting and not a number in the module. Read a preset's figure off the tool,
+  or watch the Inspector — at the right setting the tiles are blobs, at the
+  wrong one they are broad ramps.
+
+  Gabor is the modality that cares, because it compares `x` DIRECTLY to a
+  centre in 4-D: at the old spread of 2.0, `||c|| ~ 4` against `||x|| ~ 0.4`, so
+  the envelope was constant over everything a particle reads and a Gabor filter
+  degenerated into a plain oscillation. Measured as the correlation between a
+  unit and the same unit with its envelope removed (1.0 = it IS a Fourier), the
+  median preset scored 0.85 at spread 2.0 against 0.74 at 0.35, and presets
+  with room to work moved much further (Salt 0.84 -> 0.61, Bubbles 0.71 -> 0.35).
+  Lenia does NOT need it: its bump compares `w.x`, and the projection amplifies
+  by `W_SCALE` and sums four terms, which already lands near its `mu` range.
+
+  For roughly a third of the presets the input barely moves at all (Searching
+  p50 0.0016, p90 0.0032). Over a range that small every smooth brain is
+  approximately linear, so the modality cannot matter much and the lever is
+  `SENSOR_GAIN`, not the brain.
+
+- **A setting that is declared but never read is the recurring defect here.**
+  It has happened twice: every non-count slider before `BrainLayout.scales`
+  existed, and `fourier.low_freq_bias` after. Both rendered, both moved, both
+  did nothing. `tests/test_brain_scales.py` derives its cases from
+  `settings_schema()` rather than a hand-written list, because the hand-written
+  list is what let the second one through.
+
 - **A brain's mutation belongs to its modality, not to a generic per-float
   helper.** The Fourier mutation is structured: ONE scalar scales all four
   components of a centre's frequency (so the frequency *vector* keeps its

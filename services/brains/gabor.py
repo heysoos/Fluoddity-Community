@@ -18,13 +18,43 @@ import numpy as np
 from services.brains import BrainLayout, Setting, register
 
 FLOATS_PER_FILTER = 14
-CENTER_SCALE = 2.0
-FREQ_SCALE = 3.0
+
+# INPUT SCALE - the typical magnitude of one sensor component, and the only
+# quantity in this modality that has units. Everything spatial is expressed as a
+# multiple of it: a centre lives in the input's own space, a sigma is a distance
+# in that space, and a frequency is one over it.
+#
+# It has to be a setting because it is not a property of the brain, it is a
+# property of the PRESET. Measured over all 23 of physics_configs/Core by
+# tools/brain_input_scale.py, the median |input| per preset runs 0.0016
+# (Searching) to 1.43 (Bubbles) - a spread of about 900x - with a median of
+# 0.057 and a median p90 of 0.36. No constant can be right for all of them.
+#
+# 0.5 covers the p90-p99 band of the median preset. The old value was 2.0, which
+# put every centre 10x further out than the input ever reached: the envelope was
+# then near-constant over everything a particle actually reads, so it did
+# nothing and a Gabor filter degenerated into a plain oscillation. Measured as
+# the correlation between a unit's response and the same unit with its envelope
+# removed - 1.0 means it IS a Fourier - the median preset scored 0.85 at 2.0
+# against 0.74 at 0.35, and the presets with room to work moved much further
+# (Salt 0.84 -> 0.61, Bubbles 0.71 -> 0.35).
+#
+# Lenia deliberately does NOT get this treatment. Its bump compares w.x, not x,
+# and the projection amplifies by W_SCALE and sums four terms, which lands it
+# near its own mu range already - which is why its Inspector atlas showed the
+# narrow bands its spec asks for while Gabor's showed broad plane waves.
+INPUT_SCALE = 0.5
+
+# Dimensionless shape, in multiples of INPUT_SCALE. At the default they come out
+# as sigma in [0.1, 1.0] and frequency 3.0, so changing Input Scale rescales a
+# filter without reshaping it.
+FREQ_CYCLES = 1.5           # cycles per input scale -> freq = FREQ_CYCLES/S
+SIGMA_MIN_REL = 0.2
+SIGMA_MAX_REL = 2.0
 AMP_SCALE = 1.0
-# Strictly positive and bounded. The GPU divides by sigma^2, and mutation scales
-# it further, so the floor is what keeps a filter from becoming a delta spike.
-SIGMA_MIN = 0.15
-SIGMA_MAX = 2.0
+# The GPU divides by sigma^2 and mutation scales it further, so an absolute
+# floor is still needed however small Input Scale is set.
+SIGMA_FLOOR = 1e-3
 EPS = 1e-4
 
 
@@ -41,7 +71,12 @@ class GaborModality:
         # 36 filters * 14 floats = 504, just inside MAX_BRAIN_FLOATS.
         return [
             Setting("filters", "Filters", "int", 4, 36, 12),
-            Setting("freq_scale", "Freq Scale", "float", 0.5, 6.0, FREQ_SCALE),
+            # The measured per-preset range is 0.0016 to 1.43, so the slider has
+            # to reach both ends. Read the preset's own figure off
+            # tools/brain_input_scale.py, or just watch the Inspector: at the
+            # right setting the tiles show blobs, at the wrong one, plane waves.
+            Setting("input_scale", "Input Scale", "float", 0.01, 4.0, INPUT_SCALE),
+            Setting("freq_cycles", "Freq Cycles", "float", 0.25, 6.0, FREQ_CYCLES),
             Setting("envelope_width", "Envelope Width", "float", 0.2, 2.0, 1.0),
             Setting("phase_spread", "Phase Spread", "float", 0.0, 3.1416, 3.1416),
         ]
@@ -49,21 +84,29 @@ class GaborModality:
     def layout_from_settings(self, s: dict) -> BrainLayout:
         n = int(s.get("filters", 12))
         return BrainLayout("gabor", (n,), FLOATS_PER_FILTER * n, scales=(
-            ("freq_scale", float(s.get("freq_scale", FREQ_SCALE))),
+            ("input_scale", float(s.get("input_scale", INPUT_SCALE))),
+            ("freq_cycles", float(s.get("freq_cycles", FREQ_CYCLES))),
             ("envelope_width", float(s.get("envelope_width", 1.0))),
             ("phase_spread", float(s.get("phase_spread", np.pi))),
-            ("center_scale", float(s.get("center_scale", CENTER_SCALE))),
         ))
 
     @staticmethod
     def _scales(layout: BrainLayout):
-        """The decode scales this layout was built with. Envelope Width scales
-        the sigma BAND rather than replacing it, so the floor stays positive."""
-        cs = layout.scale("center_scale", CENTER_SCALE)
-        fs = layout.scale("freq_scale", FREQ_SCALE)
+        """Absolute decode scales, derived from Input Scale.
+
+        Centre and sigma are proportional to it and frequency inversely so, so
+        moving one slider rescales a filter to a different preset without
+        reshaping it. Envelope Width scales the sigma BAND rather than replacing
+        it, and the floor is absolute, so no combination reaches zero - the GPU
+        divides by sigma^2.
+        """
+        s = max(layout.scale("input_scale", INPUT_SCALE), 1e-4)
         ew = layout.scale("envelope_width", 1.0)
+        fs = layout.scale("freq_cycles", FREQ_CYCLES) / s
         ps = layout.scale("phase_spread", np.pi)
-        return cs, fs, SIGMA_MIN * ew, SIGMA_MAX * ew, max(ps, 1e-6)
+        s_lo = max(SIGMA_MIN_REL * s * ew, SIGMA_FLOOR)
+        s_hi = max(SIGMA_MAX_REL * s * ew, s_lo + SIGMA_FLOOR)
+        return s, fs, s_lo, s_hi, max(ps, 1e-6)
 
     def decode(self, z: np.ndarray, layout: BrainLayout) -> np.ndarray:
         n = layout.shape[0]
