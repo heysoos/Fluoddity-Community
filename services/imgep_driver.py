@@ -255,6 +255,7 @@ class ImgepDriver:
             self.algorithm, self.spec.dim, self.tournament.tiles,
             self.expedition_sigma, self.base_seed + self.gen,
             self._parent_z(self._x0_index).astype(np.float64),
+            layout=self.spec.layout,
         )
         return True
 

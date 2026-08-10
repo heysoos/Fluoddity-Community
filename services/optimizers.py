@@ -70,7 +70,11 @@ def _restore_rng(rng, d: dict) -> None:
 class _BaseOptimizer:
     name = "base"
 
-    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None):
+    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
+        # Only the GA reads the layout - it is the one operator with structure.
+        # It lives on the base anyway so make_optimizer can forward it without
+        # knowing which algorithm it is building.
+        self._layout = layout
         self._dim = int(dim)
         self._popsize = int(popsize)
         self._sigma0 = float(sigma0)
@@ -135,8 +139,8 @@ class _CMAFamily(_BaseOptimizer):
 
     _cls = None
 
-    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None):
-        super().__init__(dim, popsize, sigma0, seed, x0)
+    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
+        super().__init__(dim, popsize, sigma0, seed, x0, layout)
         self._cma = self._new()
 
     def _new(self):
@@ -229,8 +233,8 @@ class RandomSearchOptimizer(_BaseOptimizer):
 
     name = "Random Search"
 
-    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None):
-        super().__init__(dim, popsize, sigma0, seed, x0)
+    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
+        super().__init__(dim, popsize, sigma0, seed, x0, layout)
         self._rng = np.random.default_rng(seed)
 
     @property
@@ -270,8 +274,7 @@ class GAOptimizer(_BaseOptimizer):
     MUT = 0.25
 
     def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
-        super().__init__(dim, popsize, sigma0, seed, x0)
-        self._layout = layout
+        super().__init__(dim, popsize, sigma0, seed, x0, layout)
         self._rng = np.random.default_rng(seed)
         self._pop = self._fresh(popsize)
         self._told = False
@@ -350,5 +353,13 @@ ALGORITHMS: dict[str, type] = {
 }
 
 
-def make_optimizer(name, dim, popsize, sigma0=0.5, seed=0, x0=None) -> Optimizer:
-    return ALGORITHMS[name](dim, popsize, sigma0, seed, x0)
+def make_optimizer(name, dim, popsize, sigma0=0.5, seed=0, x0=None,
+                   layout=None) -> Optimizer:
+    """`layout` is the BrainLayout the brain block of z decodes under.
+
+    Only the GA reads it, but it must be forwarded unconditionally: this is the
+    single route the app uses, and while it did not take the argument at all,
+    GAOptimizer._breed fell back to its Fourier branch for every modality and
+    raised on three of the four.
+    """
+    return ALGORITHMS[name](dim, popsize, sigma0, seed, x0, layout)

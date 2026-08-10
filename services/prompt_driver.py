@@ -88,6 +88,7 @@ class PromptDriver:
             self._optimizer = make_optimizer(
                 self.algorithm, self.spec.dim, popsize,
                 self.sigma0, self.base_seed, self._x0,
+                layout=self.spec.layout,
             )
 
     def ask(self, n: int) -> np.ndarray:

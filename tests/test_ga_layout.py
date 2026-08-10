@@ -4,11 +4,24 @@ GAOptimizer reshaped z to (-1, 8) because services.genome.crossover expects
 Fourier's (N, 8) centres. That fails outright for a length not divisible by 8 -
 and is quietly WRONG for one that is, because it would cross over along rows
 that are not units of anything.
+
+The operator below was written correctly and then never connected: every test
+here constructed GAOptimizer directly, while the only production route,
+make_optimizer(), had no `layout` parameter at all. So `self._layout` was always
+None and _breed always took its Fourier branch. Measured through make_optimizer
+before the fix, tell() raised ValueError for gabor, lenia AND mlp - including
+gabor at 168 and lenia at 120, both multiples of 8, because crossover's mask is
+N_CENTERS=10 regardless.
+
+The same defect as the settings CLAUDE.md flags, one level up: not a value that
+is declared and never read, but a constructor argument that is implemented,
+documented and tested, and never supplied.
 """
 import numpy as np
+import pytest
 
 from services.brains import REGISTRY, default_layout
-from services.optimizers import GAOptimizer
+from services.optimizers import GAOptimizer, make_optimizer
 
 
 def test_a_length_that_is_not_a_multiple_of_eight_breeds():
@@ -64,7 +77,8 @@ def test_fourier_still_breeds_per_centre():
 
 
 def test_omitting_the_layout_reproduces_the_old_behaviour():
-    """Every existing call site omits `layout`; those must be untouched."""
+    """Omitting `layout` must stay equivalent to passing the Fourier one, so a
+    caller that has no layout to give is not silently changed."""
     a = GAOptimizer(80, 8, 0.5, 0, None)
     b = GAOptimizer(80, 8, 0.5, 0, None, layout=default_layout())
     fit = np.arange(8, dtype=np.float32)
@@ -73,3 +87,61 @@ def test_omitting_the_layout_reproduces_the_old_behaviour():
     assert np.array_equal(a.ask(8), b.ask(8)), (
         "passing the Fourier layout explicitly must be the same as omitting it"
     )
+
+
+# ---- the production route ----------------------------------------------
+#
+# Everything above builds a GAOptimizer by hand. The app reaches it only through
+# make_optimizer(), which is where the layout went missing.
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_make_optimizer_hands_the_ga_its_layout(name):
+    lay = REGISTRY[name].layout_from_settings({})
+    opt = make_optimizer("GA", lay.length, 8, 0.5, 0, layout=lay)
+    assert opt._layout is lay
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_the_ga_breeds_every_modality_through_make_optimizer(name):
+    lay = REGISTRY[name].layout_from_settings({})
+    opt = make_optimizer("GA", lay.length, 8, 0.5, 0, layout=lay)
+    opt.tell(opt.ask(8), np.arange(8, dtype=np.float32))
+    nxt = opt.ask(8)
+    assert nxt.shape == (8, lay.length)
+    assert np.all(np.isfinite(nxt))
+
+
+@pytest.mark.parametrize("algo", ["CMA-ES", "Sep-CMA-ES", "Random Search"])
+def test_the_layout_aware_signature_does_not_disturb_the_others(algo):
+    """Only the GA has a structured operator; the rest search a plain vector and
+    must accept - and ignore - the argument rather than raising on it."""
+    lay = REGISTRY["gabor"].layout_from_settings({})
+    opt = make_optimizer(algo, lay.length, 8, 0.5, 0, layout=lay)
+    opt.tell(opt.ask(8), np.arange(8, dtype=np.float32))
+    assert opt.ask(8).shape == (8, lay.length)
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_a_ga_search_runs_end_to_end_for_every_modality(name):
+    """The wiring, not the operator: a driver built on a non-Fourier spec has to
+    reach tell() without raising.
+
+    The grid must exceed ELITES. At 4 tiles the elites alone fill the next
+    population, _breed() is never called, and this passes without testing
+    anything - which is how it read on the first run.
+    """
+    from services.genome_spec import spec_for
+    from services.prompt_driver import PromptDriver
+    from services.tournament_service import TournamentService
+
+    lay = REGISTRY[name].layout_from_settings({})
+    n = 4 * GAOptimizer.ELITES
+    ts = TournamentService(grid=4)
+    ts.init_population()
+    d = PromptDriver(ts, scorer=None, spec=spec_for(lay))
+    d.algorithm = "GA"
+    z = d.ask(n)
+    assert z.shape == (n, lay.length)
+    d.tell(z, [])
+    assert d.ask(n).shape == (n, lay.length)
