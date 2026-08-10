@@ -678,3 +678,33 @@ def test_the_seed_falls_back_to_nearest_when_there_is_nothing_to_contrast():
 def test_an_empty_archive_has_no_seed():
     d, _, _ = make()
     assert d._seed_index(np.eye(DIM, dtype=np.float32)[0], "latent") is None
+
+
+# ---- set_spec ----------------------------------------------------------
+
+def test_a_scales_only_change_does_not_abandon_the_expedition():
+    """set_spec ends the expedition, so comparing spec objects by identity made
+    a decode-scale tweak throw away the goal the driver was climbing toward."""
+    from services.brains import REGISTRY
+    from services.genome_spec import spec_for
+
+    m = REGISTRY["fourier"]
+    d, _, _ = make()
+    d.set_spec(spec_for(m.layout_from_settings({"freq_scale": 3.0})))
+    d._remaining = 5
+    scaled = spec_for(m.layout_from_settings({"freq_scale": 1.5}))
+    d.set_spec(scaled)
+    assert d._remaining == 5
+    assert d.spec is scaled
+
+
+def test_a_width_change_ends_the_expedition():
+    from services.brains import REGISTRY
+    from services.genome_spec import spec_for
+
+    m = REGISTRY["fourier"]
+    d, _, _ = make()
+    d.set_spec(spec_for(m.layout_from_settings({"centers": 10})))
+    d._remaining = 5
+    d.set_spec(spec_for(m.layout_from_settings({"centers": 20})))
+    assert d._remaining == 0

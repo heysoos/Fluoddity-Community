@@ -155,8 +155,12 @@ class ImgepDriver:
     # ---- driver interface ----------------------------------------------
 
     def set_spec(self, spec) -> None:
-        if spec is not self.spec:
-            self.spec = spec
+        # Adopt the object either way; abandon the expedition only if the space
+        # moved under it. A scale tweak mid-expedition would otherwise throw
+        # away the goal it was climbing toward.
+        same = self.spec.same_space_as(spec)
+        self.spec = spec
+        if not same:
             # The search dimension changed; an optimizer for the old one is
             # meaningless, and the archive is unaffected because it stores
             # phenotypes rather than z.

@@ -51,8 +51,11 @@ class PromptDriver:
     # ---- configuration -------------------------------------------------
 
     def set_spec(self, spec) -> None:
-        if spec is not self.spec:
-            self.spec = spec
+        # Always adopt the object - its scales decide what decode() produces -
+        # but only discard the optimizer when the SPACE actually changed.
+        same = self.spec.same_space_as(spec)
+        self.spec = spec
+        if not same:
             self._optimizer = None
 
     def set_prompt(self, text: str) -> None:

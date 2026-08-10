@@ -76,6 +76,23 @@ class GenomeSpec:
         """Stable string used to reject incompatible checkpoints."""
         return ",".join(f"{b.name}:{b.size}" for b in self.blocks)
 
+    def same_space_as(self, other) -> bool:
+        """Would an optimizer built for `other` still be valid here?
+
+        Not `is`, and not signature() either. Signature is widths alone, and
+        Fourier at 21 centres is 168 floats exactly as Gabor at 12 filters is -
+        the same dimension over completely different meanings. The layout is
+        what separates them.
+
+        BrainLayout compares with `scales` excluded, so a decode-scale change
+        counts as the SAME space on purpose: it changes what a z means, not how
+        many there are, and the covariance a run has spent generations learning
+        is still about the right axes. Callers hold specs by value, not by
+        identity - main._refresh_driver_specs builds a fresh one every time it
+        is called - so comparing objects reset the search on every scale tweak.
+        """
+        return self.blocks == other.blocks and self.layout == other.layout
+
     def decode(self, z: np.ndarray) -> dict[str, np.ndarray]:
         z = np.asarray(z, dtype=np.float32)
         out: dict[str, np.ndarray] = {}
