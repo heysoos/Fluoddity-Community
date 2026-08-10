@@ -128,12 +128,15 @@ class BrainWindowMixin:
         imgui.text(f"archive: {layout.signature()} "
                    f"({state.archive_entries} entries)")
 
-        frac = saturation_fraction(getattr(self, "brain_best_z", None))
-        imgui.text(f"saturated params: {frac:.0%}")
-        imgui.progress_bar(frac, imgui.ImVec2(-1.0, 0.0))
-        if frac >= 0.10:
-            imgui.text_colored(imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
-                               "the search is losing dimensions")
+        if state.best_z is None:
+            imgui.text_disabled("saturated params: no search yet")
+        else:
+            frac = saturation_fraction(state.best_z)
+            imgui.text(f"saturated params: {frac:.0%}")
+            imgui.progress_bar(frac, imgui.ImVec2(-1.0, 0.0))
+            if frac >= 0.10:
+                imgui.text_colored(imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
+                                   "the search is losing dimensions")
 
         self._render_brain_inspector(state, layout)
         imgui.end()

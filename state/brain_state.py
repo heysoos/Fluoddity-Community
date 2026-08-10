@@ -45,6 +45,10 @@ class BrainState:
 
     # Display only, pushed in by the orchestrator each frame.
     archive_entries: int = 0
+    # The best search vector the active driver has found, or None when no search
+    # has produced one. The saturation readout is its only reader, and None is
+    # not the same as an unsaturated z - it means there is nothing to report.
+    best_z: object = None
     # True when no rule is loaded, so each cohort is running its own generated
     # brain. Not a warning - it is the normal startup state and the reason the
     # canvas holds several different behaviours at once. The Inspector shows

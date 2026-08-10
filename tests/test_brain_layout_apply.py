@@ -189,3 +189,82 @@ def test_the_handler_still_clears_the_flag_before_applying():
     body = src[i:src.index("def ", i + 10)]
     assert body.index("request_layout_change = False") < body.index(
         "self.apply_brain_layout("), "the flag is cleared after the apply"
+
+
+# ---- the saturation readout's source ------------------------------------
+#
+# brain_best_z was read by ui/brain_window.py and assigned NOWHERE in the app -
+# the only writer was a test's own stub, so the readout said 0% forever while
+# the test that "covered" it passed by supplying the value itself.
+
+
+class _StubHandler:
+    """CommandHandler's collaborators, reached the way _StubApp reaches App's."""
+
+    auto_service = imgep_driver = None
+
+    def best_z(self):
+        import command_handler
+
+        return command_handler.CommandHandler._active_best_z(self)
+
+
+class _StubDriver:
+    def __init__(self, optimizer=None):
+        self.optimizer = optimizer
+
+
+def _an_optimizer(told):
+    import numpy as np
+
+    from services.optimizers import make_optimizer
+
+    opt = make_optimizer("CMA-ES", 8, 6, 0.5, 0)
+    if told:
+        opt.tell(opt.ask(6), np.arange(6, dtype=np.float32))
+    return opt
+
+
+def test_no_search_reports_no_best():
+    assert _StubHandler().best_z() is None
+
+
+def test_an_optimizer_that_was_never_told_reports_no_best():
+    """best() answers zeros and -inf there, and zeros would render as a
+    perfectly unsaturated genome - a reading, not the absence of one."""
+    h = _StubHandler()
+    h.auto_service = _StubDriver.__new__(_StubDriver)
+    h.auto_service.driver = _StubDriver(_an_optimizer(told=False))
+    assert h.best_z() is None
+
+
+def test_the_running_drivers_best_reaches_the_readout():
+    import numpy as np
+
+    h = _StubHandler()
+    opt = _an_optimizer(told=True)
+    h.auto_service = _StubDriver.__new__(_StubDriver)
+    h.auto_service.driver = _StubDriver(opt)
+    assert np.allclose(h.best_z(), opt.best()[0])
+
+
+def test_explore_is_read_when_auto_has_no_driver():
+    """Explore swaps its own driver in; whichever owns the search is the one
+    whose saturation matters."""
+    import numpy as np
+
+    h = _StubHandler()
+    opt = _an_optimizer(told=True)
+    h.imgep_driver = _StubDriver(opt)
+    assert np.allclose(h.best_z(), opt.best()[0])
+
+
+def test_the_handler_pushes_it_onto_brain_state():
+    """The wiring itself. Without this line the field is read and never
+    written, which is the defect it replaces."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "command_handler.py").read_text()
+    i = src.index("def _handle_brain_layout")
+    body = src[i:src.index("\n    def ", i + 10)]
+    assert "bst.best_z = self._active_best_z()" in body

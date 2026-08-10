@@ -1,15 +1,12 @@
 """Render the Brain window for real, headless.
 
-test_brain_window.py asserts on the decisions the window makes and states that
-"the render call needs a GL context". It does not. Only the imgui BACKEND needs
-GL; the widget layer is pure CPU, so a context plus new_frame() is enough to
-execute every binding call.
+Only the imgui BACKEND needs GL; the widget layer is pure CPU, so a context plus
+new_frame() is enough to execute every binding call.
 
-That wrong premise is exactly why `imgui.collapsing_header("Inspector")[0]`
-shipped: the one-argument overload returns a bare bool and only the p_visible
-overload returns a tuple, so opening the window raised TypeError and took the
-app down. Nothing in the suite had ever called the function - the whole window
-was covered only by tests of the free functions beside it.
+Believing otherwise is why `imgui.collapsing_header("Inspector")[0]` shipped:
+the one-argument overload returns a bare bool and only the p_visible overload
+returns a tuple, so opening the window raised TypeError and took the app down
+with the whole render path uncovered.
 
 These tests call render_brain_window itself, so the binding checks its own
 argument and return types. Verified by re-breaking the fix: with the `[0]` back,
@@ -65,7 +62,11 @@ class _StubUI(BrainWindowMixin):
         self.state.brain.enabled = True
         self.state.brain.modality = modality
         self.state.brain.settings = dict(settings or {})
-        self.brain_best_z = best_z
+        # On BrainState, not on the UI: it is a display-only value the
+        # orchestrator pushes, exactly like archive_entries. As a loose UI
+        # attribute it was assigned by this stub and by nothing else in the app,
+        # so the saturation readout was permanently 0%.
+        self.state.brain.best_z = best_z
         # The real geometry helpers, with the GL half left unbuilt: unit_count
         # is a staticmethod and uv_for/grid read only _grid, so this exercises
         # the actual tile maths rather than a stand-in that cannot disagree.
@@ -108,7 +109,7 @@ def test_the_saturation_warning_renders(gui):
     ui.render_brain_window()
     from ui.brain_window import saturation_fraction
 
-    assert saturation_fraction(ui.brain_best_z) == 1.0
+    assert saturation_fraction(ui.state.brain.best_z) == 1.0
 
 
 def test_the_inspector_degrades_without_a_preview(gui):

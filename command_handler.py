@@ -201,16 +201,33 @@ class CommandHandler:
 
         bst = ui_state.brain
         bst.archive_entries = len(self.archive) if self.archive is not None else 0
+        bst.best_z = self._active_best_z()
 
         bst.request_layout_change = False
         if self.apply_brain_layout is None:
             return
-        # Called every frame, not only on the flag. A COUNT change is confirmed
-        # behind a modal and only reaches bst.settings once applied, but a SCALE
-        # slider commits immediately - and it still has to reach the decode.
-        # _apply_brain_layout early-returns when nothing differs and takes a
-        # light path when only the scales do.
+        # Called every frame, not only on the flag: a count slider commits on
+        # release and a scale slider immediately, and both have to reach the
+        # decode. _apply_brain_layout early-returns when nothing differs and
+        # takes a light path when only the scales do.
         self.apply_brain_layout(layout_for(bst.modality, bst.settings), ui_state)
+
+    def _active_best_z(self):
+        """The best search vector the running driver has found, or None.
+
+        Whichever driver owns the search: Auto's is auto_service.driver, Explore
+        swaps its own in. None when no optimizer exists yet, and also when one
+        exists but has never been told a fitness - best() answers zeros and -inf
+        there, and reporting zeros as an unsaturated genome would be a lie.
+        """
+        import numpy as np
+
+        drv = getattr(self.auto_service, "driver", None) or self.imgep_driver
+        opt = getattr(drv, "optimizer", None)
+        if opt is None:
+            return None
+        z, f = opt.best()
+        return z if np.isfinite(f) else None
 
     def _handle_world_size_change(self, ui_state):
         """Handle world size change request (also handles aspect ratio changes)."""
