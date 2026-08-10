@@ -120,7 +120,6 @@ layout(std430, binding = 3) buffer MultiLoadConfigBuffer {
 // top half of the tournament grid would render empty.
 #define ACTIVE_COUNT float(ENTITY_COUNT)
 #define SQRT_WORLD_SIZE (sqrt(WORLD_SIZE))
-#define SQRT_WORLD_SIZE (sqrt(WORLD_SIZE))
 // Multi-load helper: Calculate which config index this particle should use
 int tournament_home_tile(uint index);   // defined below
 
@@ -362,19 +361,12 @@ float get_particle_rule_seed() {
     return idx >= 0 ? configs[idx].rule_seed : RULE_SEED;
 }
 
-// Which slot of brain_params this particle reads. Multi-load configs own
-// slots by config index; tournament mode by tile; otherwise slot 0.
 // Which brain this particle reads, as a float offset into the flat buffer.
+// Multi-load configs own slots by config index, tournament mode by tile.
 //
-// With no rule loaded the host generates ONE BRAIN PER COHORT and puts them in
-// the cohort slots, so `cohort` picks the slot. That used to be a GPU-side
-// fallback that only Fourier had - it built FourierCenters - which left the
-// other three modalities running 64 cohorts of one identical brain, a
-// monoculture, while Fourier got 64 independent rules. Generating on the host
-// makes every modality behave the same and removes the special case entirely.
-//
-// A loaded rule, a multi-load config and a tournament tile all still name their
-// own slot, and per-cohort variety then comes from the mutation, as before.
+// With no rule loaded the host fills the cohort slots with ONE BRAIN PER
+// COHORT, so `cohort` picks the slot; see CLAUDE.md. With a rule loaded every
+// particle reads slot 0 and per-cohort variety comes from the mutation.
 uint get_particle_brain_base(float cohort) {
     int idx = get_particle_config_index();
     if (idx >= 0) return uint(idx) * uint(MAX_BRAIN_FLOATS);
@@ -389,11 +381,6 @@ uint get_particle_brain_base(float cohort) {
     return 0u;
 }
 
-
-////////////////////////////////////
-//FOURIER NOISE IS IMPORTED INTO THIS SHADER
-//FROM fourier4_4.glsl
-////////////////////////////////////
 
 //rotate p around origin by angle a
 void pR(inout vec2 p, float a) {
@@ -608,12 +595,7 @@ void main() {
     Entity e=entities[index];
     float cohort = get_cohort(index);
 
-    // There is ALWAYS a brain here. The host generates one per cohort when no
-    // rule is loaded, so the eight-float "is this buffer blank" probe that used
-    // to sit here - and the Fourier-only GPU fallback it switched on - are both
-    // gone. Nothing downstream has to ask which of two brains it is looking at,
-    // which is what let the Inspector draw the blank buffer instead of the rule
-    // the particles were running.
+    // There is ALWAYS a brain here; the host fills the cohort slots.
     uint brain_base = get_particle_brain_base(cohort);
 
     //Each cohort gets a random mutation, applied on read by the modality.

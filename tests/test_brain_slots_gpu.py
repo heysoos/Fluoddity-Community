@@ -2,10 +2,9 @@
 
 A slot is MAX_BRAIN_FLOATS wide while a genome is layout.length (80 for
 Fourier), so anything that writes genomes back to back lands them inside slot
-0's padding and leaves the later slots zeroed. The shader reads a zeroed slot as
-'no brain loaded' and answers with a per-tile rule derived from
-(rule_seed, tile) - which is DETERMINISTIC, so the symptom is a tournament grid
-that shows the same patterns on every run rather than an obviously broken one.
+0's padding and leaves the later slots holding whatever was there before. Every
+slot is read as a brain, so a mis-strided write does not fail - it silently
+evaluates the wrong one.
 
 Needs a real GL context, so it skips where there is none (CI).
 """
@@ -58,8 +57,9 @@ def test_tournament_genomes_land_one_per_slot(sim):
 
 
 def test_no_tournament_slot_is_left_blank(sim):
-    """A blank slot is not merely wrong, it is INVISIBLY wrong: the shader
-    substitutes a deterministic per-tile rule, so the tile still animates."""
+    """An all-zero brain outputs zero for every input, so the tile freezes
+    rather than erroring. write_tournament_rules pads short uploads for exactly
+    this reason."""
     from services.tournament_service import TournamentService
 
     svc = TournamentService(rng=np.random.default_rng(1))

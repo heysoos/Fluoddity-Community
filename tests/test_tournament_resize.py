@@ -68,11 +68,9 @@ def test_handler_without_tournament_service_still_resizes():
 def test_a_short_genome_upload_does_not_freeze_a_tile():
     """Defence in depth: an all-zero tournament genome must not freeze the tile.
 
-    This used to be the GPU's job - it detected a blank slot and generated a
-    Fourier rule. That fallback is gone, because it existed for Fourier alone
-    and left the other three modalities silent in the same situation. The
-    guarantee moved to the HOST, which pads a short upload with generated
-    brains, and it now holds for every modality rather than one.
+    An unwritten slot is zero, and an all-zero brain outputs zero for every
+    input. The host pads a short upload with generated brains so no tile can be
+    left silent, for every modality alike.
     """
     from pathlib import Path
 

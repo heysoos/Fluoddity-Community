@@ -105,18 +105,15 @@ class Sim:
         MAX_MULTI_LOAD_CONFIGS = 64
         self.multi_load_buffer = self.ctx.buffer(reserve=MAX_MULTI_LOAD_CONFIGS * MULTI_LOAD_CONFIG_SIZE)
 
-        # The flat brain buffer: 64 slots of MAX_BRAIN_FLOATS floats (128 KB).
-        # Slot 0 is manual mode's brain, tournament mode indexes by tile, and
-        # multi-load indexes by config - one buffer for all three. Fixed stride,
-        # so a layout change never resizes it.
-        # Explicitly zeroed: ctx.buffer(reserve=) does NOT zero memory, and the
-        # shader's 'no brain loaded' probe reads slot 0 directly. Uninitialised
-        # garbage there would silently suppress the startup fallback. Measured:
-        # a bare reserve left 13 nonzero floats in this buffer.
-        # MAX_MULTI_LOAD_CONFIGS slots for configs and tournament tiles, then
-        # MAX_COHORT_BRAINS more holding one generated brain per cohort for when
-        # no rule is loaded. 208 slots is 416 KB - the cohort half costs 288 KB
-        # and buys every modality the per-cohort variety that only Fourier had.
+        # The flat brain buffer, 208 slots of MAX_BRAIN_FLOATS floats (416 KB):
+        # MAX_MULTI_LOAD_CONFIGS of them for configs and tournament tiles, then
+        # MAX_COHORT_BRAINS holding one generated brain per cohort for when no
+        # rule is loaded. Slot 0 is manual mode's brain, tournament mode indexes
+        # by tile, multi-load by config - one buffer for all of them, at a fixed
+        # stride, so a layout change never resizes it.
+        # Explicitly zeroed: ctx.buffer(reserve=) does NOT zero memory, and
+        # every slot is read as a brain whether anything has written it or not.
+        # Measured: a bare reserve left 13 nonzero floats in this buffer.
         self.multi_load_rule_buffer = self.ctx.buffer(
             reserve=(MAX_MULTI_LOAD_CONFIGS + MAX_COHORT_BRAINS)
             * MAX_BRAIN_FLOATS * 4)
@@ -821,15 +818,13 @@ class Sim:
         self.multi_load_buffer.write(bytes(data))
 
         # Write brains to the flat brain buffer, one MAX_BRAIN_FLOATS slot per
-        # config. A missing rule stays all-zero, which the shader reads as
-        # 'no brain loaded'.
+        # config.
         brains = []
         for i in range(config_count):
             config = multi_load_service.get_config(i)
             if config is None or config.rule is None:
-                # A generated brain of its own, not zeros. Zeros used to reach
-                # the Fourier GPU fallback and were dead silence under every
-                # other modality - a config with no rule simply froze.
+                # A generated brain of its own, not zeros: an all-zero brain
+                # outputs zero for every input, so the config would freeze.
                 from services.brains import generated_brains
 
                 brains.append(generated_brains(
@@ -871,12 +866,9 @@ class Sim:
                 params = None
             elif flat.size == layout.length:
                 params = flat
-            elif flat.any():
+            else:
                 print(f"[brain] ignoring a {flat.size}-float rule under "
                       f"{layout.signature()}, which wants {layout.length}")
-            # An all-zero rule of ANY width is the codebase's "no brain"
-            # marker - the Z key and the undo history both use the (10, 8)
-            # form - so it falls through silently rather than warning.
         if params is None:
             # No rule loaded: generate one brain PER COHORT, for whichever
             # modality is active. Slot 0 gets cohort 0's copy so anything
@@ -893,11 +885,8 @@ class Sim:
     def _write_cohort_brains(self, layout) -> np.ndarray:
         """Fill the cohort slots with independent brains. -> cohort 0's.
 
-        This is the whole of "no brain loaded" now, and every modality takes the
-        same path. Before, Fourier alone had a GPU fallback that generated a
-        rule per cohort, so at the default MUTATION_SCALE of 0.0 a Fourier
-        startup was 64 cohorts doing 64 different things while Gabor, Lenia and
-        MLP were 64 cohorts doing one thing - a monoculture nobody asked for.
+        This is the whole of "no brain loaded", and every modality takes the
+        same path; see CLAUDE.md for why it has to be per cohort.
         """
         from services.brains import (COHORT_BRAIN_SLOT0, MAX_BRAIN_FLOATS,
                                      MAX_COHORT_BRAINS, generated_brains)
@@ -1001,16 +990,12 @@ class Sim:
         RE-STRIDES on the way in. The caller packs genomes back to back at the
         LAYOUT length (80 floats for Fourier), but a slot in this buffer is
         MAX_BRAIN_FLOATS. Writing the bytes raw put genome 1 inside slot 0's
-        padding and left slots 3..15 zeroed - which the shader reads as 'no
-        brain loaded', so 13 of 16 tiles ran the per-tile fallback rule. That
-        rule is a deterministic function of (rule_seed, tile), so the grid
-        showed the SAME patterns on every run.
+        padding and left slots 3..15 unwritten.
 
-        Short uploads are PADDED with generated brains. A slot the caller does
-        not fill keeps whatever was there, and at startup that is zero - which
-        used to reach the Fourier GPU fallback and now would simply be silence,
-        a frozen tile. The padding is the same generated brain every other
-        "no rule" path uses.
+        Short uploads are PADDED with generated brains, because a slot the
+        caller does not fill keeps whatever was there - zero at startup, and an
+        all-zero brain outputs zero for every input, which is a frozen tile. The
+        padding is the same generated brain every other "no rule" path uses.
         """
         n = self._brain_layout.length
         flat = np.frombuffer(rule_bytes, dtype=np.float32)
@@ -1096,8 +1081,8 @@ class Sim:
 
         It is BRAIN_LEN floats per particle, NOT MAX_BRAIN_FLOATS: at the max
         stride this would be ~1 KB per particle, about 600 MB at the default
-        count. The flat brain buffer needs no resize - it is 64 fixed-stride
-        slots totalling 128 KB.
+        count. The flat brain buffer needs no resize - its slots are a fixed
+        stride wide whatever the layout.
 
         Called on every layout change, which already resets the optimizer and
         switches archive, so the reallocation cost is invisible.

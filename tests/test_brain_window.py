@@ -3,10 +3,8 @@
 The decisions the window makes live in free functions so they can be asserted
 on directly - the same split tests/test_shader_source.py uses for shaders.
 
-This file used to claim the render call needs a GL context. It does not: only
-the imgui BACKEND needs GL, and that mistake left render_brain_window with no
-coverage at all until it crashed on open. The render itself is now driven
-headlessly in tests/test_brain_window_render.py.
+The render path itself is driven headlessly in
+tests/test_brain_window_render.py - it needs no GL beyond the imgui backend.
 """
 import numpy as np
 import pytest

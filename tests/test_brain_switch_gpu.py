@@ -88,12 +88,10 @@ def test_a_switch_leaves_a_brain_that_actually_RUNS(sim, ctx, name):
     """The state the switch really produces, not the one the tests wanted.
 
     _apply_brain_layout drops the old genome, because its floats mean something
-    else under a new layout. For Fourier the shader answers an all-zero brain
-    with a generated per-cohort rule. NO OTHER MODALITY HAS THAT - the fallback
-    builds FourierCenters - and their zero brain is not a fallback but silence:
-    a Gabor filter with amplitude 0 and envelope width 1e-3 returns 0 for every
-    input, so every particle stops and the canvas fades to black. Reported as
-    "changed to gabor and particles disappeared".
+    else under a new layout, and what replaces it must RUN. An all-zero brain is
+    not an error, it is silence: a Gabor filter with amplitude 0 and envelope
+    width 1e-3 returns 0 for every input, so every particle stops and the canvas
+    fades to black. Reported as "changed to gabor and particles disappeared".
     """
     from services.brains import REGISTRY
     from state import SimState

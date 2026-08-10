@@ -31,9 +31,10 @@ vec4 gabor_unit(uint base, int i, vec4 x) {
     vec4 c = gabor_v4(base, o);
     vec4 f = gabor_v4(base, o + 4);
     vec4 a = gabor_v4(base, o + 8);
-    // decode() floors sigma at 0.15, but mutation scales it afterwards, so the
-    // guard is here rather than only on the host. The sign is irrelevant - only
-    // sigma^2 is used - but zero is a division by zero.
+    // decode() already floors sigma, but the floor is proportional to Input
+    // Scale (0.1 at the defaults, 0.002 at the slider's minimum) and mutation
+    // scales it further, so the guard belongs here too. The sign is irrelevant -
+    // only sigma^2 is used - but zero is a division by zero.
     float sg = max(abs(gabor_param_at(base, o + 12)), 1e-3);
     float ph = gabor_param_at(base, o + 13);
     vec4 d = x - c;

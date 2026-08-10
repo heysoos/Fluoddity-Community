@@ -7,13 +7,6 @@
 // uniform write rather than a shader recompile.
 
 // There is always a brain in the buffer, so there is nothing to fall back to.
-//
-// A GPU-side generated rule used to live here, reached whenever slot 0 was all
-// zero. It could only ever be Fourier, because it built FourierCenters - so
-// Fourier silently had TWO ways to get a brain and the other three had one,
-// and at the default MUTATION_SCALE of 0.0 that was the difference between 64
-// cohorts running 64 independent rules and 64 cohorts running the same one.
-// The host now generates a brain per cohort for every modality instead.
 vec4 eval_brain(uint base, vec4 x) {
     if (BRAIN_MODALITY == 0) return brain_fourier(base, x);
     if (BRAIN_MODALITY == 1) return brain_gabor(base, x);
