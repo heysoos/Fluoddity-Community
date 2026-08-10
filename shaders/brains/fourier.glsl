@@ -34,9 +34,9 @@ float fourier_mut_seed(uint base, int n) {
     return hash(a + b + c) + g_brain_cohort;
 }
 
-// One centre's mutation. Shared by the SSBO path, the writeback and the
-// fallback path so the three cannot drift apart - they must agree exactly or
-// click-to-adopt copies a rule the particle was never running.
+// One centre's mutation. Shared by the SSBO path and the writeback so the two
+// cannot drift apart - they must agree exactly or click-to-adopt copies a rule
+// the particle was never running.
 void fourier_mutate(inout vec4 freq, inout vec4 amp, int i, float mseed) {
     amp += g_brain_mut * (-1.0 + 2.0 * hash4(-.5 + vec2(float(-i) + mseed, float(i))));
     freq *= 1.0 + g_brain_mut * 0.5 * (hash(vec2(mseed, float(i))) - .5);
@@ -50,17 +50,12 @@ void fourier_load(uint base, int i, out vec4 freq, out vec4 amp) {
                 brain_params[o + 6u], brain_params[o + 7u]);
 }
 
-// ONE centre's contribution, with the mutation seed passed in so the summing
-// loop can hoist it. The phase offset is derived from the centre INDEX, which
-// is why a unit cannot be previewed by pointing `base` at it and setting n=1:
-// centre 5 seen at index 0 is a different function from the one the particles
-// run.
-// The basis itself, over a centre held in registers rather than read from the
-// buffer. Split out so the FALLBACK can be drawn one centre at a time: it
-// generates FourierCenter structs and has no brain_params to point at, and the
-// Brain Inspector has to draw exactly what the particles run in that state.
-// Identical expression to fourier_noise() in fourier4_4.glsl, which is the
-// other caller of this basis.
+// The basis, over a centre held in registers rather than read from the buffer.
+//
+// The phase offset is derived from the centre INDEX, which is why a unit cannot
+// be previewed by pointing `base` at it and setting n=1: centre 5 seen at index
+// 0 is a different function from the one the particles run. `i` is therefore a
+// parameter rather than something the caller can fake.
 vec4 fourier_eval(vec4 f, vec4 a, int i, vec4 x) {
     float phase = dot(x, f);
     float po = 2.0 * float(i) * 0.6283 + a.w * 3.14159;

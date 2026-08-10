@@ -47,27 +47,27 @@ def test_adopting_a_loaded_brain_returns_it(sim, ctx):
     assert np.allclose(_adopt(sim, ctx), genome, atol=1e-5)
 
 
-def test_adopting_while_the_fallback_is_active_does_not_return_zeros(sim, ctx):
+def test_adopting_a_generated_cohort_rule_does_not_return_zeros(sim, ctx):
     """With no brain loaded the particle runs a generated per-cohort rule. The
-    readback must be THAT rule, not the blank buffer behind it.
+    readback must be THAT rule, mutation included.
 
-    Returning zeros re-blanks the buffer on apply, which flips every cohort to
-    its own random rule - most sluggish, a few lively. That was the reported
-    symptom.
+    Returning zeros re-marks the rule as "none" on apply, which redraws every
+    cohort - most sluggish, a few lively. That was the reported symptom.
     """
     sim.apply_rule(None)
     rule = _adopt(sim, ctx)
     assert not np.all(rule == 0.0), (
-        "adoption copied the blank buffer instead of the running fallback rule"
+        "adoption returned zeros instead of the rule the particle was running"
     )
     assert np.all(np.isfinite(rule))
     assert np.abs(rule[:, :4]).max() <= 3.0 + 1e-4, "frequency out of range"
     assert np.abs(rule[:, 4:]).max() <= 1.0 + 1e-4, "amplitude out of range"
 
 
-def test_adopting_the_fallback_is_stable_under_reapply(sim, ctx):
+def test_adopting_a_generated_rule_is_stable_under_reapply(sim, ctx):
     """Adopt, apply, adopt again -> the same rule. If the first adoption
-    returned zeros this oscillates between blank and generated forever."""
+    returned zeros this oscillates between "no rule" and a fresh draw
+    forever."""
     sim.apply_rule(None)
     first = _adopt(sim, ctx)
     sim.apply_rule(first)
@@ -99,9 +99,9 @@ def test_only_the_adopted_particle_is_written(sim, ctx):
 
 
 def test_the_brain_buffer_starts_zeroed(ctx):
-    """ctx.buffer(reserve=) does not zero memory. Slot 0 must be all-zero or
-    the 'no brain loaded' probe reads uninitialised garbage and the startup
-    fallback silently does not fire."""
+    """ctx.buffer(reserve=) does not zero memory, and every slot is read as a
+    brain whether anything has written it or not. Measured: a bare reserve left
+    13 nonzero floats here."""
     from sim import Sim
 
     s = Sim(ctx, world_size=1.0, canvas_aspect_ratio="1:1", particle_density=0.01)

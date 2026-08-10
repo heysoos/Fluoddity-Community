@@ -78,6 +78,27 @@ def test_mutation_keeps_the_width_and_moves_the_genome(name):
 
 
 @pytest.mark.parametrize("name", MODALITIES)
+def test_a_bigger_strength_moves_the_genome_further(name):
+    """Inherited from the Fourier-only operator this replaces: the slider has to
+    mean something monotone, or the user cannot steer with it."""
+    lay = layout(name)
+    g = np.asarray(get(name).random(np.random.default_rng(9), lay),
+                   np.float32).reshape(-1)
+    small = mutate(g, 0.05, np.random.default_rng(7), lay).reshape(-1)
+    big = mutate(g, 0.5, np.random.default_rng(7), lay).reshape(-1)
+    assert np.abs(big - g).mean() > np.abs(small - g).mean()
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_mutation_returns_a_copy(name):
+    lay = layout(name)
+    g = np.asarray(get(name).random(np.random.default_rng(10), lay),
+                   np.float32).reshape(-1)
+    out = mutate(g, 0.0, np.random.default_rng(0), lay)
+    assert out is not g
+
+
+@pytest.mark.parametrize("name", MODALITIES)
 def test_zero_strength_is_the_identity(name):
     lay = layout(name)
     rng = np.random.default_rng(1)
