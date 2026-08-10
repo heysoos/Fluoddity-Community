@@ -3,10 +3,7 @@
 One-shot request flags are set by the UI and cleared by the consuming side in
 CommandHandler - never inside UI.get_state(), which returns the live object.
 
-Defaults are spec 7.4. Note steps_per_gen=2000 and snapshots_per_gen=6: at 2000
-steps a generation is ~2.8 s, so 6 snapshots land ~333 steps apart, which is
-enough for a slow pattern to visibly change. Six snapshots is 96 CLIP images at
-N=4, about 7 ms against 2800 ms of simulation.
+What each setting does: docs/imgep.md. Why a default is what it is: CLAUDE.md.
 """
 from __future__ import annotations
 
@@ -31,8 +28,8 @@ class ArchiveState:
     steps_per_gen: int = 2000
     sim_steps_per_frame: int = 10
     snapshots_per_gen: int = 6
-    # Random sub-crop views averaged into each tile's embedding. MEASURED - see
-    # CLIPScorer.embed_mean. 1 is the raw frame and is fully position-dependent.
+    # Sub-crops averaged into each tile's embedding; 1 is the raw frame and is
+    # fully position-dependent. See CLIPScorer.embed_mean.
     n_views: int = 3
     physics_enabled: bool = False
     tile_mutation_enabled: bool = False
@@ -45,15 +42,12 @@ class ArchiveState:
     alpha: float = 4.0
     k: int = 10
     seed_n: int = 256
-    # MEASURED 2026-08-07 over all 131 presets at 2000 steps / 6 snapshots:
-    # liveness runs 0.0034 (Branes2) to 0.0792 (Sandcrabs), median 0.0241. The
-    # originally guessed 0.02 sits just under that median and would have
-    # rejected 43 of 131 hand-curated presets. This floor clears the quietest
-    # of them by 1.7x while still rejecting a frozen canvas, which scores 0.
+    # A FLOOR on the bulk, deliberately far below what looks reasonable - a
+    # frozen canvas scores 0, and real presets run much lower than they seem.
+    # Re-run tools.calibrate_imgep --liveness before changing it.
     liveness_min: float = 0.002
     # Capacity is the long-run cap; min_separation is what stops a converged
-    # expedition filling it with its own endpoint. MEASURED - see
-    # services/archive.DEFAULT_MIN_SEPARATION for the table. 0 disables it.
+    # expedition filling it with its own endpoint. 0 disables it.
     capacity: int = 20000
     min_separation: float = 0.02
     # Generations for a full novelty sweep, NOT entries per generation: the
@@ -71,13 +65,8 @@ class ArchiveState:
     novelty_share: float = 0.25
     goal_order: str = "round_robin"  # or "least_matched"
     # How many archive entries are effectively in the running as an expedition
-    # seed. A BAND, not a target: measured over 20 varied prompts against a
-    # 4784-entry archive, ESS at alpha=4 ran 3.1 ("a photograph of a cat" - the
-    # archive really does hold almost nothing cat-like) to 1973 ("circuit board
-    # traces" - it holds a great deal). That spread is signal. The band only
-    # stops the ends: too peaked repeats one trajectory, too flat ignores the
-    # goal, and ESS/N is roughly constant per goal so a diffuse goal drifts
-    # toward ~6600 as the archive fills to capacity.
+    # seed. A BAND, not a target - the spread across goals is signal, and only
+    # the degenerate ends need stopping. See services/novelty.banded_alpha.
     seed_ess_min: float = 8.0
     seed_ess_max: float = 512.0
 
@@ -98,9 +87,8 @@ class ArchiveState:
     map_color_by: str = "source"     # source | novelty | liveness
     map_filter: str = "all"          # all | recent | novel | kept | goal | source
     map_render: str = "points"       # points | density | points+density
-    # 50, not 200: at grid 8 a generation admits tens of entries, so a real
-    # 13049-entry archive spans only ~200 generations and a 200 default shows
-    # 100% of it - a filter whose default filters nothing.
+    # Low, because a large archive spans few generations: a default that shows
+    # everything is a filter that filters nothing.
     map_recent_gens: int = 50        # for filter "recent"
     map_novel_pct: int = 25          # for filter "novel", top N%
     map_filter_goal: str = ""        # for filter "goal"

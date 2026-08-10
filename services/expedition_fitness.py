@@ -1,35 +1,22 @@
 """Contrastive fitness for a directed expedition.
 
-Raw cosine to a goal is not a usable objective on this substrate. Measured
-2026-08-08 over a real 4784-entry archive: mean pairwise <b, b'> is 0.897 and
-half the variance sits in 3 of 512 components, so the archive covers its
-reachable cone densely and every reachable goal is ALREADY matched to 0.96-0.99
-by something in it. The whole usable range of <b, g> is a couple of percent.
-
-For a text goal the same saturation wears CLIP's modality gap as a disguise:
-within one prompt the spread over the archive is std 0.011 around 0.21, while
-the offset BETWEEN prompts is 0.013. The phrase moves the number as much as the
-creature does.
+Raw cosine to a goal is not usable: the archive covers its reachable cone
+densely, so every reachable goal is already matched almost as well by
+something in it, and for a text goal CLIP's modality gap swamps the signal.
 
     fit = mean_s softmax(scale * [<e_s, g>, <e_s, r_1>, ...])[0]
 
-fixes both at once. The scale turns a 0.03 cosine advantage into a 3.0 logit
-advantage, and a softmax is invariant to any constant added to every similarity
-- which is exactly what the modality gap is. Measured effect on the thing that
-matters: the number of archived entries scoring above an expedition's own
-starting point goes from 0.0 to 23.8.
+fixes both - the scale turns a small cosine advantage into a large logit one,
+and softmax is invariant to the constant offset the modality gap adds. See
+CLAUDE.md.
 
 The reference set is ONE vector for latent and chase goals, the archive
-centroid: "more like the goal than like the average of everything made so far".
-Both richer alternatives measured worse - adding 8 random archive entries halves
-the spread (0.139 -> 0.070), and using the 16 entries nearest the goal collapses
-it to 0.004, far too flat to rank on.
+centroid ("more like the goal than like the average of everything made so
+far") - richer alternatives measured worse.
 
-Scored per snapshot and THEN averaged, never on the trajectory centroid.
-descriptor() renormalises that centroid, and 1/||m|| grows as the snapshots
-decorrelate, so scoring it hands a pattern a free bonus for CHANGING rather than
-for matching - 0.22 standard deviations of the fitness spread, measured. The
-descriptor is right for novelty and wrong for fitness; they are separate
+Scored per snapshot and THEN averaged, never on the trajectory centroid:
+descriptor() renormalises that centroid, which rewards CHANGING over matching.
+The descriptor is right for novelty and wrong for fitness; they are separate
 computations over the same embeddings.
 
 THE SCALE DEPENDS ON THE GOAL'S MODALITY. See the constants below - using
@@ -42,22 +29,12 @@ import numpy as np
 from services.clip_scorer import LOGIT_SCALE
 
 # CLIP's own learned logit_scale.exp(), and the right value for TEXT goals: the
-# modality gap compresses text-image similarity into a narrow band near 0.2, and
-# 100 is precisely the temperature trained to spread that band out. Measured
-# 2026-08-08 over 4784 real descriptors: 0.0% of tiles floored, all 16 of a
-# generation distinguishable, and a wider spread than any smaller scale.
+# modality gap compresses text-image similarity into a narrow band, and 100 is
+# the temperature trained to spread that band out.
 TEXT_LOGIT_SCALE = LOGIT_SCALE  # 100.0
 
-# Image-image similarity is a different regime entirely - it sits above 0.9,
-# where 100 is far too sharp and the softmax pins to zero. Measured on the same
-# archive, a +3sd latent goal scored against the centroid:
-#
-#     scale 100 -> 59.6% of tiles floored, 10.6 of 16 distinct, spread 0.37
-#     scale  30 ->  1.4% of tiles floored, 16.0 of 16 distinct, spread 0.44
-#     scale  10 ->  0.0% of tiles floored, 16.0 of 16 distinct, spread 0.33
-#
-# A floored tile is invisible to a rank-based optimizer, so at 100 a third of
-# every generation carries no information. 30 is the peak of that curve.
+# Image-image similarity sits above 0.9, a different regime - 100 is far too
+# sharp there and floors most of the population to zero. See CLAUDE.md.
 IMAGE_LOGIT_SCALE = 30.0
 
 

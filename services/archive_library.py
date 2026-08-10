@@ -148,16 +148,9 @@ def _count_index_rows(path: Path) -> int:
 def _size_mb(path: Path) -> float:
     """Bytes under `path`, in MB.
 
-    os.scandir, NOT Path.rglob. This one number is displayed once, under the
-    archive combo, and computing it for every archive was 3.4 SECONDS of the
-    lag when Explore mode is first opened - three quarters of the whole stall,
-    on 33,000 thumbnails across ten archives.
-
-    rglob builds a Path per entry and then pays a separate is_file() and stat()
-    syscall on it; a DirEntry already carries its type, and on Windows its
-    stat() is served from the FindNextFile record the scan returned rather than
-    from a fresh syscall. Measured over the ten real archives: 2596 ms -> 37 ms,
-    69.6x, byte-identical on every one of them.
+    os.scandir, NOT Path.rglob: rglob pays a separate stat() syscall per entry,
+    where a DirEntry already carries its type. This number is displayed once,
+    per archive, when Explore mode opens - see CLAUDE.md.
     """
     total = 0
     stack = [str(path)]

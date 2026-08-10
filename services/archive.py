@@ -1,24 +1,12 @@
 """The exploration archive: admission gates, capacity, and novelty bookkeeping.
 
-ADMIT GENEROUSLY, PRUNE AFTERWARDS. Two gates, and both ask only whether the
-tile is a picture of something:
-
-  viable   - the tile is not black or blown out
-  alive    - liveness >= liveness_min (ASAL Eq.3; a frozen canvas scores ~0)
-
-Novelty is not a gate. It ranks, and capacity evicts the bottom of the ranking
-(prune_to_capacity). The asymmetry is the argument: a rejected pattern is gone
-for good and cost a full 2000-step rollout to produce, while an admitted dud
-costs one slot until something more novel displaces it.
-
-There WAS a third gate, an adaptive kNN-novelty threshold driven to a target
-admission rate. It was removed 2026-08-08 for two independent reasons, both
-measured - the controller could not be stabilised at any gain, and a
-generation's tiles are not independent draws so they clear or miss any bar
-together. See AdmissionRate.
+Admission gates only on `viable` (not black/blown out) and `alive` (liveness
+>= liveness_min). Novelty is not a gate - it ranks, and capacity evicts the
+bottom of the ranking (prune_to_capacity). See CLAUDE.md and AdmissionRate for
+why there is no adaptive novelty threshold.
 
 Entries store the DECODED PHENOTYPE, never z. See
-tests/test_physics_origin_roundtrip.py for why.
+tests/test_physics_origin_roundtrip.py.
 """
 from __future__ import annotations
 
@@ -37,25 +25,8 @@ from services.novelty import (
 
 
 class AdmissionRate:
-    """What fraction of recent candidates got in. A READOUT, not a controller.
-
-    It replaces AdaptiveThreshold, a Lehman-Stanley novelty gate driven to a
-    target rate, which was removed 2026-08-08 because it could not be made
-    stable on this substrate. Its `observe()` ran once per CANDIDATE - 16 tiles
-    a generation at grid 4, 64 at grid 8 - and each observation multiplied the
-    threshold by 1.05 or 0.95. All 16 pushing the same way moves it 2.18x in a
-    single generation (22.7x at grid 8), while the rate it steers on is
-    averaged over the last 100 observations, i.e. roughly six generations old.
-    Gain that far above the measurement lag is a limit cycle, not a controller:
-    simulated on a STATIONARY novelty distribution with no archive at all, it
-    admitted nothing in 61% of generations and ran an admission-rate standard
-    deviation of 0.315 against a Bernoulli noise floor of 0.089. That matched
-    the real archives, where admission was bimodal rather than near target.
-
-    Novelty now prunes instead of gating: everything viable and alive is
-    admitted, and capacity evicts the least novel. Rate is kept only so the
-    "nothing is getting in" warning still has something to look at.
-    """
+    """What fraction of recent candidates got in. A READOUT, not a controller
+    - there is no adaptive novelty gate. See CLAUDE.md."""
 
     def __init__(self, window: int = 100):
         self.window = int(window)
@@ -102,32 +73,12 @@ class ArchiveEntry:
     thumb: str = ""
 
 
-# Minimum cosine distance between two stored entries. 0 disables the rule.
-#
+# Minimum cosine distance between two stored entries; 0 disables the rule.
 # The unstructured-archive rule from quality-diversity (Cully & Mouret): store
-# nothing within `l` of something already stored, so the archive is a covering
-# of the space rather than a log of everything that happened. It is what stops a
-# converged expedition filling the archive with its own endpoint - measured on
-# the real archives, ONE goal had already contributed 25% of debug07 (3200 of
-# 12672) and 30% of debug05.
-#
-# 0.02 is measured, not chosen. Replaying each archive in insertion order:
-#
-#   archive    1-NN median   kept at l=0.02   of that flood   of the rest
-#   default        0.0162         2604/4808         33.3%         62.6%
-#   debug05        0.0113         2717/8002         20.6%         39.7%
-#   debug07        0.0074        1402/12672          8.3%         12.0%
-#
-# so it is selective - it always cuts the flood about twice as hard as the rest
-# - and it takes a generation's admissions from 16-64 down to 5-14. Larger
-# values are not a matter of taste: at 0.05 every archive keeps under 6%.
-#
-# Note what this is NOT. The adaptive novelty threshold removed 2026-08-08
-# failed because it was a feedback controller whose gain ran far ahead of its
-# measurement lag, and because a generation's tiles are correlated so they clear
-# or miss any bar together. Neither applies here: there is no controller and no
-# gain, and correlated tiles landing on top of each other is exactly the case
-# this is meant to reject. See AdmissionRate.
+# nothing within `l` of something already stored. Stops a converged expedition
+# filling the archive with its own endpoint. See CLAUDE.md for the measured
+# value and why this is not the same thing as the adaptive threshold in
+# AdmissionRate.
 DEFAULT_MIN_SEPARATION = 0.02
 
 
@@ -135,10 +86,8 @@ class Archive:
     def __init__(self, store=None, capacity: int = 20000, k: int = 10,
                  liveness_min: float = 0.002, dim: int = 512,
                  min_separation: float = DEFAULT_MIN_SEPARATION):
-        # seed_n is gone from here: it existed only to hold the novelty gate
-        # off during bootstrap, and there is no novelty gate. The DRIVER still
-        # has one - it chooses bootstrap vs expansion - but that is a question
-        # about the search, not about admission.
+        # seed_n lives on the driver (it picks bootstrap vs expansion), not
+        # here - admission has no novelty gate to hold off.
         self.store = store
         self.capacity = int(capacity)
         self.k = int(k)
@@ -158,19 +107,14 @@ class Archive:
         self._next_id = 0
         self._refresh_cursor = 0
         self._since_flush = 0
-        # Bumped by anything that changes what a viewer would draw: which
-        # entries exist, or their novelty. The browser derives a PCA projection
-        # and a sort order from those, both O(n) and both unchanged between
-        # generations - without a version to compare, the only way to know they
-        # are still valid is to recompute them every frame, which is what made
-        # the browser cost ~10x the frame time. Monotonic, never reset.
+        # Bumped by anything that changes what a viewer would draw (entries or
+        # their novelty), so a viewer can cache derived views instead of
+        # recomputing every frame. Monotonic, never reset.
         self.revision = 0
         self.n_nonfinite = 0
         self.n_rejected = 0
-        # Split by reason, because they mean opposite things. "Dead" rising is a
-        # fault - a black capture, a frozen preset, a liveness floor set too
-        # high. "Too close" rising is the separation rule working, and during a
-        # converged expedition it should be nearly every tile.
+        # Split by reason: "dead" rising is a fault, "too close" rising is the
+        # separation rule working as intended.
         self.n_rejected_dead = 0
         self.n_rejected_close = 0
         self.n_evicted = 0
@@ -211,13 +155,7 @@ class Archive:
         }
 
     def mean_novelty(self) -> float:
-        """Mean stored kNN novelty: how far apart the archive's entries are.
-
-        With `size`, this is the pair that says whether exploration is still
-        finding new territory - a growing archive whose mean novelty is flat is
-        spreading, one whose mean novelty falls is filling in. Free, because
-        refresh() keeps the column current for its own reasons.
-        """
+        """Mean stored kNN novelty: how far apart the archive's entries are."""
         if not self.entries:
             return 0.0
         return float(np.mean([e.novelty for e in self.entries]))
@@ -227,9 +165,8 @@ class Archive:
     def novelty_of(self, queries: np.ndarray) -> np.ndarray:
         """kNN novelty against archive UNION rejects ring.
 
-        The two references are reduced separately and merged; concatenating a
-        2k ring onto a 20k archive every generation would copy 40 MB - more
-        than the novelty computation costs.
+        The two references are reduced separately and merged rather than
+        concatenated, to avoid copying the whole archive every generation.
         """
         return novelty_from_distances(
             [knn_distances(queries, self.embeddings, self.k),
@@ -240,11 +177,9 @@ class Archive:
     def refresh(self, n: int) -> int:
         """Re-score n entries against the FULL archive, round-robin by position.
 
-        Full archive, not a subsample: a subsampled neighbour set inflates kNN
-        distances, so subsampled and full novelty values sit on different
-        scales and could not be ranked against each other for parent sampling
-        or eviction. This is also what makes eviction cheap - see
-        prune_to_capacity.
+        Full archive, not a subsample: subsampled kNN distances sit on a
+        different scale and could not be ranked against full ones for parent
+        sampling or eviction.
         """
         if n <= 0 or self._n == 0:
             return 0
@@ -263,17 +198,9 @@ class Archive:
         """Re-score EVERY entry against the whole archive. -> how many.
 
         refresh() spreads this over generations, which is right during a run
-        but means a stored novelty is only ever as fresh as the last sweep -
-        and nothing at all after a reload, because the value on disk was
-        measured at admission time against however much archive existed then.
-        Entry #50 was scored against 49 neighbours and entry #4000 against
-        3999; those numbers are not on the same scale and the search compares
-        them as if they were. Measured 2026-08-08 on the default archive, the
-        stored column correlates 0.075 with a correct rescore.
-
-        The whole sweep is one blocked matmul - 0.23 s at 4808 entries, 4.3 s
-        at the 20000 capacity - so it is affordable on load, which is the one
-        moment the round-robin cannot cover.
+        but leaves the on-disk novelty column stale after a reload - each
+        entry was scored against however much archive existed at admission
+        time, so the values are not on a comparable scale. See CLAUDE.md.
         """
         if self._n == 0:
             return 0
@@ -315,33 +242,20 @@ class Archive:
                  ignore_liveness: bool = False) -> ArchiveEntry | None:
         """Run the gates and add on success. Returns the entry, or None.
 
-        Three gates, in order of what they mean:
+        Gates, in order: finite/viable/alive (is this a picture of something
+        at all), then separation (is there already an entry within
+        `min_separation` of this one). No novelty gate - see AdmissionRate.
 
-          finite/viable/alive   is this a picture of something at all
-          separation            do we already have one of these
+        `force` bypasses separation only, so the caller can keep one tile per
+        generation regardless.
 
-        There is still NO novelty gate, and the difference matters. A novelty
-        threshold asks "is this neighbourhood empty enough", which is a moving,
-        archive-wide judgement - that is what was removed 2026-08-08 and it is
-        not coming back (see AdmissionRate). Separation asks the local,
-        parameter-free question "is there already an entry within l of this
-        one", which is the unstructured-archive rule from quality-diversity.
+        `ignore_liveness` drops the CHANGE half of the alive gate;
+        `cand.viable` (black/blown-out) still applies. Used by the expedition
+        summit and goal records, where liveness is the wrong test - see
+        CLAUDE.md.
 
-        `force` bypasses separation only. The caller uses it to keep the best
-        tile of every generation whatever happens, so a converged expedition
-        still leaves a trail rather than vanishing from the record entirely.
-
-        `ignore_liveness` drops the CHANGE half of the alive gate, and nothing
-        else - `cand.viable` (is this a black or blown-out frame) still has to
-        hold. Two callers pass it: the expedition summit and a goal record.
-        Liveness is a floor on the bulk of the archive, not a veto over a
-        chosen entry, and it is measurably the wrong test for these two -
-        liveness is HIGHER during the transient after a reset than once a
-        pattern settles into its attractor, which is precisely what a
-        converging expedition produces.
-
-        `separation` is passed in because the caller has the whole batch and can
-        do one matmul for all of it; omitted, it is computed here.
+        `separation` lets the caller batch the matmul over the whole
+        generation; omitted, it is computed here.
         """
         if pinned:
             return self._add(cand, novelty, "pin", True, thumb_crop)
@@ -366,12 +280,8 @@ class Archive:
             if d < self.min_separation:
                 self.n_rejected += 1
                 self.n_rejected_close += 1
-                # Deliberately NOT added to the rejects ring. The ring exists so
-                # novelty remembers regions the search was refused; a
-                # separation rejection means the region is already IN the
-                # archive, which novelty measures against anyway. Feeding these
-                # in would evict the ring's real content - the dead regions -
-                # within a couple of generations at grid 8.
+                # Not added to the rejects ring: that region is already IN the
+                # archive, which novelty measures against anyway.
                 self.admission.observe(False)
                 return None
 
@@ -384,9 +294,8 @@ class Archive:
         self.rejects.add(cand.embedding[None, :])
 
     def _add(self, cand, novelty, source, pinned, thumb_crop) -> ArchiveEntry | None:
-        # Deliberately no eviction here. Pruning is a once-per-generation bulk
-        # pass (prune_to_capacity), so len() may exceed capacity by up to one
-        # generation - 64 entries at grid 8 - and never by more.
+        # No eviction here - pruning is a once-per-generation bulk pass
+        # (prune_to_capacity), so len() may exceed capacity briefly.
         self._grow(1)
         i = self._n
         self._emb[i] = cand.embedding
@@ -418,17 +327,9 @@ class Archive:
     def prune_to_capacity(self) -> int:
         """Drop the least novel entries until len <= capacity. -> how many went.
 
-        The ONLY pruning rule now that admission does not gate on novelty:
-        ASAL's illumination criterion as an eviction rule, so what survives is
-        the `capacity` most novel things the search has found. This is where
-        the compute the old threshold used to throw away gets spent instead -
-        every pattern is scored and kept, and only then ranked.
-
-        Bulk rather than one-at-a-time-on-admission: a generation adds 16-64
-        entries at once and one argpartition costs what one linear scan did.
-        It runs AFTER refresh() so it ranks on the freshest novelty available;
-        that is also why the persisted novelty column has to be live, since
-        eviction is only meaningful if the numbers it compares are.
+        The only pruning rule: what survives is the `capacity` most novel
+        things found. Bulk rather than per-admission, and run AFTER refresh()
+        so it ranks on the freshest novelty available.
         """
         over = self._n - int(self.capacity)
         if over <= 0:
@@ -444,18 +345,15 @@ class Archive:
             return 0
 
         victims = np.argpartition(nov, take - 1)[:take]
-        # Descending, because _remove swaps the LAST entry into the hole. Going
-        # highest-first means every entry moved down is one we are keeping, so
-        # no victim is ever relocated out from under the loop.
+        # Descending: _remove swaps the last entry into the hole, so removing
+        # highest-index-first never relocates an unprocessed victim.
         for i in sorted((int(v) for v in victims), reverse=True):
             self._remove(i)
         self.n_evicted += take
         return take
 
     def _remove(self, i: int) -> None:
-        # The picture goes with the entry. Nothing could reach it afterwards
-        # anyway: index.jsonl is append-only and the id is gone from
-        # vectors.npz, so load_from_store drops the row on the next open.
+        # Thumbnail goes with the entry - nothing could reach it afterwards.
         if self.store is not None:
             self.store.delete_thumb(self.entries[i].thumb)
         last = self._n - 1
@@ -516,9 +414,9 @@ class Archive:
         emb = np.asarray(arrays["embeddings"], dtype=np.float32)
         brains = np.asarray(arrays["brains"], dtype=np.float32)
         phys = np.asarray(arrays["physics"], dtype=np.float32)
-        # vectors.npz is the authority for novelty when it carries it: the
-        # index row can only ever hold the at-admission value. Archives written
-        # before 2026-08-08 have no such array and fall back to the row.
+        # vectors.npz is the authority for novelty when it carries it - the
+        # index row only ever holds the at-admission value. Older archives
+        # lack the array and fall back to the row.
         nov = arrays.get("novelty")
         nov = (np.asarray(nov, dtype=np.float32)
                if nov is not None and len(np.asarray(nov)) == len(ids)
@@ -551,26 +449,14 @@ class Archive:
                 ts=float(r.get("ts", 0.0)),
                 thumb=str(r.get("thumb", "")),
             ))
-        # From the INDEX, not from the entries that survived reconciliation.
-        # index.jsonl is append-only, so it is the record of every id ever
-        # ISSUED; self.entries is only the ids still backed by vectors.npz.
-        # Deriving the counter from the survivors makes it restart at the first
-        # id whose vectors were lost, and the next run then re-issues ids that
-        # already exist - overwriting those entries' thumbnails, since the
-        # thumbnail filename derives from the id, and leaving index.jsonl with
-        # duplicate ids that shadow the originals on the following load.
-        # Observed in a real archive: an unclean exit lost 157 entries' vectors,
-        # and each of the two following runs re-issued ids 1005-1161.
-        # Eviction reaches this too - prune_to_capacity can remove the
-        # highest-id entry, so max(survivors) is not max(issued) even after a
-        # perfectly clean quit.
+        # From the INDEX (every id ever issued), not from the surviving
+        # entries (only those still backed by vectors.npz) - else the counter
+        # restarts at the first lost id and the next run re-issues ids that
+        # already exist, overwriting those entries' thumbnails. See CLAUDE.md.
         self._next_id = max(by_id, default=-1) + 1
-        # Unconditional, even when the file carried a novelty array: the array
-        # is only as fresh as the last round-robin sweep, and load is the one
-        # moment a whole-archive pass is both affordable and necessary. This is
-        # what stops the search reopening on stale scores - notably generation
-        # 0, whose entries are all stamped 1.0 by the no-reference convention
-        # and would otherwise take 100% of the p ~ novelty^4 parent weight.
+        # Unconditional even when the file carried a novelty array: only a
+        # whole-archive pass is guaranteed fresh, and load is the one moment
+        # it is affordable. See CLAUDE.md.
         self.rescore_all()
         if dropped:
             print(f"[Archive] dropped {dropped} entries with no matching "

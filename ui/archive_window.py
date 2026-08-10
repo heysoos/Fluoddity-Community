@@ -11,21 +11,21 @@ from imgui_bundle import imgui
 
 from services import map_view, save_targets
 from services.archive_library import safe_name
+from ui import layout
 from ui.notices import BAD as _BAD
 from ui.notices import DIM as _DIM
 from ui.notices import OK as _OK
 from ui.notices import WARN as _WARN
 from ui.notices import render_banner
 
-# One sentence each. A tooltip wider than the window is not read, it is
-# dismissed - the long-form reasoning lives in the module docstrings.
-GOAL_TOOLTIP = "Text goals for expeditions, cycled in order; leave empty for latent goals only."
+# One sentence each. See docs/imgep.md for what any of them actually do.
+GOAL_TOOLTIP = "Text goals for expeditions, cycled in order."
 
-ALPHA_TOOLTIP = "How strongly parent choice favours novel entries (p ~ novelty^alpha); 0 is uniform."
+ALPHA_TOOLTIP = "How strongly parent choice favours novel entries."
 
-EXPORT_TOOLTIP = "Asks for a name, then saves this entry to your configs folder, openable from File > Load."
+EXPORT_TOOLTIP = "Saves this entry to your configs folder, under a name you pick."
 
-SEED_TOOLTIP = "Starts Auto (CLIP) mode's search from this genome; Explore mode picks its own parents."
+SEED_TOOLTIP = "Starts Auto (CLIP) mode's search from this genome."
 
 
 def archive_row_model(ast) -> dict:
@@ -89,11 +89,8 @@ class ArchiveWindowMixin:
         ast = self.state.archive
         ast.enabled = True
 
-        # Wrapped, and Dismiss on its OWN line. These carry OS error strings -
-        # "Could not empty 'default': [WinError 5] Access is denied: ..." with
-        # two full paths in it - and same_line() after text that long pushed
-        # the button off the right edge of the panel, so the banner could not
-        # be dismissed at all.
+        # Wrapped, and Dismiss on its OWN line: these carry OS error strings
+        # with full paths, and same_line() pushes the button off the edge.
         self._render_banner(ast, "warning", _BAD)
         self._render_banner(ast, "notice", _OK)
 
@@ -106,16 +103,14 @@ class ArchiveWindowMixin:
 
         self._render_archive_row(ast)
         imgui.separator()
-        # Above the fold, always: which archive, what the search is doing, and
-        # the buttons that change it. Everything below is a setting you adjust
-        # occasionally, so it folds away - the tab was one unbroken column of
-        # twenty sliders and you had to scroll past all of them to reach the
-        # browser button.
+        # Above the fold: which archive, what the search is doing, and the
+        # buttons that change it. Settings fold away below.
         self._render_explore_status(ast)
         imgui.separator()
         self._render_explore_transport(ast)
         imgui.separator()
 
+        layout.push_settings_width()
         if imgui.collapsing_header("Goals", imgui.TreeNodeFlags_.default_open):
             self._render_goal_list(ast)
         if imgui.collapsing_header("Rollout"):
@@ -124,16 +119,13 @@ class ArchiveWindowMixin:
             self._render_view_setting(ast)
         if imgui.collapsing_header("Exploration"):
             self._render_exploration_settings(ast)
-        # "Admission", not "Archive": an ImGui widget's identity IS its label,
-        # and the archive combo at the top of this tab is already called
-        # "Archive". Two visible items with one ID is a hard error - ImGui put
-        # up its conflict dialog and the combo stopped responding to clicks
-        # entirely. It is also the better name: this section is what the
-        # archive KEEPS, which the combo is not.
+        # "Admission", not "Archive": a widget's identity IS its label, and the
+        # archive combo at the top of this tab already owns "Archive".
         if imgui.collapsing_header("Admission"):
             self._render_archive_settings(ast)
         if imgui.collapsing_header("Expeditions"):
             self._render_expedition_settings(ast)
+        imgui.pop_item_width()
 
         imgui.separator()
         if imgui.button("Open Archive Browser"):
@@ -147,28 +139,33 @@ class ArchiveWindowMixin:
         """Which archive is active is an experimental variable, so it sits at
         the top of the tab rather than in a menu."""
         m = archive_row_model(ast)
-        imgui.set_next_item_width(240)
+        right = layout.row_right_edge()
+        layout.push_settings_width()
         changed, idx = imgui.combo("Archive", m["index"], m["labels"])
+        imgui.pop_item_width()
         if changed and 0 <= idx < len(m["names"]) and m["names"][idx] != ast.archive_name:
             ast.switch_archive_name = m["names"][idx]
-        imgui.same_line()
+
+        # Wrapped rather than one fixed row: five items do not fit a narrow
+        # panel, and a clipped Delete button cannot be clicked.
+        layout.wrap_row(right, layout.button_width("New"))
         if imgui.button("New##archive"):
             ast.new_archive_name = ""
             imgui.open_popup("New archive")
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Empty"))
         if imgui.button("Empty##archive"):
             imgui.open_popup("Empty archive")
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Delete"))
         imgui.begin_disabled(not m["delete_enabled"])
         if imgui.button("Delete##archive"):
             ast.confirm_delete_text = ""
             imgui.open_popup("Delete archive")
         imgui.end_disabled()
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Refresh"))
         if imgui.button("Refresh##archive"):
             ast.refresh_archive_list_requested = True
 
-        imgui.text_colored(imgui.ImVec4(*_DIM), m["summary"])
+        layout.text_colored_wrapped(_DIM, m["summary"])
         self._render_archive_modals(ast)
 
     def _render_archive_modals(self, ast):
@@ -228,12 +225,8 @@ class ArchiveWindowMixin:
             imgui.end_popup()
 
     def _render_running_light(self, ast, running: bool):
-        """Whether the search is actually stepping, as a colour.
-
-        "Regime: expansion" reads identically whether the search is running or
-        paused, so the tab looked the same either way and there was no way to
-        tell a stalled run from a stopped one.
-        """
+        """Whether the search is actually stepping, as a colour. The regime
+        line alone reads the same running or paused."""
         dl = imgui.get_window_draw_list()
         p = imgui.get_cursor_screen_pos()
         r = imgui.get_text_line_height() * 0.32
@@ -270,79 +263,69 @@ class ArchiveWindowMixin:
             return
         st = d.status()
         self._render_running_light(ast, bool(ast.running))
-        # .get, like every other read here: the panel must render against
-        # whatever the driver chooses to report rather than requiring it.
+        # .get, like every other read here: the panel renders against whatever
+        # the driver reports rather than requiring it.
         phase = st.get("phase")
         if phase:
             self._render_phase_bar(phase)
         else:
             imgui.text(f"Regime: {st['regime']}")
-            imgui.text(f"Goal: {st.get('goal') or '-'}")
-        # Only while there is something to abandon - a permanently dead button
-        # would be noise on a panel this dense.
+            imgui.text_wrapped(f"Goal: {st.get('goal') or '-'}")
         if st["regime"] == "expedition":
             if imgui.button("Cancel##expedition"):
                 ast.cancel_expedition_requested = True
             if imgui.is_item_hovered():
-                imgui.set_tooltip(
-                    "Abandon this goal; the next expedition is a full "
-                    "Expansion Between interval away.")
-        imgui.text(f"Archive: {st['archive_size']} / {st['capacity']}   "
-                   f"admitting {100.0 * st['admission_rate']:.0f}%   "
-                   f"evicted {st['n_evicted']}")
+                imgui.set_tooltip("Abandon this goal.")
+        imgui.text_wrapped(f"Archive: {st['archive_size']} / {st['capacity']}   "
+                           f"admitting {100.0 * st['admission_rate']:.0f}%   "
+                           f"evicted {st['n_evicted']}")
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "A low rate is normal with Min Separation on - it means the "
-                "archive already holds those patterns.")
+            imgui.set_tooltip("A low rate means the archive already holds "
+                              "those patterns.")
         if st.get("last_tiles"):
-            imgui.text_colored(
-                imgui.ImVec4(*_DIM),
+            layout.text_disabled_wrapped(
                 f"Last generation: kept {st.get('last_admitted', 0)} of "
                 f"{st['last_tiles']} tiles   "
                 f"({st.get('n_rejected_close', 0)} too close, "
                 f"{st.get('n_rejected_dead', 0)} dead, all-time)")
         if st.get("n_summits") or st.get("n_records"):
-            imgui.text_colored(
-                imgui.ImVec4(*_OK),
+            layout.text_colored_wrapped(
+                _OK,
                 f"Kept for matching: {st.get('n_summits', 0)} summits, "
                 f"{st.get('n_records', 0)} goal records")
             if imgui.is_item_hovered():
                 imgui.set_tooltip(
                     "Summits beat their own expedition's best; records beat "
-                    "the whole archive's best for one of your goals.")
+                    "the archive's best for one of your goals.")
         self._render_explore_traces(d)
-        # The seed pool actually used, so the band is legible rather than a
-        # pair of numbers with no visible effect.
         if st.get("seed_ess"):
-            imgui.text_colored(
-                imgui.ImVec4(*_DIM),
+            layout.text_disabled_wrapped(
                 f"Seed pool: {st['seed_ess']:.0f} entries "
                 f"(alpha {st['seed_alpha']:.1f})")
         if st.get("blocked_by_pins"):
-            imgui.text_colored(
-                imgui.ImVec4(*_WARN),
+            layout.text_colored_wrapped(
+                _WARN,
                 "Archive is over capacity and entirely pinned - nothing can "
                 "be evicted, so it will keep growing.")
-        # A persistently zero admission rate now means the capture is broken or
-        # the preset is dead. It can no longer mean "the search is hard": there
-        # is no novelty gate left for a hard search to fail.
         if st["archive_size"] > 0 and st["admission_rate"] <= 0.0:
-            imgui.text_colored(
-                imgui.ImVec4(*_WARN),
+            layout.text_colored_wrapped(
+                _WARN,
                 "Nothing has been admitted recently - check the preset is alive, "
                 "the capture is not black, and Liveness Floor is not too high.")
 
     def _render_explore_transport(self, ast):
+        right = layout.row_right_edge()
         if imgui.button("Start##explore"):
             ast.start_requested = True
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Pause"))
         if imgui.button("Pause##explore"):
             ast.pause_requested = True
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Reset Search"))
         if imgui.button("Reset Search##explore"):
             ast.reset_requested = True
-        imgui.same_line()
-        imgui.text_colored(imgui.ImVec4(*_DIM), "(Reset keeps the archive)")
+        note = "(Reset keeps the archive)"
+        layout.wrap_row(right, imgui.calc_text_size(note).x)
+        imgui.text_colored(imgui.ImVec4(*_DIM), note)
         self._render_cycle_estimate(ast)
 
     _SIZE_COLOR = (0.45, 0.70, 1.00, 1.0)      # blue, how much
@@ -353,16 +336,8 @@ class ArchiveWindowMixin:
     def _render_explore_traces(self, d):
         """Two plots: what the archive is doing, and what the goal chase is.
 
-        Archive size alone cannot say whether exploration is working - it only
-        ever goes up. Size together with mean novelty can: both climbing is new
-        territory, size climbing while novelty falls is filling in ground the
-        archive already covers, and that is the state the separation rule
-        exists to prevent.
-
-        The expedition plot answers the other question, which was previously
-        unanswerable from the UI at all: is this goal chase still climbing, or
-        did it converge thirty generations ago and start handing the archive
-        sixty-four copies of the same tile?
+        Size climbing while novelty falls means the archive is filling in
+        ground it already covers; a flat expedition trace means it converged.
         """
         t = getattr(d, "trace", None)
         if not t or not t["gen"]:
@@ -388,20 +363,19 @@ class ArchiveWindowMixin:
                     [(ex["mean"], self._MEAN_COLOR, "mean"),
                      (ex["best"], self._BEST_COLOR, "best")],
                     height=70.0)
-                imgui.text_colored(
-                    imgui.ImVec4(*_DIM),
-                    f"{ex['gens']} generations - flat means converged, and a "
-                    f"converged expedition keeps proposing the same tile")
+                layout.text_disabled_wrapped(
+                    f"{ex['gens']} generations - flat means converged")
             imgui.tree_pop()
 
+    _STEPS_PER_SECOND = 716.0
+
     def _render_cycle_estimate(self, ast):
-        """One expansion+expedition cycle in wall-clock, at the measured
-        716 sim steps/s. expedition_gens=350 (the paper's value) is ~16 minutes
-        on a single goal, which is worth seeing before choosing it."""
-        per_gen = ast.steps_per_gen / 716.0
+        """One expansion+expedition cycle in wall-clock, so the cost of a long
+        expedition is visible before choosing it."""
+        per_gen = ast.steps_per_gen / self._STEPS_PER_SECOND
         cycle = (ast.expansion_between + ast.expedition_gens) * per_gen
-        imgui.text_colored(
-            imgui.ImVec4(*_DIM),
+        layout.text_colored_wrapped(
+            _DIM,
             f"~{per_gen:.1f}s per generation, ~{cycle / 60.0:.1f} min per cycle")
 
     def _render_goal_list(self, ast):
@@ -431,13 +405,14 @@ class ArchiveWindowMixin:
 
         # enter_returns_true so a list can be typed straight through without
         # reaching for the mouse between every entry.
+        imgui.set_next_item_width(-layout.button_width("Add Goal")
+                                  - imgui.get_style().item_spacing.x)
         submitted, ast.new_goal_text = imgui.input_text(
             "##new_goal", ast.new_goal_text,
             flags=imgui.InputTextFlags_.enter_returns_true)
         entered = submitted and bool(ast.new_goal_text.strip())
         if entered:
-            # Enter defocuses the box by default, which would make the second
-            # goal need a click after all. -1 is the item just submitted.
+            # Enter defocuses the box by default. -1 is the item just submitted.
             imgui.set_keyboard_focus_here(-1)
         imgui.same_line()
         if (imgui.button("Add Goal") and ast.new_goal_text.strip()) or entered:
@@ -452,13 +427,11 @@ class ArchiveWindowMixin:
     def _render_view_setting(self, ast):
         _, ast.n_views = imgui.slider_int("CLIP Views", ast.n_views, 1, 8)
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Random sub-crops averaged into each tile's embedding; more is "
-                "steadier but costs CLIP time.")
+            imgui.set_tooltip("Sub-crops averaged into each tile's embedding.")
         if ast.n_views <= 1:
-            imgui.text_colored(
-                imgui.ImVec4(*_WARN),
-                "1 view is the raw frame - a 16px shift then reads as a "
+            layout.text_colored_wrapped(
+                _WARN,
+                "1 view is the raw frame - a small shift then reads as a "
                 "different creature")
 
     def _render_exploration_settings(self, ast):
@@ -473,48 +446,32 @@ class ArchiveWindowMixin:
         _, ast.sigma0 = imgui.slider_float("Bootstrap Sigma", ast.sigma0, 0.05, 1.5)
 
     def _render_archive_settings(self, ast):
-        """What the archive KEEPS: the admission gates and the retention cap.
-
-        Split from the exploration settings because they answer a different
-        question. These four decide what survives; the others decide where the
-        search looks next.
-        """
-        # 0-0.1, not 0-0.5: measured preset liveness tops out at 0.079, so a
-        # 0.5 range would bury the entire useful span in the leftmost sixth of
-        # the slider.
+        """What the archive KEEPS: the admission gates and the retention cap."""
+        # The slider ranges are narrow on purpose; see CLAUDE.md.
         _, ast.liveness_min = imgui.slider_float(
             "Liveness Floor", ast.liveness_min, 0.0, 0.1, "%.4f")
-        # 0-0.05, because the measurement says the whole useful span is there:
-        # at 0.05 every real archive keeps under 6% of what it holds now.
         _, ast.min_separation = imgui.slider_float(
             "Min Separation", ast.min_separation, 0.0, 0.05, "%.4f")
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Refuses anything this close to an entry already stored; 0 "
-                "stores everything.")
+            imgui.set_tooltip("Refuses anything this close to a stored entry.")
         if ast.min_separation <= 0.0:
-            imgui.text_colored(
-                imgui.ImVec4(*_WARN),
+            layout.text_colored_wrapped(
+                _WARN,
                 "off - a converging expedition will store every tile it makes")
         _, ast.capacity = imgui.slider_int("Capacity", ast.capacity, 1000, 100000)
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "The long-run cap: over capacity, the least novel entries are "
-                "evicted.")
+            imgui.set_tooltip("Over this, the least novel entries are evicted.")
         _, ast.refresh_sweep_gens = imgui.slider_int(
             "Novelty Sweep (gens)", ast.refresh_sweep_gens, 1, 100)
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Generations until every entry has been re-scored, i.e. how "
-                "stale novelty may get.")
+            imgui.set_tooltip("Generations to re-score every entry.")
 
     def _render_expedition_settings(self, ast):
         _, ast.expansion_between = imgui.slider_int(
             "Expansion Between", ast.expansion_between, 0, 500)
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Expansion generations between expeditions; 0 disables "
-                "expeditions entirely.")
+            imgui.set_tooltip("Expansion generations between expeditions; "
+                              "0 disables expeditions.")
         _, ast.expedition_gens = imgui.slider_int(
             "Expedition Gens", ast.expedition_gens, 5, 400)
         _, ast.expedition_sigma = imgui.slider_float(
@@ -522,37 +479,26 @@ class ArchiveWindowMixin:
         _, ast.novelty_share = imgui.slider_float(
             "Novelty Goal Share", ast.novelty_share, 0.0, 1.0)
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Expeditions with no target that climb novelty itself; always "
-                "well posed, unlike a point that may not be reachable.")
+            imgui.set_tooltip("Expeditions that climb novelty with no target.")
         _, ast.latent_share = imgui.slider_float(
             "Latent Goal Share", ast.latent_share, 0.0, 1.0)
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Expeditions toward a point extrapolated past the archive's "
-                "frontier; your text goals take whatever these two leave.")
+            imgui.set_tooltip("Expeditions toward a point past the archive's "
+                              "frontier.")
         left = 1.0 - min(1.0, ast.novelty_share + ast.latent_share)
-        imgui.text_colored(
-            imgui.ImVec4(*_DIM),
+        layout.text_colored_wrapped(
+            _DIM,
             f"goals: {100 * min(1.0, ast.novelty_share):.0f}% novelty, "
             f"{100 * min(1.0, max(0.0, 1.0 - ast.novelty_share), ast.latent_share):.0f}% latent, "
             f"{100 * left:.0f}% text")
         _, ast.seed_ess_min = imgui.slider_float(
             "Seed Pool Min", ast.seed_ess_min, 1.0, 128.0)
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Fewest entries in the running as an expedition's starting "
-                "point, so a repeated goal does not retrace one trajectory.")
+            imgui.set_tooltip("Fewest entries in the running as a starting point.")
         _, ast.seed_ess_max = imgui.slider_float(
             "Seed Pool Max", ast.seed_ess_max, 16.0, 4096.0)
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Most entries in the running, so a diffuse goal does not stop "
-                "influencing the starting point as the archive grows.")
-        # "Extrapolation (beta)" was here. The latent goal no longer
-        # extrapolates away from the centroid - it extrapolates in the archive's
-        # principal subspace, in whitened units, and no value of beta made the
-        # old construction work. See services/goal_source.py.
+            imgui.set_tooltip("Most entries in the running as a starting point.")
 
     # ---- the browser ---------------------------------------------------
 
@@ -560,13 +506,12 @@ class ArchiveWindowMixin:
         ast = self.state.archive
         if not ast.show_browser:
             return
-        # Without an explicit size ImGui auto-fits this window to something
-        # smaller than its own content: the 360px gallery child gets clipped and
-        # the Export / Seed / Delete row lands entirely below the fold, drawing
-        # nothing at all. first_use_ever, so a window the user has resized keeps
-        # their size.
+        # Without an explicit size ImGui auto-fits smaller than its own content
+        # and the button row below the gallery draws nothing at all.
+        # first_use_ever, so a window the user has resized keeps their size.
         imgui.set_next_window_size(imgui.ImVec2(760, 620),
                                    imgui.Cond_.first_use_ever)
+        layout.constrain_panel(layout.MIN_PANEL_WIDTH, 320.0)
         # The name is in the title, not the body: a screenshot of the gallery
         # should say which archive it came from.
         expanded, opened = imgui.begin(f"Archive - {ast.archive_name}###archive",
@@ -582,9 +527,9 @@ class ArchiveWindowMixin:
             return
 
         st = arc.stats()
-        imgui.text(f"{st['size']} / {st['capacity']} entries   "
-                   f"{st['n_pinned']} pinned   "
-                   f"{st['n_evicted']} evicted")
+        imgui.text_wrapped(f"{st['size']} / {st['capacity']} entries   "
+                           f"{st['n_pinned']} pinned   "
+                           f"{st['n_evicted']} evicted")
         imgui.separator()
 
         if imgui.begin_tab_bar("archive_views"):
@@ -600,9 +545,8 @@ class ArchiveWindowMixin:
     def _sorted_entries(self, ast, arc):
         """The gallery's display order, cached against the archive revision.
 
-        Sorting every entry to show 240 of them costs 1.5 ms at 4808 entries
-        and 8.0 ms at the 20000 capacity - per frame, for an order that only
-        changes when the archive does.
+        The order only changes when the archive does, so it must not be
+        recomputed every frame.
         """
         key = (ast.sort_by, ast.pinned_only, getattr(arc, "revision", None))
         hit = getattr(self, "_sort_cache", None)
@@ -620,24 +564,33 @@ class ArchiveWindowMixin:
         self._sort_cache = (arc, key, out)
         return out
 
+    _THUMB = 96.0
+
     def _render_gallery(self, ast, arc):
         modes = ["novelty", "recency", "liveness"]
         idx = modes.index(ast.sort_by) if ast.sort_by in modes else 0
+        right = layout.row_right_edge()
+        layout.push_settings_width("Sort")
         ch, idx = imgui.combo("Sort", idx, ["Novelty", "Recency", "Liveness"])
+        imgui.pop_item_width()
         if ch:
             ast.sort_by = modes[idx]
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Pinned only") + self._THUMB)
         _, ast.pinned_only = imgui.checkbox("Pinned only", ast.pinned_only)
 
         cache = getattr(self, "thumb_cache", None)
-        per_row = 6
         imgui.begin_child("gallery", imgui.ImVec2(0, 360))
+        # Rows fit the window rather than a fixed six, so a narrow panel wraps
+        # instead of clipping the right-hand thumbnails.
+        step = self._THUMB + imgui.get_style().item_spacing.x
+        per_row = max(1, int(imgui.get_content_region_avail().x / step))
         for n, (i, e) in enumerate(self._sorted_entries(ast, arc)[:240]):
             tex = cache.get(e.thumb) if cache is not None else None
             if tex is not None:
-                imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(96, 96))
+                imgui.image(imgui.ImTextureRef(tex.glo),
+                            imgui.ImVec2(self._THUMB, self._THUMB))
             else:
-                imgui.button(f"#{e.id}", imgui.ImVec2(96, 96))
+                imgui.button(f"#{e.id}", imgui.ImVec2(self._THUMB, self._THUMB))
             if imgui.is_item_hovered():
                 imgui.set_tooltip(
                     f"#{e.id}  {e.source}\nnovelty {e.novelty:.3f}\n"
@@ -651,38 +604,36 @@ class ArchiveWindowMixin:
         if ast.selected_entry_id >= 0:
             imgui.separator()
             imgui.text(f"Selected #{ast.selected_entry_id}")
+            right = layout.row_right_edge()
             if imgui.button("Save as config..."):
                 self.open_save_popup(save_targets.ARCHIVE_ENTRY,
                                      arg=ast.selected_entry_id)
             if imgui.is_item_hovered():
                 imgui.set_tooltip(EXPORT_TOOLTIP)
-            imgui.same_line()
+            layout.wrap_row(right, layout.button_width("Seed a run from here"))
             if imgui.button("Seed a run from here"):
                 ast.seed_entry_id = ast.selected_entry_id
             if imgui.is_item_hovered():
                 imgui.set_tooltip(SEED_TOOLTIP)
-            imgui.same_line()
+            layout.wrap_row(right, layout.button_width("Delete"))
             if imgui.button("Delete"):
                 ast.delete_entry_id = ast.selected_entry_id
             if imgui.is_item_hovered():
                 imgui.set_tooltip("Remove this entry and its thumbnail.")
 
+    # Summits are brighter than the expeditions they sit among, and records get
+    # their own hue because a record can be set in any regime.
     _MAP_COLORS = {
         "bootstrap": imgui.IM_COL32(120, 120, 130, 200),
         "expansion": imgui.IM_COL32(90, 200, 120, 220),
         "expedition": imgui.IM_COL32(255, 170, 60, 230),
-        # A tile that beat its expedition's best. Brighter than the expedition
-        # colour it sits among, because the whole point is to be able to find
-        # these afterwards - they are the results of the goal chases.
         "summit": imgui.IM_COL32(255, 240, 130, 255),
-        # The archive's best-ever match for one of the text goals. Its own
-        # colour rather than the summit's: a record can be set in any regime,
-        # usually while chasing a completely different goal.
         "record": imgui.IM_COL32(255, 120, 200, 255),
         "pin": imgui.IM_COL32(90, 170, 255, 255),
     }
 
     _MAP_PAD = 8.0
+    _MAP_H = 320.0
     _MAP_ZOOM_MIN = 1.0
     _MAP_ZOOM_MAX = 200.0
     # Screen pixels of movement that turn a click into a drag. Without it a pan
@@ -692,62 +643,87 @@ class ArchiveWindowMixin:
     def _render_map(self, ast, arc):
         proj = getattr(self, "archive_projection", None)
         # proj.fitted, not just proj: an unfitted Projection transforms
-        # everything to the origin, which would stack the whole archive in one
-        # corner and read as a broken map rather than an unbuilt one.
+        # everything to the origin, which reads as a broken map rather than an
+        # unbuilt one.
         if proj is None or not proj.fitted or len(arc) < 3:
             imgui.text_colored(imgui.ImVec4(*_DIM),
                                "Not enough entries to project yet.")
             return
+
+        self._render_map_toolbar(ast)
+        self._render_map_controls(ast, arc)
+
+        pts = self._map_points(arc, proj, ast)
+        if pts is None:
+            imgui.text_colored(imgui.ImVec4(*_DIM),
+                               "No entries match this filter.")
+            return
+
+        size = imgui.ImVec2(max(64.0, imgui.get_content_region_avail().x),
+                            self._MAP_H)
+        # The canvas OWNS the wheel. A child with both no_scrollbar and
+        # no_scroll_with_mouse absorbs it instead of forwarding it to the tab,
+        # so scrolling here zooms and never also scrolls the panel behind it.
+        imgui.push_style_var(imgui.StyleVar_.window_padding,
+                             imgui.ImVec2(0.0, 0.0))
+        imgui.begin_child("map_canvas", size, imgui.ChildFlags_.none,
+                          imgui.WindowFlags_.no_scrollbar
+                          | imgui.WindowFlags_.no_scroll_with_mouse)
+        imgui.pop_style_var()
+        entry, clicked = self._draw_map(ast, arc, proj, pts, size)
+        imgui.end_child()
+
+        if entry is not None:
+            self._map_hover_card(entry)
+            if clicked:
+                ast.selected_entry_id = entry.id
+
+        self._render_map_legend(ast, len(pts.idx), len(arc))
+        self._render_map_selection(ast, arc)
+
+    def _render_map_toolbar(self, ast):
+        right = layout.row_right_edge()
         if imgui.button("Refit projection"):
             ast.refit_projection_requested = True
         if imgui.is_item_hovered():
-            imgui.set_tooltip("Recompute the 2-D PCA over the current archive.")
-        imgui.same_line()
+            imgui.set_tooltip("Recompute the projection over the current archive.")
+        layout.wrap_row(right, layout.button_width("Home"))
         if imgui.button("Home##map"):
             self._map_home(ast)
         if imgui.is_item_hovered():
             imgui.set_tooltip("Reset zoom and recentre.")
-        imgui.same_line()
-        imgui.text_colored(imgui.ImVec4(*_DIM),
-                           f"{ast.map_zoom:.1f}x - scroll to zoom, drag to pan")
+        hint = f"{ast.map_zoom:.1f}x - scroll to zoom, drag to pan"
+        layout.wrap_row(right, imgui.calc_text_size(hint).x)
+        imgui.text_colored(imgui.ImVec4(*_DIM), hint)
 
-        self._render_map_controls(ast, arc)
-
-        cached = self._map_points(arc, proj, ast)
-        if cached is None:
-            imgui.text_colored(imgui.ImVec4(*_DIM),
-                               "No entries match this filter.")
-            return
-        unit, lo, span, colors, idx = cached
-
-        size = imgui.ImVec2(imgui.get_content_region_avail().x, 320)
+    def _draw_map(self, ast, arc, proj, pts, size):
+        """Draw the canvas. -> (entry under the cursor or None, was it clicked)."""
         origin = imgui.get_cursor_screen_pos()
-        imgui.invisible_button("map_canvas", size)
+        imgui.invisible_button("map_hit", size)
         hovering = imgui.is_item_hovered()
         clicked = self._map_interact(ast, origin, size, hovering)
 
         draw = imgui.get_window_draw_list()
         far = imgui.ImVec2(origin.x + size.x, origin.y + size.y)
         draw.add_rect_filled(origin, far, imgui.IM_COL32(20, 20, 24, 255))
-        # Zooming moves points outside the canvas; without a clip they would be
-        # drawn over the rest of the tab.
         draw.push_clip_rect(origin, far, True)
 
-        xs, ys = self._map_to_screen(ast, unit, origin, size)
-        # Only what is actually on the canvas: at 200x almost nothing is, and a
-        # draw call per archive entry per frame is the cost otherwise.
+        xs, ys = self._map_to_screen(ast, pts.unit, origin, size)
+        # Only what is actually on the canvas: at high zoom almost nothing is,
+        # and a draw call per archive entry per frame is the cost otherwise.
         on = ((xs >= origin.x) & (xs <= far.x) & (ys >= origin.y) & (ys <= far.y))
         sel = np.flatnonzero(on)
 
         if ast.map_render in ("density", "points+density"):
-            self._draw_density(draw, xs[sel], ys[sel], origin, size)
+            self._draw_density(
+                draw, xs[sel], ys[sel], origin, size, pts.colors[sel],
+                None if pts.tvals is None else pts.tvals[sel])
 
         if ast.map_render != "density":
             # .tolist() first: indexing a numpy array with a Python int inside
-            # the loop builds a scalar object per access, which costs more than
-            # the draw call it feeds.
+            # the loop costs more than the draw call it feeds.
             px, py = xs[sel].tolist(), ys[sel].tolist()
-            pc = colors[sel].tolist()
+            pc = pts.colors[sel].tolist()
             for x, y, c in zip(px, py, pc):
                 draw.add_circle_filled(imgui.ImVec2(x, y), 3.0, c)
 
@@ -760,39 +736,27 @@ class ArchiveWindowMixin:
 
         goal_pt = getattr(self, "archive_goal_point", None)
         if goal_pt is not None:
-            gu = (proj.transform(np.asarray(goal_pt)[None]) - lo) / span
+            gu = (proj.transform(np.asarray(goal_pt)[None]) - pts.lo) / pts.span
             gx, gy = self._map_to_screen(ast, gu, origin, size)
             draw.add_circle(imgui.ImVec2(float(gx[0]), float(gy[0])), 7.0,
                             imgui.IM_COL32(255, 90, 90, 255), 0, 2.0)
         draw.pop_clip_rect()
 
-        # Through idx: with a filter on, row i is not entry i, and hovering the
-        # wrong entry is worse than not hovering at all.
+        # Through pts.idx: with a filter on, row i is not entry i, and hovering
+        # the wrong entry is worse than not hovering at all.
         if hovering and best_i >= 0 and best_d < 12.0:
-            entry = arc.entries[int(idx[best_i])]
-            self._map_hover_card(entry)
-            if clicked:
-                ast.selected_entry_id = entry.id
-
-        self._render_map_legend(ast, len(idx), len(arc))
-        self._render_map_selection(ast, arc)
+            return arc.entries[int(pts.idx[best_i])], clicked
+        return None, False
 
     def _map_points(self, arc, proj, ast):
-        """-> (unit positions, lo, span, colours, archive indices), or None.
+        """-> a map_view.MapPoints, or None if the filter matched nothing.
 
-        Cached against (archive revision, projection version, view options),
-        because none of the operands change between generations while the map is
-        redrawn 60 times a second. Measured on the real archives: the transform
-        alone is 3.8 ms at 4808 entries, 5.8 ms at 8002 and 20 ms at the 20000
-        capacity - most of what the browser cost, and none of it new work.
-
-        Returns the ARCHIVE INDICES alongside, because a filtered map's row i is
-        not entry i and hover, click and the goal marker all resolve through it.
+        Cached against (archive revision, projection version, view options):
+        none of them change between generations, and the map redraws every
+        frame.
 
         The unit square is normalised over the FILTERED entries, so narrowing
-        the filter also expands what is left to fill the canvas - the crowding
-        that makes a large map unreadable is the thing being fixed, and this is
-        the half of it that costs nothing.
+        the filter also expands what is left to fill the canvas.
         """
         key = (getattr(arc, "revision", None), getattr(proj, "version", None),
                len(arc), ast.map_color_by, ast.map_filter, ast.map_recent_gens,
@@ -820,20 +784,26 @@ class ArchiveWindowMixin:
         values = map_view.scalar_values(shown, ast.map_color_by)
         if values is None:
             fallback = self._MAP_COLORS["expansion"]
+            tvals = None
             colors = np.array(
                 [self._MAP_COLORS.get("pin" if e.pinned else e.source, fallback)
                  for e in shown], dtype=np.int64)
         else:
-            colors = map_view.ramp_colors(map_view.normalise(values))
+            tvals = map_view.normalise(values)
+            colors = map_view.ramp_colors(tvals)
 
-        out = (unit, lo, span, colors, idx)
+        out = map_view.MapPoints(unit, lo, span, colors, idx, tvals)
         self._map_cache = (arc, proj, key, out)
         return out
+
+    _MAP_COMBO_W = 130.0
 
     def _render_map_controls(self, ast, arc) -> None:
         """Colour / Show / Draw. Every default is the historical map, so the
         plain scatter coloured by regime is always one combo away."""
-        w = 130
+        w = self._MAP_COMBO_W
+        right = layout.row_right_edge()
+
         imgui.set_next_item_width(w)
         changed, i = imgui.combo("Colour##map",
                                  map_view.COLOR_MODES.index(ast.map_color_by)
@@ -842,12 +812,9 @@ class ArchiveWindowMixin:
         if changed:
             ast.map_color_by = map_view.COLOR_MODES[i]
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Regime, or a ramp over novelty / liveness. Novelty is measured "
-                "in the full 512-d space, so it is the honest local-density "
-                "reading - dot crowding on this map is not.")
+            imgui.set_tooltip("What the colours mean.")
 
-        imgui.same_line()
+        layout.wrap_row(right, layout.labelled_width(w, "Show"))
         imgui.set_next_item_width(w)
         labels = [map_view.FILTER_LABELS[m] for m in map_view.FILTER_MODES]
         changed, i = imgui.combo("Show##map",
@@ -857,12 +824,9 @@ class ArchiveWindowMixin:
         if changed:
             ast.map_filter = map_view.FILTER_MODES[i]
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Fewer points is the whole fix: measured, the map keeps 27% of "
-                "true neighbours at 500 entries and 3% at 13000. What is left "
-                "also expands to fill the canvas.")
+            imgui.set_tooltip("Which entries to draw.")
 
-        imgui.same_line()
+        layout.wrap_row(right, layout.labelled_width(w, "Draw"))
         imgui.set_next_item_width(w)
         changed, i = imgui.combo("Draw##map",
                                  map_view.RENDER_MODES.index(ast.map_render)
@@ -871,22 +835,22 @@ class ArchiveWindowMixin:
         if changed:
             ast.map_render = map_view.RENDER_MODES[i]
         if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Density bins the points on a log scale, so a crowded archive "
-                "reads as a heatmap instead of one solid blob.")
+            imgui.set_tooltip("Dots, or a heatmap of the same colours.")
 
         self._render_map_filter_arg(ast, arc)
 
     def _render_map_filter_arg(self, ast, arc) -> None:
         """The one extra control the chosen filter needs, and nothing else."""
         if ast.map_filter == "recent":
-            imgui.set_next_item_width(200)
+            layout.push_settings_width()
             _, ast.map_recent_gens = imgui.slider_int(
                 "Generations##map", ast.map_recent_gens, 1, 2000)
+            imgui.pop_item_width()
         elif ast.map_filter == "novel":
-            imgui.set_next_item_width(200)
+            layout.push_settings_width()
             _, ast.map_novel_pct = imgui.slider_int(
                 "Top %##map", ast.map_novel_pct, 1, 100)
+            imgui.pop_item_width()
         elif ast.map_filter in ("goal", "source"):
             field = "goal" if ast.map_filter == "goal" else "source"
             attr = "map_filter_goal" if field == "goal" else "map_filter_source"
@@ -899,46 +863,56 @@ class ArchiveWindowMixin:
             if current not in values:
                 setattr(ast, attr, values[0])
                 current = values[0]
-            imgui.set_next_item_width(240)
+            layout.push_settings_width()
             changed, i = imgui.combo(f"{field.title()}##mapfilter",
                                      values.index(current), values)
+            imgui.pop_item_width()
             if changed:
                 setattr(ast, attr, values[i])
 
-    def _draw_density(self, draw, xs, ys, origin, size) -> None:
-        """A log-scaled heatmap of how many entries land in each screen cell.
+    def _draw_density(self, draw, xs, ys, origin, size, colors, tvals) -> None:
+        """A heatmap carrying the SAME colour the dots would have, with the
+        entry count in the opacity - so the Colour combo means one thing in
+        both draw modes.
 
-        Binned in SCREEN space so the resolution follows the zoom, and drawn
-        under the points: overlapping dots hide their own density, which is
-        exactly why a full archive reads as one blob.
+        Binned in screen space so resolution follows the zoom, and drawn under
+        the points: overlapping dots hide their own density, which is why a
+        full archive reads as one blob.
         """
-        counts, nx, ny, cell = map_view.density_grid(
+        flat, on, nx, ny, cell = map_view.bin_points(
             xs, ys, (origin.x, origin.y), (size.x, size.y))
-        if not counts.any():
+        if not len(flat):
             return
-        t = map_view.density_intensity(counts)
-        gy, gx = np.nonzero(counts)
-        cols = map_view.ramp_colors(t[gy, gx], alpha=200).tolist()
-        x0 = origin.x + gx * cell
-        y0 = origin.y + gy * cell
-        for x, y, c in zip(x0.tolist(), y0.tolist(), cols):
+
+        ncells = nx * ny
+        if tvals is None:
+            # A category cannot be averaged: the cell takes its winner's colour.
+            cell_col, counts = map_view.cell_majority(flat, colors[on], ncells)
+            filled = np.flatnonzero(counts)
+            cols = map_view.with_alpha(
+                cell_col[filled], map_view.density_alpha(counts[filled]))
+        else:
+            means, counts = map_view.cell_means(flat, tvals[on], ncells)
+            filled = np.flatnonzero(counts)
+            cols = map_view.ramp_colors(
+                means[filled], alpha=map_view.density_alpha(counts[filled]))
+
+        x0 = origin.x + (filled % nx) * cell
+        y0 = origin.y + (filled // nx) * cell
+        for x, y, c in zip(x0.tolist(), y0.tolist(), cols.tolist()):
             draw.add_rect_filled(imgui.ImVec2(x, y),
                                  imgui.ImVec2(x + cell, y + cell), c)
 
     def _render_map_legend(self, ast, shown: int, total: int) -> None:
-        """How much of the archive is on screen, and what the ramp means.
-
-        A ramp with no scale is unreadable, and "showing N of M" is the only
-        thing that makes a filtered map honest about what it is hiding.
-        """
+        """How much of the archive is on screen, and what the colours mean."""
         imgui.text_colored(imgui.ImVec4(*_DIM), f"showing {shown} of {total}")
-        ramped = ast.map_color_by in ("novelty", "liveness")
-        if not ramped and ast.map_render == "points":
+        if ast.map_render != "points":
+            imgui.same_line()
+            imgui.text_colored(imgui.ImVec4(*_DIM), "   opacity: entries per cell")
+        if ast.map_color_by not in ("novelty", "liveness"):
             return
 
-        imgui.same_line()
-        label = ast.map_color_by if ramped else "entries per cell"
-        imgui.text_colored(imgui.ImVec4(*_DIM), f"   {label}  low")
+        imgui.text_colored(imgui.ImVec4(*_DIM), f"{ast.map_color_by}  low")
         for k, t in enumerate((0.0, 0.25, 0.5, 0.75, 1.0)):
             imgui.same_line(0.0, 2.0)
             c = int(map_view.ramp_colors(np.array([t], dtype=np.float32))[0])
@@ -1020,11 +994,7 @@ class ArchiveWindowMixin:
         imgui.end_tooltip()
 
     def _render_map_selection(self, ast, arc):
-        """The picked dot's actual image.
-
-        A dot is a position in a projection; without the picture beside it the
-        map says where something sits but never what it is - which is most of
-        why you would click it."""
+        """The picked dot's actual image - a position is not what it IS."""
         entry = next((e for e in arc.entries if e.id == ast.selected_entry_id),
                      None)
         if entry is None:

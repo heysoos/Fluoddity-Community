@@ -87,7 +87,7 @@ def get_archives_root(user_dir=None) -> Path:
 
 
 def migrate_legacy_archive(user_dir=None) -> Path:
-    """Move the pre-2026-08-08 single archive under archives/default.
+    """Move the legacy single archive under archives/default.
 
     A move, not a copy: archives run to hundreds of megabytes of thumbnails.
 

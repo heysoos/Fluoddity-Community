@@ -5,16 +5,12 @@ entity_update.glsl, canvas.frag and brush.vert. Anything on the CPU that needs
 to know where a tile starts - the capture crop, tests - uses this, so there is
 one definition of a seam rather than four.
 
-A tile owns a WHOLE NUMBER of texels rather than an equal share of the world.
-The canvas is 647 texels across at the default world_size of 0.40 and the grid
-slider goes 2..8, so no canvas size makes every setting divide; an evenly
-divided seam runs through the middle of a texel. Measured 2026-08-09 at grid 8,
-the middle column of the diffusion retained 25.7% of its own trail and 39 of 64
-tiles lit a tile they could not legally reach.
+A tile owns a WHOLE NUMBER of texels rather than an equal share of the world,
+since no canvas size divides evenly for every grid setting - an evenly divided
+seam would run through the middle of a texel. See CLAUDE.md.
 
-Integer arithmetic, because a seam is decided by the last bit: 647*4/8 is
-exactly 323.5, and the GPU evaluated the float form of this as tile 3 where the
-true answer is 4.
+Integer arithmetic, because a seam is decided by the last bit: e.g. 647*4/8 is
+exactly 323.5, and the GPU's float form of this can round to the wrong tile.
 """
 from __future__ import annotations
 

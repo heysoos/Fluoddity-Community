@@ -2,6 +2,7 @@
 from imgui_bundle import imgui
 
 from services import save_targets
+from ui import layout
 from ui.notices import OK, render_banner
 
 
@@ -26,6 +27,11 @@ class TournamentWindowMixin:
         svc = getattr(self, "tournament_service", None)
         selected = svc.selected if svc is not None else set()
 
+        # Wide enough that a slider label is never clipped, tall enough that
+        # the transport buttons are not below the fold.
+        imgui.set_next_window_size(imgui.ImVec2(520, 700),
+                                   imgui.Cond_.first_use_ever)
+        layout.constrain_panel()
         expanded, opened = imgui.begin("Tournament - EXPERIMENTAL", True)
         if not opened:
             state.enabled = False
@@ -54,14 +60,13 @@ class TournamentWindowMixin:
         imgui.end()
 
     def _render_manual_tournament(self, state, selected):
-        imgui.text_colored(imgui.ImVec4(0.6, 0.6, 0.6, 1.0),
-                           "Click tiles (on canvas or below) to select, then breed")
+        layout.text_colored_wrapped(
+            (0.6, 0.6, 0.6, 1.0),
+            "Click tiles (on canvas or below) to select, then breed")
         imgui.separator()
 
-        # 4x4 selectable grid mirroring the on-canvas tiles.
-        # Tile 0 is the BOTTOM-left of the canvas (entity space y grows upward), but
-        # ImGui draws the first row it is given at the TOP. Walk rows top-down in
-        # canvas terms (ty = 3 first) so this panel matches what you see on screen.
+        # Tile 0 is the BOTTOM-left of the canvas but ImGui draws its first row
+        # at the TOP, so walk rows in descending ty. See ui_row_order.
         grid = self.tournament_service.grid
         for ty in ui_row_order(grid):
             for tx in range(grid):
@@ -83,24 +88,28 @@ class TournamentWindowMixin:
 
         imgui.separator()
 
+        layout.push_settings_width()
         _, state.mutation_strength = imgui.slider_float(
             "Mutation strength", state.mutation_strength, 0.0, 0.5)
         _, state.inject_randoms = imgui.slider_int(
             "Inject randoms", state.inject_randoms, 0, 4)
+        imgui.pop_item_width()
         _, state.crossover_enabled = imgui.checkbox(
             "Crossover", state.crossover_enabled)
 
         imgui.separator()
 
+        right = layout.row_right_edge()
         if imgui.button("Next Generation"):
             state.next_gen_requested = True
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Undo"))
         if imgui.button("Undo"):
             state.undo_requested = True
 
+        right = layout.row_right_edge()
         if imgui.button("Reset Population"):
             state.reset_requested = True
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Save Selected..."))
         # A disabled item does not receive hover, so the reason is plain text
         # rather than a tooltip that would never appear.
         imgui.begin_disabled(not selected)
@@ -109,8 +118,8 @@ class TournamentWindowMixin:
                                  tiles=sorted(selected))
         imgui.end_disabled()
         if not selected:
-            imgui.same_line()
+            layout.wrap_row(right, imgui.calc_text_size("(select tiles first)").x)
             imgui.text_disabled("(select tiles first)")
 
-        imgui.text(f"Selected: {sorted(selected)}")
+        imgui.text_wrapped(f"Selected: {sorted(selected)}")
         render_banner(state, "notice", OK, scope="tournament")

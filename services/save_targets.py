@@ -1,13 +1,6 @@
 """What a "Save" is about, for every place in the app that can save one.
 
-Before this, each tournament mode invented its own filename and wrote it
-without asking: manual tournament produced `tournament_tile3.json`, Auto
-produced `evolved_best_gen0042.json`, the archive produced `archive_000123.json`.
-Three problems, all reported at once - you could not choose the name, you could
-not tell where it went, and `tournament_tile3.json` silently overwrote the tile
-3 you saved five generations ago.
-
-So a save subject is (kind, arg), and everything else - the suggested name, the
+A save subject is (kind, arg), and everything else - the suggested name, the
 label the dialog shows, the files it will touch - is derived here. Pure
 functions over plain data, so the naming and collision rules are testable
 without an ImGui context or a GPU.
@@ -33,11 +26,9 @@ _ILLEGAL = '<>:"/\\|?*'
 def safe_stem(name: str) -> str:
     """A filename stem that cannot escape the configs directory.
 
-    The old save path interpolated the typed name straight into a path, so a
-    name containing a separator wrote outside the folder and then did not
-    appear in the load menu. Trailing dots and spaces are stripped because
-    Windows silently drops them, which would make the existence check disagree
-    with what actually landed on disk.
+    Separators are stripped so a typed name cannot write outside the folder.
+    Trailing dots and spaces are stripped because Windows silently drops them,
+    which would make the existence check disagree with what lands on disk.
     """
     cleaned = "".join("_" if c in _ILLEGAL else c for c in str(name))
     cleaned = "".join(c for c in cleaned if c.isprintable())
@@ -84,10 +75,8 @@ def target_stems(kind: str, base: str, tiles=()) -> list[str]:
     """Every file stem this save will write, in order.
 
     Only one subject writes more than one file: several selected tournament
-    tiles. They are suffixed rather than sharing a name, because the whole
-    point of the report was that `tournament_tile3.json` kept clobbering
-    itself - collapsing N tiles onto one name would reintroduce that inside a
-    single click.
+    tiles. They are suffixed rather than sharing a name, since one shared name
+    would clobber itself across tiles within a single click.
     """
     stem = safe_stem(base)
     if not stem:

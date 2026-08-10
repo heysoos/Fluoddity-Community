@@ -1,15 +1,10 @@
 """Intrinsically-motivated goal exploration over the archive.
 
-Expedition & Expansion (arXiv:2509.03863) on a substrate that runs N^2 rollouts
-per generation. E&E's loop is serial - one theta, one rollout, one embedding -
-so one generation here is a batch of 4 to 64 IMGEP samples at no extra cost.
-
-See docs/imgep.md for the loop, the regimes and every fitness equation.
-
-Deliberate deviation from E&E: every expedition generation's tiles also go
-through the admission gate, not just the endpoint. E&E archives only the final
-optimised solution because its expeditions are a serial inner loop; here the
-embeddings are already computed and the path toward a goal is itself territory.
+Based on Expedition & Expansion (arXiv:2509.03863), adapted to a tournament
+grid: one generation is a batch of N tiles rather than E&E's serial rollouts,
+and every expedition generation's tiles go through the admission gate, not
+just the endpoint. See docs/imgep.md for the loop, regimes and fitness
+equations.
 """
 from __future__ import annotations
 
@@ -69,26 +64,24 @@ class ImgepDriver:
         self.alpha = 4.0
         self.k = 10
         self.seed_n = 256
-        self.liveness_min = 0.002    # measured; see state/archive_state.py
-        self.n_views = 3             # measured; see CLIPScorer.embed_mean
+        self.liveness_min = 0.002    # see CLAUDE.md
+        self.n_views = 3             # see CLIPScorer.embed_mean
         self.refresh_sweep_gens = 10
         self.flush_every = 200
 
         # expedition settings (spec 7.4)
         self.expansion_between = 25      # 0 disables expeditions entirely
-        self.expedition_gens = 50        # E&E uses 350; that is ~16 min at 2000 steps
-        self.expedition_sigma = 0.1      # E&E's value; deliberately << sigma0
+        self.expedition_gens = 50
+        self.expedition_sigma = 0.1      # deliberately << sigma0: local refinement
         self.latent_share = 0.5
-        # Text takes whatever novelty and latent leave. See _draw_goal.
-        self.novelty_share = 0.25
+        self.novelty_share = 0.25        # text takes what's left; see _draw_goal
         self.goal_order = "round_robin"  # or "least_matched"
-        # Band on the seed pool, not a target - the spread of ESS across goals
-        # is real information about the archive. See novelty.banded_alpha.
+        # Band on the seed pool, not a target. See novelty.banded_alpha.
         self.seed_ess_min = 8.0
         self.seed_ess_max = 512.0
 
-        # The search's OWN projection, separate from the map's 2-component one:
-        # refitting between 2 and 8 components every frame would thrash both.
+        # The search's own projection, separate from the map's - refitting a
+        # shared one every frame would thrash both.
         self.projection = Projection(LATENT_DIMS)
         self._distractors = None
 
@@ -97,10 +90,9 @@ class ImgepDriver:
         self._remaining = 0
         self._since_expedition = 0
         self._x0_index: int | None = None
-        # High-water mark for the CURRENT expedition, and how many times it has
-        # been beaten. Reset with the expedition: fitness is contrastive
-        # against a different goal each time, so the numbers are not comparable
-        # across expeditions.
+        # High-water mark for the CURRENT expedition. Reset with the
+        # expedition: fitness is contrastive against a different goal each
+        # time, so the numbers aren't comparable across expeditions.
         self._expedition_best = -np.inf
         self._n_summits = 0
         # Cumulative over the run: how many times a tile beat the archive's
@@ -116,9 +108,7 @@ class ImgepDriver:
                                       "mean_novelty", "admitted", "tiles",
                                       "fit_best", "fit_mean")}
 
-    # One row per generation, ~2.8 s each, so this is about 8 hours of run. The
-    # plot subsamples anyway; the cap is only here so a machine left running
-    # over a weekend does not grow a list without bound.
+    # One row per generation; caps trace memory on a long-running machine.
     TRACE_CAP = 10000
 
     # ---- state ---------------------------------------------------------
@@ -324,16 +314,12 @@ class ImgepDriver:
         self._x0_index = int(i)
         self._remaining = int(self.expedition_gens)
         self._since_expedition = 0
-        # Explicitly, not only via end_expedition(): chase() and the UI can
-        # start a new expedition on top of a running one, and a high-water mark
-        # carried over from a different goal would suppress every summit of
-        # this one. The fitnesses are contrastive against different references
-        # and are not comparable across goals in any case.
+        # Reset explicitly: chase()/UI can start a new expedition on top of a
+        # running one, and fitness is not comparable across different goals.
         self._expedition_best = -np.inf
-        # A FRESH optimizer per goal: a covariance learned climbing toward
-        # "coral reef" is not informative about "lightning". sigma is
-        # deliberately much smaller than sigma0 - an expedition is a local
-        # refinement from an already-relevant seed, not a fresh search.
+        # Fresh optimizer per goal - a covariance learned for one goal doesn't
+        # transfer to another. sigma << sigma0: local refinement, not a fresh
+        # search.
         self._optimizer = make_optimizer(
             self.algorithm, self.spec.dim, self.tournament.tiles,
             self.expedition_sigma, self.base_seed + self.gen,
@@ -399,18 +385,12 @@ class ImgepDriver:
     # ---- rollout -------------------------------------------------------
 
     def precompute(self, snapshots: list[np.ndarray]):
-        """CLIP, and nothing else. Runs OFF the main thread.
-
-        Measured 2026-08-10 at grid 8 with 6 snapshots: this is 92-97% of
-        tell()'s wall clock - 1.1 s at 1 view, 4.2 s at 3 - against ~50-130 ms
-        for everything after it. Blocking the frame loop on it is what made the
-        app freeze once a generation during archive growth.
+        """CLIP, and nothing else. Runs OFF the main thread - see CLAUDE.md.
 
         Split here rather than running the whole of tell() on the worker,
         because everything after this point mutates the archive, which the UI
-        reads every frame to draw the gallery, the map and the status. This
-        half touches only its own arguments and the scorer, so it needs no
-        locking at all.
+        reads every frame. This half touches only its own arguments and the
+        scorer, so it needs no locking.
         """
         return [np.asarray(self._embed(c), dtype=np.float32) for c in snapshots]
 
@@ -448,11 +428,8 @@ class ImgepDriver:
         viable = shows_something & alive
         # One matmul for the whole batch instead of n matrix-vector products.
         sep = self.archive.separation_of(b)
-        # ALWAYS TAKE ONE. The most novel tile that is a picture of something
-        # gets in whatever the separation rule says, so a converged expedition
-        # still leaves a trail through the archive and a generation is never
-        # silently absent from the record. If nothing is viable there is
-        # nothing worth forcing, and the whole generation is dropped.
+        # Always take one: the most novel viable tile gets in regardless of
+        # separation, so a generation is never silently absent from the record.
         keeper = -1
         if viable.any():
             cand_nov = np.where(viable, nov, -np.inf)
@@ -516,11 +493,9 @@ class ImgepDriver:
             )
             if entry is not None:
                 admitted += 1
-                # The batch has to separate from ITSELF too. Without this, 64
-                # tiles that have all converged onto the same pattern would
-                # each measure against the pre-generation archive, find nothing
-                # within l, and all go in - which is the exact failure the rule
-                # exists to stop.
+                # The batch has to separate from itself too, or converged
+                # tiles would all pass separation against the pre-generation
+                # archive and all go in.
                 sep = np.minimum(sep, 1.0 - b @ b[i])
 
         self.tournament.selected.clear()
@@ -557,16 +532,13 @@ class ImgepDriver:
 
         -> {tile: (goal text, margin)}, at most one tile per goal.
 
-        Runs in EVERY regime, because the goal being chased and the goal being
-        beaten are unrelated: nothing else in the pipeline keeps a record -
-        novelty does not know the goal exists, and separation asks whether the
-        archive holds something SIMILAR, not something BETTER.
+        Runs in EVERY regime - the goal being chased and the goal being beaten
+        are unrelated, and nothing else keeps this record. See CLAUDE.md.
 
         Scored on descriptors on both sides via contrastive() with the
-        distractor set - the same objective `_seed_index` ranks seeds by. The
-        expedition fitness's per-snapshot averaging is deliberately not used:
-        archive entries have no snapshots, so it would compare two different
-        quantities. A tile breaking several records is credited with the
+        distractor set, the same objective `_seed_index` uses (archive entries
+        have no snapshots, so the fitness's per-snapshot averaging doesn't
+        apply here). A tile breaking several records is credited with the
         largest margin and admitted once.
         """
         if self.goals is None or len(self.archive) == 0:
@@ -597,24 +569,13 @@ class ImgepDriver:
     def _summit(self, fit, shows_something) -> int:
         """The tile that sets a new best fitness for this expedition, or -1.
 
-        A RATCHET, and the point is that separation and fitness rank tiles by
-        different things. Separation asks "do we already have one of these";
-        an expedition climbing toward a goal necessarily produces tiles that
-        look like the ones it just produced, so its best-matching tile - the
-        actual result of the whole expedition - is exactly the kind of thing
-        the separation rule throws away. `keeper` did not cover this: it is the
-        most NOVEL viable tile, which during a converging chase is close to the
-        least goal-matching one.
+        A RATCHET: separation discards an expedition's best-matching tile
+        (it necessarily resembles recent tiles), and `keeper` is the most
+        novel viable tile, not the best-matching one. See CLAUDE.md. A
+        converged expedition stops improving and therefore stops admitting -
+        at most one extra entry per generation.
 
-        Ratcheting rather than admitting every generation's best is what keeps
-        it bounded and makes it mean something. A climb over rough ground
-        leaves a checkpoint at every gain; a converged expedition stops
-        improving and therefore stops admitting, which is the behaviour that
-        was wanted in the first place. Worst case is one extra entry per
-        generation - expedition_gens, 50 by default - against the 64 a
-        generation that flooding would produce.
-
-        Gated on `shows_something` (viability), NOT on liveness - a settled
+        Gated on `shows_something` (viability), NOT liveness - a settled
         attractor is what a converging chase produces. See
         Archive.consider(ignore_liveness=).
         """
@@ -690,12 +651,8 @@ class ImgepDriver:
     def _refresh_count(self) -> int:
         """How many entries to re-score this generation.
 
-        A FRACTION of the archive, not a fixed count: what matters is how many
-        generations a full sweep takes, and that has to hold as the archive
-        grows. Staleness is directional - expansion breeds locally, so true
-        novelty only falls and a stale value is systematically too HIGH, which
-        makes an entry both likelier to be picked as a parent and likelier to
-        survive eviction. See CLAUDE.md for the measured cost.
+        A FRACTION of the archive, not a fixed count, so a full sweep takes a
+        constant number of generations as the archive grows. See CLAUDE.md.
         """
         g = int(self.refresh_sweep_gens)
         if g <= 0:
@@ -705,24 +662,19 @@ class ImgepDriver:
     def _expedition_fitness(self, snaps: np.ndarray, nov, coherence) -> np.ndarray:
         """What the optimizer climbs, scaled by how much of it is a pattern.
 
-        Contrastive, from the PER-SNAPSHOT embeddings. Deliberately not
-        `descriptor(snaps) @ goal`. That was the old objective and it failed
-        twice over: raw cosine saturates in a cone whose mean pairwise
-        similarity is 0.897, and descriptor() renormalises the trajectory
-        centroid, so 1/||m|| paid a bonus for decorrelated snapshots rather
-        than for matching the goal. The descriptor is still the right thing to
-        ARCHIVE - novelty needs unit vectors - it was only ever wrong as a
+        Contrastive, from the PER-SNAPSHOT embeddings - not
+        `descriptor(snaps) @ goal`, whose raw cosine saturates and whose
+        renormalised centroid rewards decorrelated snapshots rather than goal
+        match. See CLAUDE.md. `descriptor()` is still the right thing to
+        ARCHIVE (novelty needs unit vectors); it was only ever wrong as a
         fitness.
 
         A NOVELTY expedition has no goal to match, so its fitness is the kNN
-        novelty already computed for admission this generation. That makes the
-        expedition climb exactly the quantity the archive ranks on.
+        novelty already computed for admission this generation.
 
-        Everything is then multiplied by `coherence` (~0.95 for a real pattern,
-        ~0 for static): a single-reference contrastive fitness is a monotone
-        squash of raw cosine, which noise maximises. See
-        capture_health.structure. Applied to text goals too, where it barely
-        moves ranking, because one rule beats two.
+        Multiplied by `coherence` (~0 for static, ~1 for a real pattern) so
+        noise cannot maximise a single-reference contrastive score. See
+        capture_health.structure.
         """
         c = np.asarray(coherence, dtype=np.float32)
         if self._goal is not None and self._goal.kind == "novelty":
@@ -743,22 +695,13 @@ class ImgepDriver:
         """Where the expedition starts: the archive entry that best matches the
         goal UNDER THE SAME OBJECTIVE the expedition will be scored on.
 
-        Not Archive.nearest(), which is argmax(embeddings @ goal). For a text
-        goal that ranking is degenerate and its winner is a NOISE TEXTURE:
-        high-frequency noise has energy everywhere, so it carries a decent
-        cosine to every phrase, and the modality gap leaves nothing else to
-        separate entries by. Measured over 15 unrelated prompts, raw cosine
-        returned 6 distinct seeds and one cyan static tile won 7 of them;
-        contrastive gives 14.
+        Not Archive.nearest() (argmax(embeddings @ goal)): for a text goal
+        that ranking is degenerate and its winner is a noise texture. See
+        CLAUDE.md.
 
-        SAMPLED with p proportional to fit^alpha, not argmaxed - the same rule
-        E&E uses to pick a parent, and the same `alpha`. An argmax would send
-        every expedition toward a given goal from the identical entry, so
-        repeating a goal could only ever retrace one trajectory.
-
-        alpha is then BANDED, not fixed and not solved to a target: see
-        novelty.banded_alpha. How concentrated a goal's matches are is real
-        information about the archive, so the band only clips the ends.
+        SAMPLED with p proportional to fit^alpha, not argmaxed, so repeating a
+        goal explores a different trajectory each time. alpha is then BANDED,
+        not fixed - see novelty.banded_alpha.
         """
         e = self.archive.embeddings
         if len(e) == 0:
@@ -777,12 +720,8 @@ class ImgepDriver:
     def _references(self, kind: str | None = None):
         """-> (references, logit_scale) for a goal of this kind.
 
-        The scale differs by MODALITY, not by taste: CLIP's 100 is tuned for the
-        narrow band that text-image similarity occupies, and applying it to
-        image-image similarity above 0.9 floors 59.6% of a generation to zero.
-
-        `kind` is explicit because seed selection has to ask this question
-        BEFORE self._goal is assigned.
+        The scale differs by MODALITY - see CLAUDE.md. `kind` is explicit
+        because seed selection has to ask this before self._goal is assigned.
         """
         if kind is None:
             kind = self._goal.kind if self._goal is not None else ""
@@ -820,12 +759,11 @@ class ImgepDriver:
         }
 
     def restore(self, d: dict) -> None:
-        # An expedition is deliberately NOT resumed: its optimizer is one
-        # goal's local refinement, and the archive - which is the thing worth
-        # preserving - is on disk independently of any checkpoint.
+        # An expedition is not resumed: its optimizer is one goal's local
+        # refinement, and the archive is on disk independently of any
+        # checkpoint.
         self.end_expedition()
         self.gen = int(d.get("imgep_gen", 0))
         self._since_expedition = int(d.get("imgep_since_expedition", 0))
-        # "imgep_threshold" appears in checkpoints written before 2026-08-08.
-        # Ignored rather than rejected: there is no threshold to restore it to,
-        # and an old checkpoint is still perfectly good for gen and cadence.
+        # "imgep_threshold" may appear in older checkpoints; ignored, not
+        # restored.

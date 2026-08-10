@@ -1,9 +1,4 @@
-"""Dismissable on-screen messages, shared by every tab.
-
-A console print is not feedback in a GUI. Saving writes a file into a folder
-the user cannot see, so without this the button looks like it did nothing -
-which is exactly how the tournament save features were reported.
-"""
+"""Dismissable on-screen messages, shared by every tab."""
 from __future__ import annotations
 
 from imgui_bundle import imgui
@@ -17,10 +12,8 @@ DIM = (0.6, 0.6, 0.6, 1.0)
 def render_banner(obj, field: str, colour, scope: str = "") -> None:
     """Draw obj.<field> if non-empty, with a Dismiss button that clears it.
 
-    `scope` disambiguates the button's ImGui id. Two tabs both showing a
-    "notice" banner would otherwise give their Dismiss buttons the same label,
-    and a duplicate id silently stops one of them responding to the mouse -
-    see the ImGui caveat in CLAUDE.md.
+    `scope` disambiguates the button's ImGui id across tabs - see the ImGui
+    duplicate-id caveat in CLAUDE.md.
     """
     text = getattr(obj, field, "")
     if not text:

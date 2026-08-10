@@ -1,29 +1,20 @@
 """Physics as part of the search space.
 
-Measured motivation: with the brain alone, whether a run improves is decided by
-the (starting preset x prompt) pair. On the default config "glowing coral"
-gained +0.225 mean fitness over 25 generations, but the same optimizer on
-HungryHungryHippos gained +0.008 - its physics leaves the brain almost no
-leverage over the image. The optimizer needs to move the physics too.
+With the brain alone, whether a run improves is decided by the (starting
+preset x prompt) pair - some presets' physics leave the brain almost no
+leverage over the image, so the optimizer needs to move the physics too.
 
 Parameters are searched RELATIVE TO THE LOADED PRESET:
 
     value = origin + span * tanh(z)
 
-not as a position inside a fixed absolute range. The absolute version was
-broken in two ways at once. A preset may hold a value outside a parameter's
-nominal range - HungryHungryHippos stores global_force_mult = -0.341 against a
-nominal (0.0, 2.0) - and the slider machinery accommodates that by expanding the
-stored range to *exactly* that value. Either way the origin lands on a boundary:
-
-  - it did not round-trip: -0.341 encoded to z = -4.605 and decoded back to
-    0.0002, so merely enabling physics search switched the forces off before
-    generation 1
-  - the tanh gradient there is 4e-4, so CMA-ES could never move the gene again
-
-Origin-relative fixes both: z = 0 reproduces the preset exactly, and the
-gradient at the origin is `span`, its maximum. Still bounded, so no clipping
-repair bias in the covariance estimate.
+not as a position inside a fixed absolute range. A preset can hold a value
+outside a parameter's nominal range (the slider machinery expands the stored
+range to fit it), which puts an absolute encoding's origin on a boundary where
+it neither round-trips nor has a usable gradient. Origin-relative fixes both:
+z = 0 reproduces the preset exactly, and the gradient at the origin is `span`,
+its maximum. Still bounded, so no clipping repair bias in the covariance
+estimate.
 
 MUTATION_SCALE is deliberately absent: tournament mode owns it. HAZARD_RATE is
 absent because respawning is a global aesthetic, not a morphology knob.

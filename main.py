@@ -21,9 +21,7 @@ def put_back_auto_overrides(ui_state, prev_aspect, prev_speedmult,
                             prev_motion_blur):
     """Restore the three preferences an automatic mode commandeers.
 
-    Module level and parameterised rather than a method, so the single
-    implementation is shared by the mode-off edge and by the quit path without
-    either having to know about the other.
+    Module-level so both the mode-off edge and the quit path can share it.
     """
     prefs = ui_state.preferences
     if prev_aspect and prev_aspect != "1:1":
@@ -183,9 +181,8 @@ class App:
     def _ensure_auto_service(self):
         """Build the CLIP scorer, capture buffer and service on first use.
 
-        Imports are deliberately lazy: onnxruntime and cmaes must not be
-        imported at startup, and Auto mode must degrade to a message rather
-        than crashing when they are absent.
+        Imports stay lazy (onnxruntime/cmaes must not load at startup); Auto
+        mode degrades to a message instead of crashing when they're absent.
         """
         if self.auto_service is not None:
             return True
@@ -226,11 +223,8 @@ class App:
 
     def _build_archive_set(self, path):
         """(Re)build everything that hangs off ONE archive directory, and point
-        every holder at it.
-
-        The ImgepDriver instance is deliberately kept: sigma, alpha, the
-        expedition cadence and the rest are the user's settings, not the
-        archive's.
+        every holder at it. Keeps the existing ImgepDriver - its sigma, alpha
+        and expedition cadence are the user's settings, not the archive's.
         """
         from services.archive import Archive
         from services.archive_io import ArchiveStore
@@ -266,12 +260,7 @@ class App:
         self.command_handler.archive_projection = self.archive_projection
 
     def _archive_path_for(self, name, ast):
-        """The directory for `name`, falling back to 'default' when it is gone.
-
-        A missing folder means the user deleted it outside the app or moved
-        their Documents. Substituting silently would have them exploring into a
-        different archive than the one the UI says is loaded.
-        """
+        """The directory for `name`, falling back to 'default' when it is gone."""
         from services.archive_library import create, resolve, safe_name
         from utilities.paths import DEFAULT_ARCHIVE, get_archives_root
 
@@ -289,16 +278,11 @@ class App:
     def _release_archive(self, ui_state):
         """Let go of the archive DIRECTORY: flush, save, close, drop textures.
 
-        Separate from _switch_archive because emptying or deleting an archive
-        has to happen with nothing holding it. ArchiveStore keeps index.jsonl
-        open for append, and Windows refuses to rename or remove a directory
-        that contains an open handle - that is WinError 5, the "access is
-        denied" Empty was failing with.
-
-        Flush before closing the store, or the entries since the last
-        200-admission vector flush are lost. Release the thumbnail cache too:
-        entry ids restart at 0 in every archive, so a stale cache would show
-        the previous archive's pictures under the new archive's entries.
+        Must run before an archive is emptied or deleted - Windows refuses to
+        remove a directory with an open handle, and ArchiveStore keeps
+        index.jsonl open for append. Flush before closing the store or
+        unflushed entries are lost; release the thumbnail cache too, since
+        entry ids restart at 0 in every archive.
         """
         ui_state.archive.running = False
         if self.auto_service is not None:
@@ -319,8 +303,6 @@ class App:
         """Persist the Explore settings into the archive's own folder.
 
         Called before anything lets go of an archive - a switch, and quitting.
-        Settings that suit a 20000-entry archive are not the ones that suit an
-        empty one, so they belong to the archive rather than to the app.
         """
         if self.archive_store is None:
             return
@@ -329,10 +311,8 @@ class App:
     def _load_archive_settings(self, ui_state):
         """Restore an archive's settings, and make a restored grid take effect.
 
-        `grid` is the one restored field the driver cannot pick up from the
-        per-frame configure() push: the tournament grid is rebuilt only on
-        `grid_changed`, so without this the sliders would read 8 while the
-        simulation still ran 4x4.
+        `grid` needs `grid_changed` set too - the tournament grid only
+        rebuilds on that flag, not on the per-frame configure() push.
         """
         if self.archive_store is None:
             return
@@ -376,9 +356,8 @@ class App:
     def _ensure_archive_service(self, ui_state):
         """Build the archive, goal list and IMGEP driver on first use.
 
-        Explore mode reuses the SAME AutoTournamentService instance - the
-        rollout machine is identical - and only swaps its driver. Imports stay
-        lazy: onnxruntime and cmaes must not be imported at startup.
+        Reuses the same AutoTournamentService as Auto mode, swapping only
+        its driver. Imports stay lazy.
         """
         if not self._ensure_auto_service():
             self.ui.archive_unavailable = self.ui.auto_unavailable
@@ -416,10 +395,8 @@ class App:
     def _capture_tiles(self, ui_state):
         """Render the tournament grid into the square capture FBO.
 
-        The canvas is re-rendered for the capture at exactly grid*224 with an
-        identity camera, so there is NO crop rect: the whole texture is the
-        grid. Where the user is looking cannot change what the optimizer
-        scores, and the capture is identical at any window size.
+        Re-renders the canvas at grid*224 with an identity camera, so the
+        displayed pan/zoom/window size cannot affect what the optimizer scores.
         """
         from services.tile_capture import TILE_PX
 
@@ -452,9 +429,8 @@ class App:
         if action is Action.WRITE_RULES:
             self.sim.write_tournament_rules(self.tournament_service.pack_rule_bytes())
             self.tournament_service.clear_dirty()
-            # Every tile of a generation shares this seed, so the population is
-            # compared on equal footing; it changes between generations so a
-            # genome cannot win by suiting one fixed starting layout.
+            # Every tile in a generation shares this seed for a fair comparison;
+            # it changes between generations.
             if svc.tile_physics:
                 self.sim.write_tournament_physics(svc.tile_physics)
             self.sim.reset_seed = float(svc.gen_seed)
@@ -484,13 +460,9 @@ class App:
         svc = self.auto_service
         gen = svc.generation
 
-        # A refit every 500 admissions, not per frame. Projection.fit
-        # sign-aligns to the previous components, so the map does not mirror
-        # itself when this fires.
-        #
-        # The `not fitted` arm matters on a cold archive: the startup fit had
-        # nothing to fit, and without this the map would say "not enough
-        # entries" until the 500th admission rather than the 3rd.
+        # Refit every 500 admissions, not per frame (Projection.fit sign-aligns
+        # to the previous components, so the map doesn't mirror itself). Also
+        # refit once while unfitted so a cold archive doesn't wait 500 entries.
         proj = self.archive_projection
         if self.archive is not None and proj is not None:
             grown = len(self.archive) - self._last_projection_size
@@ -534,15 +506,8 @@ class App:
             print(f"Failed to load default config from {default_path}")
 
     def run(self):
-        """The frame loop, and the guarantee that a crash is survivable.
-
-        Without the try/finally an exception in orchestrate_frame propagated
-        straight out and cleanup() never ran, which cost three things at once:
-        the archive entries admitted since the last 200-admission vector flush,
-        the goal list and settings, and any record of what went wrong. An
-        overnight run then presented as a screenful of `Texture.__del__` errors
-        from interpreter teardown, with the real traceback scrolled away.
-        """
+        """The frame loop. Wrapped in try/finally so a crash still logs its
+        traceback and runs cleanup() to flush the archive and settings."""
         try:
             while not glfw.window_should_close(self.window):
                 glfw.poll_events()
@@ -573,13 +538,8 @@ class App:
             print(f"[crash] could not write the crash log ({exc})")
 
     def _cleanup_safely(self) -> None:
-        """cleanup(), but a failure in it must not replace the real exception.
-
-        On a lost device every GL call raises, and cleanup touches GL - so
-        without this the user would see the teardown error instead of the cause.
-        The archive flush inside cleanup is pure numpy and disk, and runs first,
-        so the valuable half survives a broken context.
-        """
+        """Run cleanup(); a failure in it must not mask the real exception
+        (a lost GL context makes every GL call raise)."""
         try:
             self.cleanup()
         except BaseException as exc:
@@ -592,14 +552,9 @@ class App:
         ui_state = self.ui.get_state()
         tiling_mode = (ui_state.sim.current_view_option == 3)
 
-        # 1.5. Auto-mode enable edge. This MUST run before process_commands:
-        # _handle_auto_tournament clears the one-shot flags, so if the service
-        # were built later the very first start_requested would be consumed and
-        # discarded before anything could act on it.
-        #
-        # Auto mode also requires square tiles - tiles inherit the canvas aspect
-        # ratio, and a 16:9 tile cannot be fitted to CLIP's square input without
-        # distortion, padding or discarding content.
+        # 1.5. Auto-mode enable edge. MUST run before process_commands, which
+        # clears the one-shot start_requested flag. Also forces square tiles -
+        # CLIP needs square input.
         auto = ui_state.auto_tournament
         if auto.enabled and not self._auto_was_enabled:
             self._save_auto_overrides(ui_state)
@@ -610,10 +565,8 @@ class App:
                 self.auto_service.pause()
         self._auto_was_enabled = auto.enabled
 
-        # Explore mode reuses Auto mode's rollout machine, canvas forcing and
-        # capture path; only the driver differs. Swapping on the edge - rather
-        # than constructing a second service - is what keeps abort-on-resize,
-        # snapshot scheduling and the capture wiring in exactly one place.
+        # Explore mode reuses Auto mode's rollout machine and capture path;
+        # only the driver is swapped.
         expl = ui_state.archive
         if expl.enabled and not self._explore_was_enabled:
             self._save_auto_overrides(ui_state)
@@ -693,9 +646,7 @@ class App:
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)
         _auto_svc = self.auto_service
-        # Explore mode drives the same service, so everything keyed on "an
-        # automatic search is running" must see it too. The two flags are
-        # mutually exclusive - the tab bar enables exactly one.
+        # Auto and Explore are mutually exclusive; either counts as "running".
         _auto_on = ui_state.auto_tournament.enabled or ui_state.archive.enabled
         _tile_mut = (
             _auto_svc.tile_mutation_strength
@@ -708,16 +659,12 @@ class App:
             ui_state.tournament.enabled,
             grid=self.tournament_service.grid,
             mutation=_tile_mut,
-            # Auto mode ranks tiles against each other, and cohort colouring
-            # gives each tile a fixed palette decided by its slot rather than
-            # its genome (29.5% of the fitness spread, measured).
+            # Cohort colouring gives each tile a fixed palette by slot rather
+            # than genome, which confounds ranking.
             plain_colour=(_auto_svc is not None and _auto_on),
-            # Each tile reads its own physics block from the config SSBO.
-            # It must cover EVERY tile: get_particle_config_index() returns the
-            # home tile, so a tile with no block written reads a zeroed config -
-            # zero force, zero drag, zero sensor gain - and renders black. That
-            # happens whenever the grid grows between generations, since
-            # tile_physics still holds the old, smaller population.
+            # Must cover every tile: a tile with no physics block written reads
+            # a zeroed config and renders black (e.g. when the grid grows
+            # between generations before tile_physics catches up).
             physics=(_auto_svc is not None
                      and _auto_on
                      and _auto_svc.physics_enabled
@@ -952,12 +899,8 @@ class App:
             prefs.canvas_aspect_ratio = "1:1"
             ui_state.request_world_size_change = True
 
-        # Motion blur accumulates speedmult/blur_quality renders into one
-        # texture - at the tournament's speedmult of 10 and the default quality
-        # of 2 that is a FIVE frame temporal average, and _capture_tiles grabs
-        # exactly that texture. Both the archive thumbnails and CLIP's input
-        # were smeared across five simulation steps, which blurs away the fine
-        # structure that distinguishes one genome from another.
+        # Motion blur averages several renders into the texture _capture_tiles
+        # grabs, smearing away the fine structure that distinguishes genomes.
         prefs.motion_blur = False
 
     def _undo_auto_overrides(self, ui_state):
@@ -966,20 +909,11 @@ class App:
             self._auto_prev_motion_blur)
 
     def _restore_auto_overrides(self, ui_state):
-        """Undo the transient overrides before anything is persisted.
-
-        An automatic mode drives the physics step count through
-        preferences.speedmult, forces a 1:1 canvas and disables motion blur.
-        All three are restored on the mode->off edge, but quitting while the
-        mode is still enabled never crosses that edge. That matters because
-        _drive_auto_tournament returns 0 on capture, score and write-rules
-        frames, so the persisted speedmult could be 0 - and a speedmult of 0
-        means the next launch never steps the simulation: a black canvas with a
-        working UI and no visible cause.
-
-        Checks BOTH modes. Explore commandeers the same preferences, so
-        checking only auto_tournament let a quit from the Explore tab persist
-        all three overrides.
+        """Undo the transient auto/explore overrides before anything is
+        persisted. Quitting while a mode is still enabled never crosses the
+        mode->off edge that normally restores them, and a persisted
+        speedmult of 0 would leave the next launch never stepping the sim.
+        Checks both modes since either can commandeer the same preferences.
         """
         if not (ui_state.auto_tournament.enabled or ui_state.archive.enabled):
             return
@@ -989,13 +923,8 @@ class App:
 
     @staticmethod
     def _step(label, fn, *args, **kwargs):
-        """Run one shutdown step; a failure must not skip the ones after it.
-
-        cleanup() also runs on the crash path, where any single step can fail -
-        a lost GL context makes every GL call raise. Unguarded, the first such
-        failure would skip everything below it, and what is below is the part
-        worth saving.
-        """
+        """Run one shutdown step; log and continue if it raises, so a failing
+        step (e.g. a lost GL context) doesn't skip the ones after it."""
         try:
             return fn(*args, **kwargs)
         except BaseException as exc:
@@ -1003,10 +932,9 @@ class App:
             return None
 
     def cleanup(self):
-        # Ordered by what is lost if the step does not run. The archive is
-        # hours of compute and its writes are pure numpy and disk; GLFW
-        # teardown costs nothing and touches the context most likely to be
-        # broken, so it goes last.
+        # Ordered by what is lost if a step doesn't run: archive writes first
+        # (pure numpy/disk), GLFW teardown last (touches the context most
+        # likely to be broken).
         ui_state = self._step("read ui state", self.ui.get_state)
 
         if self.archive is not None:
@@ -1014,8 +942,7 @@ class App:
         if self.goal_list is not None:
             self._step("save goals", self.goal_list.save)
         if ui_state is not None:
-            # Before the store closes: quitting is how a session normally ends,
-            # so it is the main path that persists the archive's settings.
+            # Before the store closes.
             self._step("save archive settings",
                        self._save_archive_settings, ui_state)
             self._step("restore auto overrides",

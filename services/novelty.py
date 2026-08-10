@@ -6,18 +6,14 @@ k=10 and the parent-sampling exponent alpha=4 are E&E's tuned values. All
 vectors are L2-normalised, so cosine similarity is a plain dot product and the
 whole thing is one matmul.
 
-References are taken SEPARATELY rather than concatenated. Novelty is measured
-against archive UNION rejects-ring (the classic Lehman-Stanley formulation:
-archive plus current population), and gluing a 2k ring onto a 20k archive every
-generation would copy 40 MB - more than the novelty computation costs. Instead
-each reference block is reduced to its k nearest distances and the blocks are
-merged.
+References are taken SEPARATELY rather than concatenated (archive UNION
+rejects-ring, the classic Lehman-Stanley formulation): each reference block is
+reduced to its k nearest distances first and the blocks are merged, rather
+than copying the whole archive every generation.
 
-Scale note, measured 2026-08-07: over 97 viable presets the mean pairwise
-cosine distance is 0.159 with std 0.063, so novelty here lives in a compressed
-range. Nothing in this module assumes a scale, and nothing downstream needs a
-threshold in these units either: novelty RANKS entries for eviction rather than
-gating admission, and a ranking is scale-free.
+Nothing in this module assumes a scale, and nothing downstream needs a
+threshold in these units either: novelty RANKS entries for eviction rather
+than gating admission, and a ranking is scale-free.
 """
 from __future__ import annotations
 
@@ -45,10 +41,9 @@ def knn_distances(queries: np.ndarray, reference: np.ndarray, k: int = 10,
     is itself and every novelty collapses toward zero.
 
     Computed in row BLOCKS. Only k distances per query survive, so the full
-    (n, m) matrix is a scratch value - and at the archive's 20000 capacity a
-    whole-archive rescore would ask for 1.6 GB of it at once. Blocking caps the
-    scratch at block_elems and costs nothing: 20000 x 20000 measured at 4.3 s
-    either way, since the work is the same matmul either way.
+    (n, m) matrix is scratch - a whole-archive rescore at capacity would ask
+    for over a GB of it at once. Blocking caps the scratch at block_elems and
+    costs nothing, since the work is the same matmul either way.
     """
     q = np.asarray(queries, dtype=np.float32)
     q = q.reshape(len(q), -1) if len(q) else q.reshape(0, -1)
@@ -186,29 +181,16 @@ def banded_alpha(weights, alpha: float, ess_min: float, ess_max: float,
                  alpha_cap: float = ALPHA_CAP) -> float:
     """`alpha`, adjusted ONLY if its ESS falls outside [ess_min, ess_max].
 
-    A band rather than a target, because the spread of ESS across goals is real
-    signal and a target would destroy it. Measured 2026-08-08 over 20 varied
-    prompts against a 4784-entry archive, ESS at alpha=4 ran 3.1 to 1973 - and
-    the ordering is semantic: the archive genuinely holds almost nothing like
-    "a photograph of a cat" (3.1) and a great deal that could pass for "circuit
-    board traces" (1973). Pinning ESS to 64 would tell the cat prompt it has 64
-    good seeds when it has three.
+    A band rather than a target: how concentrated a goal's matches are is real
+    signal about the archive (see CLAUDE.md), and pinning ESS to one value
+    would destroy it. The band exists only to stop the degenerate ends - too
+    peaked and a repeated goal retraces one trajectory, too flat and the goal
+    stops influencing the seed at all. Mirrors adaptive resampling in particle
+    filters, which triggers on an ESS threshold rather than steering to one.
 
-    The band exists only to stop the degenerate ends: too peaked and a repeated
-    goal retraces one trajectory, too flat and the goal stops influencing the
-    seed at all. The latter is not hypothetical - ESS/N is roughly constant per
-    goal, so a diffuse goal drifts from ESS 92 at 300 entries to 1602 at 4808,
-    heading for ~6600 at the 20000 capacity.
-
-    This mirrors adaptive resampling in particle filters, which triggers on an
-    ESS THRESHOLD rather than steering ESS to a value.
-
-    The floor is capped at N/8, because a floor is a demand for candidates that
-    may not exist: asking for 8 out of a 12-entry archive forces two thirds of
-    it into the pool and makes the goal almost irrelevant. In the app an
-    expedition needs len(archive) >= seed_n = 256, where the default floor of 8
-    is 3% and the cap never binds - it is a guard for small archives, and for
-    anyone who raises the floor a long way.
+    The floor is capped at N/8: a floor is a demand for candidates that may not
+    exist, and forcing most of a small archive into the pool makes the goal
+    almost irrelevant.
     """
     n = int(np.asarray(weights).size)
     ess_min = min(float(ess_min), n / 8.0)

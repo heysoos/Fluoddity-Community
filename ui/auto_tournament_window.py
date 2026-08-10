@@ -9,21 +9,14 @@ from imgui_bundle import imgui
 from services import save_targets
 from services.capture_health import sweeping_parameters
 from services.cohort_tiling import cohorts_for, max_variants
+from ui import layout
 from ui.notices import OK, render_banner
 
 ALGORITHM_NAMES = ["CMA-ES", "Sep-CMA-ES", "GA", "Random Search"]
 
-# One sentence each. The reasoning lives in services/cohort_tiling.py and
-# services/physics_genome.py, where it can be as long as it needs to be.
-COHORT_TOOLTIP = (
-    "Gives each tile several variants of its genome; the cohort count is set "
-    "for you."
-)
+COHORT_TOOLTIP = "Gives each tile several variants of its genome."
 
-PHYSICS_TOOLTIP = (
-    "Searches the physics sliders as well as the brain; toggling it resets the "
-    "search."
-)
+PHYSICS_TOOLTIP = "Searches the physics sliders as well as the brain."
 
 _WARN = (1.0, 0.6, 0.2, 1.0)
 _BAD = (1.0, 0.4, 0.3, 1.0)
@@ -34,12 +27,8 @@ _SIGMA_COLOR = (1.0, 0.65, 0.25, 1.0)     # orange, decaying
 
 
 def normalize_series(values) -> list[float]:
-    """Map a series onto 0..1 against its own min/max.
-
-    Fitness and sigma live on different scales, so a shared axis would flatten
-    one of them. Each gets its own normalisation and its real range is printed
-    in the legend. A flat series sits in the middle rather than dividing by zero.
-    """
+    """Map a series onto 0..1 against its OWN min/max, so series on different
+    scales can share a plot. A flat series sits in the middle."""
     vals = [float(v) for v in values]
     finite = [v for v in vals if v == v and abs(v) != float("inf")]
     if not vals:
@@ -78,6 +67,9 @@ class AutoTournamentWindowMixin:
         imgui.text(f"Generation {gen}")
         imgui.separator()
 
+        # One item width for the whole tab: every label then stays on screen
+        # however narrow the window is.
+        layout.push_settings_width()
         self._render_goal(ats, svc)
 
         idx = (ALGORITHM_NAMES.index(ats.algorithm)
@@ -105,15 +97,12 @@ class AutoTournamentWindowMixin:
 
         imgui.separator()
         self._render_save_load(ats, svc)
+        imgui.pop_item_width()
 
     # -- pieces ---------------------------------------------------------
 
     def _render_auto_banners(self, ats):
-        if ats.warning:
-            imgui.text_colored(imgui.ImVec4(*_BAD), ats.warning)
-            imgui.same_line()
-            if imgui.button("Dismiss"):
-                ats.warning = ""
+        render_banner(ats, "warning", _BAD, scope="auto")
         render_banner(ats, "notice", OK, scope="auto")
 
         # A right-click on a tile asks for a name rather than saving silently.
@@ -128,15 +117,11 @@ class AutoTournamentWindowMixin:
 
         sweeps = sweeping_parameters(self.state.sim)
         if sweeps:
-            imgui.text_colored(
-                imgui.ImVec4(*_WARN),
-                "Tiles are not comparable: " + ", ".join(sweeps),
-            )
-            imgui.text_disabled(
-                "These have a spatial or cohort sweep, so they take different "
-                "values in different tiles. Fitness is confounded by position "
-                "until they are cleared."
-            )
+            layout.text_colored_wrapped(
+                _WARN, "Tiles are not comparable: " + ", ".join(sweeps))
+            layout.text_disabled_wrapped(
+                "These sweep across tiles, so fitness is confounded by "
+                "position until they are cleared.")
 
     def _render_auto_unavailable(self, ats):
         if self.auto_unavailable == "model_missing":
@@ -148,9 +133,8 @@ class AutoTournamentWindowMixin:
             imgui.text_disabled("pip install onnxruntime-directml tokenizers cmaes")
 
     def _render_goal(self, ats, svc):
-        """Typed text is not the goal until it is submitted. The box is tinted
-        while the two differ, so there is never a moment where the UI shows one
-        prompt and CLIP is scoring another."""
+        """Typed text is not the goal until submitted, so the box is tinted
+        while the two differ."""
         active = (svc.prompt if svc is not None else "").strip()
         pending = ats.prompt.strip() != active
 
@@ -161,6 +145,11 @@ class AutoTournamentWindowMixin:
                                    imgui.ImVec4(0.52, 0.35, 0.07, 1.0))
             imgui.push_style_color(imgui.Col_.frame_bg_active,
                                    imgui.ImVec4(0.58, 0.40, 0.09, 1.0))
+        # Room for the label AND the Set button that follows it.
+        style = imgui.get_style()
+        imgui.set_next_item_width(
+            -(imgui.calc_text_size("Goal").x + style.item_inner_spacing.x
+              + style.item_spacing.x + layout.button_width("Set")))
         changed, ats.prompt = imgui.input_text(
             "Goal", ats.prompt, imgui.InputTextFlags_.enter_returns_true
         )
@@ -176,22 +165,19 @@ class AutoTournamentWindowMixin:
         imgui.end_disabled()
 
         if pending and ats.prompt.strip():
-            imgui.text_colored(imgui.ImVec4(*_WARN),
-                               "not set - press Enter or click Set")
+            layout.text_colored_wrapped(_WARN,
+                                        "not set - press Enter or click Set")
         elif active:
-            imgui.text_colored(imgui.ImVec4(*_OK), f'steering toward: "{active}"')
+            layout.text_colored_wrapped(_OK, f'steering toward: "{active}"')
         else:
             imgui.text_disabled("no goal set")
 
     def _render_rollout_controls(self, ats, grid_note=None):
-        """Grid and rollout timing. Shared verbatim by Auto and Explore - both
-        drive the same AutoTournamentService rollout machine, so duplicating
-        these widgets would let the two tabs disagree about what a generation
-        is.
+        """Grid and rollout timing, shared by Auto and Explore so the two tabs
+        cannot disagree about what a generation is.
 
-        grid_note overrides the last hint line because the consequence of a
-        grid change differs: Auto mode loses its accumulated covariance, while
-        Explore mode only ends any expedition in flight."""
+        grid_note overrides the last hint line: a grid change costs Auto its
+        covariance but only ends Explore's expedition."""
         ch, g = imgui.slider_int("Grid", ats.grid, 2, 8)
         if ch and g != ats.grid:
             ats.grid = g
@@ -208,15 +194,18 @@ class AutoTournamentWindowMixin:
     def _render_grid_hints(self, ats, note=None):
         tiles = ats.grid * ats.grid
         src_px = 1024 // ats.grid
-        imgui.text_disabled(f"population {tiles}   source {src_px}px/tile")
+        layout.text_disabled_wrapped(
+            f"population {tiles}   source {src_px}px/tile")
         if src_px < 224:
-            imgui.text_disabled(
+            layout.text_disabled_wrapped(
                 "  upscaled to 224 for CLIP - consider a larger canvas")
         if ats.grid == 2:
-            imgui.text_disabled("  popsize 4 is small for 80-D CMA-ES")
-        imgui.text_disabled(note or "changing the grid resets the optimizer")
+            layout.text_disabled_wrapped("  popsize 4 is small for CMA-ES")
+        layout.text_disabled_wrapped(
+            note or "changing the grid resets the optimizer")
 
     def _render_transport(self, ats):
+        right = layout.row_right_edge()
         if ats.running:
             if imgui.button("Pause"):
                 ats.pause_requested = True
@@ -225,7 +214,7 @@ class AutoTournamentWindowMixin:
             if imgui.button("Start"):
                 ats.start_requested = True
             imgui.end_disabled()
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Reset"))
         if imgui.button("Reset"):
             ats.reset_requested = True
 
@@ -241,15 +230,15 @@ class AutoTournamentWindowMixin:
             ats.reset_requested = True     # the search space changed dimension
 
         if not ats.physics_enabled:
-            imgui.text_disabled(
+            layout.text_disabled_wrapped(
                 "brain only - the loaded preset fixes the overall look")
             return
 
-        imgui.text_disabled(
+        layout.text_disabled_wrapped(
             "searching " + ", ".join(n.replace('_', ' ').title()
                                      for n, _g, _lo, _hi in PHYSICS_PARAMS))
-        imgui.text_colored(
-            imgui.ImVec4(*_WARN),
+        layout.text_colored_wrapped(
+            _WARN,
             "the preset's physics sliders no longer apply while this is on")
 
     def _render_tile_mutation(self, ats, sigma):
@@ -264,20 +253,19 @@ class AutoTournamentWindowMixin:
             "Variants per Tile", ats.variants_per_tile, 1, kmax)
         if imgui.is_item_hovered():
             imgui.set_tooltip(COHORT_TOOLTIP)
-        imgui.text_disabled(
+        layout.text_disabled_wrapped(
             f"cohorts driven to {cohorts_for(ats.grid, ats.variants_per_tile)} "
             f"(max {kmax} variants at this grid)")
 
         _, ats.tile_mutation_strength = imgui.slider_float(
             "Mutation Strength", ats.tile_mutation_strength, 0.0, 0.5)
-        # Sigma shrinks as CMA-ES converges. Once it approaches the mutation
-        # strength, the spread between tiles no longer exceeds the wobble inside
-        # each tile and the search stalls with no error.
+        # Once mutation approaches sigma, the spread between tiles no longer
+        # exceeds the wobble inside each one and the search stalls silently.
         if ats.tile_mutation_strength < sigma / 3.0:
             imgui.text_disabled(f"sigma {sigma:.3f} - ok")
         else:
-            imgui.text_colored(
-                imgui.ImVec4(*_WARN),
+            layout.text_colored_wrapped(
+                _WARN,
                 f"sigma {sigma:.3f} - mutation too high, search may stall")
 
     def _render_metrics(self, svc):
@@ -312,13 +300,7 @@ class AutoTournamentWindowMixin:
     _TRACE_MAX_PTS = 400      # one run can reach thousands of generations
 
     def _render_trace(self, best, sigma):
-        """Fitness and sigma overlaid, each on its own axis.
-
-        Sharing an axis would be misleading: fitness climbs through ~0.05-0.5
-        while sigma decays from ~0.5 toward 0, so whichever has the wider range
-        flattens the other. Each is normalised separately and the true range is
-        printed next to its colour.
-        """
+        """Fitness and sigma overlaid, each on its own axis."""
         self._render_series([(sigma, _SIGMA_COLOR, "sigma"),   # behind
                              (best, _FIT_COLOR, "fitness")])   # in front
 
@@ -326,10 +308,7 @@ class AutoTournamentWindowMixin:
         """Overlay several series, each normalised against its OWN range.
 
         `series` is [(values, rgba, label), ...], drawn back to front, with the
-        true range of each printed under the plot next to its colour. Separate
-        normalisation is the whole point: an archive size in the thousands and
-        a mean novelty around 0.02 share no axis, and forcing one on them shows
-        a flat line and a step.
+        true range of each printed under the plot next to its colour.
         """
         h = float(height if height is not None else self._TRACE_H)
         w = max(120.0, imgui.get_content_region_avail().x)
@@ -398,35 +377,34 @@ class AutoTournamentWindowMixin:
 
     def _render_save_load(self, ats, svc):
         gen = int(getattr(svc, "generation", 0) or 0)
+        right = layout.row_right_edge()
         if imgui.button("Save best genome..."):
             self.open_save_popup(save_targets.AUTO_BEST, generation=gen)
-        imgui.same_line()
+        layout.wrap_row(right, layout.button_width("Save checkpoint"))
         if imgui.button("Save checkpoint"):
             ats.save_checkpoint_requested = True
-        imgui.set_item_tooltip(
-            "A checkpoint resumes the optimizer; it is not a config and does "
-            "not appear under File > Load. Right-click a tile to save that "
-            "tile as a named config.")
+        imgui.set_item_tooltip("Resumes the optimizer; it is not a config.")
 
         _, self._auto_load_path = imgui.input_text(
             "Load path", getattr(self, "_auto_load_path", ""))
+        right = layout.row_right_edge()
         if imgui.button("Load genome"):
             ats.load_genome_path = self._auto_load_path
-        imgui.same_line()
+        imgui.set_item_tooltip("Takes the starting point only.")
+        layout.wrap_row(right, layout.button_width("Load checkpoint"))
         if imgui.button("Load checkpoint"):
             ats.load_checkpoint_path = self._auto_load_path
-        imgui.text_disabled(
-            "Load genome takes only the starting point - sigma, algorithm and "
-            "grid stay as set here. Load checkpoint restores the whole search "
-            "and forces the grid to the saved value.")
+        imgui.set_item_tooltip("Restores the whole search, and the saved grid.")
 
         if svc is not None and svc.logger is not None and svc.logger.enabled:
+            right = layout.row_right_edge()
             if imgui.button("Open run folder"):
                 import os
                 import subprocess
 
                 subprocess.Popen(["explorer", os.path.abspath(svc.logger.dir)])
-            imgui.same_line()
+            layout.wrap_row(right, imgui.calc_text_size(
+                str(svc.logger.run_id)).x)
             imgui.text_disabled(str(svc.logger.run_id))
 
         _, ats.autosave_every = imgui.slider_int(

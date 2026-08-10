@@ -36,8 +36,7 @@ class CommandHandler:
         self.archive_projection = None
         # App._switch_archive; None until Explore mode has been opened once.
         self.switch_archive = None
-        # App._release_archive. Emptying or deleting an archive must happen
-        # with nothing holding the directory open - see _handle_archive_management.
+        # App._release_archive - see _handle_archive_management.
         self.release_archive = None
 
         # Preview state
@@ -340,13 +339,10 @@ class CommandHandler:
         ts.reset_requested = False
 
     def _save_tournament_selection(self, ui_state, filename):
-        """Save each selected genome under the name the user chose.
-
-        Several tiles get suffixed names rather than one shared name - see
-        save_targets.target_stems. The tiles come from the request rather than
-        from the live selection, so the set that was named in the dialog is the
-        set that gets written even if a click lands while it is open.
-        """
+        """Save each selected genome under the chosen name (tiles get suffixed
+        names, see save_targets.target_stems). Uses the tiles from the
+        request, not the live selection, so a click while the dialog is open
+        can't change what gets written."""
         from services import save_targets
 
         svc = self.tournament_service
@@ -374,12 +370,8 @@ class CommandHandler:
 
     @staticmethod
     def _clear_auto_flags(ats):
-        """Reset auto one-shot flags after consumption.
-
-        Cleared here rather than in UI.get_state(): get_state returns the live
-        state object, so clearing there would wipe flags before this handler
-        ever read them. `warning` is persistent and is NOT cleared.
-        """
+        """Reset auto one-shot flags after consumption. `warning` is
+        persistent and is NOT cleared."""
         ats.start_requested = False
         ats.pause_requested = False
         ats.reset_requested = False
@@ -405,9 +397,8 @@ class CommandHandler:
             self._clear_auto_flags(ats)
             return
 
-        # Explore mode drives this same service through a different driver.
-        # Letting Auto's settings through here would fight _handle_explore over
-        # steps_per_gen, sigma0 and the algorithm on every single frame.
+        # Explore drives this same service through a different driver; skip so
+        # Auto's settings don't fight _handle_explore over the same fields.
         if self.imgep_driver is not None and svc.driver is self.imgep_driver:
             self._clear_auto_flags(ats)
             return
@@ -482,12 +473,9 @@ class CommandHandler:
         ast.refresh_archive_list_requested = False
 
     def _handle_archive_management(self, ui_state):
-        """Create, empty, delete and switch archives.
-
-        Runs BEFORE _handle_explore so a switch lands on the same frame the
-        button was pressed, and so the settings push that follows goes to the
-        archive the user just chose.
-        """
+        """Create, empty, delete and switch archives. Runs BEFORE
+        _handle_explore so a switch lands the same frame the button was
+        pressed, before the settings push that follows."""
         from services.archive_library import (clear, create, delete,
                                               list_archives)
         from utilities.paths import get_archives_root
@@ -508,11 +496,8 @@ class CommandHandler:
             else:
                 ast.warning = res.message
         elif ast.clear_archive_requested:
-            # LET GO FIRST. ArchiveStore keeps index.jsonl open for append, and
-            # Windows will not rename a directory that contains an open handle:
-            # that is WinError 5, the "access is denied" Empty kept failing
-            # with. Either outcome then needs a rebuild - on success because
-            # the directory is now empty, on failure because we just closed it.
+            # Release first: Windows refuses to rename a directory with an
+            # open handle, and ArchiveStore keeps index.jsonl open for append.
             self._release_current_archive(ui_state)
             res = clear(root, ast.archive_name)
             target = res.name if res.ok else ast.archive_name
@@ -541,12 +526,7 @@ class CommandHandler:
 
     def _release_current_archive(self, ui_state):
         """Close everything holding the active archive directory, if we can.
-
-        Optional so the handler still works in tests and in any wiring that
-        never set the callback; the clear/delete then behaves as it did before,
-        which on Windows means it may fail with a message rather than silently
-        corrupting anything.
-        """
+        Optional so this still works when no release callback is wired up."""
         if self.release_archive is not None:
             self.release_archive(ui_state)
 
@@ -641,7 +621,7 @@ class CommandHandler:
         z, _clamped = encode(self.archive.brains[i])
         sim_state = ui_state.sim
         if "physics" in e.spec:
-            # The archive stores ABSOLUTE physics, so applying it needs no origin.
+            # Archive physics is stored ABSOLUTE, so no origin is needed here.
             for j, (name, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
                 setattr(sim_state, name, float(self.archive.physics[i][j]))
         meta = {"archive_id": int(e.id), "novelty": float(e.novelty),
@@ -650,26 +630,18 @@ class CommandHandler:
         path = self.user_configs_dir / f"{filename}.json"
         export_genome(path, z, sim_state, meta)
         print(f"[archive] saved {path}")
-        # A console print is not feedback in a GUI: the file lands somewhere the
-        # user cannot see, so the button looked like it did nothing.
         ui_state.archive.notice = (
             f"Saved {path.name} to your configs folder (File > Load > Custom).")
 
     def _seed_from_archive(self, ast):
-        """Load an archive entry as a search starting point.
-
-        Only Auto mode has an x0 - an IMGEP expansion draws its parents from the
-        archive by novelty, so 'seed from here' has no meaning there and must
-        say so rather than silently do nothing.
-        """
+        """Load an archive entry as a search starting point. Only Auto mode
+        has an x0; Explore draws parents from the archive by novelty."""
         from services.genome_spec import encode
 
         i = self._archive_index(ast.seed_entry_id)
         if i is None or self.auto_service is None:
             return
         if not hasattr(self.auto_service.driver, "set_x0"):
-            # This is the common case - the button lives in a tab whose own
-            # mode cannot use it - so it has to be said on screen, not printed.
             ast.warning = ("'Seed a run from here' applies to the Auto (CLIP) "
                            "tab; Explore picks its own parents from the archive.")
             return
@@ -744,9 +716,8 @@ class CommandHandler:
         print(f"[auto] resumed at generation {svc.generation}")
 
     def _save_auto_checkpoint(self, svc, ats):
-        """A checkpoint resumes the OPTIMIZER, so it is not a config and does
-        not go through the name dialog or into the configs folder. It still has
-        to say where it went, which was the other half of the report."""
+        """A checkpoint resumes the OPTIMIZER, so it skips the name dialog
+        and configs folder, saving into the run folder instead."""
         from services.run_checkpoint import save_checkpoint
 
         if svc.logger is None or not svc.logger.enabled:
@@ -779,17 +750,13 @@ class CommandHandler:
                            "first.")
             return
 
-        # With physics search on the genome is 88 wide: 80 brain genes then 8
-        # physics genes. export_genome decodes a BRAIN, so handing it the whole
-        # vector is a reshape error - and this runs inside orchestrate_frame,
-        # so it took the app down rather than printing a warning.
+        # export_genome decodes a BRAIN only; with physics search on, z also
+        # carries physics genes and must be split first.
         blocks = svc.spec.split(z)
         brain_z = blocks["brain"]
 
-        # The physics half has to travel with the brain. Writing the brain
-        # against whatever the sliders currently say would save a file that
-        # does not reproduce what was on screen. Onto a COPY: pressing Save
-        # must not move the user's sliders.
+        # Physics travels with the brain, applied to a COPY so Save doesn't
+        # move the user's sliders.
         sim_state = ui_state.sim
         if "physics" in blocks:
             sim_state = copy.copy(sim_state)
@@ -911,12 +878,8 @@ class CommandHandler:
                     print(f"Config deleted: {filepath}")
 
     def _handle_file_save(self, ui_state):
-        """Every save in the app arrives here, named by the user.
-
-        The dialog decided the name and confirmed any overwrite; this only
-        decides WHAT to write. `kind` "" is the live configuration and keeps
-        its original behaviour exactly - see services/save_targets.
-        """
+        """Every save in the app arrives here, named by the user. Dispatches
+        on `kind`; "" is the live configuration. See services/save_targets."""
         from services import save_targets
 
         filename = ui_state.save_filename

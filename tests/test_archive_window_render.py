@@ -13,8 +13,10 @@ from imgui_bundle import imgui
 
 from services.goal_source import GoalList
 from state.archive_state import ArchiveState
+from state.sim_state import SimState
 from state.auto_tournament_state import AutoTournamentState
 from state.tournament_state import TournamentState
+from ui import layout
 from ui.archive_window import ArchiveWindowMixin
 from ui.auto_tournament_window import AutoTournamentWindowMixin
 
@@ -57,6 +59,8 @@ def host_only():
 class _State:
     def __init__(self):
         self.archive = ArchiveState()
+        # The Auto tab reads it for the sweep warning.
+        self.sim = SimState()
         self.auto_tournament = AutoTournamentState()
         self.tournament = TournamentState()
 
@@ -743,9 +747,8 @@ def test_refitting_the_projection_invalidates_the_map():
 def test_the_map_colours_pins_over_their_source():
     h = Harness(archive=_populated())
     proj = _spread(h.archive_obj)
-    _unit, _lo, _span, colors, _idx = h._map_points(
-        h.archive_obj, proj, h.state.archive)
-    for e, c in zip(h.archive_obj.entries, colors.tolist()):
+    pts = h._map_points(h.archive_obj, proj, h.state.archive)
+    for e, c in zip(h.archive_obj.entries, pts.colors.tolist()):
         want = ArchiveWindowMixin._MAP_COLORS["pin" if e.pinned else e.source]
         assert c == want
 
@@ -956,7 +959,7 @@ def test_selection_follows_the_filter_not_the_row(gui):
     ast = h.state.archive
     ast.map_filter = "kept"
 
-    _u, _l, _s, _c, idx = h._map_points(h.archive_obj, proj, ast)
+    idx = h._map_points(h.archive_obj, proj, ast).idx
     kept = [i for i, e in enumerate(h.archive_obj.entries)
             if e.pinned or e.source in ("summit", "record")]
     assert idx.tolist() == kept
@@ -985,7 +988,8 @@ def test_filtering_renormalises_so_what_is_left_fills_the_canvas(gui):
     ast.map_filter = "novel"
     ast.map_novel_pct = 25
 
-    unit, _lo, _span, _c, idx = h._map_points(h.archive_obj, proj, ast)
+    pts = h._map_points(h.archive_obj, proj, ast)
+    unit, idx = pts.unit, pts.idx
     assert len(idx) == 10
     assert unit.min() == pytest.approx(0.0, abs=1e-5)
     assert unit.max() == pytest.approx(1.0, abs=1e-5)
@@ -1021,3 +1025,172 @@ def test_the_legend_says_how_much_is_hidden(gui):
     finally:
         imgui.text_colored = real
     assert any("showing 10 of 40" in s for s in seen), seen
+
+
+# ---- the density heatmap carries the Colour mode --------------------------
+
+class _RecordingDrawList:
+    """Captures add_rect_filled, so what _draw_density chose is assertable."""
+
+    def __init__(self):
+        self.rects = []
+
+    def add_rect_filled(self, a, b, col):
+        self.rects.append((a.x, a.y, int(col)))
+
+
+def _density(color_by_value, xs, ys, colors, tvals, cell_size=320.0):
+    h = Harness()
+    dl = _RecordingDrawList()
+    h._draw_density(dl, np.asarray(xs, np.float32), np.asarray(ys, np.float32),
+                    imgui.ImVec2(0.0, 0.0),
+                    imgui.ImVec2(cell_size, cell_size),
+                    np.asarray(colors, np.int64),
+                    None if tvals is None else np.asarray(tvals, np.float32))
+    return dl.rects
+
+
+def _rgb(packed):
+    return packed & 0xFFFFFF
+
+
+def _alpha(packed):
+    return (packed >> 24) & 255
+
+
+def test_density_takes_the_regime_colour_when_colouring_by_source():
+    """The Colour combo has to mean the same thing in both draw modes. It used
+    to be ignored here and every cell was coloured by its count."""
+    expedition = ArchiveWindowMixin._MAP_COLORS["expedition"]
+    expansion = ArchiveWindowMixin._MAP_COLORS["expansion"]
+    # Two points in one cell, three in another far away.
+    rects = _density(None, [1.0, 3.0, 200.0, 202.0, 204.0],
+                     [1.0, 3.0, 200.0, 202.0, 204.0],
+                     [expedition, expedition, expansion, expansion, expansion],
+                     None)
+    got = {_rgb(c) for _x, _y, c in rects}
+    assert got == {_rgb(expedition), _rgb(expansion)}
+
+
+def test_density_ramps_the_cell_mean_when_colouring_by_a_number():
+    from services import map_view as mv
+
+    rects = _density(None, [1.0, 3.0, 200.0], [1.0, 3.0, 200.0],
+                     [0, 0, 0], [0.0, 0.0, 1.0])
+    by_x = {round(x): c for x, _y, c in rects}
+    lo, hi = sorted(by_x)
+    assert _rgb(by_x[lo]) == _rgb(int(mv.ramp_colors(np.array([0.0]))[0]))
+    assert _rgb(by_x[hi]) == _rgb(int(mv.ramp_colors(np.array([1.0]))[0]))
+
+
+def test_density_puts_the_count_in_the_opacity():
+    """Once colour carries novelty, count is the only thing alpha is left to
+    say - and a one-entry cell must not fade to invisible."""
+    from services import map_view as mv
+
+    # Eight entries land in the cell at x=0, one in the cell out at x=200.
+    positions = [1.0] * 8 + [200.0]
+    rects = _density(None, positions, positions, [0] * 9, [0.5] * 9)
+    by_x = {round(x): c for x, _y, c in rects}
+    crowded, lone = sorted(by_x)
+    assert _alpha(by_x[crowded]) > _alpha(by_x[lone])
+    assert _alpha(by_x[lone]) >= mv.DENSITY_ALPHA_MIN
+
+
+def test_density_draws_nothing_when_every_point_is_off_canvas():
+    assert _density(None, [-50.0, -60.0], [-50.0, -60.0], [1, 1], None) == []
+
+
+@pytest.mark.parametrize("mode", ["source", "novelty", "liveness"])
+def test_the_density_map_renders_in_every_colour_mode(gui, mode):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.map_color_by = mode
+    h.state.archive.map_render = "points+density"
+    assert frame(_mapped(h)) > host_only()
+
+
+# ---- the canvas owns the mouse wheel --------------------------------------
+
+def test_the_map_canvas_is_a_child_that_absorbs_the_wheel(gui, monkeypatch):
+    """ImGui scrolls the hovered window with the same wheel event the zoom
+    reads, so the tab scrolled AND the map zoomed. A child with both
+    no_scrollbar and no_scroll_with_mouse is what stops the forwarding."""
+    seen = {}
+    real = imgui.begin_child
+
+    def spy(str_id, size=None, child_flags=0, window_flags=0):
+        seen[str_id] = window_flags
+        return real(str_id, size, child_flags, window_flags)
+
+    monkeypatch.setattr(imgui, "begin_child", spy)
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    frame(_mapped(h))
+
+    flags = seen.get("map_canvas")
+    assert flags is not None, f"no map canvas child; saw {sorted(seen)}"
+    assert flags & imgui.WindowFlags_.no_scroll_with_mouse
+    # Without NoScrollbar too, ImGui walks up to the parent and scrolls it.
+    assert flags & imgui.WindowFlags_.no_scrollbar
+
+
+# ---- narrow panels ---------------------------------------------------------
+
+def narrow_frame(fn, width=layout.MIN_PANEL_WIDTH, n=3):
+    """Render fn in a host window at the narrowest the panels allow."""
+    for _ in range(n):
+        imgui.new_frame()
+        imgui.set_next_window_size(imgui.ImVec2(width, 720), imgui.Cond_.always)
+        imgui.begin("narrow host", True)
+        fn()
+        imgui.end()
+        imgui.render()
+
+
+def narrow_button_labels(fn):
+    seen = []
+    real = imgui.button
+
+    def spy(label, *a, **kw):
+        seen.append(label)
+        return real(label, *a, **kw)
+
+    imgui.button = spy
+    try:
+        narrow_frame(fn)
+    finally:
+        imgui.button = real
+    return seen
+
+
+def test_the_explore_tab_keeps_its_buttons_at_the_minimum_width(gui):
+    """Rows that overflow do not scroll - ImGui clips them, so a button past
+    the right edge cannot be clicked at all."""
+    goals = GoalList()
+    goals.add("coral reef")
+    h = Harness(driver=_TracingDriver(), archive=_populated(), goals=goals)
+    labels = narrow_button_labels(h.render_explore_tab)
+    for want in ("New##archive", "Empty##archive", "Delete##archive",
+                 "Refresh##archive", "Start##explore", "Pause##explore",
+                 "Reset Search##explore", "Add Goal"):
+        assert want in labels, f"{want} missing at {layout.MIN_PANEL_WIDTH}px"
+
+
+def test_the_map_keeps_its_buttons_at_the_minimum_width(gui):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.selected_entry_id = 0
+    labels = narrow_button_labels(_mapped(h))
+    assert "Refit projection" in labels and "Home##map" in labels
+    assert "Save as config...##map" in labels and "Delete##map" in labels
+
+
+def test_the_auto_tab_keeps_its_buttons_at_the_minimum_width(gui):
+    h = Harness()
+    h.auto_service = None
+    h.auto_unavailable = ""
+    labels = narrow_button_labels(h.render_auto_tournament_tab)
+    for want in ("Set", "Reset", "Save best genome...", "Save checkpoint",
+                 "Load genome", "Load checkpoint"):
+        assert want in labels, f"{want} missing at {layout.MIN_PANEL_WIDTH}px"

@@ -3,7 +3,7 @@
 Depends only on onnxruntime, tokenizers, numpy and PIL. Knows nothing about
 tournaments, tiles or OpenGL.
 
-ONNX tensor names, verified against Xenova/clip-vit-base-patch32 on 2026-08-04:
+ONNX tensor names, verified against Xenova/clip-vit-base-patch32:
   vision: in 'pixel_values' (N,3,224,224) tensor(float) -> out 'image_embeds'
   text:   in 'input_ids'    (N,77) int64               -> out 'text_embeds'
 
@@ -41,17 +41,14 @@ DEFAULT_DISTRACTORS = [
     "a blurry photograph",
     "a screenshot of text",
     "a solid color",
-    # Without this one, nearly every trail pattern scores highly on nearly every
-    # prompt, because "abstract texture" is the honest description of most of
+    # Without this one, nearly every trail pattern scores highly on nearly
+    # every prompt - "abstract texture" is the honest description of most of
     # the search space.
     "an abstract texture",
-    # The last three exist because a DEAD CANVAS is a degenerate attractor.
-    # Measured on 32 real tiles (Task 3 gate): with only the six distractors
-    # above, a pure black image scored 0.37 on "flowing water" and 0.35 on
-    # "tree branches", outranking 31 of 32 genuine tiles. The optimizer would
-    # have driven straight to an empty simulation. "a blank image" and "a solid
-    # color" alone did not catch it; these do, dropping black to 0.03 while
-    # leaving real-signal spread essentially unchanged.
+    # The last three exist because a DEAD CANVAS is a degenerate attractor:
+    # without them a pure black image can outrank genuine tiles and the
+    # optimizer drives straight to an empty simulation. "a blank image" and
+    # "a solid color" alone did not catch it.
     "a black image",
     "an empty black background",
     "a dark empty scene",
@@ -67,23 +64,14 @@ _OFFSET_CHW = (-CLIP_MEAN / CLIP_STD).reshape(1, 3, 1, 1).astype(np.float32)
 def preprocess(crops: np.ndarray, dtype=np.float32) -> np.ndarray:
     """uint8 (B,224,224,3) -> (B,3,224,224) in `dtype`, C-contiguous.
 
-    TRANSPOSE FIRST, while the data is still uint8. This was the single largest
-    cost in the whole CLIP path - 54-58% of it, more than the GPU - because the
-    old order converted to float32, made two more full-array temporaries for
-    the mean and the std, and only then did a strided transpose of 38 MB per
-    64 images. Transposing one byte per element instead of four, and folding
-    the normalisation into one in-place multiply-add, measures 2.3x faster
-    (112.6 ms -> 48.7 ms per 64 images).
+    TRANSPOSE FIRST, while the data is still uint8 - this was the single
+    largest cost in the CLIP path. Folds normalisation into one in-place
+    multiply-add rather than three full-array passes.
 
-    EXACT in fp16, which is the dtype the shipped model takes: 0 of 4.8M values
-    differ from the old formula. In float32 it differs on 67% of values, but by
-    at most 4.8e-7 - one ulp, from `x*(1/std) + (-mean/std)` associating
-    differently to `(x - mean)/std`. Worth stating precisely, because every
-    embedding already in an archive was produced by the old order.
-
-    Not done in fp16 throughout, which looks tempting since the model is fp16:
-    numpy emulates fp16 arithmetic, so it measured 150.6 ms - slower than the
-    original - and lost 0.002 of accuracy for the privilege.
+    In float32 this differs from the old per-channel formula by at most one
+    ulp (associativity), which matters because every embedding already in an
+    archive was produced by the old order. Not done in fp16 throughout: numpy
+    emulates fp16 arithmetic and that measured slower, not faster.
 
     ascontiguousarray is required, not cosmetic: a non-contiguous array either
     forces a silent copy inside ONNX Runtime or errors, depending on provider.
@@ -220,17 +208,12 @@ class CLIPScorer:
 
     def _embed_images(self, crops: np.ndarray) -> np.ndarray:
         """PIPELINED: the next chunk is normalised on a worker thread while the
-        GPU runs the current one.
+        GPU runs the current one. numpy releases the GIL for work this size, so
+        they genuinely overlap.
 
-        The two stages are close in cost after the preprocess rewrite - 48.7 ms
-        of numpy against 58.4 ms of DirectML per 64 images - and numpy releases
-        the GIL for work this size, so they genuinely overlap. Measured 1.39x
-        at 1152 images, which is one generation at grid 8, 6 snapshots, 3 views.
-
-        A lookahead of exactly ONE chunk. Submitting every chunk up front is
-        simpler and marginally faster, but it would hold the whole generation
-        preprocessed in memory at once - 345 MB at grid 8 - to save nothing
-        beyond the first chunk's latency.
+        Lookahead of exactly ONE chunk - submitting every chunk up front would
+        hold the whole generation preprocessed in memory at once, to save
+        nothing beyond the first chunk's latency.
 
         Only preprocess() moves off the main thread. augment() draws from
         self._rng and must not race, and only one thread ever calls
@@ -275,33 +258,11 @@ class CLIPScorer:
         """uint8 (B,224,224,3) -> float32 (B, 512): ONE embedding per image,
         averaged over n_views and renormalised.
 
-        The averaging is the point. embed() returns the views un-reduced, and
-        handing those to a novelty archive would make three sub-crops of one
-        tile into three competing descriptors for one behaviour - which is why
-        the search used n_views=1 and took the raw frame.
-
-        But CLIP ViT-B/32 is strongly position-dependent: measured 2026-08-09 on
-        real archive thumbnails, shifting one 16px on the torus moves its
-        embedding 0.078-0.088, which is 2.5-2.7x the distance to its nearest
-        genuine neighbour and past the 0.02 separation bar for 100% of tiles.
-        Averaging over random sub-crops buys back some of that invariance:
-
-            views   roll 16px   repeat noise   same/unrelated
-                1      0.0784        0.0000            0.459
-                3      0.0319        0.0069            0.425
-                5      0.0236        0.0050            0.445
-                8      0.0197        0.0037            0.424
-
-        `repeat` is what the averaging COSTS - the same image embedded twice no
-        longer agrees, because views 1..n are random draws. At 3 views the
-        nuisance falls by 0.046 and the new noise is 0.007, so the trade is
-        about 7:1 in favour; and 0.0069 is a third of the separation bar, so a
-        true duplicate still cannot pass it on noise alone.
-
-        (Centring on the centre of mass was measured first and rejected: it
-        cancels a shift exactly, but 26-34% of tiles have no well-posed centre -
-        these are space-filling textures, not localised objects - so it pushed
-        real near-duplicates APART by 15-19%.)
+        The averaging is the point: embed() returns views un-reduced, which
+        would make sub-crops of one tile into competing archive descriptors.
+        CLIP ViT-B/32 is strongly position-dependent (a roll on the torus
+        moves the embedding well past the separation bar), and averaging over
+        random sub-crops buys back most of that invariance. See CLAUDE.md.
         """
         b = np.asarray(images)
         v = max(1, int(n_views))

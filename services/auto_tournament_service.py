@@ -69,9 +69,8 @@ class AutoTournamentService:
         self.physics_enabled = False
         self.tile_physics: list[dict] = []
         # Current physics, so z=0 decodes to the LOADED PRESET rather than the
-        # midpoint of every slider. The midpoint is AXIAL_FORCE=0,
-        # LATERAL_FORCE=0, DRAG=0 - a dead configuration with no propulsion,
-        # which is where CMA-ES would otherwise centre its search.
+        # slider midpoint - a dead, propulsion-less configuration CMA-ES would
+        # otherwise centre its search on.
         self.physics_origin: dict[str, float] = {}
         self.tile_mutation_enabled = False
         self.variants_per_tile = 4

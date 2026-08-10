@@ -58,6 +58,25 @@ entity_update.glsl (compute) → fourier4_4.glsl (compute) → frame_assembly.fr
 
 Uniforms are set from Python via `tryset(program, 'UNIFORM_NAME', value)` which gracefully handles missing uniforms during shader development. Press `V` to hot-reload shaders.
 
+## Writing Rules (comments, docstrings, tooltips)
+
+**State the rule. Never the evidence, never the reasoning.**
+
+Banned in comments, docstrings and UI strings: measured percentages, benchmark
+timings, the word MEASURED, dates, before/after comparisons, "I tried X and it
+failed", and multi-paragraph rationale.
+
+- A **tooltip** is ONE sentence naming what the control does. Not why the
+  default is what it is, not what happens at the extremes, not a number.
+- A **comment** is one line naming a non-obvious constraint. If it is longer
+  than the code beneath it, delete it.
+- A **docstring** says what the function returns and what a caller must know to
+  call it. Not the history of the design.
+
+Measured facts have exactly one home: the caveats in this file, or a document
+under `docs/`. Everywhere else points at that home instead of restating it — a
+number in two places drifts, and then neither is evidence.
+
 ## Naming Conventions
 
 - **SimState fields / shader uniforms**: `ALL_CAPS_UNDERSCORE` (e.g. `SENSOR_DISTANCE`)
@@ -469,6 +488,24 @@ mechanics these caveats assume.
   showing a "Dismiss" button would otherwise collide on the ImGui id, per the
   caveat below.
 
+- **A wheel event reaches the zoom AND the scrollbar, unless a child eats it.**
+  ImGui scrolls the hovered window during `NewFrame`, so a canvas that reads
+  `io.mouse_wheel` to zoom also scrolls the panel it sits in — which reads as
+  the wheel doing something different every time. The map canvas is therefore
+  a child window with **both** `no_scrollbar` and `no_scroll_with_mouse`: with
+  only the latter, ImGui walks up to the parent and scrolls that instead.
+  Guarded by `tests/test_archive_window_render.py::test_the_map_canvas_is_a_child`.
+
+- **A widget's label is drawn to its RIGHT and is CLIPPED, not scrolled.**
+  ImGui's default item width is 65% of the window, so at any narrow width the
+  label runs past the edge and simply vanishes — there is no horizontal
+  scrollbar to find it with. Every settings panel therefore pushes
+  `layout.push_settings_width()`, which reserves room for `WIDEST_LABEL`, and
+  button rows use `layout.wrap_row()` rather than bare `same_line()`. A label
+  wider than `WIDEST_LABEL` fails `tests/test_label_widths.py`, measured in
+  real pixels — the font is proportional, so character counts do not predict
+  width.
+
 - **An ImGui widget's identity IS its label, and a duplicate silently kills the
   loser.** Two visible items hashing to one ID puts Dear ImGui's "conflicting
   ID" dialog over the app and stops one of them responding to the mouse at all
@@ -493,6 +530,16 @@ mechanics these caveats assume.
   subset, so narrowing also expands what is left. UMAP was considered and not
   used: PCA's `transform()` is a matmul, so a new entry places instantly against
   stable axes, while UMAP is non-parametric and its refit relayouts everything.
+
+- **Colour and Draw are ORTHOGONAL: the heatmap carries the same colour the
+  dots would, and count moves to the ALPHA channel.** A density map coloured by
+  its own cell counts silently overrides the Colour combo, so switching to
+  novelty appeared to do nothing in that draw mode. A ramp mode averages the
+  cell (`cell_means`); `source` cannot be averaged — two packed colours added
+  together are not a colour — so it takes the cell's **majority**
+  (`cell_majority`). The alpha floor is well above transparent, because a
+  one-entry cell fading to nothing hides exactly the frontier the log scale
+  exists to show.
 
 - **Opening the Explore tab is where every lazy cost lands at once.** The
   biggest was a directory walk: `list_archives` spent 3418 ms, essentially all

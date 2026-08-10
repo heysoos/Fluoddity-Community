@@ -1,12 +1,8 @@
 """Popup modal dialogs: Save, Overwrite, Delete confirmations.
 
-ONE save dialog for the whole app. It used to serve only File > Save, while
-each tournament mode wrote its own auto-generated filename without asking -
-which is why saving a tile gave you no name, no confirmation, and silently
-clobbered the file from five generations ago. The dialog now carries a
-*subject* (kind, arg, tiles; see services/save_targets) so every save in the
-app goes through the same name box, the same overwrite check and the same
-destination.
+ONE save dialog for the whole app - every save carries a *subject* (kind,
+arg, tiles; see services/save_targets) and goes through the same name box,
+overwrite check and destination.
 """
 from imgui_bundle import imgui
 
@@ -55,8 +51,7 @@ class PopupModalsMixin:
             imgui.open_popup("Save Config")
 
         if imgui.begin_popup_modal("Save Config", flags=imgui.WindowFlags_.always_auto_resize)[0]:
-            # What is about to be written. The same dialog serves the live
-            # sliders and a tournament tile, and those produce different files.
+            # What is about to be written.
             imgui.text_disabled(save_targets.subject_label(
                 self.save_popup_kind, self.save_popup_arg, self.save_popup_tiles))
             imgui.text("Enter filename (without extension):")
@@ -68,8 +63,6 @@ class PopupModalsMixin:
             stem = save_targets.safe_stem(self.save_filename_buffer)
             stems = save_targets.target_stems(
                 self.save_popup_kind, stem, self.save_popup_tiles)
-            # Say where it lands, always. "Where did it even go" was half the
-            # complaint, and the answer is the same folder File > Load reads.
             if len(stems) > 1:
                 imgui.text_disabled(
                     f"Writes {len(stems)} files: {', '.join(s + '.json' for s in stems[:3])}"

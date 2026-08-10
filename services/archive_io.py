@@ -25,10 +25,10 @@ THUMB_PX = 160
 THUMB_QUALITY = 85
 
 _ARRAY_KEYS = ("ids", "embeddings", "brains", "physics")
-# Written since 2026-08-08, absent from every archive saved before it. NOT in
-# _ARRAY_KEYS and NOT a format_version bump on purpose: both would quarantine
-# every existing archive on first open. A file without it simply loads without
-# it, and Archive.load_from_store rescores from the embeddings anyway.
+# Newer field, absent from older archives. NOT in _ARRAY_KEYS and NOT a
+# format_version bump on purpose: both would quarantine every existing archive
+# on first open. A file without it simply loads without it, and
+# Archive.load_from_store rescores from the embeddings anyway.
 _OPTIONAL_ARRAY_KEYS = ("novelty",)
 
 
@@ -81,16 +81,12 @@ class ArchiveStore:
     def flush_vectors(self, ids, embeddings, brains, physics,
                       novelty=None) -> None:
         """Rewrite vectors.npz atomically. Embeddings go to disk as fp16 - half
-        the bytes, and the precision loss is far below the scale any novelty
-        decision turns on.
+        the bytes, well below the precision any novelty decision needs.
 
         novelty belongs HERE rather than in index.jsonl because it is the one
         stored field that CHANGES after admission: refresh() re-scores entries
-        against the grown archive, and index.jsonl is append-only, so the index
-        can only ever hold the at-admission value. Measured 2026-08-08 on the
-        default archive, that value correlates 0.075 with the truth - which
-        made parent sampling, latent-goal anchoring and eviction all run on a
-        column that was very nearly noise."""
+        against the grown archive, and index.jsonl is append-only so it can
+        only ever hold the at-admission value. See CLAUDE.md."""
         if not self.enabled:
             return
         tmp = self.vectors_path.with_suffix(self.vectors_path.suffix + ".tmp")
@@ -141,11 +137,9 @@ class ArchiveStore:
     def delete_thumb(self, name: str) -> bool:
         """Remove one thumbnail. -> did a file go?
 
-        Load-bearing now that capacity is the only pruning rule: at 64 tiles a
-        generation a full archive evicts 64 entries every ~2.8 s, and an
-        orphaned 9 KB JPEG each would be ~12 MB a minute of files nothing can
-        ever reach again - index.jsonl is append-only and the entry is gone
-        from vectors.npz, so nothing on reload would even name them.
+        Load-bearing now that capacity is the only pruning rule: without this,
+        every eviction orphans a JPEG nothing can ever reach again -
+        index.jsonl is append-only and the entry is gone from vectors.npz.
         """
         if not self.enabled or not name:
             return False

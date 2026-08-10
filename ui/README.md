@@ -25,8 +25,14 @@ ImGui is immediate-mode: every frame, all widgets are re-rendered by calling fun
 | `auto_tournament_window.py` | `AutoTournamentWindowMixin` | Auto (CLIP) mode: prompt, optimizer settings, status |
 | `archive_window.py` | `ArchiveWindowMixin` | Explore (IMGEP) mode: archive picker, goals, gallery, map |
 
-`physics_params.py` (shared parameter table) and `notices.py` (dismissable
-on-screen messages, used by several tabs) are plain modules, not mixins.
+Three plain modules, not mixins: `physics_params.py` (shared parameter table),
+`notices.py` (dismissable on-screen messages) and `layout.py`.
+
+`layout.py` is what keeps a panel readable when it is narrow. ImGui draws a
+widget's label to its RIGHT and clips it rather than scrolling, so a settings
+block wraps its widgets in `push_settings_width()` and a button row uses
+`wrap_row()` instead of bare `same_line()`. Labels are size-checked in real
+pixels by `tests/test_label_widths.py`.
 
 `popup_modals.py` owns the app's **only** save dialog. Every Save button calls
 `self.open_save_popup(kind, ...)` rather than writing a file, so naming,

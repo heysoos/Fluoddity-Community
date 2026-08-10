@@ -217,7 +217,18 @@ only the running app can answer.
 - [ ] Show > One goal / One regime: the combo lists only values the archive actually holds
 - [ ] Show > Kept for matching on an archive with no summits/records/pins: reads "No entries match this filter", not a broken map
 - [ ] Draw > density: a log-scaled heatmap; zooming in raises the cell resolution
+- [ ] Draw > density with Colour=novelty/liveness: cells take the RAMP, not a count colour, and the legend still shows the ramp
+- [ ] Draw > density with Colour=source: cells take the regime colour of whatever is in them
+- [ ] In every density mode, a crowded cell is more opaque than a lone one, and a lone cell is still visible
 - [ ] Draw > points+density: dots drawn over the heatmap
 - [ ] "showing N of M" is correct under every filter
 - [ ] With a filter on, hovering a dot shows THAT entry, and clicking selects it (not the entry at the same row index)
 - [ ] Switching archives restores that archive's map view settings
+
+## 19. Panel width and the map wheel
+- [ ] Drag the Tournament window as narrow as it will go: no slider label is cut off, and every button is reachable
+- [ ] Same for the Archive browser, on both the Gallery and Map tabs
+- [ ] The gallery wraps to fewer thumbnails per row as the window narrows, instead of clipping the right-hand column
+- [ ] Scrolling with the pointer over the map zooms the map and does NOT scroll the panel behind it
+- [ ] Scrolling with the pointer anywhere else in the tab scrolls the panel and does NOT zoom the map
+- [ ] Zoom still centres on the point under the cursor, and drag-to-pan still works

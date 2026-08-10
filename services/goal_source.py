@@ -10,13 +10,12 @@ Two sources, both fully offline:
   write a 5-15 word description of a hypothetical pattern; here the human writes
   that list and the app cycles it.
 
-Ordering over text goals is ROUND ROBIN by default. CLIP's modality gap means
-different phrases have different baseline affinities to any image, so 'which
-goal is the archive least able to match' is not comparable across phrases
-without normalisation. Within a single expedition the goal is fixed, so the gap
-is a constant offset on every tile's score and CMA-ES's ranking is unaffected -
-which is why raw <b, g> is a fine expedition fitness and a poor cross-goal
-comparison. least_matched() therefore subtracts the archive mean.
+Ordering over text goals is ROUND ROBIN by default. CLIP's modality gap gives
+different phrases different baseline affinities to any image, so "which goal
+is the archive least able to match" needs normalisation to compare across
+phrases - least_matched() subtracts the archive mean for that. Within a single
+expedition the goal is fixed, so the gap is just a constant offset and
+CMA-ES's ranking is unaffected.
 """
 from __future__ import annotations
 
@@ -33,12 +32,9 @@ class Goal:
     text: str
     embedding: np.ndarray | None   # (dim,) float32 unit norm; None for novelty
     # Where the expedition should START, for a goal that cannot be asked.
-    #
-    # Only a novelty goal sets this: it has no embedding, so there is nothing
-    # for _seed_index to score the archive against. Text, chase and latent
-    # goals all leave it None and go through _seed_index, which samples with a
-    # banded alpha - measured better than any shortcut tried here, including
-    # seeding a latent goal at its own anchor. See latent_goal.
+    # Only a novelty goal sets this (no embedding for _seed_index to score
+    # against). Text, chase and latent goals leave it None and go through
+    # _seed_index instead. See latent_goal.
     seed_index: int | None = None
 
     @property
@@ -135,16 +131,13 @@ class GoalList:
 
             reach(g) = max_e <e, g> - mean_e <e, g>
 
-        The mean is the archive's indifferent baseline for that phrase, which is
-        exactly what the modality gap contributes, so subtracting it makes two
-        phrases comparable. What is left is in cosine units and still positional
-        - it says how far past that baseline the archive actually reaches.
+        The mean is the archive's indifferent baseline for that phrase (the
+        modality gap's contribution), so subtracting it makes phrases
+        comparable; what's left says how far past baseline the archive reaches.
 
-        NOT z-scored. Dividing by the per-goal std makes the statistic
-        scale-free, and a scale-free max is a property of the distribution's
-        tail rather than of where it sits: on an archive that fans out around
-        goal A and barely brushes goal B, the z-score ranks A as the worse-
-        covered of the two. Verified 2026-08-07 - reach picks B, z picks A.
+        NOT z-scored: dividing by the per-goal std makes the statistic
+        scale-free, which ranks by the shape of the tail rather than where it
+        actually sits.
         """
         live = self.enabled_items()
         e = np.asarray(embeddings, dtype=np.float32)
@@ -174,22 +167,16 @@ class GoalList:
             self.store.save_goals(self.items)
 
 
-# The archive is a low-dimensional cloud inside a 512-d space: measured
-# 2026-08-08 over 4784 descriptors, HALF its variance lies in 3 components and
-# 80% in 18. Extrapolating in the top 8 therefore moves along the manifold the
-# creatures actually occupy.
-#
-# d must stay SMALL. At d=32 this construction is nearly a no-op - seed rank
-# 0.1, against 41.3 at d=8 - because whitening equalises the components and the
-# unit direction then puts most of its energy in the minor ones, which unwhiten
-# back to almost nothing. Raising d to "capture more variance" silently turns
-# the push off.
+# The archive is a low-dimensional cloud inside a 512-d space, so extrapolating
+# in a small top-component subspace moves along the manifold the creatures
+# actually occupy. d must stay SMALL: whitening equalises the components, so a
+# large d puts the push's energy in minor directions that unwhiten back to
+# almost nothing. See CLAUDE.md.
 LATENT_DIMS = 8
 
-# In whitened units, so it is 3 standard deviations along the seed's own
-# direction whichever axes that direction uses. Measured seed rank: 21.0 at
-# +1sd, 29.1 at +2sd, 41.3 at +3sd, with reach still 0.962 - far enough to
-# leave real room past the seed, near enough to stay on the manifold.
+# In whitened units: standard deviations along the seed's own direction,
+# whichever axes that direction uses. Far enough to leave real room past the
+# seed, near enough to stay on the manifold.
 LATENT_PUSH_SD = 3.0
 
 
@@ -202,15 +189,11 @@ def latent_goal(archive, rng, projection, alpha: float = 4.0,
     whitened, pushed out along its own direction, and unwhitened.
 
     This replaces g = normalise(b + beta*(b - c)), which did not work and could
-    not be made to work by tuning beta. Archive.nearest() returns
-    argmax(embeddings @ g), so the expedition always seeds on the archive's best
-    entry under its goal; the old construction then put the goal 0.965 cosine
-    from that very seed, because <b, c> = 0.947 makes b - c a tiny vector.
-    Measured over 200 trials: the goal's nearest entry WAS the seed it was built
-    from 199 times, at mean rank 0.01. CMA-ES started on the optimum of its own
-    objective and every subsequent move could only score worse. Raising beta
-    bought climbability at a ruinous rate - beta=20 reaches only 0.328, as
-    unreachable as a text prompt.
+    not be made to work by tuning beta: since Archive.nearest() is
+    argmax(embeddings @ g), the expedition always seeds on the archive's best
+    entry under its goal, and that construction put the goal too close to the
+    seed itself - CMA-ES started on the optimum of its own objective and every
+    subsequent move could only score worse. See CLAUDE.md.
 
     Returns None when the projection cannot be fit. It must NOT fall back to the
     seed or to centroid extrapolation: both hand back a goal the seed already
@@ -239,11 +222,8 @@ def latent_goal(archive, rng, projection, alpha: float = 4.0,
     if not np.isfinite(nrm) or nrm < 1e-6:
         return None
     # NO seed_index, deliberately. Seeding at the anchor looks obviously right
-    # and measured as a REGRESSION - 15.8% -> 27.0% of seeds in the archive's
-    # roughest decile - because _seed_index samples with banded_alpha, which
-    # already spreads the draw, while p ~ NOV^alpha concentrates hard. The
-    # noisy-TOP-PICK half is answered by the coherence factor in
-    # ImgepDriver._expedition_fitness, not here.
+    # but is a regression - see CLAUDE.md. The noisy-top-pick half is answered
+    # by the coherence factor in ImgepDriver._expedition_fitness, not here.
     return Goal("latent", "", (g / nrm).astype(np.float32))
 
 

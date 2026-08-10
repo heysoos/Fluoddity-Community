@@ -416,10 +416,7 @@ class UI(
             self.imgui_char_callback(window, char)
 
     def get_state(self) -> UIState:
-        """Return current UI state for Orchestrator to read.
-
-        Returns snapshot and resets one-shot flags.
-        """
+        """Return a state snapshot for the Orchestrator, resetting one-shot flags."""
         # Check for pending resize (debounced)
         if self.pending_resize_time is not None:
             if time.time() - self.pending_resize_time >= self.resize_debounce_delay:
@@ -562,11 +559,8 @@ class UI(
         glfw.set_clipboard_string(self.window, text)
 
     def add_to_config_clipboard(self, config, filename: str, field_snapshot=None) -> None:
-        """Add a config snapshot to the config clipboard.
-
-        Args:
-            field_snapshot: Optional numpy float32 array of field texture data.
-        """
+        """Add a config snapshot to the config clipboard. field_snapshot is
+        an optional numpy float32 array of field texture data."""
         label = f"{filename}*{self.clipboard_counter:02d}"
         self.config_clipboard.append((config, label, field_snapshot))
         self.clipboard_counter += 1

@@ -1,26 +1,10 @@
 """Render the tournament grid from the CANVAS, not from the window view.
 
-The capture used to crop the on-screen image, because in cam_brush_mode the
-particles are only ever composited over the trails in a window-shaped target -
-sim.view_tex holds trails alone, so the finished picture existed nowhere else.
-That forced the capture to reverse-engineer where the canvas sat inside the
-window, and every crop bug so far has been that rect disagreeing with the
-texture it was cropping: first a frame of camera lag, then a top-down/bottom-up
-mirror that put 20% of each tile's neighbour into its crop and blacked out the
-whole bottom row.
-
-cam_brush.vert takes window_size as a uniform, so the same particle pass can be
-run into a square target with an identity camera. The canvas then fills that
-target exactly. There is no crop rect at all, which is the point - the class of
-bug is gone rather than fixed again.
-
-Two further consequences, both improvements:
-
-  - the capture no longer depends on where the user is looking. Pan, zoom and
-    window size cannot change what the optimizer scores.
-  - it is rendered at exactly grid*224, so CLIP gets its native resolution with
-    no resampling, and a run is reproducible across window sizes. Previously
-    the sampling density of the capture was whatever the window happened to be.
+cam_brush.vert takes window_size as a uniform, so the same particle pass can
+run into a square target with an identity camera, filling it exactly with no
+crop rect. Pan, zoom and window size therefore cannot change what the
+optimizer scores, and it renders at exactly grid*224 so CLIP gets its native
+resolution with no resampling.
 """
 from __future__ import annotations
 
@@ -83,16 +67,11 @@ class CaptureView:
     def draw_grid(self, fbo, src, grid, blit, ui_state, tile_px):
         """Fill the bound capture framebuffer, blooming each tile ALONE.
 
-        Bloom reaches 30-60px at these sizes (a 5-level mip chain), so running
-        it over the whole grid put a quarter of a tile's worth of its
-        neighbours' glow into every crop - and the optimizer scored it as if it
-        belonged to the creature. Blooming a tile in isolation makes that
-        impossible by construction rather than by choosing a big enough gutter:
-        the pass cannot see anything outside the tile.
-
-        The total pixel count is unchanged - grid^2 tiles of tile_px^2 is the
-        whole grid - so the cost is the extra per-pass overhead, not extra
-        shading.
+        Blooming the whole grid at once leaks neighbouring tiles' glow into
+        every crop, and the optimizer would score that as belonging to the
+        creature. Blooming a tile in isolation makes that impossible by
+        construction: the pass cannot see anything outside the tile. See
+        CLAUDE.md.
         """
         from services.tile_geometry import tile_uv_box
 

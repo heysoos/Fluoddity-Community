@@ -50,37 +50,22 @@ COHERENCE_LAGS = (1, 2, 3, 4, 6, 8, 12, 16)
 def structure(crops: np.ndarray, lags=COHERENCE_LAGS) -> np.ndarray:
     """(n, H, W, 3) uint8 -> (n,) in [0, 1]. 1 is coherent, 0 is white noise.
 
-    The best |spatial autocorrelation| over several lags and both axes: is this
-    image self-similar at ANY offset? Noise decorrelates at every lag; anything
-    with structure re-correlates at its own scale.
+    Best |spatial autocorrelation| over several lags and both axes: is this
+    image self-similar at ANY offset? Multiple lags because lag 1 alone scores
+    a fine regular lattice the same as static - see CLAUDE.md.
 
-    MULTIPLE LAGS, not just the neighbouring pixel. Lag 1 alone cannot tell a
-    fine regular pattern from static, because a lattice with a 3-pixel period
-    also decorrelates in one pixel - a 3px and a 4px lattice both scored 0.000,
-    exactly what white noise scores. That is a false negative on precisely the
-    fine, complex patterns this must not punish. Over the lag set: noise 0.017,
-    3-12px lattices 1.000, once-smoothed noise 0.214, real archive entries
-    median 0.89-0.98.
+    Multiplies expedition fitness because a single-reference contrastive score
+    (latent/chase goals) is a monotone squash of raw cosine, which noise
+    maximises. Not a CLIP term: image-image and image-text similarity sit at
+    different scales, so distractors can't just join the reference set. This
+    runs on crops already in memory instead.
 
-    This exists because a contrastive fitness with ONE reference - which is
-    what a latent or chase goal has, the archive centroid - is a monotone
-    squash of raw cosine to the goal, and raw cosine to an arbitrary direction
-    is maximised by high-frequency noise, which carries energy everywhere.
-    Text goals never had this problem: DEFAULT_DISTRACTORS contains "random
-    noise" and "an abstract texture" precisely to reject it.
+    A flat tile scores 1.0 (no high frequencies) - not a hole, since
+    is_viable_tile already rejects blank captures.
 
-    Deliberately not a CLIP term. The distractors cannot simply be added to a
-    latent goal's reference set: image-image similarity sits near 0.9 and
-    image-text near 0.2, so at one logit scale the text references contribute
-    nothing but a constant, which a softmax is invariant to. This is free, runs
-    on crops already in memory, and cannot inherit CLIP's own blind spots.
-
-    A flat tile scores 1.0 - it has no high frequencies. That is correct here
-    and not a hole: is_viable_tile already rejects blank captures.
-
-    Absolute value, and the axes taken separately rather than averaged: a
-    period-2 stripe is ANTI-correlated at lag 1, which is structure, and a
-    pattern can be organised along one axis and not the other.
+    Absolute value, axes taken separately: a period-2 stripe is
+    anti-correlated at lag 1, which is still structure, and a pattern can be
+    organised along one axis and not the other.
     """
     a = np.asarray(crops)
     if a.ndim != 4 or a.shape[0] == 0:
@@ -103,19 +88,16 @@ def structure(crops: np.ndarray, lags=COHERENCE_LAGS) -> np.ndarray:
 def sweeping_parameters(sim_state) -> list[str]:
     """Parameters whose value differs across tiles.
 
-    Tiles partition both position space and cohort index, so any parameter with
-    a non-zero x, y or cohort sweep takes different values in different tiles.
-    Neither human selection nor a CLIP score is then comparing genomes on equal
-    terms - the comparison is confounded by position.
+    Tiles partition position space and cohort index, so a non-zero x/y/cohort
+    sweep confounds any comparison of genomes across tiles.
 
-    Gated on parameter_sweeps_enabled, matching what actually reaches the GPU:
-    _assign_physics_setting sends 0.0 for every sweep while the master toggle is
-    off, so the stored values are inert. Presets routinely carry sweep values
-    with the toggle off, and warning about those cries wolf. This mirrors
+    Gated on parameter_sweeps_enabled, matching what reaches the GPU
+    (_assign_physics_setting zeroes every sweep while the toggle is off, so a
+    preset can carry inert sweep values without warning). Mirrors
     Sim.has_active_xy_sweep / has_active_cohort_sweep.
 
-    Jitter is deliberately not counted: it is per-particle noise, not a
-    systematic gradient, so it does not bias one tile against another.
+    Jitter is not counted: per-particle noise, not a systematic gradient, so
+    it doesn't bias one tile against another.
     """
     if not getattr(sim_state, "parameter_sweeps_enabled", False):
         return []

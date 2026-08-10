@@ -226,3 +226,87 @@ def test_present_values_lists_what_the_archive_actually_holds():
 
 def test_present_values_drops_the_empty_string():
     assert "" not in mv.present_values(_entries(20), "goal")
+
+
+# ---- density carries the colour mode -------------------------------------
+
+def _grid_of(xs, ys, cell=10.0):
+    return mv.bin_points(np.asarray(xs, np.float32), np.asarray(ys, np.float32),
+                         (0, 0), (100, 100), cell_px=cell)
+
+
+def test_bin_points_and_density_grid_agree():
+    xs = np.array([1.0, 3.0, 55.0], np.float32)
+    ys = np.array([1.0, 2.0, 55.0], np.float32)
+    flat, on, nx, ny, cell = _grid_of(xs, ys)
+    counts, gnx, gny, gcell = mv.density_grid(xs, ys, (0, 0), (100, 100), 10.0)
+    assert (nx, ny, cell) == (gnx, gny, gcell)
+    assert counts.reshape(-1)[flat[0]] == 2
+    assert on.tolist() == [True, True, True]
+
+
+def test_bin_points_drops_what_is_off_canvas():
+    flat, on, *_ = _grid_of([-5.0, 50.0], [50.0, 50.0])
+    assert on.tolist() == [False, True]
+    assert len(flat) == 1
+
+
+def test_cell_means_average_the_entries_that_landed_there():
+    """Colouring a heatmap by novelty means the cell shows the novelty of what
+    is in it, not how many things are in it."""
+    flat = np.array([0, 0, 3], dtype=np.int64)
+    vals = np.array([0.2, 0.8, 0.5], dtype=np.float32)
+    means, counts = mv.cell_means(flat, vals, 4)
+    assert means[0] == pytest.approx(0.5)
+    assert means[3] == pytest.approx(0.5)
+    assert counts.tolist() == [2, 0, 0, 1]
+
+
+def test_an_empty_cell_has_no_mean_rather_than_a_nan():
+    means, counts = mv.cell_means(np.zeros(0, np.int64),
+                                  np.zeros(0, np.float32), 4)
+    assert np.isfinite(means).all() and counts.sum() == 0
+
+
+def test_cell_majority_picks_a_winner_rather_than_blending():
+    """Averaging two packed colours is not a colour - it is whatever bit
+    pattern falls out of the arithmetic."""
+    flat = np.array([0, 0, 0, 1], dtype=np.int64)
+    codes = np.array([111, 111, 222, 222], dtype=np.int64)
+    best, counts = mv.cell_majority(flat, codes, 2)
+    assert best[0] == 111 and best[1] == 222
+    assert counts.tolist() == [3, 1]
+
+
+def test_cell_majority_leaves_empty_cells_alone():
+    best, counts = mv.cell_majority(np.array([2], np.int64),
+                                    np.array([777], np.int64), 4)
+    assert best.tolist() == [0, 0, 777, 0]
+    assert counts.tolist() == [0, 0, 1, 0]
+
+
+def test_density_alpha_rises_with_count_and_never_vanishes():
+    """Count moves to the alpha channel once colour is carrying something
+    else; a one-entry cell that fades to nothing hides the frontier."""
+    a = mv.density_alpha(np.array([1, 5, 50, 500]))
+    assert list(a) == sorted(a)
+    assert a[0] >= mv.DENSITY_ALPHA_MIN
+    assert a[-1] <= 255
+
+
+def test_density_alpha_survives_an_empty_grid():
+    assert np.isfinite(mv.density_alpha(np.zeros(4, np.int32))).all()
+
+
+def test_ramp_takes_a_per_entry_alpha():
+    cols = mv.ramp_colors(np.array([0.5, 0.5], np.float32),
+                          alpha=np.array([10, 250]))
+    assert [(int(c) >> 24) & 255 for c in cols] == [10, 250]
+    assert (int(cols[0]) & 0xFFFFFF) == (int(cols[1]) & 0xFFFFFF)
+
+
+def test_with_alpha_replaces_only_the_alpha_byte():
+    src = mv.pack(10, 20, 30, 255)
+    got = int(mv.with_alpha(np.array([src]), 77)[0])
+    assert got & 0xFFFFFF == src & 0xFFFFFF
+    assert (got >> 24) & 255 == 77
