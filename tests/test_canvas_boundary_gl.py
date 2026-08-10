@@ -10,12 +10,21 @@ Measured before the fix, border/interior luminance over physics_configs/Core:
 wrap presets 1.0-2.1x, bounce presets 2.5-10.7x. See
 docs/superpowers/specs/2026-08-09-bounce-boundary-sensing.md.
 
-CLAMPING IS NOT THE FIX and these tests enforce that. Clamping the sampler was
-measured to roughly DOUBLE the artifact (LavaLamp 10.58x -> 16.06x) because both
-sensors then land on the same texel within sample_dist of the wall, so the
-steering differential is identically zero in a band round the whole border -
-the same dead band CLAUDE.md documents for tournament tiles. The fix is a MIRROR
-(zero-flux/Neumann), which keeps the two sensors distinct.
+Beyond a wall there is no world, so a sensor reads ZERO there and a diffusion
+tap contributes nothing. Three other treatments were measured and all of them
+are worse - the numbers are in the shader comments and in the spec. In
+particular the two tidy ones both fail:
+
+  - CLAMP    LavaLamp 10.6x -> 16.1x
+  - MIRROR   LavaLamp 10.6x -> 11.2x, Streamers 4.7% -> 10.5% at the wall
+  - VOID     LavaLamp  9.5x, Streamers 1.9% at the wall     <- shipped
+
+The reason is not the steering differential, which was the hypothesis these
+tests were first written to enforce. Clamped or mirrored, both of a particle's
+sensors read the wall's own bright trail and reinforce it, so the pile-up gets
+WORSE the more locally accurate the reading becomes. The wrap was not
+preventing the artifact, it was masking it with decorrelated data from across
+the world.
 
 Runs the shipped shader text: the helpers are read from disk and only main() is
 supplied. Skipped when no GL 4.3 context is available.
@@ -65,9 +74,13 @@ void main(){
 
 
 def _sense_helpers() -> str:
-    """The real sense_uv + get_can, lifted from entity_update.glsl."""
+    """The real sense_off_world + sense_uv + get_can, from entity_update.glsl.
+
+    get_field is excluded: it is the same two calls over field_texture, and
+    pulling it in would drag advanced_drawing_resources_initialized with it.
+    """
     src = read_shader("shaders/entity_update.glsl")
-    start = src.index("vec2 sense_uv(")
+    start = src.index("bool sense_off_world(")
     return src[start:src.index("vec4 get_field(", start)]
 
 
@@ -117,28 +130,26 @@ def _world_x(u: float) -> float:
 
 @pytest.mark.parametrize("mode", [BOUNCE, RESET])
 @pytest.mark.parametrize("depth", [0.02, 0.05, 0.13])
-def test_a_wall_mirrors_the_sensor_instead_of_wrapping(sense, mode, depth):
-    """The defect itself. A sensor `depth` past the left wall must read the
-    canvas `depth` INSIDE that wall, not `depth` inside the opposite one."""
+def test_a_sensor_past_a_wall_reads_nothing(sense, mode, depth):
+    """The defect itself. Past the wall the canvas is empty, and the one thing
+    it must never be is a reading of the opposite side of the world."""
     got = sense([[_world_x(-depth), 0.0]], mode)[0][0]
-    assert got == pytest.approx(depth, abs=2.0 / RES), (
-        f"read u={got:.4f}, wanted the mirror {depth:.4f}")
-    assert abs(got - (1.0 - depth)) > 0.1, "it wrapped to the far wall"
+    assert got == 0.0, f"read u={got:.4f} from beyond the wall"
 
 
 @pytest.mark.parametrize("mode", [BOUNCE, RESET])
-def test_the_right_wall_mirrors_too(sense, mode):
-    got = sense([[_world_x(1.0 + 0.05), 0.0]], mode)[0][0]
-    assert got == pytest.approx(0.95, abs=2.0 / RES)
+def test_the_right_wall_reads_nothing_too(sense, mode):
+    assert sense([[_world_x(1.0 + 0.05), 0.0]], mode)[0][0] == 0.0
 
 
 @pytest.mark.parametrize("mode", [BOUNCE, RESET])
-def test_both_axes_mirror(sense, mode):
-    """A corner is where the two folds meet; getting one axis right and the
-    other wrong is exactly the kind of bug that only shows in two corners."""
-    out = sense([[_world_x(-0.05), _world_x(-0.05)]], mode)[0]
-    assert out[0] == pytest.approx(0.05, abs=2.0 / RES)
-    assert out[1] == pytest.approx(0.05, abs=2.0 / RES)
+def test_off_world_on_either_axis_is_off_world(sense, mode):
+    """A corner leaves on both axes at once, and an over-clever test of only
+    one of them would pass on a shader that handled only x."""
+    out = sense([[_world_x(-0.05), 0.0],            # x only
+                 [0.0, _world_x(-0.05)],            # y only
+                 [_world_x(-0.05), _world_x(1.05)]], mode)   # both, a corner
+    assert np.all(out == 0.0)
 
 
 def test_wrap_still_wraps(sense):
@@ -158,27 +169,26 @@ def test_the_interior_is_untouched(sense, mode):
 
 
 @pytest.mark.parametrize("mode", [BOUNCE, RESET])
-def test_two_sensors_past_the_wall_stay_distinct(sense, mode):
-    """What rules out the clamp.
+def test_a_sensor_past_the_wall_never_reads_the_wall_itself(sense, mode):
+    """What rules out BOTH tidy alternatives, and the reason they lose.
 
-    A particle heading into the wall has BOTH sensors past it. Clamping sends
-    both to the same texel, the steering differential is identically zero, and
-    the result is a dead band of width sample_dist round the entire border -
-    measured to be worse than the wrap it replaced. A mirror keeps them apart,
-    and keeps them the same distance apart as they started.
+    A particle heading into a wall has both sensors past it. Clamped, they read
+    the first texel inside; mirrored, they read just inside - either way they
+    read the bright trail piled at that wall, and a trail-following particle
+    reinforces it. That is why locally accurate readings measured WORSE than the
+    wrap they replaced. Empty is not an approximation here, it is what is there.
     """
-    a, b = -0.02, -0.09
-    got = sense([[_world_x(a), 0.0], [_world_x(b), 0.0]], mode)[:, 0]
-    assert abs(got[0] - got[1]) == pytest.approx(0.07, abs=2.0 / RES), (
-        f"the two sensors collapsed to {got} - this is the clamp, not a mirror")
+    got = sense([[_world_x(-0.02), 0.0], [_world_x(-0.09), 0.0]], mode)[:, 0]
+    assert np.all(got == 0.0), (
+        f"read {got} past the wall - clamped or mirrored, not void")
 
 
 @pytest.mark.parametrize("mode", [BOUNCE, RESET])
 def test_the_sample_at_the_wall_never_blends_the_far_edge(sense, mode):
-    """A mirror alone is not enough. texture() is bilinear and the sampler
-    repeats, so a coordinate nearer the seam than half a texel still blends in
-    the texel from the OPPOSITE edge - the leak, at reduced weight. The fold
-    must land no closer than the first texel CENTRE.
+    """Void handles OUTSIDE; this is the last texel INSIDE. texture() is
+    bilinear and the sampler repeats, so a coordinate nearer the seam than half
+    a texel still blends in the texel from the opposite edge - the same leak at
+    reduced weight - and uv exactly 0 is a 50/50 blend with it.
     """
     got = sense([[_world_x(0.0), 0.0], [_world_x(1.0), 0.0]], mode)
     assert got[0][0] == pytest.approx(HALF_TEXEL, abs=1e-3), (
@@ -268,12 +278,39 @@ def test_wrap_still_carries_the_trail_across(ctx):
     assert float(out[:, -1].mean()) > 1e-3
 
 
-@pytest.mark.parametrize("mode", [BOUNCE, RESET, WRAP])
-def test_the_trail_is_conserved(ctx, mode):
-    """A torus and a zero-flux wall both conserve mass exactly. Mass leaving
-    means the canvas is losing trail over the edge; mass arriving means the
-    kernel is double-counting a mirrored tap."""
+def test_wrap_conserves_the_trail(ctx):
+    """A torus has no edge to lose anything over, so mass is exact. Mass
+    arriving would mean the kernel is double-counting a tap."""
     rng = np.random.default_rng(1)
     field = rng.random((RES, RES)).astype(np.float32)
-    out = _diffuse(ctx, field, mode, steps=120)
+    out = _diffuse(ctx, field, WRAP, steps=120)
     assert float(out.sum()) == pytest.approx(float(field.sum()), rel=1e-4)
+
+
+@pytest.mark.parametrize("mode", [BOUNCE, RESET])
+def test_a_wall_drains_the_trail_rather_than_sealing_it(ctx, mode):
+    """Deliberately NOT conservative, and this is the load-bearing choice.
+
+    A zero-flux mirror is the tidier boundary and measured worse: the leak it
+    replaces was acting as a sink draining the bright edge, so sealing the
+    border pushed LavaLamp's border/interior from 10.6x to 14.2x. Absorbing
+    keeps the drain without teleporting anything.
+
+    So mass must fall, and must fall only at the border - an interior that also
+    loses mass would be a broken kernel rather than an open edge.
+    """
+    field = np.ones((RES, RES), dtype=np.float32)
+    out = _diffuse(ctx, field, mode, steps=120)
+    assert out.sum() < field.sum() * 0.999, "the border sealed instead of draining"
+    assert out[RES // 2, RES // 2] == pytest.approx(1.0, rel=1e-3), (
+        "the interior is losing trail too")
+
+
+@pytest.mark.parametrize("mode", [BOUNCE, RESET])
+def test_the_drain_only_reaches_where_diffusion_reaches(ctx, mode):
+    """A few steps must not empty the canvas: the loss is a border effect that
+    spreads at the diffusion rate, not a global dimming."""
+    field = np.ones((RES, RES), dtype=np.float32)
+    out = _diffuse(ctx, field, mode, steps=4)
+    assert out.sum() > field.sum() * 0.95
+    assert float(out[:, 0].max()) < 1.0, "the border did not drain at all"

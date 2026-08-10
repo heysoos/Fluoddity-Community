@@ -387,14 +387,56 @@ void pR(inout vec2 p, float a) {
 }
 
 
+// Is this sensor coordinate outside the world?
+//
+// Only ever true off wrap, because a torus has no outside. Under bounce or
+// reset the world ends at the wall, and BEYOND IT THERE IS NOTHING TO SMELL -
+// get_can() returns zero there rather than a sample of somewhere else.
+//
+// It used to sample somewhere else, and that is the bug: uv left [0,1] and fell
+// through to the sampler, which has repeat_x/repeat_y set (sim.py:132) and
+// returned the OPPOSITE EDGE OF THE WORLD. The world reflected but the senses
+// wrapped, so a particle at the left wall steered on what was at the right one.
+//
+// Three treatments were measured over physics_configs/Core, 600 steps, as
+// border/interior luminance. Reading them as "the wrap was hiding the artifact"
+// is the point: it fed the particle decorrelated data from across the world,
+// which broke the feedback loop with its own trail.
+//
+//   treatment        LavaLamp   Streamers   Streamers %at-wall
+//   wrap (shipped)     10.6x       2.9x         4.70%
+//   clamp              16.1x         -              -
+//   mirror             11.2x       8.1x        10.50%
+//   void (this)         9.5x       3.4x         1.89%
+//
+// So neither clamping nor mirroring works, and the reason is not the steering
+// differential - it is WHAT the two sensors read. A particle heading into a
+// wall has both sensors past it; clamped or mirrored they both read the wall's
+// own bright trail and reinforce it, which is why the pile-up gets worse the
+// more locally accurate the reading becomes. Void reads empty, and empty is
+// what is actually there.
+bool sense_off_world(vec2 uv, int mode){
+    return mode != 2 && (any(lessThan(uv, vec2(0.0)))
+                      || any(greaterThan(uv, vec2(1.0))));
+}
+
+// Half a texel is the first texel CENTRE. texture() is bilinear and the sampler
+// repeats, so an in-range coordinate nearer the seam than that still blends in
+// the texel from the opposite edge - the same leak, at reduced weight.
+vec2 sense_uv(vec2 uv, int mode, vec2 res){
+    if(mode == 2) return fract(uv);
+    return clamp(uv, 0.5 / res, 1.0 - 0.5 / res);
+}
+
 //convert p (entity space) to texture coords and retrieve canvas
 vec4 get_can(vec2 p){
     vec2 res=textureSize(canvas,0);
     float ca = res.x / res.y;
     vec2 half_extent = vec2(sqrt(ca), 1.0 / sqrt(ca));
     vec2 uv = p / (2.0 * half_extent) + 0.5;
-    if(get_particle_boundary_conditions() == 2) uv = fract(uv);
-    return texture(canvas, uv);
+    int bm = get_particle_boundary_conditions();
+    if(sense_off_world(uv, bm)) return vec4(0.0);
+    return texture(canvas, sense_uv(uv, bm, res));
 }
 vec4 get_field(vec2 p){
     if(!advanced_drawing_resources_initialized)return vec4(0);
@@ -402,8 +444,9 @@ vec4 get_field(vec2 p){
     float ca = res.x / res.y;
     vec2 half_extent = vec2(sqrt(ca), 1.0 / sqrt(ca));
     vec2 uv = p / (2.0 * half_extent) + 0.5;
-    if(get_particle_boundary_conditions() == 2) uv = fract(uv);
-    return texture(field_texture, uv);
+    int bm = get_particle_boundary_conditions();
+    if(sense_off_world(uv, bm)) return vec4(0.0);
+    return texture(field_texture, sense_uv(uv, bm, res));
 }
 
 vec2 safenorm(vec2 p){

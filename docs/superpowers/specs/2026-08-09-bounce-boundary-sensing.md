@@ -1,14 +1,15 @@
-# Deferred: the canvas edge under BOUNCE
+# The canvas edge under BOUNCE
 
-**Status:** diagnosed, not fixed. Deferred 2026-08-09 to finish the brain
-modalities. Not a regression — see the three-tree measurement below.
+**Status:** fixed 2026-08-10. Beyond a wall there is no world: a sensor reads
+zero there, and a diffusion tap contributes nothing. Not a regression — see the
+three-tree measurement below.
 
 ## Symptom
 
 A bright line of particles hugging the canvas border, worst on the left and
 bottom edges, with the interior unaffected. Reported from a zoomed screenshot.
 
-## It is not new
+## It was not new
 
 Same preset, same seed, 600 steps, `particle_density=0.2`, `LavaLamp`:
 
@@ -18,61 +19,93 @@ Same preset, same seed, 600 steps, `particle_density=0.2`, `LavaLamp`:
 | `tournament-mode` @ `1cf194f` | 4.85% | 10.61x |
 | `worktree-brain-modalities` | 4.77% | 10.42x |
 
-So it predates both the brain rewrite and `1cf194f`. Probe:
-`scratchpad/edge3.py` (particles + trail, over eight Core presets).
+So it predated both the brain rewrite and `1cf194f`. Probe: `tools/edge3.py`.
 
-## It is a BOUNCE-mode problem
+## It was a BOUNCE-mode problem
 
-Measured over the Core presets, border/interior luminance:
+Border/interior luminance over `physics_configs/Core`:
 
 | boundary | presets | border |
 |---|---|---|
 | wrap | Adrift, Bubbles, Critters | 1.0 - 2.1x |
 | bounce | LavaLamp, Streamers | 2.5 - 10.7x |
 
-`get_can()` wraps uv **only** in wrap mode:
+`get_can()` wrapped uv **only** in wrap mode; otherwise uv left [0,1] and fell
+through to the sampler, which has `repeat_x/repeat_y = True` (`sim.py:132`). The
+world reflected but the senses WRAPPED: a particle at the left wall steered on
+the right edge of the world. `getCan()` in `canvas.frag` leaked identically —
+measured, 15.5% of a blob on the left edge arrived at the right edge in 60 steps.
 
-```glsl
-vec2 uv = p / (2.0 * half_extent) + 0.5;
-if(get_particle_boundary_conditions() == 2) uv = fract(uv);
-return texture(canvas, uv);
-```
+## The wrap was HIDING the artifact, not causing it
 
-Otherwise uv leaves [0,1] and falls through to the sampler, which has
-`repeat_x/repeat_y = True` (`sim.py:132`). Under bounce the world REFLECTS but
-the senses WRAP: a particle at the left wall steers on the right edge of the
-world. The same inconsistency `1cf194f` fixed for tournament tiles, never fixed
-for the canvas itself.
+This is the finding, and it took three failed fixes to see. Every treatment that
+gave the particle a locally accurate reading at the wall made the pile-up
+**worse**:
 
-## The obvious fix is wrong — measured
+| sensor treatment | LavaLamp border | Streamers border | Streamers % at wall |
+|---|---|---|---|
+| wrap (shipped) | 10.6x | 2.9x | 4.70% |
+| clamp | **16.1x** | — | — |
+| mirror (zero-flux) | 11.2x | 8.1x | **10.50%** |
+| void | **9.5x** | 3.4x | **1.89%** |
 
-Clamping the sampler to the edge roughly doubles the artifact:
+The original diagnosis blamed the steering differential — clamping puts both of
+a particle's sensors on the same texel, so it cannot steer. That reasoning is
+**wrong here**, and mirroring disproves it: a mirror keeps the two sensors
+perfectly distinct and still measured worse than the clamp-free wrap.
 
-| preset | shipped (repeat) | clamped |
-|---|---|---|
-| LavaLamp | 10.58x | **16.06x** |
-| Streamers | 2.50x, 3.7% at wall | **12.78x, 14.1% at wall** |
+What matters is *what they read*. A particle heading into a wall has both
+sensors past it. Clamped or mirrored, both read the bright trail piled at that
+wall, and a trail-following particle reinforces what it reads — positive
+feedback with its own deposit. Wrapping fed it decorrelated data from across the
+world, which broke the loop by accident. Void reads empty, which is what is
+actually there, and the feedback has nothing to work on.
 
-Because clamping puts BOTH sensors on the same texel within `sample_dist` of the
-wall, so the steering differential is identically zero — a dead band all round
-the border, exactly as documented for tiles in CLAUDE.md. Do not reach for
-`clamp()` here. Probe: `scratchpad/confirm_edge.py` (runtime-only, flips
-`repeat_x/repeat_y` and re-measures; no source edit).
+## The trail leak was a SINK
 
-## What to do instead
+Same trap on the diffusion side. A zero-flux mirror is the tidier boundary and
+it is the wrong one: sealing the border pushed LavaLamp from 10.6x to **14.2x**,
+because the leak it replaced had been draining the bright edge. An absorbing
+edge keeps that drain, locally, without teleporting anything.
 
-MIRROR the sensor sample back inside on a reflective wall — a zero-flux
-(Neumann) boundary, which is what bounce physically implies. Fold with a
-triangle wave rather than clamping, so there is no dead band, and no teleport
-across the world as wrapping gives. This parallels `confine_sample()`'s wrap
-branch, which already exists for tiles and would want a third branch.
+Mass is therefore deliberately **not** conserved at the border under bounce or
+reset. `tests/test_canvas_boundary_gl.py` asserts the drain, and asserts it
+reaches only as far as diffusion does.
 
-The trail diffusion in `getBlur` (`canvas.frag`) needs the matching treatment —
-it currently wraps across the canvas border through the same sampler.
+## What shipped
 
-## Before changing it
+`sense_off_world()` + `sense_uv()` in `entity_update.glsl` (used by `get_can`
+and `get_field`), and the matching branch in `canvas.frag`'s `getCan`. Under
+wrap both reduce to `texture(sam, fract(p))` — byte-identical to before, so the
+three wrap presets cannot have changed.
 
-This alters the look of every bounce-mode preset in the curated library,
-LavaLamp most of all. Re-measure the whole of `physics_configs/Core` before and
-after, and get the appearance change signed off — it is a judgement call, not a
-correctness one.
+The trailing half-texel clamp is not cosmetic: `texture()` is bilinear and the
+sampler repeats, so an *in-range* coordinate nearer the seam than half a texel
+still blends the opposite edge, and uv exactly 0 is a 50/50 blend with it.
+
+Before/after over Core, 600 steps:
+
+| preset | mode | border before | after | interior before | after |
+|---|---|---|---|---|---|
+| LavaLamp | bounce | 10.72x | **7.45x** | 0.00815 | 0.00812 |
+| Streamers | bounce | 2.49x | **0.45x** | 0.00968 | 0.01184 |
+| RingOfFire | bounce | 0.00x | 0.00x | 0.02371 | 0.02403 |
+| Salt | reset | 0.00x | 0.00x | 0.02976 | 0.02973 |
+| Adrift | wrap | 1.03x | 1.09x | 0.00837 | 0.00836 |
+| Bubbles | wrap | 2.36x | 1.52x | 0.01199 | 0.01225 |
+| Critters | wrap | 0.80x | 1.51x | 0.00814 | 0.01083 |
+| Growth | wrap | 0.00x | 0.00x | 0.02653 | 0.02667 |
+
+Interior luminance is flat, so the border genuinely darkened rather than the
+interior washing out. The wrap rows move because the sim does not reproduce
+run to run — repeated runs of the *unchanged* tree gave Bubbles 1.35/1.94/2.36x
+and Critters 0.74/0.80/1.92x, which brackets both columns.
+
+## Still open: the tournament tile disagrees
+
+`confine_sample()` still CLAMPS a tile sensor under bounce, and
+`tests/test_tile_isolation_gl.py` asserts it. That is the treatment measured
+worst of all at the canvas level. A tile is supposed to be a small world getting
+the world's own boundary condition (CLAUDE.md), so it should read void past its
+seam too. Not changed here because it would alter tournament results, and the
+optimizer's archives were built under the current behaviour.

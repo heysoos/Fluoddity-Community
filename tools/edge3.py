@@ -58,6 +58,10 @@ def run(ctx, sim, saver, name):
         "wall_2%": float((d < 0.02).mean()) * 100.0,
         "mode": int(st.boundary_conditions),
         "border_lum": float(border),
+        # Absolute, because the ratio alone cannot tell a darker border from a
+        # brighter interior - and an "improvement" that is really the interior
+        # washing out is not one.
+        "interior_lum": float(interior),
     }
 
 
@@ -68,7 +72,7 @@ def main():
     saver = ConfigSaver()
     print(f"{TREE}")
     print(f"  {'preset':<12} {'bc':<7} {'%<0.5% wall':>12} {'%<2% wall':>10} "
-          f"{'border/interior':>16}")
+          f"{'border/interior':>16} {'interior':>12}")
     for name in PRESETS:
         r = run(ctx, sim, saver, name)
         if r is None:
@@ -76,7 +80,8 @@ def main():
             continue
         bc = {0: "bounce", 1: "reset", 2: "wrap"}[r["mode"]]
         print(f"  {name:<12} {bc:<7} {r['wall_0.5%']:11.4f}% "
-              f"{r['wall_2%']:9.3f}% {r['border_lum']:15.3f}x")
+              f"{r['wall_2%']:9.3f}% {r['border_lum']:15.3f}x "
+              f"{r['interior_lum']:11.5f}")
     return 0
 
 
