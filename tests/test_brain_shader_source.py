@@ -135,14 +135,44 @@ def test_the_writeback_emits_the_fallback_rule_not_the_blank_buffer():
     )
 
 
+def _code(path: str) -> str:
+    """Shader source with // comments stripped.
+
+    Scanning the raw text conflates a CALL with a mention: a comment explaining
+    why the preview must not call brain_fourier() failed the check below.
+    """
+    import re
+
+    return re.sub(r"//[^\n]*", "", read(path))
+
+
 def test_the_inspector_does_not_reimplement_the_brain():
     """It calls eval_brain/eval_brain_unit, which are the same functions the
     compute shader dispatches. A second implementation would drift, and the
     picture would stop being evidence about what the particles do."""
-    src = read("shaders/brain_preview.frag")
+    src = _code("shaders/brain_preview.frag")
     assert "eval_brain_unit(" in src and "eval_brain(" in src
     for fn in ("brain_fourier", "brain_gabor", "brain_lenia", "brain_mlp"):
-        assert fn not in src, f"the preview reaches past the dispatch to {fn}"
+        assert f"{fn}(" not in src, (
+            f"the preview reaches past the dispatch to {fn}")
+
+
+def test_the_inspector_reproduces_the_generated_rule():
+    """The sim decides at RUNTIME whether to read the buffer or generate a rule.
+    The preview binds the same buffer, so unless it is told, it renders the
+    blank buffer that TRIGGERED the fallback - black tiles while the particles
+    move on the generated rule, which is exactly what was reported.
+    """
+    src = _code("shaders/brain_preview.frag")
+    assert "g_brain_fallback" in src and "g_brain_seed" in src, (
+        "the preview never sets the fallback state, so it cannot show it")
+
+    dispatch = _code("shaders/brains/_dispatch.glsl")
+    i = dispatch.index("vec4 eval_brain_unit")
+    body = dispatch[i:dispatch.index("float brain_param_at", i)]
+    assert "g_brain_fallback" in body, (
+        "per-unit tiles ignore the fallback, so they stay black")
+    assert "fallback_centers()" in body
 
 
 def test_the_inspector_can_isolate_one_unit():

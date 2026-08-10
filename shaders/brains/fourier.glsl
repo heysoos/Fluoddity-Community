@@ -55,10 +55,13 @@ void fourier_load(uint base, int i, out vec4 freq, out vec4 amp) {
 // is why a unit cannot be previewed by pointing `base` at it and setting n=1:
 // centre 5 seen at index 0 is a different function from the one the particles
 // run.
-vec4 fourier_unit_at(uint base, int i, vec4 x, float mseed) {
-    vec4 f, a;
-    fourier_load(base, i, f, a);
-    if (g_brain_mut != 0.0) fourier_mutate(f, a, i, mseed);
+// The basis itself, over a centre held in registers rather than read from the
+// buffer. Split out so the FALLBACK can be drawn one centre at a time: it
+// generates FourierCenter structs and has no brain_params to point at, and the
+// Brain Inspector has to draw exactly what the particles run in that state.
+// Identical expression to fourier_noise() in fourier4_4.glsl, which is the
+// other caller of this basis.
+vec4 fourier_eval(vec4 f, vec4 a, int i, vec4 x) {
     float phase = dot(x, f);
     float po = 2.0 * float(i) * 0.6283 + a.w * 3.14159;
     vec4 basis = vec4(
@@ -68,6 +71,13 @@ vec4 fourier_unit_at(uint base, int i, vec4 x, float mseed) {
         cos(phase * 2.0 + po * 0.5)
     );
     return a * basis;
+}
+
+vec4 fourier_unit_at(uint base, int i, vec4 x, float mseed) {
+    vec4 f, a;
+    fourier_load(base, i, f, a);
+    if (g_brain_mut != 0.0) fourier_mutate(f, a, i, mseed);
+    return fourier_eval(f, a, i, x);
 }
 
 // The same unit, for a caller with no seed to hand (the Brain Inspector).

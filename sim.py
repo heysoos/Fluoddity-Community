@@ -852,6 +852,10 @@ class Sim:
             # form - so it falls through silently rather than warning.
         if params is None:
             params = self._blank_brain(layout)
+        self._slot0 = np.asarray(params, dtype=np.float32).reshape(-1).copy()
+        # A new rule arrives DECODED; its search vector is unknown until a scale
+        # change needs one. See set_brain_scales.
+        self._slot0_z = None
         self.multi_load_rule_buffer.write(pack_brains([params], layout))
 
     def _blank_brain(self, layout) -> np.ndarray:
@@ -975,19 +979,60 @@ class Sim:
         stride - click-to-adopt readback, in particular."""
         return self._brain_layout
 
+    @property
+    def slot0_params(self):
+        """The decoded brain last written to slot 0, or None.
+
+        The Brain Inspector needs it to reach the same 'is this blank' verdict
+        the shader does, and reading it back off the GPU would sync the pipeline
+        every frame.
+        """
+        return getattr(self, "_slot0", None)
+
     def set_brain_scales(self, layout) -> None:
         """Adopt a layout of the SAME width - a decode-scale change only.
 
         Separate from realloc_brain_buffers because that releases and
         reallocates the per-particle buffer, which is 192 MB at the default
-        count. A slider tick must not pay for that, and does not need to: the
-        GPU is handed decoded parameters, so a scale change never reaches it.
+        count. A slider tick must not pay for that.
+
+        The GPU holds DECODED parameters, so a new scale does not reach it on
+        its own - it only changes what future z decode to. That made every scale
+        slider look dead: Band Center, Freq Scale and the rest changed nothing
+        on screen until a count change forced a rebuild. So the live brain is
+        re-decoded here.
+
+        Through the STORED z, not by re-encoding each time. encode() clamps at
+        the rails, so round-tripping on every frame of a drag would grind a
+        parameter that leaves the range down and never let it come back. One
+        encode, then every later scale moves decode from that same z.
         """
         if layout.length != self._brain_layout.length:
             raise ValueError(
                 f"set_brain_scales needs the same width: {layout.length} vs "
                 f"{self._brain_layout.length}; use realloc_brain_buffers")
-        self._brain_layout = layout
+        from utilities.gl_helpers import pack_brains
+
+        from services.brains import get, is_fallback
+
+        old, self._brain_layout = self._brain_layout, layout
+        params = getattr(self, "_slot0", None)
+        # A blank Fourier brain is not decoded from anything - the shader
+        # generates it - so there is nothing to rescale and re-encoding the
+        # zeros would manufacture a rule out of nowhere.
+        if params is None or is_fallback(params, old):
+            return
+        m = get(layout.modality)
+        try:
+            if getattr(self, "_slot0_z", None) is None:
+                self._slot0_z = m.encode(params, old)[0]
+            decoded = np.asarray(m.decode(self._slot0_z, layout),
+                                 dtype=np.float32).reshape(-1)
+        except (ValueError, TypeError) as exc:
+            print(f"[brain] could not rescale the live rule ({exc})")
+            return
+        self._slot0 = decoded
+        self.multi_load_rule_buffer.write(pack_brains([decoded], layout))
 
     def realloc_brain_buffers(self, layout) -> None:
         """Resize the per-particle brain buffer for a new layout.

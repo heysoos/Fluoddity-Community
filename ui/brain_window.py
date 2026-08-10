@@ -177,21 +177,44 @@ class BrainWindowMixin:
             imgui.text_disabled("preview unavailable")
             return
 
-        n = preview.unit_count(layout)
+        n = preview.unit_count(layout, state.preview_fallback)
+        if state.preview_fallback:
+            imgui.text_colored(imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
+                               "no brain loaded - showing the GENERATED rule")
+            imgui.text_disabled("   cohort 0; each cohort gets its own")
         imgui.text(f"whole brain, then {n} units "
                    f"(blue negative, orange positive)")
-        avail = max(imgui.get_content_region_avail().x, 64.0)
-        per_row = max(1, min(preview.grid, int(avail // 74)))
-        size = min(72.0, (avail - 8.0 * per_row) / per_row)
+
+        # A CHILD with a permanent scrollbar, and the tile layout derived from
+        # the unit count rather than from the width available.
+        #
+        # Reading get_content_region_avail().x to choose the column count is a
+        # feedback loop: the tiles decide the content height, the height decides
+        # whether a scrollbar appears, and the scrollbar takes ~20px off the
+        # width - which changes the column count, the height, and round again.
+        # That is the grid visibly resizing every frame. Reserving the scrollbar
+        # unconditionally makes the width constant, and a child of fixed height
+        # keeps the parent's own scrollbar out of the same loop.
+        SIZE, PAD = 72.0, 8.0
+        per_row = max(1, min(preview.grid, 8))
+        height = np.ceil((n + 1) / per_row) * (SIZE + PAD) + PAD
+        avail_y = imgui.get_content_region_avail().y
+        imgui.begin_child(
+            "brain_units",
+            imgui.ImVec2(0.0, float(min(height, max(avail_y, 120.0)))),
+            imgui.ChildFlags_.none,
+            imgui.WindowFlags_.always_vertical_scrollbar,
+        )
         for slot in range(n + 1):
             if slot % per_row:
                 imgui.same_line()
             (u0, v0), (u1, v1) = preview.uv_for(slot)
-            imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(size, size),
+            imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(SIZE, SIZE),
                         imgui.ImVec2(u0, v0), imgui.ImVec2(u1, v1))
             if imgui.is_item_hovered():
                 imgui.set_tooltip("whole brain" if slot == 0
                                   else f"unit {slot - 1}")
+        imgui.end_child()
 
     @property
     def _brain_draft(self) -> dict:

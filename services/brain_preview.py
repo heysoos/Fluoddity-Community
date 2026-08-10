@@ -20,7 +20,14 @@ from utilities.gl_helpers import read_shader, shader_prepend, tryset
 _BRAINS = ("mlp", "lenia", "gabor", "fourier")
 
 CHANNELS = ("force axial", "force lateral", "strafe axial", "strafe lateral",
-            "|force|", "|strafe|")
+            "|force|", "|strafe|", "random projection")
+# Index of the random-projection entry, which the shader handles as a dot with
+# PREVIEW_OUT rather than by picking a component.
+CHANNEL_RANDOM = len(CHANNELS) - 1
+
+# The fallback rule is always ten generated centres, whatever Centers is set to:
+# generate_random_centers() returns FourierCenter[10].
+FALLBACK_UNITS = 10
 # The 4D input is (L.axial, L.lateral, R.axial, R.lateral) in the particle's own
 # frame. Sweeping the two AXIAL taps is the pair that drives steering, so it is
 # the default.
@@ -65,6 +72,18 @@ def basis_for(axes, seed: int = 0):
     return q[:, 0].astype(np.float32), q[:, 1].astype(np.float32)
 
 
+def output_direction(seed: int = 0) -> np.ndarray:
+    """-> a random UNIT direction in the 4D output space.
+
+    Unit length so the Contrast slider means the same thing here as it does for
+    a single channel. Offset from the input plane's seed so that one Reseed
+    press moves both without the two being locked to the same draw.
+    """
+    rng = np.random.default_rng((int(seed) ^ 0x9E3779B9) & 0xFFFFFFFF)
+    v = rng.standard_normal(4)
+    return (v / np.linalg.norm(v)).astype(np.float32)
+
+
 class BrainPreview:
     def __init__(self, ctx: moderngl.Context, tile: int = 96):
         self.ctx = ctx
@@ -92,8 +111,15 @@ class BrainPreview:
     # ---- geometry ------------------------------------------------------
 
     @staticmethod
-    def unit_count(layout) -> int:
-        """Units in this brain: centres, filters, bumps or hidden units."""
+    def unit_count(layout, fallback: bool = False) -> int:
+        """Units in this brain: centres, filters, bumps or hidden units.
+
+        Under the fallback it is the GENERATED rule's count, which is fixed at
+        ten however Centers is set - otherwise a 20-centre layout draws ten
+        black tiles for units the generated rule does not have.
+        """
+        if fallback:
+            return FALLBACK_UNITS
         return int(layout.shape[0]) if layout.shape else 0
 
     def _ensure_target(self, tiles: int) -> None:
@@ -114,6 +140,7 @@ class BrainPreview:
 
     def render(self, layout, brain_buffer, *, axes=(0, 2), channel: int = 0,
                value_range: float = 2.0, gain: float = 1.0, seed: int = 0,
+               fallback: bool = False, rule_seed: float = 0.0,
                include_total: bool = True) -> moderngl.Texture:
         """-> the atlas texture. Tile 0 is the whole brain when include_total.
 
@@ -123,13 +150,16 @@ class BrainPreview:
         """
         from services.brains import get
 
-        n = self.unit_count(layout)
+        n = self.unit_count(layout, fallback)
         tiles = n + (1 if include_total else 0)
         self._ensure_target(tiles)
         assert self._fbo is not None and self._tex is not None
 
         brain_buffer.bind_to_storage_buffer(4)
         p = self.program
+        tryset(p, "PREVIEW_FALLBACK", 1 if fallback else 0)
+        tryset(p, "PREVIEW_SEED", float(rule_seed))
+        tryset(p, "PREVIEW_OUT", tuple(float(c) for c in output_direction(seed)))
         tryset(p, "BRAIN_MODALITY", get(layout.modality).modality_id)
         tryset(p, "BRAIN_LEN", int(layout.length))
         shape = (tuple(layout.shape) + (0, 0, 0, 0))[:4]

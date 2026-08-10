@@ -59,7 +59,20 @@ void fourier_write_fallback(uint out_base) {
 // filter, one Lenia bump, one MLP hidden unit. The Brain Inspector draws this,
 // and it is the SAME function the summing loop uses, so a tile shows what the
 // particles actually compute rather than a reimplementation of it.
+// The fallback is always ten generated centres, whatever Centers is set to -
+// generate_random_centers() returns FourierCenter[10].
+const int FALLBACK_UNITS = 10;
+
 vec4 eval_brain_unit(uint base, int i, vec4 x) {
+    // The Inspector must show what the particles RUN. With no brain uploaded
+    // that is the generated rule, not the blank buffer that triggered it -
+    // drawing brain_fourier() over all-zero params is what made every tile
+    // black while the particles moved.
+    if (g_brain_fallback) {
+        if (i < 0 || i >= FALLBACK_UNITS) return vec4(0.0);
+        FourierCenter[10] fc = fallback_centers();
+        return fourier_eval(fc[i].frequency, fc[i].amplitude, i, x);
+    }
     if (BRAIN_MODALITY == 0) return fourier_unit(base, i, x);
     if (BRAIN_MODALITY == 1) return gabor_unit(base, i, x);
     if (BRAIN_MODALITY == 2) return lenia_unit(base, i, x);

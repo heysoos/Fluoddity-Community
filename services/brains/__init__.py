@@ -88,6 +88,33 @@ def default_layout() -> BrainLayout:
     return REGISTRY["fourier"].layout_from_settings({})
 
 
+# The eight floats entity_update.glsl probes to decide "no brain uploaded":
+# centre 0's four frequencies, and the four amplitudes of centre 5 (or the last
+# centre, for a layout shorter than six). Kept in one place because the Brain
+# Inspector has to reach the SAME verdict as the particles - it renders the
+# generated rule when this is true, and the stored buffer when it is not.
+_BLANK_PROBE_CENTRE = 5
+
+
+def is_fallback(params, layout: BrainLayout) -> bool:
+    """Will the shader generate a rule instead of reading these params?
+
+    Only Fourier has a fallback: it builds FourierCenters, which is meaningless
+    for any other modality, and every other modality's all-zero brain is
+    SILENCE rather than a neutral start. See Sim._blank_brain.
+    """
+    import numpy as np
+
+    if layout.modality != "fourier" or params is None:
+        return False
+    p = np.asarray(params, dtype=np.float32).reshape(-1)
+    if p.size < layout.length:
+        return False
+    n = max(int(layout.shape[0]), 1)
+    o = min(_BLANK_PROBE_CENTRE, n - 1) * 8
+    return bool(not p[0:4].any() and not p[o + 4:o + 8].any())
+
+
 # Registration happens on package import, so `import services.brains` is enough
 # to populate REGISTRY. Placed at the bottom because each module imports
 # BrainLayout/Setting/register from this one.
