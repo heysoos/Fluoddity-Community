@@ -14,6 +14,7 @@ app stays responsive; it is not an optimization to be added later.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 
 import numpy as np
@@ -29,6 +30,9 @@ class Action(str, Enum):
     STEP = "step"
     CAPTURE = "capture"
     SCORE = "score"
+
+
+_PENDING = object()      # the CLIP pass has not finished; no fitness this frame
 
 
 class Phase(str, Enum):
@@ -84,6 +88,11 @@ class AutoTournamentService:
         self._next_snap = 0
         self._buffer: list[np.ndarray] = []
         self._needs_write = False
+
+        # Scoring runs off the frame loop. See _precomputed().
+        self.async_scoring = True
+        self._pool: ThreadPoolExecutor | None = None
+        self._pre_future = None
 
     # ---- delegated to the driver ---------------------------------------
     # These exist so the service's public surface survived the extraction
@@ -187,6 +196,7 @@ class AutoTournamentService:
         self._z = None
         self.tile_physics = []
         self._buffer.clear()
+        self._drop_score()
         self._needs_write = False
         self.phase = Phase.IDLE
 
@@ -195,6 +205,7 @@ class AutoTournamentService:
         shader reload, and grid change."""
         self.step_in_gen = 0
         self._buffer.clear()
+        self._drop_score()
         self._next_snap = 0
         if self.phase is not Phase.IDLE:
             self._needs_write = True
@@ -216,6 +227,7 @@ class AutoTournamentService:
         self._next_snap = 0
         self.step_in_gen = 0
         self._buffer.clear()
+        self._drop_score()
         self._needs_write = True
 
     # ---- per-frame driver ----------------------------------------------
@@ -245,8 +257,70 @@ class AutoTournamentService:
 
     # ---- scoring -------------------------------------------------------
 
-    def score_and_tell(self) -> np.ndarray:
-        fit = np.asarray(self.driver.tell(self._z, self._buffer), dtype=np.float32)
+    def _score_pool(self) -> ThreadPoolExecutor:
+        if self._pool is None:
+            self._pool = ThreadPoolExecutor(max_workers=1,
+                                            thread_name_prefix="score")
+        return self._pool
+
+    def _precomputed(self):
+        """This generation's CLIP result, or _PENDING while it is still running.
+
+        The first SCORE frame submits and hands the frame straight back; every
+        later one polls. update() keeps returning Action.SCORE in the meantime,
+        because the phase and the snapshot counter are both unchanged, so this
+        needs no new state machine - only somewhere to put the future.
+
+        -> None for a driver with no precompute() (the test fakes), which makes
+        tell() do the whole thing inline exactly as before.
+
+        The buffer is COPIED into the worker: abort_generation clears the list,
+        and the worker must not see it emptied halfway through.
+        """
+        fn = getattr(self.driver, "precompute", None)
+        if fn is None or not self.async_scoring:
+            return None
+        if self._pre_future is None:
+            self._pre_future = self._score_pool().submit(fn, list(self._buffer))
+            return _PENDING
+        if not self._pre_future.done():
+            return _PENDING
+        f, self._pre_future = self._pre_future, None
+        return f.result()               # re-raises on the main thread
+
+    def _drop_score(self) -> None:
+        """Abandon an in-flight CLIP pass.
+
+        Its result describes a rollout that is no longer going to be scored,
+        and self._buffer is about to be cleared underneath it. cancel() only
+        bites if the worker has not started; either way the future is dropped,
+        so a stale result can never reach tell().
+        """
+        f, self._pre_future = self._pre_future, None
+        if f is not None:
+            f.cancel()
+
+    def close(self) -> None:
+        """Let go of the scoring thread. Called from App.cleanup()."""
+        self._drop_score()
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = None
+
+    def score_and_tell(self):
+        """-> fitness, or None while the CLIP pass is still off-thread.
+
+        None is not a failure and not the end of the generation: the caller
+        gives the frame back to the UI and tries again next frame.
+        """
+        pre = self._precomputed()
+        if pre is _PENDING:
+            return None
+        # Only pass it when there is one: a driver fake with a two-argument
+        # tell() must keep working.
+        raw = (self.driver.tell(self._z, self._buffer) if pre is None
+               else self.driver.tell(self._z, self._buffer, pre))
+        fit = np.asarray(raw, dtype=np.float32)
         self.fitness = fit
         self.generation += 1
         st = self.driver.status()

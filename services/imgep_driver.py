@@ -100,6 +100,12 @@ class ImgepDriver:
         self._remaining = 0
         self._since_expedition = 0
         self._x0_index: int | None = None
+        # High-water mark for the CURRENT expedition, and how many times it has
+        # been beaten. Reset with the expedition: fitness is contrastive
+        # against a different goal each time, so the numbers are not comparable
+        # across expeditions.
+        self._expedition_best = -np.inf
+        self._n_summits = 0
         self._last_descriptors: np.ndarray | None = None
         self._last_seed_ess = 0.0
         self._last_seed_alpha = 0.0
@@ -193,6 +199,9 @@ class ImgepDriver:
             "prompt": self.goal_label,
             "seed_ess": float(self._last_seed_ess),
             "seed_alpha": float(self._last_seed_alpha),
+            "n_summits": int(self._n_summits),
+            "expedition_best": (float(self._expedition_best)
+                                if np.isfinite(self._expedition_best) else None),
             "phase": self.phase(),
             "last_admitted": (self.trace["admitted"][-1]
                               if self.trace["admitted"] else 0),
@@ -220,6 +229,7 @@ class ImgepDriver:
         """
         self.gen = 0
         self._since_expedition = 0
+        self._n_summits = 0
         for v in self.trace.values():
             v.clear()
         self.end_expedition()
@@ -229,6 +239,7 @@ class ImgepDriver:
         self._goal = None
         self._remaining = 0
         self._x0_index = None
+        self._expedition_best = -np.inf
 
     def ask(self, n: int) -> np.ndarray:
         n = int(n)
@@ -298,6 +309,12 @@ class ImgepDriver:
         self._x0_index = int(i)
         self._remaining = int(self.expedition_gens)
         self._since_expedition = 0
+        # Explicitly, not only via end_expedition(): chase() and the UI can
+        # start a new expedition on top of a running one, and a high-water mark
+        # carried over from a different goal would suppress every summit of
+        # this one. The fitnesses are contrastive against different references
+        # and are not comparable across goals in any case.
+        self._expedition_best = -np.inf
         # A FRESH optimizer per goal: a covariance learned climbing toward
         # "coral reef" is not informative about "lightning". sigma is
         # deliberately much smaller than sigma0 - an expedition is a local
@@ -335,13 +352,29 @@ class ImgepDriver:
 
     # ---- rollout -------------------------------------------------------
 
-    def tell(self, z: np.ndarray, snapshots: list[np.ndarray]) -> np.ndarray:
+    def precompute(self, snapshots: list[np.ndarray]):
+        """CLIP, and nothing else. Runs OFF the main thread.
+
+        Measured 2026-08-10 at grid 8 with 6 snapshots: this is 92-97% of
+        tell()'s wall clock - 1.1 s at 1 view, 4.2 s at 3 - against ~50-130 ms
+        for everything after it. Blocking the frame loop on it is what made the
+        app freeze once a generation during archive growth.
+
+        Split here rather than running the whole of tell() on the worker,
+        because everything after this point mutates the archive, which the UI
+        reads every frame to draw the gallery, the map and the status. This
+        half touches only its own arguments and the scorer, so it needs no
+        locking at all.
+        """
+        return [np.asarray(self._embed(c), dtype=np.float32) for c in snapshots]
+
+    def tell(self, z: np.ndarray, snapshots: list[np.ndarray],
+             pre=None) -> np.ndarray:
         n = len(z)
         if not snapshots:
             return np.zeros(n, dtype=np.float32)
 
-        per_snap = [np.asarray(self._embed(c), dtype=np.float32)
-                    for c in snapshots]
+        per_snap = pre if pre is not None else self.precompute(snapshots)
         snaps = stack_snapshots(per_snap)
         b = descriptor(snaps)
         live = liveness(snaps)
@@ -373,6 +406,10 @@ class ImgepDriver:
         if viable.any():
             cand_nov = np.where(viable, nov, -np.inf)
             keeper = int(np.argmax(cand_nov))
+        # Computed BEFORE the admission loop, not after it, so the summit
+        # ratchet can see this generation's fitness.
+        fit = self._expedition_fitness(snaps) if source == "expedition" else None
+        summit = self._summit(fit, viable)
         admitted = 0
 
         for i in range(n):
@@ -401,10 +438,10 @@ class ImgepDriver:
                 ),
                 float(nov[i]),
                 pinned=(i in pinned),
-                source=source,
+                source=("summit" if i == summit else source),
                 thumb_crop=last[i],
                 separation=float(sep[i]),
-                force=(i == keeper),
+                force=(i == keeper or i == summit),
             )
             if entry is not None:
                 admitted += 1
@@ -426,7 +463,6 @@ class ImgepDriver:
         self.archive.maybe_flush(every=self.flush_every)
 
         if source == "expedition":
-            fit = self._expedition_fitness(snaps)
             self._optimizer.tell(z, fit)
             self._remaining -= 1
             self._record(source, admitted, n, fit)
@@ -444,6 +480,40 @@ class ImgepDriver:
 
         self._last_score_label = "novelty"
         return np.asarray(nov, dtype=np.float32)
+
+    def _summit(self, fit, viable) -> int:
+        """The tile that sets a new best fitness for this expedition, or -1.
+
+        A RATCHET, and the point is that separation and fitness rank tiles by
+        different things. Separation asks "do we already have one of these";
+        an expedition climbing toward a goal necessarily produces tiles that
+        look like the ones it just produced, so its best-matching tile - the
+        actual result of the whole expedition - is exactly the kind of thing
+        the separation rule throws away. `keeper` did not cover this: it is the
+        most NOVEL viable tile, which during a converging chase is close to the
+        least goal-matching one.
+
+        Ratcheting rather than admitting every generation's best is what keeps
+        it bounded and makes it mean something. A climb over rough ground
+        leaves a checkpoint at every gain; a converged expedition stops
+        improving and therefore stops admitting, which is the behaviour that
+        was wanted in the first place. Worst case is one extra entry per
+        generation - expedition_gens, 50 by default - against the 64 a
+        generation that flooding would produce.
+
+        Never bypasses liveness or viability: `viable` gates the argmax, for
+        the same reason `keeper` does. A frozen tile that happens to score well
+        against a goal is still not a picture of anything.
+        """
+        if fit is None or not len(fit) or not np.any(viable):
+            return -1
+        f = np.where(viable, np.asarray(fit, dtype=np.float64), -np.inf)
+        i = int(np.argmax(f))
+        if not np.isfinite(f[i]) or float(f[i]) <= self._expedition_best:
+            return -1
+        self._expedition_best = float(f[i])
+        self._n_summits += 1
+        return i
 
     # ---- traces ---------------------------------------------------------
 

@@ -1,3 +1,5 @@
+import time
+
 import numpy as np
 import pytest
 
@@ -37,6 +39,21 @@ def crops_for(svc, value=128):
     return np.full((svc.tournament.tiles, 224, 224, 3), value, dtype=np.uint8)
 
 
+def scored(svc) -> bool:
+    """One SCORE frame. -> did a fitness come back?
+
+    Scoring runs on a worker thread, so the first SCORE frame only submits and
+    update() keeps returning SCORE until the result lands - exactly what
+    main.py does. The sleep stands in for the real frame's rendering: without
+    it a tight Python loop can hold the GIL for its whole 5 ms switch interval
+    and the worker never gets to run at all.
+    """
+    if svc.score_and_tell() is not None:
+        return True
+    time.sleep(0.001)
+    return False
+
+
 def run_one_generation(svc, value=128):
     """Drive update() until one full generation completes."""
     seen = []
@@ -46,8 +63,8 @@ def run_one_generation(svc, value=128):
         if a is Action.CAPTURE:
             svc.submit_frames(crops_for(svc, value))
         elif a is Action.SCORE:
-            svc.score_and_tell()
-            return seen
+            if scored(svc):
+                return seen
     raise AssertionError("generation never completed")
 
 
@@ -92,8 +109,8 @@ def test_captures_land_on_the_snapshot_steps():
             at.append(svc.step_in_gen)
             svc.submit_frames(crops_for(svc))
         elif a is Action.SCORE:
-            svc.score_and_tell()
-            break
+            if scored(svc):
+                break
     assert at == [25, 50, 75, 100]
 
 
@@ -110,8 +127,8 @@ def test_snapshot_count_holds_for_odd_configurations(steps, snaps, per_frame):
             n += 1
             svc.submit_frames(crops_for(svc))
         elif a is Action.SCORE:
-            svc.score_and_tell()
-            break
+            if scored(svc):
+                break
     assert n == snaps
 
 
@@ -135,9 +152,12 @@ def test_elite_injection_ranks_selected_tiles_first():
             imgs[2] = 250        # tile 2 is genuinely brightest
             svc.submit_frames(imgs)
         elif a is Action.SCORE:
-            ts.toggle_select(0)  # but the human picks tile 0
-            svc.score_and_tell()
-            break
+            # Once, not once per SCORE frame: scoring now spans two of them and
+            # toggle_select is a toggle, so selecting on each would deselect.
+            if not ts.selected:
+                ts.toggle_select(0)   # but the human picks tile 0
+            if scored(svc):
+                break
     assert svc.fitness[0] == svc.fitness.max()
     assert ts.selected == set(), "selection is cleared after tell"
 
@@ -246,8 +266,8 @@ def test_fitness_is_averaged_over_snapshots():
             svc.submit_frames(crops_for(svc, vals[i]))
             i += 1
         elif a is Action.SCORE:
-            svc.score_and_tell()
-            break
+            if scored(svc):
+                break
     assert svc.fitness[0] == pytest.approx(100 / 255.0, rel=1e-3)
 
 

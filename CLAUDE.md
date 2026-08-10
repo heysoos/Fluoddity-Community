@@ -395,6 +395,63 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   200 trials the goal's nearest entry WAS its own seed 199 times - and no value
   of beta fixed it. See `docs/superpowers/specs/2026-08-08-expedition-objective-design.md`.
 
+- **Scoring runs OFF the frame loop, and the split is exactly `precompute()`.**
+  CLIP is 92–97% of a generation's main-thread cost — measured 2026-08-10 at
+  grid 8 / 6 snapshots: `tell()` is 1143 ms at 1 view and 4324 ms at 3, of
+  which `_embed` is 1057 / 4194; `consider` × 64 is 2 ms, `refresh` 30–77 ms,
+  `prune` 0. Blocking on it froze the app once a generation, which is what
+  "the program gets stuck during archive growth" was. `AutoTournamentService`
+  submits `driver.precompute(list(self._buffer))` to a one-thread pool and
+  `score_and_tell()` returns **None** until it lands; `update()` keeps
+  returning `Action.SCORE` because neither the phase nor the snapshot counter
+  moved, so there is no new state machine. Measured with a 60 Hz stand-in
+  frame loop: worst frame gap **1857 ms → 68 ms**, generation wall clock
+  1.86 → 1.99 s.
+  Three things this deliberately does NOT do. It does not move the rest of
+  `tell()`: everything after `precompute` mutates the archive, which the UI
+  reads every frame for the gallery, the map and the status, so that half
+  would need a lock around every one of those reads to buy ~5% more. It takes
+  no locks in `CLIPScorer` — ORT `run` is thread-safe and the vision and text
+  sessions are separate objects; a lock held for a 4 s vision pass would
+  freeze `set_prompt` and put the stall back. And it passes a **copy** of the
+  frame buffer, because `abort_generation()` clears the list.
+  A test that drives `update()` in a tight Python loop can starve the worker
+  outright — 500 iterations fit inside one 5 ms GIL switch interval — so
+  `tests/test_auto_tournament_service.scored()` sleeps 1 ms on a `None`. The
+  real frame loop renders, so this does not arise in the app.
+
+- **`keeper` is the most NOVEL tile; `summit` is the best-MATCHING one, and an
+  expedition needs both.** Separation asks "do we already have one of these",
+  and a chase converging on a goal necessarily makes tiles that look like the
+  ones it just made — so the tile that best matches the goal, the actual
+  result of the expedition, is precisely what separation throws away.
+  `keeper` never covered it: during a converging chase the most novel viable
+  tile is close to the least goal-matching one. `_summit()` is a **ratchet**
+  on the expedition's own best fitness: a climb over rough ground leaves a
+  checkpoint at every genuine gain, a converged expedition stops improving and
+  therefore stops admitting, and the worst case is one extra entry per
+  generation (`expedition_gens`, 50) against the 64 a generation that flooding
+  produced. It forces past separation only — never past liveness or viability
+  — and the mark resets in `start_expedition_with` as well as
+  `end_expedition`, because contrastive fitnesses against different goals are
+  not comparable. These entries carry `source="summit"` so they are findable
+  afterwards; the expedition fitness therefore has to be computed BEFORE the
+  admission loop rather than after it.
+
+- **Expansion draws one parent PER TILE, independently and with replacement,
+  so the grid sets the number of draws and not the number of parents.**
+  `_ask_expansion` samples `p ~ novelty^alpha`, re-encodes each parent's
+  stored phenotype under the current origin, and adds isotropic
+  `sigma_expand` noise — no crossover, no covariance, no shared distribution.
+  At the default alpha=4 the two numbers nearly coincide (measured
+  2026-08-10: 15.5–15.9 distinct parents of 16 draws, 58.0–61.9 of 64), but
+  the slider reaches 8, where `default`'s ESS is **2.2** and one entry takes
+  **66.6%** of the weight — 64 tiles collapse to 16 distinct parents. Nothing
+  else scales with the grid: `sigma_expand`, `alpha`, `k` and the refresh
+  budget are all grid-independent. Expeditions are the exception — CMA-ES
+  takes `popsize = tournament.tiles`, so there a bigger grid IS a bigger
+  population.
+
 - **An ImGui widget's identity IS its label, and a duplicate silently kills
   the loser.** Two visible items hashing to one ID puts Dear ImGui's
   "conflicting ID" dialog over the app and stops one of them responding to the

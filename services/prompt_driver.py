@@ -91,13 +91,21 @@ class PromptDriver:
         self._ensure(int(n))
         return self._optimizer.ask(int(n))
 
-    def tell(self, z: np.ndarray, snapshots: list[np.ndarray]) -> np.ndarray:
+    def precompute(self, snapshots: list[np.ndarray]):
+        """CLIP, and nothing else. Runs OFF the main thread; see
+        ImgepDriver.precompute for why the split is here."""
+        if self.scorer is None or not snapshots:
+            return None
+        return [np.asarray(self.scorer.score(c), dtype=np.float32)
+                for c in snapshots]
+
+    def tell(self, z: np.ndarray, snapshots: list[np.ndarray],
+             pre=None) -> np.ndarray:
         n = len(z)
         if self.scorer is None or not snapshots:
             fit = np.zeros(n, dtype=np.float32)
         else:
-            per_snap = [np.asarray(self.scorer.score(c), dtype=np.float32)
-                        for c in snapshots]
+            per_snap = pre if pre is not None else self.precompute(snapshots)
             fit = np.mean(np.stack(per_snap, axis=0), axis=0).astype(np.float32)
 
         bad = ~np.isfinite(fit)

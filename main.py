@@ -435,7 +435,12 @@ class App:
             return 0
         if action is Action.SCORE:
             fit = svc.score_and_tell()
-            self._after_generation(fit)
+            # None while the CLIP pass runs on the scoring thread. The frame is
+            # handed straight back to the UI instead of blocking on it - that
+            # pass is 92-97% of a generation's main-thread cost, and waiting on
+            # it here is what froze the app once a generation.
+            if fit is not None:
+                self._after_generation(fit)
             return 0
         if action is Action.STEP:
             return max(1, int(svc.sim_steps_per_frame))
@@ -911,6 +916,8 @@ class App:
         # Save preferences before cleanup
         ui_state = self.ui.get_state()
         self._restore_auto_overrides(ui_state)
+        if self.auto_service is not None:
+            self.auto_service.close()          # let go of the scoring thread
         if self.archive is not None:
             self.archive.maybe_flush(force=True)
         if self.goal_list is not None:

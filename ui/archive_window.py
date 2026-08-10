@@ -307,6 +307,14 @@ class ArchiveWindowMixin:
                 f"{st['last_tiles']} tiles   "
                 f"({st.get('n_rejected_close', 0)} too close, "
                 f"{st.get('n_rejected_dead', 0)} dead, all-time)")
+        if st.get("n_summits"):
+            imgui.text_colored(
+                imgui.ImVec4(*_OK),
+                f"Summits kept: {st['n_summits']}")
+            if imgui.is_item_hovered():
+                imgui.set_tooltip(
+                    "Tiles admitted for beating their expedition's best match, "
+                    "past the separation rule.")
         self._render_explore_traces(d)
         # The seed pool actually used, so the band is legible rather than a
         # pair of numbers with no visible effect.
@@ -651,6 +659,10 @@ class ArchiveWindowMixin:
         "bootstrap": imgui.IM_COL32(120, 120, 130, 200),
         "expansion": imgui.IM_COL32(90, 200, 120, 220),
         "expedition": imgui.IM_COL32(255, 170, 60, 230),
+        # A tile that beat its expedition's best. Brighter than the expedition
+        # colour it sits among, because the whole point is to be able to find
+        # these afterwards - they are the results of the goal chases.
+        "summit": imgui.IM_COL32(255, 240, 130, 255),
         "pin": imgui.IM_COL32(90, 170, 255, 255),
     }
 

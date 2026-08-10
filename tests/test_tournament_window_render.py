@@ -8,6 +8,8 @@ the stack balances; the explicit checks below cover the rest.
 
 No window and no renderer: ImGui only needs a display size and a frame.
 """
+import time
+
 import pytest
 
 from imgui_bundle import imgui
@@ -73,6 +75,7 @@ class FakeScorer:
 
     def score(self, images):
         import numpy as np
+
         return np.linspace(0.1, 0.6, len(images)).astype(np.float32)
 
 
@@ -108,8 +111,11 @@ def _service(tmp_path, generations=0, grid=4):
                     svc.submit_frames(
                         np.full((ts.tiles, 224, 224, 3), 128, dtype=np.uint8))
                 elif a.value == "score":
-                    svc.score_and_tell()
-                    break
+                    # Scoring is off-thread; the first SCORE frame only
+                    # submits. See test_auto_tournament_service.scored().
+                    if svc.score_and_tell() is not None:
+                        break
+                    time.sleep(0.001)
     return svc
 
 
