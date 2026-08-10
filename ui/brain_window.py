@@ -154,6 +154,13 @@ class BrainWindowMixin:
         ch, v = imgui.combo("Slice", state.preview_axes, [a[0] for a in AXES])
         if ch:
             state.preview_axes = v
+        if AXES[min(state.preview_axes, len(AXES) - 1)][1] is None:
+            # Only meaningful for the random projection; the four axis-aligned
+            # slices are fixed planes and have nothing to reseed.
+            if imgui.button("Reseed plane"):
+                state.preview_seed += 1
+            imgui.same_line()
+            imgui.text_disabled(f"plane #{state.preview_seed}")
         ch, v = imgui.combo("Output", state.preview_channel, list(CHANNELS))
         if ch:
             state.preview_channel = v

@@ -162,6 +162,74 @@ void main(){
     assert err < 1e-4, f"{name}: units sum to {err:.3%} away from the whole"
 
 
+@pytest.mark.parametrize("name", MODALITIES)
+def test_the_random_projection_draws_structure(ctx, preview, name):
+    """Held to the same standard as the fixed slices. A random plane cuts
+    through the units at an angle, so if anything it should show MORE than an
+    axis-aligned one, never less."""
+    from services.brains import REGISTRY
+
+    layout = REGISTRY[name].layout_from_settings({})
+    buf, _ = upload(ctx, layout)
+    img = atlas(preview, preview.render(layout, buf, axes=None, seed=3))
+    assert float(img[..., :3].std()) > 1.0, f"{name}: the random plane is flat"
+    buf.release()
+
+
+def test_the_same_seed_renders_the_same_picture(ctx, preview):
+    """End to end, through the shader. The basis is rebuilt every frame, so a
+    seed that did not fully determine it would strobe on screen while every
+    CPU-side test still passed."""
+    from services.brains import default_layout
+
+    layout = default_layout()
+    buf, _ = upload(ctx, layout)
+    a = atlas(preview, preview.render(layout, buf, axes=None, seed=7)).copy()
+    b = atlas(preview, preview.render(layout, buf, axes=None, seed=7))
+    assert np.array_equal(a, b)
+    buf.release()
+
+
+def test_reseeding_renders_a_different_picture(ctx, preview):
+    from services.brains import default_layout
+
+    layout = default_layout()
+    buf, _ = upload(ctx, layout)
+    a = atlas(preview, preview.render(layout, buf, axes=None, seed=7)).copy()
+    b = atlas(preview, preview.render(layout, buf, axes=None, seed=8))
+    assert not np.array_equal(a, b), "Reseed did not reach the shader"
+    buf.release()
+
+
+def test_the_seed_does_not_touch_an_axis_aligned_slice(ctx, preview):
+    """The four fixed slices are fixed planes. If the seed leaked into them the
+    Reseed button would silently change views it has no business changing."""
+    from services.brains import default_layout
+
+    layout = default_layout()
+    buf, _ = upload(ctx, layout)
+    a = atlas(preview, preview.render(layout, buf, axes=(0, 2), seed=1)).copy()
+    b = atlas(preview, preview.render(layout, buf, axes=(0, 2), seed=99))
+    assert np.array_equal(a, b)
+    buf.release()
+
+
+def test_a_random_plane_is_not_one_of_the_fixed_ones(ctx, preview):
+    """Otherwise the new option is just a fifth copy of an existing view."""
+    from services.brain_preview import AXES
+    from services.brains import default_layout
+
+    layout = default_layout()
+    buf, _ = upload(ctx, layout)
+    rnd = atlas(preview, preview.render(layout, buf, axes=None, seed=5)).copy()
+    for label, axes in AXES:
+        if axes is None:
+            continue
+        fixed = atlas(preview, preview.render(layout, buf, axes=axes))
+        assert not np.array_equal(rnd, fixed), f"random == {label}"
+    buf.release()
+
+
 def test_the_tile_uv_is_flipped_for_imgui(preview, ctx):
     """The framebuffer's origin is bottom-left and ImGui's is top-left; handing
     it the raw range draws every tile upside down."""

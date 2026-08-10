@@ -24,12 +24,45 @@ CHANNELS = ("force axial", "force lateral", "strafe axial", "strafe lateral",
 # The 4D input is (L.axial, L.lateral, R.axial, R.lateral) in the particle's own
 # frame. Sweeping the two AXIAL taps is the pair that drives steering, so it is
 # the default.
+#
+# `None` is a RANDOM PROJECTION: a plane spanned by two random orthonormal
+# directions instead of two coordinate axes. Standard practice for looking at a
+# high-dimensional function - it is how neural-net loss landscapes are drawn
+# (Li et al. 2018) - and it is the honest default view, because an axis-aligned
+# slice only shows the behaviour along one arbitrary frame. A brain's units
+# point wherever the search put them, so the coordinate axes have no special
+# claim, and structure lying diagonally is invisible in all four of them.
 AXES = (
     ("L.axial / R.axial", (0, 2)),
     ("L.axial / L.lateral", (0, 1)),
     ("R.axial / R.lateral", (2, 3)),
     ("L.lateral / R.lateral", (1, 3)),
+    ("random projection", None),
 )
+
+
+def basis_for(axes, seed: int = 0):
+    """-> (u, v), two ORTHONORMAL directions in the 4D input space.
+
+    Orthonormal, not merely random: a plane spanned by two arbitrary Gaussian
+    vectors is skewed and unequally scaled, so the Input Range slider would mean
+    a different distance along each one and the picture would be sheared - and
+    two nearly-parallel draws would collapse it to almost a line.
+
+    Deterministic in `seed`, because this is recomputed every frame and a plane
+    that redrew itself each time would strobe rather than show anything.
+    """
+    if axes is not None:
+        e = np.eye(4, dtype=np.float32)
+        return e[axes[0]], e[axes[1]]
+    # QR of a 4x2 Gaussian is the standard uniform draw from the Stiefel
+    # manifold - every 2-plane equally likely, and both directions unit length.
+    rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
+    q, r = np.linalg.qr(rng.standard_normal((4, 2)))
+    # numpy's QR does not fix the sign of R's diagonal, so without this the
+    # plane flips about an axis for some seeds - harmless but confusing.
+    q = q * np.sign(np.diag(r))
+    return q[:, 0].astype(np.float32), q[:, 1].astype(np.float32)
 
 
 class BrainPreview:
@@ -80,7 +113,7 @@ class BrainPreview:
     # ---- drawing -------------------------------------------------------
 
     def render(self, layout, brain_buffer, *, axes=(0, 2), channel: int = 0,
-               value_range: float = 2.0, gain: float = 1.0,
+               value_range: float = 2.0, gain: float = 1.0, seed: int = 0,
                include_total: bool = True) -> moderngl.Texture:
         """-> the atlas texture. Tile 0 is the whole brain when include_total.
 
@@ -101,7 +134,9 @@ class BrainPreview:
         tryset(p, "BRAIN_LEN", int(layout.length))
         shape = (tuple(layout.shape) + (0, 0, 0, 0))[:4]
         tryset(p, "BRAIN_SHAPE", tuple(int(v) for v in shape))
-        tryset(p, "PREVIEW_AXES", (int(axes[0]), int(axes[1])))
+        u, v = basis_for(axes, seed)
+        tryset(p, "PREVIEW_U", tuple(float(c) for c in u))
+        tryset(p, "PREVIEW_V", tuple(float(c) for c in v))
         tryset(p, "PREVIEW_CHANNEL", int(channel))
         tryset(p, "PREVIEW_RANGE", float(value_range))
         tryset(p, "PREVIEW_GAIN", float(gain))

@@ -14,10 +14,20 @@ in vec2 texcoord;
 out vec4 frag;
 
 uniform int   PREVIEW_UNIT;     // -1 = the whole brain, >=0 = that unit alone
-uniform ivec2 PREVIEW_AXES;     // which two of the four inputs to sweep
 uniform int   PREVIEW_CHANNEL;  // 0..3 = one output, 4 = |force|, 5 = |strafe|
-uniform float PREVIEW_RANGE;    // half-extent of the swept axes
+uniform float PREVIEW_RANGE;    // half-extent of the swept plane
 uniform float PREVIEW_GAIN;     // display scale only; does not touch the brain
+
+// The plane to sweep, as two directions in the 4D sensor space. An axis-aligned
+// slice is just the case where these are two of the standard basis vectors, so
+// there is no separate code path for it - x = U*p.x + V*p.y reproduces the old
+// "set two components, leave the rest at zero" exactly.
+//
+// They are supplied ORTHONORMAL. A random plane spanned by two directions that
+// are merely random is skewed and unequally scaled, so PREVIEW_RANGE would mean
+// a different distance along each one and the picture would be sheared.
+uniform vec4  PREVIEW_U;
+uniform vec4  PREVIEW_V;
 
 // Blue for negative, near-black at zero, orange for positive. Diverging rather
 // than a single ramp because the SIGN is the whole point - a Lenia bump is
@@ -34,9 +44,7 @@ vec3 diverging(float v) {
 
 void main() {
     vec2 p = (texcoord * 2.0 - 1.0) * PREVIEW_RANGE;
-    vec4 x = vec4(0.0);
-    x[PREVIEW_AXES.x] = p.x;
-    x[PREVIEW_AXES.y] = p.y;
+    vec4 x = PREVIEW_U * p.x + PREVIEW_V * p.y;
 
     vec4 r = (PREVIEW_UNIT < 0) ? eval_brain(0u, x)
                                 : eval_brain_unit(0u, PREVIEW_UNIT, x);

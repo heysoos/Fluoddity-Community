@@ -386,6 +386,7 @@ class App:
                 channel=bst.preview_channel,
                 value_range=bst.preview_range,
                 gain=bst.preview_gain,
+                seed=bst.preview_seed,
             )
         except Exception as exc:
             print(f"[brain] inspector render failed ({exc})")

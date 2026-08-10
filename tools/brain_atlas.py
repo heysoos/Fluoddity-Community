@@ -33,18 +33,23 @@ from utilities.gl_helpers import pack_brains
 
 
 def parse_overrides(argv):
-    out, box = {}, None
+    """-> (settings, box, axes, seed). --axes=random draws a random 2-plane."""
+    out, box, axes, seed = {}, None, (0, 2), 0
     for a in argv:
         k, _, v = a.partition("=")
         if k == "--range":
             box = float(v)
+        elif k == "--seed":
+            seed = int(v)
+        elif k == "--axes":
+            axes = None if v == "random" else tuple(int(i) for i in v.split(","))
         else:
             out[k] = float(v)
-    return out, box
+    return out, box, axes, seed
 
 
 def main():
-    overrides, box = parse_overrides(sys.argv[4:])
+    overrides, box, axes, seed = parse_overrides(sys.argv[4:])
     modality = get(MODALITY)
     settings = {s.key: s.default for s in modality.settings_schema()}
     settings.update(overrides)
@@ -63,8 +68,8 @@ def main():
     params = np.asarray(modality.random(rng, layout), np.float32).reshape(-1)
     buf = ctx.buffer(pack_brains([params], layout))
 
-    tex = preview.render(layout, buf, axes=(0, 2), channel=0,
-                         value_range=box, gain=1.0)
+    tex = preview.render(layout, buf, axes=axes, channel=0,
+                         value_range=box, gain=1.0, seed=seed)
     w, h = tex.size
     img = np.frombuffer(tex.read(), dtype=np.uint8).reshape(h, w, 4)[::-1]
 

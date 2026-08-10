@@ -31,8 +31,13 @@ class BrainState:
     # scaled on screen.
     preview_axes: int = 0        # index into services.brain_preview.AXES
     preview_channel: int = 0     # index into services.brain_preview.CHANNELS
-    preview_range: float = 2.0   # half-extent of the swept axes
+    preview_range: float = 2.0   # half-extent of the swept plane
     preview_gain: float = 1.0    # contrast only
+    # Which random plane, when preview_axes selects the random projection. Held
+    # in state rather than drawn per frame: the basis is recomputed every frame,
+    # so a fresh draw each time would strobe instead of showing anything. The
+    # Reseed button bumps it.
+    preview_seed: int = 0
 
     # Display only, pushed in by the orchestrator each frame.
     archive_entries: int = 0
