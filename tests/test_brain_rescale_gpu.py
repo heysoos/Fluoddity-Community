@@ -14,7 +14,7 @@ import pytest
 
 moderngl = pytest.importorskip("moderngl")
 
-from services.brains import REGISTRY, is_fallback  # noqa: E402
+from services.brains import REGISTRY  # noqa: E402
 from utilities.gl_helpers import readback_rule  # noqa: E402
 
 # (modality, setting, a value far from its default)
@@ -100,19 +100,24 @@ def test_repeated_scale_moves_do_not_grind_the_brain_down(sim):
         "a round trip through the extremes did not come back")
 
 
-def test_a_blank_fourier_brain_is_left_alone(sim):
-    """It is not decoded from anything - the shader generates it - so
-    re-encoding the zeros would manufacture a rule out of nowhere and the
-    particles would stop using the fallback."""
-    m = REGISTRY["fourier"]
+@pytest.mark.parametrize("name", ["fourier", "gabor", "lenia", "mlp"])
+def test_a_generated_brain_is_regenerated_not_re_encoded(sim, name):
+    """Generated brains do not come from a z at all - random() draws them
+    directly - so a scale change re-draws them under the new scales. What must
+    never happen is the slot going blank or silent."""
+    m = REGISTRY[name]
     base = m.layout_from_settings({})
     sim.realloc_brain_buffers(base)
     sim.apply_rule(None)
-    assert is_fallback(sim.slot0_params, base)
+    assert sim.brain_per_cohort
+    assert _slot0(sim).any(), f"{name}: no rule loaded left the slot empty"
 
-    sim.set_brain_scales(m.layout_from_settings({"freq_scale": 1.0}))
-    assert not _slot0(sim).any(), "the blank brain was decoded into a real one"
-    assert is_fallback(sim.slot0_params, sim.brain_layout)
+    key = "freq_scale" if name == "fourier" else (
+        "input_scale" if name == "gabor" else "mu_scale")
+    if any(s.key == key for s in m.settings_schema()):
+        sim.set_brain_scales(m.layout_from_settings({key: 1.0}))
+        assert _slot0(sim).any(), f"{name}: rescaling emptied the slot"
+        assert sim.brain_per_cohort, "the rescale dropped out of per-cohort mode"
 
 
 def test_a_width_change_is_still_refused(sim):

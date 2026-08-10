@@ -6,73 +6,26 @@
 // same path - so there is no warp divergence, and switching modality costs one
 // uniform write rather than a shader recompile.
 
-// The generated rule a particle runs when no brain has been uploaded, WITH the
-// cohort mutation applied - the original mutated the generated rule too, and
-// skipping that made Mutation Scale a no-op on the startup population.
+// There is always a brain in the buffer, so there is nothing to fall back to.
 //
-// The seed is hashed from the centres just GENERATED, not from the blank buffer
-// that triggered the fallback. Reusing the fallback's own generation seed
-// instead correlates the jitter with the rule it is jittering, which amplifies
-// the spread rather than exploring around it.
-FourierCenter[10] fallback_centers() {
-    FourierCenter[10] fc = generate_random_centers(g_brain_seed);
-    if (g_brain_mut == 0.0) return fc;
-    float mseed = hash(fc[4].frequency.xy + fc[7].amplitude.yx + fc[1].frequency.zw)
-                + g_brain_cohort;
-    for (int c = 0; c < 10; c++) {
-        fourier_mutate(fc[c].frequency, fc[c].amplitude, c, mseed);
-    }
-    return fc;
-}
-
+// A GPU-side generated rule used to live here, reached whenever slot 0 was all
+// zero. It could only ever be Fourier, because it built FourierCenters - so
+// Fourier silently had TWO ways to get a brain and the other three had one,
+// and at the default MUTATION_SCALE of 0.0 that was the difference between 64
+// cohorts running 64 independent rules and 64 cohorts running the same one.
+// The host now generates a brain per cohort for every modality instead.
 vec4 eval_brain(uint base, vec4 x) {
-    if (g_brain_fallback) {
-        return fourier_noise(fallback_centers(), x);
-    }
     if (BRAIN_MODALITY == 0) return brain_fourier(base, x);
     if (BRAIN_MODALITY == 1) return brain_gabor(base, x);
     if (BRAIN_MODALITY == 2) return brain_lenia(base, x);
     return brain_mlp(base, x);
 }
 
-// The generated rule, written out as the particle is running it. brain_params
-// still holds the blank buffer that triggered the fallback; writing THAT made
-// click-to-adopt copy zeros, which re-blanked slot 0 on apply and flipped every
-// cohort onto its own random rule - most sluggish, a few lively.
-void fourier_write_fallback(uint out_base) {
-    FourierCenter[10] fc = fallback_centers();
-    for (int c = 0; c < 10; c++) {
-        if (c * 8 + 7 >= BRAIN_LEN) break;
-        uint o = out_base + uint(c * 8);
-        particle_brains[o + 0u] = fc[c].frequency.x;
-        particle_brains[o + 1u] = fc[c].frequency.y;
-        particle_brains[o + 2u] = fc[c].frequency.z;
-        particle_brains[o + 3u] = fc[c].frequency.w;
-        particle_brains[o + 4u] = fc[c].amplitude.x;
-        particle_brains[o + 5u] = fc[c].amplitude.y;
-        particle_brains[o + 6u] = fc[c].amplitude.z;
-        particle_brains[o + 7u] = fc[c].amplitude.w;
-    }
-}
-
 // ONE unit's contribution to the response - one Fourier centre, one Gabor
 // filter, one Lenia bump, one MLP hidden unit. The Brain Inspector draws this,
 // and it is the SAME function the summing loop uses, so a tile shows what the
 // particles actually compute rather than a reimplementation of it.
-// The fallback is always ten generated centres, whatever Centers is set to -
-// generate_random_centers() returns FourierCenter[10].
-const int FALLBACK_UNITS = 10;
-
 vec4 eval_brain_unit(uint base, int i, vec4 x) {
-    // The Inspector must show what the particles RUN. With no brain uploaded
-    // that is the generated rule, not the blank buffer that triggered it -
-    // drawing brain_fourier() over all-zero params is what made every tile
-    // black while the particles moved.
-    if (g_brain_fallback) {
-        if (i < 0 || i >= FALLBACK_UNITS) return vec4(0.0);
-        FourierCenter[10] fc = fallback_centers();
-        return fourier_eval(fc[i].frequency, fc[i].amplitude, i, x);
-    }
     if (BRAIN_MODALITY == 0) return fourier_unit(base, i, x);
     if (BRAIN_MODALITY == 1) return gabor_unit(base, i, x);
     if (BRAIN_MODALITY == 2) return lenia_unit(base, i, x);
@@ -98,7 +51,6 @@ float brain_param_at(uint base, int i) {
 // times per particle. The others mutate each float independently, which makes
 // the per-float loop the same work either way.
 void brain_write(uint base, uint out_base) {
-    if (g_brain_fallback)     { fourier_write_fallback(out_base); return; }
     if (BRAIN_MODALITY == 0)  { fourier_write(base, out_base);    return; }
     for (int i = 0; i < BRAIN_LEN; i++) {
         particle_brains[out_base + uint(i)] = brain_param_at(base, i);

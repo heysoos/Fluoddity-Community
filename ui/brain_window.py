@@ -177,11 +177,11 @@ class BrainWindowMixin:
             imgui.text_disabled("preview unavailable")
             return
 
-        n = preview.unit_count(layout, state.preview_fallback)
-        if state.preview_fallback:
-            imgui.text_colored(imgui.ImVec4(1.0, 0.7, 0.2, 1.0),
-                               "no brain loaded - showing the GENERATED rule")
-            imgui.text_disabled("   cohort 0; each cohort gets its own")
+        n = preview.unit_count(layout)
+        if state.preview_per_cohort:
+            # A statement, not a warning. Every modality does this when no rule
+            # is loaded, and it is what makes a fresh canvas interesting.
+            imgui.text_disabled("cohort 0 of an unsaved random brain per cohort")
         imgui.text(f"whole brain, then {n} units "
                    f"(blue negative, orange positive)")
 

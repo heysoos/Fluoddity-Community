@@ -375,16 +375,15 @@ class App:
             return
 
         from services.brain_preview import AXES
-        from services.brains import is_fallback
         from ui.brain_window import layout_for
 
         axes = AXES[min(bst.preview_axes, len(AXES) - 1)][1]
         layout = layout_for(bst.modality, bst.settings)
-        # The shader generates a per-cohort rule when no brain is uploaded, so
-        # the Inspector has to make the same call - otherwise it draws the blank
-        # buffer that TRIGGERED the fallback, which is black, while the
-        # particles run the generated rule and move perfectly well.
-        bst.preview_fallback = is_fallback(self.sim.slot0_params, layout)
+        # Slot 0 is always a real brain now - the loaded rule, or cohort 0's
+        # generated one - so the Inspector just draws it. It used to have to
+        # re-derive the shader's "is this buffer blank" verdict, and when it did
+        # not, it drew the blank buffer: black tiles while the particles ran.
+        bst.preview_per_cohort = self.sim.brain_per_cohort
         try:
             self.ui.brain_preview_tex = self.brain_preview.render(
                 layout,
@@ -394,11 +393,6 @@ class App:
                 value_range=bst.preview_range,
                 gain=bst.preview_gain,
                 seed=bst.preview_seed,
-                fallback=bst.preview_fallback,
-                # Cohort 0's rule. The generated rule is per-cohort - seeded
-                # rule_seed + floor(cohort) - so the Inspector shows one of
-                # them and says which.
-                rule_seed=float(ui_state.sim.rule_seed),
             )
         except Exception as exc:
             print(f"[brain] inspector render failed ({exc})")

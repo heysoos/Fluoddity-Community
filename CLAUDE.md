@@ -316,6 +316,27 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   `settings_schema()` rather than a hand-written list, because the hand-written
   list is what let the second one through.
 
+- **"No rule loaded" means one generated brain PER COHORT, for every modality,
+  and there is no blank-brain state.** It used to mean two different things:
+  Fourier answered an all-zero buffer with a GPU-side generator, and the other
+  three got one CPU brain shared by every cohort. Since `MUTATION_SCALE`
+  defaults to **0.0** and `num_cohorts` to **64**, that was 64 independent rules
+  against 64 copies of one — a monoculture — and the GPU path could never have
+  been shared, because it builds `FourierCenter`s. `generated_brains()` now
+  draws them on the host via the registry, into the cohort slots
+  (`COHORT_BRAIN_SLOT0`, mirrored in `_header.glsl`), selected by
+  `BRAIN_PER_COHORT`. Fourier lost nothing: `generate_random_centers()` and
+  `FourierModality.random()` are the same formula.
+
+- **An all-zero rule is the "no brain" marker AT THE RIGHT WIDTH TOO.** The Z
+  key, the undo history and `_Default.json` all send a zeroed `(10, 8)`, which
+  *is* 80 floats. While the GPU fallback existed this was harmless; uploaded
+  verbatim it is a brain that outputs zero for every input. Measured on
+  `_Default` when `apply_rule` accepted it: the brain's own p90 output fell from
+  0.431 to **0.034**. Anything that fills a slot — `apply_rule`,
+  `_write_multi_load_ssbo`, `write_tournament_rules` — must substitute a
+  generated brain rather than write zeros, or that slot is silent.
+
 - **A brain's mutation belongs to its modality, not to a generic per-float
   helper.** The Fourier mutation is structured: ONE scalar scales all four
   components of a centre's frequency (so the frequency *vector* keeps its

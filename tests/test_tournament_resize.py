@@ -65,27 +65,19 @@ def test_handler_without_tournament_service_still_resizes():
     sim.setup_simulation_state.assert_called_once()
 
 
-def test_shader_has_zero_rule_fallback():
+def test_a_short_genome_upload_does_not_freeze_a_tile():
     """Defence in depth: an all-zero tournament genome must not freeze the tile.
 
-    The fallback now spans two files - entity_update.glsl detects the blank
-    brain and sets g_brain_fallback, and _dispatch.glsl answers it with a
-    per-cohort random rule - so both halves are asserted. Either one alone is a
-    frozen grid.
+    This used to be the GPU's job - it detected a blank slot and generated a
+    Fourier rule. That fallback is gone, because it existed for Fourier alone
+    and left the other three modalities silent in the same situation. The
+    guarantee moved to the HOST, which pads a short upload with generated
+    brains, and it now holds for every modality rather than one.
     """
     from pathlib import Path
-    shaders = Path(__file__).resolve().parent.parent / "shaders"
 
-    src = (shaders / "entity_update.glsl").read_text()
-    i = src.index("bool blank =")
-    block = src[i:i + 600]
-    assert "g_brain_fallback = true" in block, "a zeroed genome buffer is not detected"
-
-    dispatch = (shaders / "brains" / "_dispatch.glsl").read_text()
-    assert "generate_random_centers" in dispatch, (
-        "no fallback rule for a zeroed genome buffer"
-    )
-    j = dispatch.index("if (g_brain_fallback)")
-    assert "fallback_centers()" in dispatch[j:j + 200], (
-        "the fallback branch does not evaluate the generated rule"
-    )
+    host = (Path(__file__).resolve().parent.parent / "sim.py").read_text()
+    i = host.index("def write_tournament_rules")
+    body = host[i:i + 2000]
+    assert "generated_brains" in body, "a short upload leaves tiles silent"
+    assert "tiles > len(genomes)" in body

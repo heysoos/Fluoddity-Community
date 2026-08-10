@@ -364,15 +364,29 @@ float get_particle_rule_seed() {
 
 // Which slot of brain_params this particle reads. Multi-load configs own
 // slots by config index; tournament mode by tile; otherwise slot 0.
-uint get_particle_brain_base() {
+// Which brain this particle reads, as a float offset into the flat buffer.
+//
+// With no rule loaded the host generates ONE BRAIN PER COHORT and puts them in
+// the cohort slots, so `cohort` picks the slot. That used to be a GPU-side
+// fallback that only Fourier had - it built FourierCenters - which left the
+// other three modalities running 64 cohorts of one identical brain, a
+// monoculture, while Fourier got 64 independent rules. Generating on the host
+// makes every modality behave the same and removes the special case entirely.
+//
+// A loaded rule, a multi-load config and a tournament tile all still name their
+// own slot, and per-cohort variety then comes from the mutation, as before.
+uint get_particle_brain_base(float cohort) {
     int idx = get_particle_config_index();
-    uint slot = 0u;
-    if (idx >= 0) {
-        slot = uint(idx);
-    } else if (TOURNAMENT_MODE == 1) {
-        slot = uint(tournament_home_tile(gl_GlobalInvocationID.x));
+    if (idx >= 0) return uint(idx) * uint(MAX_BRAIN_FLOATS);
+    if (TOURNAMENT_MODE == 1) {
+        return uint(tournament_home_tile(gl_GlobalInvocationID.x))
+             * uint(MAX_BRAIN_FLOATS);
     }
-    return slot * uint(MAX_BRAIN_FLOATS);
+    if (BRAIN_PER_COHORT == 1) {
+        int c = clamp(int(floor(cohort)), 0, MAX_COHORT_BRAINS - 1);
+        return uint(COHORT_BRAIN_SLOT0 + c) * uint(MAX_BRAIN_FLOATS);
+    }
+    return 0u;
 }
 
 
@@ -594,37 +608,17 @@ void main() {
     Entity e=entities[index];
     float cohort = get_cohort(index);
 
-    uint brain_base = get_particle_brain_base();
+    // There is ALWAYS a brain here. The host generates one per cohort when no
+    // rule is loaded, so the eight-float "is this buffer blank" probe that used
+    // to sit here - and the Fourier-only GPU fallback it switched on - are both
+    // gone. Nothing downstream has to ask which of two brains it is looking at,
+    // which is what let the Inspector draw the blank buffer instead of the rule
+    // the particles were running.
+    uint brain_base = get_particle_brain_base(cohort);
 
     //Each cohort gets a random mutation, applied on read by the modality.
     g_brain_mut = calculate_setting(get_particle_mutation_scale(),e.pos,cohort);
     g_brain_cohort = get_particle_rule_seed()+floor(cohort);
-
-    //The same eight floats the old all-zero Rule check tested:
-    //centers[0].frequency (0..3) and centers[5].amplitude (44..47). Probing
-    //fewer risks a live rule that happens to hold a zero there; probing index
-    //40 instead of 44 tests centre 5's FREQUENCY, which is a different rule.
-    //min() keeps a layout shorter than six centres in range.
-    //
-    //Fourier only: the fallback generates a FourierCenter[10], so it is
-    //meaningful for no other layout. Every other modality relies on the host
-    //having uploaded a brain, which it does on every layout change.
-    uint bprobe = brain_base + uint(min(5, max(BRAIN_SHAPE.x, 1) - 1) * 8);
-    bool blank = BRAIN_MODALITY == 0
-              && brain_params[brain_base+0u]==0.0
-              && brain_params[brain_base+1u]==0.0
-              && brain_params[brain_base+2u]==0.0
-              && brain_params[brain_base+3u]==0.0
-              && brain_params[bprobe+4u]==0.0
-              && brain_params[bprobe+5u]==0.0
-              && brain_params[bprobe+6u]==0.0
-              && brain_params[bprobe+7u]==0.0;
-    if(blank){
-        g_brain_fallback = true;
-        g_brain_seed = (TOURNAMENT_MODE == 1)
-            ? get_particle_rule_seed()+float(tournament_home_tile(index))
-            : get_particle_rule_seed()+floor(cohort);
-    }
 
     // Only write brains when explicitly requested, and only for the particle
     // being adopted - readback_rule() takes one entity's slice and nothing else

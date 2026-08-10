@@ -14,6 +14,13 @@ from dataclasses import dataclass, field
 # Fourier 48*8=384, Gabor 36*14=504, Lenia 48*10=480, MLP H=48 -> 9*48+4=436.
 MAX_BRAIN_FLOATS = 512
 
+# The cohort brains live in the slots after the multi-load configs, one per
+# cohort, and are what "no rule loaded" means. MAX_COHORT_BRAINS must cover
+# SimState.num_cohorts' maximum (144). Both are mirrored in
+# shaders/brains/_header.glsl and must agree with it exactly.
+COHORT_BRAIN_SLOT0 = 64
+MAX_COHORT_BRAINS = 144
+
 
 @dataclass(frozen=True)
 class BrainLayout:
@@ -88,31 +95,26 @@ def default_layout() -> BrainLayout:
     return REGISTRY["fourier"].layout_from_settings({})
 
 
-# The eight floats entity_update.glsl probes to decide "no brain uploaded":
-# centre 0's four frequencies, and the four amplitudes of centre 5 (or the last
-# centre, for a layout shorter than six). Kept in one place because the Brain
-# Inspector has to reach the SAME verdict as the particles - it renders the
-# generated rule when this is true, and the stored buffer when it is not.
-_BLANK_PROBE_CENTRE = 5
+def generated_brains(layout: BrainLayout, seed: float, count: int):
+    """`count` independent brains of `layout`, deterministic in `seed`.
 
+    What "no rule loaded" means, for EVERY modality. It used to mean two
+    different things: Fourier answered an all-zero buffer with a GPU-generated
+    rule per cohort, and the other three got one CPU brain shared by every
+    cohort. At the default MUTATION_SCALE of 0.0 that is the difference between
+    64 cohorts doing 64 different things and 64 cohorts doing one thing.
 
-def is_fallback(params, layout: BrainLayout) -> bool:
-    """Will the shader generate a rule instead of reading these params?
-
-    Only Fourier has a fallback: it builds FourierCenters, which is meaningless
-    for any other modality, and every other modality's all-zero brain is
-    SILENCE rather than a neutral start. See Sim._blank_brain.
+    Fourier loses nothing by moving to the host: generate_random_centers() in
+    fourier4_4.glsl and FourierModality.random() are the same formula -
+    frequency scaled by 1+2h^2, amplitudes 2h-1 - so the family of rules is
+    identical and only the particular draws differ.
     """
     import numpy as np
 
-    if layout.modality != "fourier" or params is None:
-        return False
-    p = np.asarray(params, dtype=np.float32).reshape(-1)
-    if p.size < layout.length:
-        return False
-    n = max(int(layout.shape[0]), 1)
-    o = min(_BLANK_PROBE_CENTRE, n - 1) * 8
-    return bool(not p[0:4].any() and not p[o + 4:o + 8].any())
+    m = get(layout.modality)
+    rng = np.random.default_rng(int(abs(float(seed)) * 1e9) % (2 ** 32))
+    return [np.asarray(m.random(rng, layout), dtype=np.float32).reshape(-1)
+            for _ in range(max(int(count), 1))]
 
 
 # Registration happens on package import, so `import services.brains` is enough

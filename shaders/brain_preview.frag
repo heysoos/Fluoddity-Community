@@ -17,13 +17,6 @@ uniform int   PREVIEW_UNIT;     // -1 = the whole brain, >=0 = that unit alone
 uniform int   PREVIEW_CHANNEL;  // 0..3 = one output, 4 = |force|, 5 = |strafe|,
                                 // 6 = project onto PREVIEW_OUT
 
-// Which brain to draw. The sim decides this per particle at runtime: with no
-// brain uploaded it generates a per-cohort rule instead of reading the buffer,
-// and the Inspector has to make the SAME decision or it draws brain_fourier()
-// over an all-zero buffer - black tiles while the particles move.
-uniform int   PREVIEW_FALLBACK;
-uniform float PREVIEW_SEED;     // the generated rule's seed, i.e. rule_seed
-
 // A random unit direction in the 4D OUTPUT space, for PREVIEW_CHANNEL 6. Same
 // reasoning as the input plane: the four outputs are (force.xy, strafe.xy) in
 // the particle's own frame, and a unit that acts diagonally across them shows
@@ -57,9 +50,6 @@ vec3 diverging(float v) {
 }
 
 void main() {
-    g_brain_fallback = (PREVIEW_FALLBACK != 0);
-    g_brain_seed = PREVIEW_SEED;
-
     vec2 p = (texcoord * 2.0 - 1.0) * PREVIEW_RANGE;
     vec4 x = PREVIEW_U * p.x + PREVIEW_V * p.y;
 

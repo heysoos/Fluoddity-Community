@@ -84,7 +84,8 @@ class Sim:
         # Set before any brain buffer is sized: both allocations below derive
         # from it. Preserved across setup_simulation_state calls so a canvas or
         # world resize does not silently revert to the default layout.
-        from services.brains import MAX_BRAIN_FLOATS, default_layout
+        from services.brains import (MAX_BRAIN_FLOATS, MAX_COHORT_BRAINS,
+                                     default_layout)
         if getattr(self, '_brain_layout', None) is None:
             self._brain_layout = default_layout()
 
@@ -112,9 +113,15 @@ class Sim:
         # shader's 'no brain loaded' probe reads slot 0 directly. Uninitialised
         # garbage there would silently suppress the startup fallback. Measured:
         # a bare reserve left 13 nonzero floats in this buffer.
+        # MAX_MULTI_LOAD_CONFIGS slots for configs and tournament tiles, then
+        # MAX_COHORT_BRAINS more holding one generated brain per cohort for when
+        # no rule is loaded. 208 slots is 416 KB - the cohort half costs 288 KB
+        # and buys every modality the per-cohort variety that only Fourier had.
         self.multi_load_rule_buffer = self.ctx.buffer(
-            reserve=MAX_MULTI_LOAD_CONFIGS * MAX_BRAIN_FLOATS * 4)
+            reserve=(MAX_MULTI_LOAD_CONFIGS + MAX_COHORT_BRAINS)
+            * MAX_BRAIN_FLOATS * 4)
         self.multi_load_rule_buffer.clear()
+        self._brain_per_cohort = False
 
         # Bind entity and rule buffers
         self.entities.bind_to_storage_buffer(0)
@@ -262,6 +269,8 @@ class Sim:
         tryset(self.entity_update_program, 'BRAIN_MODALITY',
                get_brain_modality(_bl.modality).modality_id)
         tryset(self.entity_update_program, 'BRAIN_LEN', int(_bl.length))
+        tryset(self.entity_update_program, 'BRAIN_PER_COHORT',
+               1 if self.brain_per_cohort else 0)
         tryset(self.entity_update_program, 'BRAIN_SHAPE',
                (int(_bl.shape[0]),
                 int(_bl.shape[1]) if len(_bl.shape) > 1 else 0, 0, 0))
@@ -818,7 +827,15 @@ class Sim:
         for i in range(config_count):
             config = multi_load_service.get_config(i)
             if config is None or config.rule is None:
-                brains.append(np.zeros(self._brain_layout.length, dtype=np.float32))
+                # A generated brain of its own, not zeros. Zeros used to reach
+                # the Fourier GPU fallback and were dead silence under every
+                # other modality - a config with no rule simply froze.
+                from services.brains import generated_brains
+
+                brains.append(generated_brains(
+                    self._brain_layout,
+                    float(getattr(config, "rule_seed", 0.0) or 0.0) + i,
+                    1)[0])
             else:
                 brains.append(config.rule.astype(np.float32).reshape(-1))
 
@@ -842,7 +859,17 @@ class Sim:
         params = None
         if rule is not None:
             flat = np.asarray(rule, dtype=np.float32).reshape(-1)
-            if flat.size == layout.length:
+            if not flat.any():
+                # An all-zero rule is this codebase's "no brain" marker, and it
+                # arrives at the RIGHT width as well as the wrong one - the Z
+                # key, the undo history and _Default.json all send a zeroed
+                # (10, 8). It used to be harmless because the GPU answered zeros
+                # with a generated rule; now it would be uploaded verbatim, and
+                # a brain of all zeros outputs zero for every input. Measured on
+                # _Default: p90 of the brain's own output fell from 0.431 to
+                # 0.034 before this branch existed.
+                params = None
+            elif flat.size == layout.length:
                 params = flat
             elif flat.any():
                 print(f"[brain] ignoring a {flat.size}-float rule under "
@@ -851,38 +878,50 @@ class Sim:
             # marker - the Z key and the undo history both use the (10, 8)
             # form - so it falls through silently rather than warning.
         if params is None:
-            params = self._blank_brain(layout)
+            # No rule loaded: generate one brain PER COHORT, for whichever
+            # modality is active. Slot 0 gets cohort 0's copy so anything
+            # reading "the current rule" still finds a real brain.
+            params = self._write_cohort_brains(layout)
+        else:
+            self._brain_per_cohort = False
         self._slot0 = np.asarray(params, dtype=np.float32).reshape(-1).copy()
         # A new rule arrives DECODED; its search vector is unknown until a scale
         # change needs one. See set_brain_scales.
         self._slot0_z = None
         self.multi_load_rule_buffer.write(pack_brains([params], layout))
 
-    def _blank_brain(self, layout) -> np.ndarray:
-        """What 'no rule loaded' has to mean for this layout.
+    def _write_cohort_brains(self, layout) -> np.ndarray:
+        """Fill the cohort slots with independent brains. -> cohort 0's.
 
-        Fourier gets ZEROS, which the shader answers with a generated per-cohort
-        rule - the startup behaviour, and kept bit-exact.
-
-        NO OTHER MODALITY HAS THAT FALLBACK: it builds FourierCenters, so it is
-        meaningless for a Gabor or MLP brain. And their all-zero brain is not a
-        neutral starting point, it is SILENCE - every amplitude is zero, so the
-        output is identically zero for every input, no force reaches any
-        particle, and the canvas fades to black. That is what "changed to gabor
-        and the particles disappeared" was.
-
-        So they get a random brain of their own layout, which is the same
-        user-visible result the Fourier fallback gives. Seeded from rule_seed,
-        so pressing reset produces a NEW brain and the same seed reproduces it.
+        This is the whole of "no brain loaded" now, and every modality takes the
+        same path. Before, Fourier alone had a GPU fallback that generated a
+        rule per cohort, so at the default MUTATION_SCALE of 0.0 a Fourier
+        startup was 64 cohorts doing 64 different things while Gabor, Lenia and
+        MLP were 64 cohorts doing one thing - a monoculture nobody asked for.
         """
-        from services.brains import get
+        from services.brains import (COHORT_BRAIN_SLOT0, MAX_BRAIN_FLOATS,
+                                     MAX_COHORT_BRAINS, generated_brains)
+        from utilities.gl_helpers import pack_brains
 
-        if layout.modality == "fourier":
-            return np.zeros(layout.length, dtype=np.float32)
         seed = float(getattr(getattr(self, "_state", None), "rule_seed", 0.0) or 0.0)
-        rng = np.random.default_rng(int(abs(seed) * 1e9) % (2 ** 32))
-        return np.asarray(get(layout.modality).random(rng, layout),
-                          dtype=np.float32).reshape(-1)
+        n = int(getattr(getattr(self, "_state", None), "num_cohorts", 0) or 0)
+        n = max(1, min(n or MAX_COHORT_BRAINS, MAX_COHORT_BRAINS))
+        brains = generated_brains(layout, seed, n)
+        self.multi_load_rule_buffer.write(
+            pack_brains(brains, layout),
+            offset=COHORT_BRAIN_SLOT0 * MAX_BRAIN_FLOATS * 4)
+        self._brain_per_cohort = True
+        return brains[0]
+
+    @property
+    def brain_per_cohort(self) -> bool:
+        """Is each cohort running its own generated brain?
+
+        True exactly when no rule is loaded. Read by the uniform push and by the
+        Brain window, which says so rather than leaving the user to wonder why
+        the canvas holds several different behaviours at once.
+        """
+        return bool(getattr(self, "_brain_per_cohort", False))
 
     def apply_tournament(self, enabled: bool, grid: int = 4,
                          mutation: float = 0.0, plain_colour: bool = False,
@@ -966,10 +1005,23 @@ class Sim:
         brain loaded', so 13 of 16 tiles ran the per-tile fallback rule. That
         rule is a deterministic function of (rule_seed, tile), so the grid
         showed the SAME patterns on every run.
+
+        Short uploads are PADDED with generated brains. A slot the caller does
+        not fill keeps whatever was there, and at startup that is zero - which
+        used to reach the Fourier GPU fallback and now would simply be silence,
+        a frozen tile. The padding is the same generated brain every other
+        "no rule" path uses.
         """
         n = self._brain_layout.length
         flat = np.frombuffer(rule_bytes, dtype=np.float32)
         genomes = [flat[i * n:(i + 1) * n] for i in range(len(flat) // n)]
+        tiles = int(getattr(self, "_tournament_grid", 0) or 0) ** 2
+        if tiles > len(genomes):
+            from services.brains import generated_brains
+
+            seed = float(getattr(self._state, "rule_seed", 0.0) or 0.0)
+            genomes = genomes + generated_brains(
+                self._brain_layout, seed, tiles - len(genomes))
         self.multi_load_rule_buffer.write(
             pack_brains(genomes, self._brain_layout))
 
@@ -1013,14 +1065,19 @@ class Sim:
                 f"{self._brain_layout.length}; use realloc_brain_buffers")
         from utilities.gl_helpers import pack_brains
 
-        from services.brains import get, is_fallback
+        from services.brains import get
 
         old, self._brain_layout = self._brain_layout, layout
+        # Generated brains do not come from a z at all - they are drawn by the
+        # modality's own random(). Re-generating under the new scales is the
+        # honest rescale, and it keeps the cohort slots consistent with slot 0.
+        if self.brain_per_cohort:
+            self._slot0 = self._write_cohort_brains(layout)
+            self._slot0_z = None
+            self.multi_load_rule_buffer.write(pack_brains([self._slot0], layout))
+            return
         params = getattr(self, "_slot0", None)
-        # A blank Fourier brain is not decoded from anything - the shader
-        # generates it - so there is nothing to rescale and re-encoding the
-        # zeros would manufacture a rule out of nowhere.
-        if params is None or is_fallback(params, old):
+        if params is None:
             return
         m = get(layout.modality)
         try:

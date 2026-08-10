@@ -6,6 +6,11 @@
 // the tile index; multi-load uses the config index.
 #define MAX_BRAIN_FLOATS 512
 
+// Where the per-cohort generated brains start in the flat buffer, in SLOTS.
+// The slots below this belong to multi-load configs and tournament tiles.
+#define COHORT_BRAIN_SLOT0 64
+#define MAX_COHORT_BRAINS 144
+
 layout(std430, binding = 4) buffer BrainBuffer {
     float brain_params[];
 };
@@ -32,16 +37,12 @@ uniform ivec4 BRAIN_SHAPE;      // structural ints (n_centers, hidden width, ...
 // Applied on READ. The obvious alternative - copy the brain into a local
 // float[MAX_BRAIN_FLOATS], mutate, then evaluate - is 2 KB per invocation and
 // spills to local memory for every particle every frame.
+// Set by the host when no rule is loaded: every cohort then reads its OWN
+// generated brain out of the cohort slots instead of sharing slot 0.
+uniform int BRAIN_PER_COHORT;
+
 float g_brain_mut = 0.0;
 float g_brain_cohort = 0.0;
-
-// Safety net, preserved from the old all-zero Rule check: when no brain has
-// been uploaded - manual mode with no rule loaded, which is the startup state,
-// or a buffer realloc not yet followed by an upload - fall back to a per-cohort
-// random Fourier rule so the tile still runs instead of freezing on silence.
-// Set per invocation in main(); always false in the Brain Inspector.
-bool  g_brain_fallback = false;
-float g_brain_seed = 0.0;
 
 // Per-cohort mutation jitter for one float index, in [-amount, +amount].
 // Deterministic in (cohort, index), so a cohort's variant is stable frame to

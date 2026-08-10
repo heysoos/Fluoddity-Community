@@ -113,26 +113,39 @@ def test_the_writeback_is_gated_and_scoped_to_one_particle():
     assert "_pending_entity_id" in host
 
 
-def test_the_writeback_emits_the_fallback_rule_not_the_blank_buffer():
-    """When the fallback is active the particle runs a GENERATED rule while
-    brain_params still holds the blank buffer that triggered it. Writing the
-    buffer made click-to-adopt copy zeros, which re-blanked slot 0 and flipped
-    every cohort onto its own random rule.
+def test_there_is_no_blank_brain_state_left():
+    """A brain is always in the buffer, so nothing downstream has to ask which
+    of two it is looking at.
 
-    The writeback must use the SAME helper the evaluation does, mutation
-    included, or the adopted rule is not the one the particle was running.
-    Behaviour is covered on the GPU (tests/test_brain_readback_gpu.py); this is
-    the CI-side guard, since CI has no GPU.
+    The GPU used to detect an all-zero slot and generate a Fourier rule instead.
+    That gave Fourier a second, hidden way to have a brain that the other three
+    modalities had no equivalent for - and with MUTATION_SCALE defaulting to 0.0
+    and num_cohorts to 64, the difference was 64 independent rules against 64
+    copies of one. Cohort brains come from the host now, for every modality.
     """
-    dispatch = read("shaders/brains/_dispatch.glsl")
-    assert "fourier_noise(fallback_centers()" in dispatch, (
-        "the evaluation does not run the generated fallback rule"
-    )
-    i = dispatch.index("void brain_write")
-    body = dispatch[i:]
-    assert "g_brain_fallback" in body and "fourier_write_fallback" in body, (
-        "the writeback does not emit the generated rule when the fallback is on"
-    )
+    entity = _code("shaders/entity_update.glsl")
+    for gone in ("g_brain_fallback", "bool blank ="):
+        assert gone not in entity, f"{gone} survived the removal"
+    assert "BRAIN_PER_COHORT" in entity, "cohort brains are never selected"
+
+    dispatch = _code("shaders/brains/_dispatch.glsl")
+    for gone in ("fallback_centers", "fourier_write_fallback",
+                 "g_brain_fallback"):
+        assert gone not in dispatch, f"{gone} survived the removal"
+
+
+def test_the_host_generates_a_brain_per_cohort():
+    """The replacement, on the host side, and it must apply to every modality -
+    the point of moving it off the GPU."""
+    host = read("sim.py")
+    assert "_write_cohort_brains" in host
+    assert "'BRAIN_PER_COHORT'" in host, "the uniform is never pushed"
+
+    brains = read("services/brains/__init__.py")
+    assert "def generated_brains" in brains
+    # Via the registry, so it cannot be Fourier-only ever again.
+    i = brains.index("def generated_brains")
+    assert "get(layout.modality)" in brains[i:i + 1200]
 
 
 def _code(path: str) -> str:
@@ -157,22 +170,17 @@ def test_the_inspector_does_not_reimplement_the_brain():
             f"the preview reaches past the dispatch to {fn}")
 
 
-def test_the_inspector_reproduces_the_generated_rule():
-    """The sim decides at RUNTIME whether to read the buffer or generate a rule.
-    The preview binds the same buffer, so unless it is told, it renders the
-    blank buffer that TRIGGERED the fallback - black tiles while the particles
-    move on the generated rule, which is exactly what was reported.
+def test_the_inspector_needs_no_special_case_to_show_the_running_brain():
+    """Slot 0 always holds a real brain - the loaded rule, or cohort 0's
+    generated one - so the preview just draws it.
+
+    It used to have to re-derive the shader's "is this buffer blank" verdict,
+    and because it did not, it drew the blank buffer: black tiles while the
+    particles ran. Deleting the state deletes the class of bug.
     """
     src = _code("shaders/brain_preview.frag")
-    assert "g_brain_fallback" in src and "g_brain_seed" in src, (
-        "the preview never sets the fallback state, so it cannot show it")
-
-    dispatch = _code("shaders/brains/_dispatch.glsl")
-    i = dispatch.index("vec4 eval_brain_unit")
-    body = dispatch[i:dispatch.index("float brain_param_at", i)]
-    assert "g_brain_fallback" in body, (
-        "per-unit tiles ignore the fallback, so they stay black")
-    assert "fallback_centers()" in body
+    for gone in ("g_brain_fallback", "PREVIEW_FALLBACK", "PREVIEW_SEED"):
+        assert gone not in src, f"{gone} survived the removal"
 
 
 def test_the_inspector_can_isolate_one_unit():

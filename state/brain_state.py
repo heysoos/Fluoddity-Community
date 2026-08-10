@@ -45,8 +45,8 @@ class BrainState:
 
     # Display only, pushed in by the orchestrator each frame.
     archive_entries: int = 0
-    # Whether the particles are running a GENERATED rule rather than the loaded
-    # one. Not a setting - the sim decides it, and the Inspector has to say so,
-    # because "no brain loaded" and "a brain that does nothing" look identical
-    # on screen otherwise.
-    preview_fallback: bool = False
+    # True when no rule is loaded, so each cohort is running its own generated
+    # brain. Not a warning - it is the normal startup state and the reason the
+    # canvas holds several different behaviours at once. The Inspector shows
+    # cohort 0's and says so.
+    preview_per_cohort: bool = False
