@@ -438,6 +438,28 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   afterwards; the expedition fitness therefore has to be computed BEFORE the
   admission loop rather than after it.
 
+- **The record book runs in EVERY regime, and it is measured against the
+  ARCHIVE, not against the run.** A tile that matches any enabled text goal
+  better than anything the archive holds is admitted — `source="record"`,
+  `goal` set to the phrase it beat rather than the one being chased. This is
+  not a variant of `summit`: a run chasing "pepperoni pizza" routinely
+  produces the best "a smiley face" the archive has ever had, and nothing else
+  keeps it — novelty does not know the goal list exists, and separation asks
+  whether the archive already holds something SIMILAR, which is a different
+  question from whether it holds something BETTER.
+  Scored on DESCRIPTORS on both sides via `contrastive()` with the distractor
+  set — the same objective `_seed_index` ranks seeds by. Deliberately not the
+  per-snapshot averaging the expedition fitness uses: archive entries have one
+  descriptor and no snapshots, so averaging one side only would compare two
+  different quantities. `_goal_records` is keyed BY TILE so a tile topping
+  several goals is admitted once, credited to its largest margin; two goals
+  won by two different tiles is two entries, which is correct.
+  Cost is 2 `contrastive()` calls per enabled goal, and the archive side is
+  what scales: measured 2026-08-10 at **1 ms/goal at 4808 entries and
+  3 ms/goal at 13049**, so 10 goals is 10–29 ms on a ~2 s generation. It
+  cannot move to `precompute()` — it reads `archive.embeddings`, which is
+  exactly the shared state kept on the main thread.
+
 - **Liveness is a FLOOR on the bulk, never a veto over a chosen entry, and it
   ranks nothing.** It appears in exactly two functional places — the archive's
   admission gate and the `viable`/`shows_something` split in

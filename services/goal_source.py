@@ -109,6 +109,19 @@ class GoalList:
         idx, item = live[pos]
         return Goal("text", item["text"], self._embeddings[idx])
 
+    def enabled_goals(self) -> list[Goal]:
+        """Every enabled goal, embedded, in list order.
+
+        For callers that need to score against ALL of them at once rather than
+        pick one - the archive's per-goal record book. [] when the list is
+        empty or ensure_embedded has not run, so a caller can treat "no goals"
+        and "not embedded yet" the same way.
+        """
+        live = self.enabled_items()
+        if not live or self._embeddings is None:
+            return []
+        return [Goal("text", it["text"], self._embeddings[i]) for i, it in live]
+
     def least_matched(self, embeddings: np.ndarray) -> Goal | None:
         """The enabled goal the archive extends toward least.
 

@@ -106,6 +106,9 @@ class ImgepDriver:
         # across expeditions.
         self._expedition_best = -np.inf
         self._n_summits = 0
+        # Cumulative over the run: how many times a tile beat the archive's
+        # best match for one of the text goals.
+        self._n_records = 0
         self._last_descriptors: np.ndarray | None = None
         self._last_seed_ess = 0.0
         self._last_seed_alpha = 0.0
@@ -200,6 +203,7 @@ class ImgepDriver:
             "seed_ess": float(self._last_seed_ess),
             "seed_alpha": float(self._last_seed_alpha),
             "n_summits": int(self._n_summits),
+            "n_records": int(self._n_records),
             "expedition_best": (float(self._expedition_best)
                                 if np.isfinite(self._expedition_best) else None),
             "phase": self.phase(),
@@ -230,6 +234,7 @@ class ImgepDriver:
         self.gen = 0
         self._since_expedition = 0
         self._n_summits = 0
+        self._n_records = 0
         for v in self.trace.values():
             v.clear()
         self.end_expedition()
@@ -416,6 +421,11 @@ class ImgepDriver:
         # rather than viable: see _summit.
         fit = self._expedition_fitness(snaps) if source == "expedition" else None
         summit = self._summit(fit, shows_something)
+        # Every regime, not just an expedition toward that goal: a run chasing
+        # one phrase routinely produces the best thing the archive has ever
+        # had for a DIFFERENT one, and nothing else would keep it.
+        records = self._goal_records(b, shows_something)
+        self._n_records += len(records)
         admitted = 0
 
         for i in range(n):
@@ -429,6 +439,17 @@ class ImgepDriver:
             else:
                 phys_vec = np.zeros(PHYSICS_DIM, dtype=np.float32)
 
+            record = records.get(i)
+            # The goal a record entry BEAT, not the one the run happens to be
+            # chasing - that is the only way to find it again afterwards.
+            tile_goal = record[0] if (record and i != summit) else goal_text
+            if i == summit:
+                tile_source = "summit"
+            elif record:
+                tile_source = "record"
+            else:
+                tile_source = source
+
             entry = self.archive.consider(
                 Candidate(
                     brain=np.asarray(parts[i]["brain"], dtype=np.float32),
@@ -440,15 +461,15 @@ class ImgepDriver:
                     gen=int(self.gen),
                     tile=int(i),
                     run_id=self.run_id,
-                    goal=goal_text,
+                    goal=tile_goal,
                 ),
                 float(nov[i]),
                 pinned=(i in pinned),
-                source=("summit" if i == summit else source),
+                source=tile_source,
                 thumb_crop=last[i],
                 separation=float(sep[i]),
-                force=(i == keeper or i == summit),
-                ignore_liveness=(i == summit),
+                force=(i == keeper or i == summit or record is not None),
+                ignore_liveness=(i == summit or record is not None),
             )
             if entry is not None:
                 admitted += 1
@@ -487,6 +508,55 @@ class ImgepDriver:
 
         self._last_score_label = "novelty"
         return np.asarray(nov, dtype=np.float32)
+
+    def _goal_records(self, b, shows_something) -> dict[int, tuple[str, float]]:
+        """Tiles that match a text goal better than ANYTHING in the archive.
+
+        -> {tile: (goal text, margin)}, at most one tile per goal.
+
+        The record book runs in EVERY regime, not just during an expedition
+        toward that goal, because the two are unrelated: a run chasing
+        "pepperoni pizza" wanders through shapes, and one of them can be the
+        best "a smiley face" ever produced. Nothing else in the pipeline would
+        keep it - novelty does not know the goal exists, and separation only
+        asks whether the archive already holds something similar, which is a
+        different question from whether the archive holds something BETTER.
+
+        Scored on descriptors on both sides, with contrastive() and the
+        distractor set - the same objective `_seed_index` ranks seeds by. That
+        is what makes "nearer to the goal than any other point" literally true
+        of the number being compared. Per-snapshot averaging is deliberately
+        not used here even though the expedition fitness uses it: the archive
+        stores one descriptor per entry and has no snapshots to average, so
+        scoring the tiles that way would compare two different quantities.
+
+        A tile that breaks several records is credited with the largest
+        margin, and admitted once.
+        """
+        if self.goals is None or len(self.archive) == 0:
+            return {}
+        if not np.any(shows_something):
+            return {}
+        self.goals.ensure_embedded(self.scorer)
+        live = self.goals.enabled_goals()
+        refs = self._distractor_embeddings()
+        if not live or refs is None or not len(refs):
+            return {}
+
+        arc = self.archive.embeddings[None, :, :]
+        tiles = np.asarray(b, dtype=np.float32)[None, :, :]
+        out: dict[int, tuple[str, float]] = {}
+        for g in live:
+            held = float(contrastive(arc, g.embedding, refs,
+                                     logit_scale=TEXT_LOGIT_SCALE).max())
+            cand = contrastive(tiles, g.embedding, refs,
+                               logit_scale=TEXT_LOGIT_SCALE).astype(np.float64)
+            cand = np.where(shows_something, cand, -np.inf)
+            i = int(np.argmax(cand))
+            margin = float(cand[i]) - held
+            if margin > 0.0 and (i not in out or margin > out[i][1]):
+                out[i] = (g.text, margin)
+        return out
 
     def _summit(self, fit, shows_something) -> int:
         """The tile that sets a new best fitness for this expedition, or -1.

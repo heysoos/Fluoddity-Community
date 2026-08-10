@@ -307,14 +307,15 @@ class ArchiveWindowMixin:
                 f"{st['last_tiles']} tiles   "
                 f"({st.get('n_rejected_close', 0)} too close, "
                 f"{st.get('n_rejected_dead', 0)} dead, all-time)")
-        if st.get("n_summits"):
+        if st.get("n_summits") or st.get("n_records"):
             imgui.text_colored(
                 imgui.ImVec4(*_OK),
-                f"Summits kept: {st['n_summits']}")
+                f"Kept for matching: {st.get('n_summits', 0)} summits, "
+                f"{st.get('n_records', 0)} goal records")
             if imgui.is_item_hovered():
                 imgui.set_tooltip(
-                    "Tiles admitted for beating their expedition's best match, "
-                    "past the separation rule.")
+                    "Summits beat their own expedition's best; records beat "
+                    "the whole archive's best for one of your goals.")
         self._render_explore_traces(d)
         # The seed pool actually used, so the band is legible rather than a
         # pair of numbers with no visible effect.
@@ -663,6 +664,10 @@ class ArchiveWindowMixin:
         # colour it sits among, because the whole point is to be able to find
         # these afterwards - they are the results of the goal chases.
         "summit": imgui.IM_COL32(255, 240, 130, 255),
+        # The archive's best-ever match for one of the text goals. Its own
+        # colour rather than the summit's: a record can be set in any regime,
+        # usually while chasing a completely different goal.
+        "record": imgui.IM_COL32(255, 120, 200, 255),
         "pin": imgui.IM_COL32(90, 170, 255, 255),
     }
 
