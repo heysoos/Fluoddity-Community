@@ -36,6 +36,44 @@ def test_white_noise_scores_zero_and_smooth_scores_one():
     assert s[1] > 0.95, "a smooth ramp is all coherence"
 
 
+def lattice(period, n=96):
+    """A fine, perfectly regular pattern - complex but not remotely noise."""
+    y, x = np.mgrid[0:n, 0:n]
+    v = 127 + 120 * np.sin(2 * np.pi * x / period) * np.sin(2 * np.pi * y / period)
+    return np.repeat(np.clip(v, 0, 255).astype(np.uint8)[:, :, None], 3, axis=2)
+
+
+@pytest.mark.parametrize("period", [3, 4, 6, 12])
+def test_a_fine_regular_pattern_is_not_mistaken_for_noise(period):
+    """The reason structure() looks at more than the neighbouring pixel.
+
+    A lattice with a 3-pixel period decorrelates in one pixel exactly like
+    static does - measured, lag 1 alone scored a 3px and a 4px lattice at
+    0.000, the same as white noise, which would have annihilated the fitness
+    of a perfectly good fine-grained creature. It re-correlates at its own
+    period; noise never re-correlates at all.
+    """
+    assert float(structure(lattice(period)[None])[0]) > 0.9
+
+
+def test_fine_detail_riding_on_a_large_envelope_survives():
+    y, x = np.mgrid[0:96, 0:96]
+    v = 127 + 60 * np.sin(2 * np.pi * x / 3) + 60 * np.sin(2 * np.pi * y / 40)
+    img = np.repeat(np.clip(v, 0, 255).astype(np.uint8)[:, :, None], 3, axis=2)
+    assert float(structure(img[None])[0]) > 0.9
+
+
+def test_slow_motion_is_not_penalised_at_all():
+    """structure() is purely SPATIAL - it never compares frames. How fast a
+    pattern moves is liveness, a different quantity, and the two must not be
+    conflated: a slow complex creature is exactly what must survive."""
+    img = lattice(6)
+    still = np.stack([img, img])                  # identical frames
+    moved = np.stack([img, np.roll(img, 17, axis=1)])
+    assert float(structure(still)[0]) == pytest.approx(
+        float(structure(moved)[0]), abs=1e-6)
+
+
 def test_a_flat_tile_scores_one():
     """It has no high frequencies at all. Correct here, and not a hole:
     is_viable_tile already rejects a blank capture."""

@@ -444,17 +444,26 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   `sigmoid(30·(⟨e,g⟩ − ⟨e,c⟩))`, so the latent path had no degenerate-image
   defence at all; text goals were never exposed because
   `DEFAULT_DISTRACTORS` carries "random noise" and "an abstract texture".
-  Measured 2026-08-10 against lag-1 spatial autocorrelation of the stored
-  thumbnails (validated: white noise 0.00, smooth ramp 0.99), the entry a
-  latent goal ranks FIRST is in its archive's roughest decile **30.2%
-  (default) / 19.8% (debug05)** of the time, against 10% by chance.
-  The answer is `capture_health.structure()` as a multiplicative factor on
-  every expedition fitness: **14.0% / 5.0%** after. It is deliberately NOT a
-  CLIP term — the distractors cannot simply join a latent goal's reference
-  set, because image-image similarity sits near 0.9 and image-text near 0.2,
-  so at one logit scale the text references contribute only a constant, which
-  a softmax is invariant to. It is applied to text goals too, where it barely
-  moves ranking (real entries score 0.93–0.98), because one rule beats two.
+  Measured 2026-08-10 on `default`, the entry a latent goal ranks FIRST is in
+  its archive's least-coherent decile **38.0%** of the time against 10% by
+  chance; `capture_health.structure()` as a multiplicative factor on every
+  expedition fitness takes that to **18.8%**. It is deliberately NOT a CLIP
+  term — the distractors cannot simply join a latent goal's reference set,
+  because image-image similarity sits near 0.9 and image-text near 0.2, so at
+  one logit scale the text references contribute only a constant, which a
+  softmax is invariant to. It is applied to text goals too, where it barely
+  moves ranking, because one rule beats two.
+  **`structure()` must look at more than the neighbouring pixel.** The first
+  version was lag-1 autocorrelation alone, and it scored a 3px and a 4px
+  lattice at **0.000 — exactly what white noise scores** — because a fine
+  regular pattern also decorrelates in one pixel. That is a false negative on
+  precisely the fine, complex creatures the factor must not punish. Taking the
+  best |ρ| over lags (1,2,3,4,6,8,12,16) and over each axis separately asks
+  "self-similar at ANY offset": noise stays at 0.017 while both lattices go to
+  1.000. It cost some rejection strength — the lag-1 version measured
+  30.2% → 14.0% — and that difference was being earned wrongly.
+  Nothing here is temporal: `structure` never compares frames, so a slow
+  pattern scores exactly like a fast one. Motion is `liveness`.
   **The SEED was not the problem, and the obvious fix makes it worse.**
   Seeding a latent expedition at the anchor it was extrapolated from measured
   15.8% → **27.0%** on `default` (13.5% on debug05): `_seed_index` does not
@@ -566,6 +575,9 @@ No additional wiring needed — the orchestrator pattern handles the rest.
 
 ## Key Documentation
 
+- `docs/imgep.md` — **how Explore mode works**: the regime loop, every fitness
+  and admission equation in pseudocode, and what each setting does. Read this
+  before the IMGEP caveats above, which assume it.
 - `ARCHITECTURE.md` — comprehensive architecture, file map, data flows, subsystem docs
 - `ui/README.md` — mixin architecture, how to add windows/sliders
 - `docs/adding_ui_shader_params.md` — step-by-step guide for new parameters

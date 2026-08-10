@@ -44,13 +44,30 @@ def is_viable_tile(crop: np.ndarray) -> bool:
     return 2.0 <= float(crop.mean()) <= 253.0
 
 
-def structure(crops: np.ndarray) -> np.ndarray:
+COHERENCE_LAGS = (1, 2, 3, 4, 6, 8, 12, 16)
+
+
+def structure(crops: np.ndarray, lags=COHERENCE_LAGS) -> np.ndarray:
     """(n, H, W, 3) uint8 -> (n,) in [0, 1]. 1 is coherent, 0 is white noise.
 
-    Lag-1 spatial autocorrelation of the luminance, averaged over both axes.
-    Neighbouring pixels of a trail pattern agree; neighbouring pixels of noise
-    do not. Validated on synthetics: white noise scores 0.00, a smooth ramp
-    0.99. Measured over the real archives, entries run 0.93-0.98.
+    The best |spatial autocorrelation| over several lags and both axes: is this
+    image self-similar at ANY offset? Noise decorrelates at every lag; anything
+    with structure re-correlates at its own scale.
+
+    MULTIPLE LAGS, not just the neighbouring pixel. Lag 1 alone cannot tell a
+    fine regular pattern from static, because a lattice with a 3-pixel period
+    also decorrelates in one pixel - measured, a 3px and a 4px lattice both
+    scored 0.000, exactly what white noise scores, while being perfectly
+    structured. That is a false negative on precisely the fine, complex
+    patterns this must not punish. Over the lag set:
+
+        white noise 0.017    3px lattice 1.000    4px lattice 1.000
+        6px 1.000            12px 1.000           3px detail on a 40px
+        once-smoothed noise 0.214                 envelope 1.000
+
+    Measured over 1500 sampled thumbnails from each real archive, entries run
+    to a 0.5th percentile of 0.49-0.83 with medians 0.89-0.98, so on real
+    content the factor is close to inert.
 
     This exists because a contrastive fitness with ONE reference - which is
     what a latent or chase goal has, the archive centroid - is a monotone
@@ -70,6 +87,10 @@ def structure(crops: np.ndarray) -> np.ndarray:
 
     A flat tile scores 1.0 - it has no high frequencies. That is correct here
     and not a hole: is_viable_tile already rejects blank captures.
+
+    Absolute value, and the axes taken separately rather than averaged: a
+    period-2 stripe is ANTI-correlated at lag 1, which is structure, and a
+    pattern can be organised along one axis and not the other.
     """
     a = np.asarray(crops)
     if a.ndim != 4 or a.shape[0] == 0:
@@ -77,11 +98,16 @@ def structure(crops: np.ndarray) -> np.ndarray:
     # float32 is enough and half the traffic of float64 at 64x224x224.
     g = a.astype(np.float32).mean(axis=3)
     g -= g.mean(axis=(1, 2), keepdims=True)
-    var = (g * g).mean(axis=(1, 2))
-    rx = (g[:, :, :-1] * g[:, :, 1:]).mean(axis=(1, 2))
-    ry = (g[:, :-1, :] * g[:, 1:, :]).mean(axis=(1, 2))
-    rho = np.where(var > 1e-9, 0.5 * (rx + ry) / np.maximum(var, 1e-12), 1.0)
-    return np.clip(rho, 0.0, 1.0).astype(np.float32)
+    energy = (g * g).mean(axis=(1, 2))
+    var = np.maximum(energy, 1e-12)
+    best = np.zeros(len(g), dtype=np.float32)
+    for lag in lags:
+        if lag >= min(g.shape[1], g.shape[2]):
+            break
+        rx = np.abs((g[:, :, :-lag] * g[:, :, lag:]).mean(axis=(1, 2)) / var)
+        ry = np.abs((g[:, :-lag, :] * g[:, lag:, :]).mean(axis=(1, 2)) / var)
+        best = np.maximum(best, np.maximum(rx, ry))
+    return np.clip(np.where(energy > 1e-9, best, 1.0), 0.0, 1.0).astype(np.float32)
 
 
 def sweeping_parameters(sim_state) -> list[str]:
