@@ -798,6 +798,18 @@ def test_a_very_long_warning_still_renders_its_dismiss_button(gui):
     assert frame(h.render_explore_tab) > host_only()
 
 
+SECTIONS = ("Goals", "Rollout", "Exploration", "Admission", "Expeditions")
+
+
+def _open_all_sections():
+    # By storage rather than set_next_item_open(), which only reaches the
+    # NEXT item - it would open Goals five times and leave the rest shut,
+    # so the test would pass without ever drawing them.
+    store = imgui.get_state_storage()
+    for name in SECTIONS:
+        store.set_int(imgui.get_id(name), 1)
+
+
 def test_every_settings_section_renders_when_opened(gui):
     """The tab was one unbroken column of about twenty sliders with the browser
     button below all of them. Folding them away is only safe if each section
@@ -805,14 +817,73 @@ def test_every_settings_section_renders_when_opened(gui):
     h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
 
     def open_all():
-        # By storage rather than set_next_item_open(), which only reaches the
-        # NEXT item - it would open Goals five times and leave the rest shut,
-        # so the test would pass without ever drawing them.
-        store = imgui.get_state_storage()
-        for name in ("Goals", "Rollout", "Exploration", "Archive",
-                     "Expeditions"):
-            store.set_int(imgui.get_id(name), 1)
+        _open_all_sections()
         h.render_explore_tab()
 
     closed = frame(h.render_explore_tab)
     assert frame(open_all) > closed, "opening the headers drew nothing extra"
+
+
+# Every ImGui call whose first argument is a label that becomes the widget's
+# ID. text/text_colored/progress_bar/image are absent on purpose: they have no
+# ID, so they cannot collide.
+_ID_WIDGETS = ("button", "small_button", "checkbox", "combo", "slider_int",
+               "slider_float", "input_text", "input_float", "drag_float",
+               "collapsing_header", "tree_node_ex", "invisible_button",
+               "begin_child", "selectable")
+
+
+def id_clashes(monkeypatch, draw):
+    """-> {id: [label, label]} for every ID two visible widgets shared.
+
+    get_id() is called at the widget's own call site, so it sees the same ID
+    stack the widget will: the same label under two different tree nodes,
+    child windows or top-level windows is correctly NOT a collision.
+    """
+    seen = {}
+    for fn_name in _ID_WIDGETS:
+        real = getattr(imgui, fn_name, None)
+        if real is None:                     # widget set differs between builds
+            continue
+
+        def wrapper(label, *a, _real=real, **kw):
+            seen.setdefault(imgui.get_id(label), []).append(label)
+            return _real(label, *a, **kw)
+
+        monkeypatch.setattr(imgui, fn_name, wrapper)
+
+    def render():
+        seen.clear()                         # frame() draws twice; keep the last
+        draw()
+
+    frame(render)
+    return {i: v for i, v in seen.items() if len(v) > 1}
+
+
+def test_no_two_visible_widgets_in_the_tab_share_an_id(gui, monkeypatch):
+    """An ImGui widget's identity IS its label, hashed against the enclosing ID
+    stack. Two visible items with the same ID is not cosmetic: ImGui raises its
+    "conflicting ID" dialog over the app, and the LOSER stops responding to the
+    mouse.
+
+    This shipped. A collapsing header named "Archive" sat in the same window as
+    the archive combo, also named "Archive", and the combo - the control that
+    picks which archive the search writes into - could not be clicked at all.
+    """
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    h.state.archive.warning = "something went wrong"
+
+    def draw():
+        _open_all_sections()
+        h.render_explore_tab()
+
+    clashes = id_clashes(monkeypatch, draw)
+    assert not clashes, f"widgets sharing an ImGui ID: {sorted(clashes.values())}"
+
+
+def test_no_two_visible_widgets_in_the_browser_share_an_id(gui, monkeypatch):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.state.archive.selected_entry_id = 0
+    clashes = id_clashes(monkeypatch, h.render_archive_window)
+    assert not clashes, f"widgets sharing an ImGui ID: {sorted(clashes.values())}"

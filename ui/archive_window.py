@@ -123,7 +123,13 @@ class ArchiveWindowMixin:
             self._render_view_setting(ast)
         if imgui.collapsing_header("Exploration"):
             self._render_exploration_settings(ast)
-        if imgui.collapsing_header("Archive"):
+        # "Admission", not "Archive": an ImGui widget's identity IS its label,
+        # and the archive combo at the top of this tab is already called
+        # "Archive". Two visible items with one ID is a hard error - ImGui put
+        # up its conflict dialog and the combo stopped responding to clicks
+        # entirely. It is also the better name: this section is what the
+        # archive KEEPS, which the combo is not.
+        if imgui.collapsing_header("Admission"):
             self._render_archive_settings(ast)
         if imgui.collapsing_header("Expeditions"):
             self._render_expedition_settings(ast)

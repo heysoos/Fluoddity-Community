@@ -395,6 +395,30 @@ No additional wiring needed — the orchestrator pattern handles the rest.
   200 trials the goal's nearest entry WAS its own seed 199 times - and no value
   of beta fixed it. See `docs/superpowers/specs/2026-08-08-expedition-objective-design.md`.
 
+- **An ImGui widget's identity IS its label, and a duplicate silently kills
+  the loser.** Two visible items hashing to one ID puts Dear ImGui's
+  "conflicting ID" dialog over the app and stops one of them responding to the
+  mouse at all — it is not a warning. A `collapsing_header("Archive")` shipped
+  in the same window as `combo("Archive")`, and the control that picks which
+  archive the search writes into could not be clicked. `##suffix` keeps the
+  visible text and changes the ID; different windows, child windows and tree
+  nodes are already separate scopes.
+  `tests/test_archive_window_render.py::id_clashes` monkeypatches every
+  ID-bearing widget and compares `imgui.get_id(label)` at each call site, so
+  the next one fails a test instead of a click.
+
+- **Opening the Explore tab is where every lazy cost lands at once, and the
+  biggest one was a directory walk.** Measured 2026-08-10 on the real archives
+  root (10 folders, ~33k thumbnails): `list_archives` **3418 ms**,
+  `CLIPScorer()` **1207 ms** (570 vision + 498 text ONNX sessions), archive
+  open 0 ms at 0 entries / 429 ms at 4808 / 2439 ms at 13049. All of
+  `list_archives` was `_size_mb` walking every thumbnail with `Path.rglob` to
+  print one number under the combo; `os.scandir` is **69.6x** faster
+  (2596 → 37 ms) and byte-identical, taking the whole call to 58 ms. What is
+  left is real: the ONNX sessions are what the mode runs on, and
+  `load_from_store`'s `rescore_all()` is load-bearing (see the novelty caveat
+  above). Do not "fix" the remainder by caching either of them.
+
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.
 - **Windows platform** — use forward slashes or `os.path`; use `rm` not `del` in bash commands.
 - **No test suite** — changes must be verified manually.

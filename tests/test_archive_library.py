@@ -179,6 +179,41 @@ def test_the_size_counts_the_thumbnails(tmp_path):
     assert list_archives(tmp_path)[0]["size_mb"] == pytest.approx(2.0, abs=0.1)
 
 
+def test_the_size_reaches_every_depth(tmp_path):
+    """The scandir walk is hand-rolled - it keeps its own directory stack where
+    rglob had recursion for free - so 'does it still descend' is a real
+    question. thumbs/ is one level down and holds nearly all the bytes."""
+    d = make_archive(tmp_path, "deep", entries=0)
+    (d / "thumbs" / "000000.jpg").write_bytes(b"x" * 1024)
+    (d / "a" / "b" / "c").mkdir(parents=True)
+    (d / "a" / "b" / "c" / "buried.bin").write_bytes(b"y" * 2048)
+    (d / "top.txt").write_bytes(b"z" * 512)
+    assert list_archives(tmp_path)[0]["size_mb"] == pytest.approx(
+        3584 / (1024.0 * 1024.0), rel=1e-6)
+
+
+def test_an_unreadable_subdirectory_does_not_zero_the_size(tmp_path, monkeypatch):
+    """A directory that cannot be scanned must cost its own bytes, not the
+    whole archive's - the number sits under the combo whether or not one
+    folder is locked."""
+    import os
+
+    from services import archive_library
+
+    d = make_archive(tmp_path, "locked", entries=0, thumb_bytes=4096)
+    (d / "vault").mkdir()
+    real = os.scandir
+
+    def blocked(path):
+        if str(path).endswith("vault"):
+            raise PermissionError(5, "Access is denied")
+        return real(path)
+
+    monkeypatch.setattr(archive_library.os, "scandir", blocked)
+    assert list_archives(tmp_path)[0]["size_mb"] == pytest.approx(
+        4096 / (1024.0 * 1024.0), rel=1e-6)
+
+
 from services.archive_library import clear, create, delete  # noqa: E402
 
 
