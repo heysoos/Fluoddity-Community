@@ -12,8 +12,6 @@ from typing import Protocol
 
 import numpy as np
 
-from services.genome import crossover, mutate
-
 
 class Optimizer(Protocol):
     name: str
@@ -263,15 +261,30 @@ class RandomSearchOptimizer(_BaseOptimizer):
 class GAOptimizer(_BaseOptimizer):
     """Manual mode's operator, driven by CLIP instead of by a human.
 
-    For Fourier it reuses services.genome.mutate/crossover, applied in z-space
-    by reshaping to the (10, 8) layout those operators expect. Other modalities
-    have no such row structure and get a generic per-gene operator - see
-    _breed().
+    Elitist: the top ELITES survive untouched and every child is bred from two
+    of them. See _breed() for why the operator is layout-agnostic even though
+    the decoded brains it produces are not.
     """
 
     name = "GA"
     ELITES = 4
     MUT = 0.25
+    # Fraction of genes a child mutates. Sparsity is what makes the operator
+    # work at all: perturbing EVERY gene adds dim*MUT^2 to a sphere each
+    # generation - 5.0 at dim 80, 27 at the MLP's 436 - which selection over 16
+    # samples cannot claw back, and the suite duly caught the GA improving by
+    # exactly 0.0 over 40 generations.
+    #
+    # Swept over 20 seeds, gain after 40 generations (scratchpad/ga_rate.py):
+    #   rate    sphere d=80   sphere d=436   rastrigin d=80
+    #   1.00        +1.74          +0.00          +107
+    #   0.10       +10.66         +20.06          +426
+    #   0.05       +10.84         +25.77          +455
+    #   0.02        +9.95         +29.45          +439
+    # 0.05 is at the peak on two of the three and close on the third. High-dim
+    # sphere keeps improving as the rate falls, but that is the one landscape
+    # where doing less is always better; rastrigin is the one with structure.
+    MUT_RATE = 0.05
 
     def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
         super().__init__(dim, popsize, sigma0, seed, x0, layout)
@@ -309,25 +322,29 @@ class GAOptimizer(_BaseOptimizer):
         self._pop = np.array(nxt[:n], dtype=np.float32)
 
     def _breed(self, a, b):
-        """One child from two elites, in z-space.
+        """One child from two elites, in Z-SPACE.
 
-        Fourier keeps per-CENTRE crossover, because a centre is a unit: its
-        eight floats are one frequency vector and one amplitude, and splitting
-        them apart makes a child that is neither parent's feature. No other
-        modality has that row structure - Gabor is 14 floats, MLP is not a grid
-        - so they get uniform per-gene crossover, which is the honest generic
-        operator. Blending would be worse than either: it invents values neither
-        parent held.
+        Uniform per-gene crossover then additive Gaussian, for every modality.
+        Blending is deliberately not an option: an averaged gene is a value
+        neither parent held, which is a mutation wearing a crossover's name.
 
-        reshape(-1, 8) was also a hard error for any length not divisible by 8,
-        which MLP at H=16 (148 floats) is.
+        There used to be a per-CENTRE branch for Fourier, on the reasoning that
+        a centre is a unit worth keeping whole. That reasoning was about the
+        PHENOTYPE, and z is not the phenotype: FourierModality.decode reads z as
+        [all N frequencies, then all N amplitudes], so the (-1, 8) reshape
+        called z[4:8] an amplitude when it is centre 1's frequency, and a
+        crossed "centre" was two centres' frequency vectors. It also masked with
+        a hardcoded N_CENTERS=10, so it raised at every Fourier width except the
+        default - 4, 20 and 48 centres all measured as ValueError.
+
+        The layout cannot fix that, because the z ordering belongs to the squash
+        rather than to the modality. Per-unit crossover is right on decoded
+        brains, and services.brains.crossover does it there; here, per-gene is.
         """
-        if self._layout is None or self._layout.modality == "fourier":
-            child = crossover(a.reshape(-1, 8), b.reshape(-1, 8), self._rng)
-            return mutate(child, self.MUT, self._rng).reshape(-1).astype(np.float32)
         take_a = self._rng.random(a.shape) < 0.5
         child = np.where(take_a, a, b)
-        child = child + self.MUT * self._rng.normal(0, 1, a.shape)
+        hit = self._rng.random(a.shape) < self.MUT_RATE
+        child = child + hit * self.MUT * self._rng.normal(0, 1, a.shape)
         return child.astype(np.float32)
 
     def state_dict(self) -> dict:

@@ -67,26 +67,26 @@ def test_a_generic_child_takes_each_gene_from_one_parent_or_the_other():
     )
 
 
-def test_fourier_still_breeds_per_centre():
-    """A Fourier centre IS a unit, so per-centre crossover is meaningful there
-    and must survive the generalisation."""
+def test_fourier_breeds_like_everything_else():
+    """It used to get a per-centre branch. See
+    test_crossover_treats_z_as_unstructured for why that was reasoning about
+    the phenotype applied to z."""
     layout = default_layout()
     opt = GAOptimizer(layout.length, 8, 0.5, 0, None, layout=layout)
     opt.tell(opt.ask(8), np.arange(8, dtype=np.float32))
     assert opt.ask(8).shape == (8, layout.length)
 
 
-def test_omitting_the_layout_reproduces_the_old_behaviour():
-    """Omitting `layout` must stay equivalent to passing the Fourier one, so a
-    caller that has no layout to give is not silently changed."""
+def test_the_layout_does_not_change_how_z_is_bred():
+    """The operator is layout-agnostic, so passing one must be indistinguishable
+    from omitting it. If this ever starts failing, some structure has been
+    reintroduced into z-space and it needs the same scrutiny as the last lot."""
     a = GAOptimizer(80, 8, 0.5, 0, None)
     b = GAOptimizer(80, 8, 0.5, 0, None, layout=default_layout())
     fit = np.arange(8, dtype=np.float32)
     a.tell(a.ask(8), fit)
     b.tell(b.ask(8), fit)
-    assert np.array_equal(a.ask(8), b.ask(8)), (
-        "passing the Fourier layout explicitly must be the same as omitting it"
-    )
+    assert np.array_equal(a.ask(8), b.ask(8))
 
 
 # ---- the production route ----------------------------------------------
@@ -120,6 +120,45 @@ def test_the_layout_aware_signature_does_not_disturb_the_others(algo):
     opt = make_optimizer(algo, lay.length, 8, 0.5, 0, layout=lay)
     opt.tell(opt.ask(8), np.arange(8, dtype=np.float32))
     assert opt.ask(8).shape == (8, lay.length)
+
+
+@pytest.mark.parametrize("centers", [4, 10, 20, 48])
+def test_the_ga_breeds_any_fourier_width(centers):
+    """services.genome.crossover masks with a hardcoded N_CENTERS=10, so the
+    per-centre branch worked at exactly the default width and raised at every
+    other. Measured: 4, 20 and 48 centres all ValueError."""
+    lay = REGISTRY["fourier"].layout_from_settings({"centers": centers})
+    opt = make_optimizer("GA", lay.length, 8, 0.5, 0, layout=lay)
+    opt.tell(opt.ask(8), np.arange(8, dtype=np.float32))
+    assert opt.ask(8).shape == (8, lay.length)
+
+
+def test_crossover_treats_z_as_unstructured():
+    """z is NOT the phenotype, and the per-centre branch assumed it was.
+
+    FourierModality.decode reads z as [all N frequencies, then all N
+    amplitudes]. Verified by driving one z index at a time: z[0:4] is centre 0's
+    frequency, z[4:8] is centre 1's FREQUENCY, and z[40:44] is centre 0's
+    amplitude. The (-1, 8) reshape called z[4:8] an amplitude and z[40:44] a
+    frequency, so half the frequencies got the amplitude operator and vice
+    versa - and a crossed "centre" was really two centres' frequency vectors.
+
+    No layout can rescue that, because it is not a property of the modality: the
+    squash decides the z ordering. Per-gene is the honest operator here, and it
+    is the one every modality now gets.
+    """
+    lay = REGISTRY["fourier"].layout_from_settings({})
+    opt = make_optimizer("GA", lay.length, 8, 0.5, 0, layout=lay)
+    z = opt.ask(8)
+    fit = np.zeros(8, dtype=np.float32)
+    fit[: GAOptimizer.ELITES] = np.arange(GAOptimizer.ELITES, 0, -1)
+    z[: GAOptimizer.ELITES // 2] = -5.0
+    z[GAOptimizer.ELITES // 2: GAOptimizer.ELITES] = 5.0
+    opt.tell(z, fit)
+    kids = opt.ask(8)[GAOptimizer.ELITES:]
+    blocks = kids.reshape(len(kids), -1, 8)
+    split = ((blocks > 0).any(axis=2) & (blocks < 0).any(axis=2))
+    assert split.any(), "every 8-float block came whole - still crossing rows"
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
