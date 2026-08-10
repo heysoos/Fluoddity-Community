@@ -134,13 +134,66 @@ def test_every_output_choice_renders(gui, channel):
     ui.render_brain_window()
 
 
-def test_the_layout_popup_renders(gui):
-    """The confirm modal draws through a different begin_popup_modal path,
-    which DOES return a tuple - the opposite of collapsing_header."""
-    ui = _StubUI()
-    ui._pending_brain = ("gabor", {"filters": 8})
-    gui.open_popup("Change brain layout?")
+def test_nothing_opens_a_modal(gui):
+    """There is no confirmation dialog, by request. A count change is deferred
+    to slider release instead, which fixes the problem the modal existed for -
+    a drag firing one archive rebuild per frame - without interrupting anyone.
+    """
+    from pathlib import Path
+
+    ui = _StubUI("gabor", {"filters": 12})
     ui.render_brain_window()
+    assert not gui.is_popup_open("", gui.PopupFlags_.any_popup_id)
+    src = (Path(__file__).resolve().parent.parent
+           / "ui" / "brain_window.py").read_text()
+    assert "imgui.open_popup(" not in src
+    assert "imgui.begin_popup_modal(" not in src
+
+
+def test_a_pending_count_commits_once_the_slider_is_released(gui):
+    """The failure this must never have: a deferred value that never lands.
+
+    Nothing is held in a headless frame, so is_item_active() is false and the
+    draft is due. If this ever returns {"filters": 12} the count sliders are
+    dead - which is exactly the class of bug the scales wiring already had once
+    (every non-count slider was decorative), and it is invisible on screen
+    because the slider still moves.
+    """
+    ui = _StubUI("gabor", {"filters": 12})
+    ui._brain_draft[("gabor", "filters")] = 30
+    ui.render_brain_window()
+    assert ui.state.brain.settings == {"filters": 30}
+    assert ui._brain_draft == {}, "the draft outlived its commit"
+
+
+def test_the_deferral_is_gated_on_the_slider_being_held(gui):
+    """The other half cannot be driven headlessly - it needs a mouse held down
+    across frames - so it is pinned at the source. The gate must be `is the
+    widget still active`, not a one-shot event that can be missed."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent
+           / "ui" / "brain_window.py").read_text()
+    assert "not imgui.is_item_active()" in src
+
+
+def test_a_scale_slider_commits_live(gui):
+    """The other half: scales take the light path, so they must track the
+    slider rather than wait for release."""
+    ui = _StubUI("gabor")
+    ui.render_brain_window()
+    assert ("gabor", "envelope_width") not in ui._brain_draft
+
+
+def test_switching_modality_clears_the_draft(gui):
+    """A draft is keyed by (modality, setting); a stale one from the previous
+    modality must not be committed into the new one on the next release."""
+    ui = _StubUI("gabor", {"filters": 12})
+    ui._brain_draft[("gabor", "filters")] = 30
+    ui.state.brain.modality = "lenia"
+    ui.state.brain.settings = {}
+    ui.render_brain_window()
+    assert ui.state.brain.settings == {}
 
 
 @pytest.mark.parametrize("modality", MODALITIES)

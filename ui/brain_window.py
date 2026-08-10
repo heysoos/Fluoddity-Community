@@ -77,30 +77,50 @@ class BrainWindowMixin:
         if changed and names[idx] != state.modality:
             # A different modality is always a different genome: drop the old
             # settings rather than carrying "centers" into a brain with none.
-            self._pending_brain = (names[idx], {})
-            imgui.open_popup("Change brain layout?")
+            state.modality = names[idx]
+            state.settings = {}
+            state.request_layout_change = True
+            self._brain_draft.clear()
 
         modality = get(state.modality)
-        pending = dict(state.settings)
+        settings = dict(state.settings)
         for s in modality.settings_schema():
-            value = pending.get(s.key, s.default)
+            # An int slider is the only widget here that can fire an expensive
+            # change on every frame of a drag: it changes the parameter COUNT,
+            # which rebuilds the archive and resets the search. So its value is
+            # held in a draft while the mouse is down and committed once, on
+            # release. Everything else only moves a decode scale - the light
+            # path - and commits live, so the picture tracks the slider.
+            key = (state.modality, s.key)
+            shown = self._brain_draft.get(key, settings.get(s.key, s.default))
             if s.kind == "int":
-                ch, v = imgui.slider_int(s.label, int(value), int(s.lo), int(s.hi))
-            elif s.kind == "choice":
-                ch, v = imgui.combo(s.label, int(value), list(s.choices))
+                ch, v = imgui.slider_int(s.label, int(shown), int(s.lo), int(s.hi))
+                if ch:
+                    self._brain_draft[key] = v
+                # Gated on "not being held" rather than on a one-shot
+                # deactivated-after-edit event, so a draft can never get
+                # stranded: whatever happens, the frame after the widget stops
+                # being active commits it. A slider that silently never
+                # commits is a worse failure than the modal this replaced.
+                if key in self._brain_draft and not imgui.is_item_active():
+                    settings[s.key] = self._brain_draft.pop(key)
+                # Only while it actually differs from what is committed, so the
+                # consequence is stated at the moment it is being chosen and
+                # never nags. Not a prompt: nothing here waits on an answer.
+                committed = settings.get(s.key, s.default)
+                if layout_change_needed({s.key: committed}, {s.key: shown}):
+                    imgui.text_disabled("   on release: resets the search, "
+                                        "switches archive")
+                continue
+            if s.kind == "choice":
+                ch, v = imgui.combo(s.label, int(shown), list(s.choices))
             else:
-                ch, v = imgui.slider_float(s.label, float(value), s.lo, s.hi)
+                ch, v = imgui.slider_float(s.label, float(shown), s.lo, s.hi)
             if ch:
-                pending[s.key] = v
+                settings[s.key] = v
 
-        if pending != state.settings:
-            if layout_change_needed(state.settings, pending):
-                self._pending_brain = (state.modality, pending)
-                imgui.open_popup("Change brain layout?")
-            else:
-                state.settings = pending      # a squash change costs nothing
-
-        self._render_brain_layout_popup()
+        if settings != state.settings:
+            state.settings = settings
 
         layout = layout_for(state.modality, state.settings)
         imgui.separator()
@@ -127,7 +147,7 @@ class BrainWindowMixin:
         from services.brain_preview import AXES, CHANNELS
 
         # One-arg collapsing_header returns a bare bool; only the p_visible
-        # overload returns a tuple. begin_popup_modal below really is a tuple.
+        # overload returns a tuple. Subscripting it crashed the app on open.
         if not imgui.collapsing_header("Inspector"):
             return
 
@@ -166,28 +186,18 @@ class BrainWindowMixin:
                 imgui.set_tooltip("whole brain" if slot == 0
                                   else f"unit {slot - 1}")
 
-    def _render_brain_layout_popup(self) -> None:
-        """Changing the parameter count is not undoable in place - it resets the
-        optimizer and moves to a different archive - so it is confirmed."""
-        if not imgui.begin_popup_modal("Change brain layout?")[0]:
-            return
-        name, settings = getattr(self, "_pending_brain", (None, None))
-        if name is not None:
-            layout = layout_for(name, settings)
-            imgui.text("This changes the genome layout.")
-            imgui.text("The optimizer resets and searching moves to")
-            imgui.text(f"a separate archive: {layout.signature()}")
-            imgui.separator()
-            imgui.text(f"search dim {layout.length}")
-        if imgui.button("Apply"):
-            if name is not None:
-                self.state.brain.modality = name
-                self.state.brain.settings = dict(settings)
-                self.state.brain.request_layout_change = True
-            self._pending_brain = (None, None)
-            imgui.close_current_popup()
-        imgui.same_line()
-        if imgui.button("Cancel"):
-            self._pending_brain = (None, None)
-            imgui.close_current_popup()
-        imgui.end_popup()
+    @property
+    def _brain_draft(self) -> dict:
+        """In-progress int-slider values, keyed by (modality, setting).
+
+        There used to be an Apply/Cancel modal here instead, because a count
+        change rebuilds the archive and resets the search and a drag fires one
+        per frame. Confirming every edit was the wrong answer to that - it
+        interrupted scale sliders too, which are free. Deferring the commit to
+        release fixes the actual problem and asks nothing of the user.
+        """
+        d = getattr(self, "_brain_draft_values", None)
+        if d is None:
+            d = {}
+            self._brain_draft_values = d
+        return d
