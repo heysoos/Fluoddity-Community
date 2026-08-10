@@ -208,3 +208,16 @@ only the running app can answer.
 - [ ] A brand new archive inherits the settings currently on screen rather than snapping to defaults
 - [ ] Restoring an archive saved at a different grid rebuilds the tournament grid to match
 - [ ] Deleting `settings.json` by hand loads defaults without crashing
+
+## 18. Archive map view modes
+- [ ] Defaults are unchanged: Colour=source, Show=All entries, Draw=points
+- [ ] Colour > novelty / liveness: points take a ramp, and a legend with a low->high scale appears
+- [ ] Show > Recent generations: a Generations slider appears; the remaining points expand to fill the canvas
+- [ ] Show > Most novel: a Top % slider appears
+- [ ] Show > One goal / One regime: the combo lists only values the archive actually holds
+- [ ] Show > Kept for matching on an archive with no summits/records/pins: reads "No entries match this filter", not a broken map
+- [ ] Draw > density: a log-scaled heatmap; zooming in raises the cell resolution
+- [ ] Draw > points+density: dots drawn over the heatmap
+- [ ] "showing N of M" is correct under every filter
+- [ ] With a filter on, hovering a dot shows THAT entry, and clicking selects it (not the entry at the same row index)
+- [ ] Switching archives restores that archive's map view settings

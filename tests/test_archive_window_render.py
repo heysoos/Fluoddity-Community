@@ -718,8 +718,8 @@ def test_the_map_reuses_its_projection_between_frames():
     h = Harness(archive=_populated())
     proj = _spread(h.archive_obj)
     h.archive_projection = proj
-    first = h._map_points(h.archive_obj, proj)
-    assert h._map_points(h.archive_obj, proj) is first
+    first = h._map_points(h.archive_obj, proj, h.state.archive)
+    assert h._map_points(h.archive_obj, proj, h.state.archive) is first
 
 
 def test_admitting_an_entry_invalidates_the_map():
@@ -727,23 +727,24 @@ def test_admitting_an_entry_invalidates_the_map():
     archive does, the map freezes on stale points and no test would notice."""
     h = Harness(archive=_populated())
     proj = _spread(h.archive_obj)
-    first = h._map_points(h.archive_obj, proj)
+    first = h._map_points(h.archive_obj, proj, h.state.archive)
     h.archive_obj.revision += 1
-    assert h._map_points(h.archive_obj, proj) is not first
+    assert h._map_points(h.archive_obj, proj, h.state.archive) is not first
 
 
 def test_refitting_the_projection_invalidates_the_map():
     h = Harness(archive=_populated())
     proj = _spread(h.archive_obj)
-    first = h._map_points(h.archive_obj, proj)
+    first = h._map_points(h.archive_obj, proj, h.state.archive)
     proj.fit(h.archive_obj.embeddings)          # bumps proj.version
-    assert h._map_points(h.archive_obj, proj) is not first
+    assert h._map_points(h.archive_obj, proj, h.state.archive) is not first
 
 
 def test_the_map_colours_pins_over_their_source():
     h = Harness(archive=_populated())
     proj = _spread(h.archive_obj)
-    _unit, _lo, _span, colors = h._map_points(h.archive_obj, proj)
+    _unit, _lo, _span, colors, _idx = h._map_points(
+        h.archive_obj, proj, h.state.archive)
     for e, c in zip(h.archive_obj.entries, colors.tolist()):
         want = ArchiveWindowMixin._MAP_COLORS["pin" if e.pinned else e.source]
         assert c == want
@@ -887,3 +888,136 @@ def test_no_two_visible_widgets_in_the_browser_share_an_id(gui, monkeypatch):
     h.state.archive.selected_entry_id = 0
     clashes = id_clashes(monkeypatch, h.render_archive_window)
     assert not clashes, f"widgets sharing an ImGui ID: {sorted(clashes.values())}"
+
+
+# -- map view modes ----------------------------------------------------------
+#
+# Every mode has to actually draw. An ImGui begin/end imbalance or a None
+# dereference in any of them corrupts the whole frame, not just the map.
+
+def _mapped(h):
+    return lambda: h._render_map(h.state.archive, h.archive_obj)
+
+
+@pytest.mark.parametrize("mode", ["source", "novelty", "liveness"])
+def test_the_map_renders_in_every_colour_mode(gui, mode):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.map_color_by = mode
+    assert frame(_mapped(h)) > host_only()
+
+
+@pytest.mark.parametrize("mode", ["points", "density", "points+density"])
+def test_the_map_renders_in_every_draw_mode(gui, mode):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.map_render = mode
+    assert frame(_mapped(h)) > host_only()
+
+
+@pytest.mark.parametrize("mode", ["all", "recent", "novel", "kept", "goal", "source"])
+def test_the_map_renders_under_every_filter(gui, mode):
+    """Including the ones whose extra control only appears for them, and the
+    ones that can select nothing."""
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.map_filter = mode
+    frame(_mapped(h))
+
+
+def test_a_filter_that_matches_nothing_says_so_instead_of_drawing_a_broken_map(gui):
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    ast = h.state.archive
+    ast.map_filter = "goal"
+    ast.map_filter_goal = "nothing has this goal"
+    frame(_mapped(h))          # must not raise, and must not draw a scatter
+
+
+@pytest.mark.parametrize("filt", ["all", "recent", "novel", "goal", "source"])
+def test_the_map_controls_do_not_clash_with_the_windows_other_ids(
+        gui, monkeypatch, filt):
+    """Two visible items hashing to one ID silently stop one of them
+    responding to the mouse - see the ID caveat in CLAUDE.md. Per filter,
+    because each one reveals a different extra control."""
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.show_browser = True
+    h.state.archive.map_filter = filt
+    assert id_clashes(monkeypatch, h.render_archive_window) == {}
+
+
+def test_selection_follows_the_filter_not_the_row(gui):
+    """With a filter on, map row i is not archive entry i. The hover lookup
+    resolves through the returned index array; losing it would select a
+    plausible-looking wrong entry, which is worse than selecting none."""
+    h = Harness(archive=_populated())
+    proj = _spread(h.archive_obj)
+    ast = h.state.archive
+    ast.map_filter = "kept"
+
+    _u, _l, _s, _c, idx = h._map_points(h.archive_obj, proj, ast)
+    kept = [i for i, e in enumerate(h.archive_obj.entries)
+            if e.pinned or e.source in ("summit", "record")]
+    assert idx.tolist() == kept
+    assert [h.archive_obj.entries[int(i)].pinned for i in idx] == [True] * len(idx)
+
+
+def test_changing_a_view_option_invalidates_the_cached_points(gui):
+    """The cache key covers the view options, or switching colour mode would
+    keep drawing the old colours until the next admission."""
+    h = Harness(archive=_populated())
+    proj = _spread(h.archive_obj)
+    ast = h.state.archive
+
+    first = h._map_points(h.archive_obj, proj, ast)
+    assert h._map_points(h.archive_obj, proj, ast) is first
+    ast.map_color_by = "novelty"
+    assert h._map_points(h.archive_obj, proj, ast) is not first
+
+
+def test_filtering_renormalises_so_what_is_left_fills_the_canvas(gui):
+    """Half the value of filtering: fewer points AND they expand, instead of
+    staying huddled in whatever corner of the full extent they occupied."""
+    h = Harness(archive=_populated(n=40))
+    proj = _spread(h.archive_obj)
+    ast = h.state.archive
+    ast.map_filter = "novel"
+    ast.map_novel_pct = 25
+
+    unit, _lo, _span, _c, idx = h._map_points(h.archive_obj, proj, ast)
+    assert len(idx) == 10
+    assert unit.min() == pytest.approx(0.0, abs=1e-5)
+    assert unit.max() == pytest.approx(1.0, abs=1e-5)
+
+
+def test_the_legend_draws_a_ramp_when_colouring_by_a_number(gui):
+    """A ramp with no scale is unreadable. color_button, not text: imgui.text
+    renders "##" literally and a block glyph depends on the font."""
+    h = Harness(archive=_populated())
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.map_color_by = "novelty"
+    with_ramp = frame(_mapped(h))
+    h.state.archive.map_color_by = "source"
+    assert with_ramp > frame(_mapped(h))
+
+
+def test_the_legend_says_how_much_is_hidden(gui):
+    """A filtered map that does not say so misrepresents the archive."""
+    h = Harness(archive=_populated(n=40))
+    h.archive_projection = _spread(h.archive_obj)
+    h.state.archive.map_filter = "novel"
+    h.state.archive.map_novel_pct = 25
+    seen = []
+    real = imgui.text_colored
+
+    def spy(col, text, *a, **kw):
+        seen.append(text)
+        return real(col, text, *a, **kw)
+
+    imgui.text_colored = spy
+    try:
+        frame(_mapped(h))
+    finally:
+        imgui.text_colored = real
+    assert any("showing 10 of 40" in s for s in seen), seen

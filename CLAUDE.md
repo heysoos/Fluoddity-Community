@@ -478,6 +478,22 @@ mechanics these caveats assume.
   changes the ID. Guarded by
   `tests/test_archive_window_render.py::id_clashes`.
 
+- **The map's crowding is the problem, not its projection — and its dot
+  density is NOT the archive's density.** Measured over the real archives, the
+  2-D PCA holds 46% of the variance at *every* size, but kNN(10) preservation
+  falls from 27.0% at 500 entries to 3.1% at 13049 purely because more points
+  share the same pixels. Meanwhile the true distance to the ten entries the map
+  puts nearest is flat at ~0.038 — nearly double `min_separation` (0.02) — so at
+  full size two touching dots are on average further apart than the distance at
+  which the archive calls two entries different. Never read local density off
+  dot overlap; `novelty` is the real measure and it is computed in full 512-d.
+  `services/map_view.py` therefore offers filtering (fewer points), a novelty /
+  liveness colour ramp, and a log-scaled density heatmap — all opt-in, with the
+  historical scatter as every default. Filtering renormalises to the filtered
+  subset, so narrowing also expands what is left. UMAP was considered and not
+  used: PCA's `transform()` is a matmul, so a new entry places instantly against
+  stable axes, while UMAP is non-parametric and its refit relayouts everything.
+
 - **Opening the Explore tab is where every lazy cost lands at once.** The
   biggest was a directory walk: `list_archives` spent 3418 ms, essentially all
   of it `_size_mb` walking every thumbnail with `Path.rglob` to print one number

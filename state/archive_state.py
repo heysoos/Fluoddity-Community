@@ -92,6 +92,19 @@ class ArchiveState:
     map_zoom: float = 1.0
     map_center_x: float = 0.5
     map_center_y: float = 0.5
+    # How the map draws. Every default is the historical behaviour: these are
+    # additions, and the plain scatter coloured by regime stays one combo away.
+    # See services/map_view for what each mode means and why they exist.
+    map_color_by: str = "source"     # source | novelty | liveness
+    map_filter: str = "all"          # all | recent | novel | kept | goal | source
+    map_render: str = "points"       # points | density | points+density
+    # 50, not 200: at grid 8 a generation admits tens of entries, so a real
+    # 13049-entry archive spans only ~200 generations and a 200 default shows
+    # 100% of it - a filter whose default filters nothing.
+    map_recent_gens: int = 50        # for filter "recent"
+    map_novel_pct: int = 25          # for filter "novel", top N%
+    map_filter_goal: str = ""        # for filter "goal"
+    map_filter_source: str = ""      # for filter "source"
 
     # persistent, not a one-shot: dismissed explicitly by the user
     warning: str = ""
@@ -197,4 +210,6 @@ PERSISTED_FIELDS = (
     # large enough that the map does not fit on screen.
     "show_browser", "sort_by", "pinned_only",
     "map_zoom", "map_center_x", "map_center_y",
+    "map_color_by", "map_filter", "map_render",
+    "map_recent_gens", "map_novel_pct", "map_filter_goal", "map_filter_source",
 )

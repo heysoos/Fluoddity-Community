@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 from imgui_bundle import imgui
 
-from services import save_targets
+from services import map_view, save_targets
 from services.archive_library import safe_name
 from ui.notices import BAD as _BAD
 from ui.notices import DIM as _DIM
@@ -711,10 +711,14 @@ class ArchiveWindowMixin:
         imgui.text_colored(imgui.ImVec4(*_DIM),
                            f"{ast.map_zoom:.1f}x - scroll to zoom, drag to pan")
 
-        cached = self._map_points(arc, proj)
+        self._render_map_controls(ast, arc)
+
+        cached = self._map_points(arc, proj, ast)
         if cached is None:
+            imgui.text_colored(imgui.ImVec4(*_DIM),
+                               "No entries match this filter.")
             return
-        unit, lo, span, colors = cached
+        unit, lo, span, colors, idx = cached
 
         size = imgui.ImVec2(imgui.get_content_region_avail().x, 320)
         origin = imgui.get_cursor_screen_pos()
@@ -734,13 +738,18 @@ class ArchiveWindowMixin:
         # draw call per archive entry per frame is the cost otherwise.
         on = ((xs >= origin.x) & (xs <= far.x) & (ys >= origin.y) & (ys <= far.y))
         sel = np.flatnonzero(on)
-        # .tolist() first: indexing a numpy array with a Python int inside the
-        # loop builds a scalar object per access, which costs more than the
-        # draw call it feeds.
-        px, py = xs[sel].tolist(), ys[sel].tolist()
-        pc = colors[sel].tolist()
-        for x, y, c in zip(px, py, pc):
-            draw.add_circle_filled(imgui.ImVec2(x, y), 3.0, c)
+
+        if ast.map_render in ("density", "points+density"):
+            self._draw_density(draw, xs[sel], ys[sel], origin, size)
+
+        if ast.map_render != "density":
+            # .tolist() first: indexing a numpy array with a Python int inside
+            # the loop builds a scalar object per access, which costs more than
+            # the draw call it feeds.
+            px, py = xs[sel].tolist(), ys[sel].tolist()
+            pc = colors[sel].tolist()
+            for x, y, c in zip(px, py, pc):
+                draw.add_circle_filled(imgui.ImVec2(x, y), 3.0, c)
 
         best_i, best_d = -1, 1e9
         if hovering and len(sel):
@@ -757,46 +766,191 @@ class ArchiveWindowMixin:
                             imgui.IM_COL32(255, 90, 90, 255), 0, 2.0)
         draw.pop_clip_rect()
 
+        # Through idx: with a filter on, row i is not entry i, and hovering the
+        # wrong entry is worse than not hovering at all.
         if hovering and best_i >= 0 and best_d < 12.0:
-            self._map_hover_card(arc.entries[best_i])
+            entry = arc.entries[int(idx[best_i])]
+            self._map_hover_card(entry)
             if clicked:
-                ast.selected_entry_id = arc.entries[best_i].id
+                ast.selected_entry_id = entry.id
 
+        self._render_map_legend(ast, len(idx), len(arc))
         self._render_map_selection(ast, arc)
 
-    def _map_points(self, arc, proj):
-        """-> (unit-square positions, lo, span, per-entry colours), or None.
+    def _map_points(self, arc, proj, ast):
+        """-> (unit positions, lo, span, colours, archive indices), or None.
 
-        Cached against (archive revision, projection version), because neither
-        operand of the projection changes between generations while the map is
+        Cached against (archive revision, projection version, view options),
+        because none of the operands change between generations while the map is
         redrawn 60 times a second. Measured on the real archives: the transform
         alone is 3.8 ms at 4808 entries, 5.8 ms at 8002 and 20 ms at the 20000
         capacity - most of what the browser cost, and none of it new work.
 
-        Colours are resolved here too: the pin/source lookup is a dict hit and
-        a conditional per entry, which belongs with the rest of the per-entry
-        work rather than in the draw loop.
+        Returns the ARCHIVE INDICES alongside, because a filtered map's row i is
+        not entry i and hover, click and the goal marker all resolve through it.
+
+        The unit square is normalised over the FILTERED entries, so narrowing
+        the filter also expands what is left to fill the canvas - the crowding
+        that makes a large map unreadable is the thing being fixed, and this is
+        the half of it that costs nothing.
         """
         key = (getattr(arc, "revision", None), getattr(proj, "version", None),
-               len(arc))
+               len(arc), ast.map_color_by, ast.map_filter, ast.map_recent_gens,
+               ast.map_novel_pct, ast.map_filter_goal, ast.map_filter_source)
         hit = getattr(self, "_map_cache", None)
         if hit is not None and hit[0] is arc and hit[1] is proj and hit[2] == key:
             return hit[3]
 
-        pts = proj.transform(arc.embeddings)
+        idx = map_view.filter_indices(
+            arc.entries, ast.map_filter,
+            recent_gens=ast.map_recent_gens, novel_pct=ast.map_novel_pct,
+            goal=ast.map_filter_goal, source=ast.map_filter_source)
+        if not len(idx):
+            self._map_cache = (arc, proj, key, None)
+            return None
+
+        pts = proj.transform(arc.embeddings[idx])
         if not len(pts):
             return None
         lo = pts.min(axis=0)
         span = np.maximum(pts.max(axis=0) - lo, 1e-6)
-        unit = (pts - lo) / span                    # whole archive in [0, 1]^2
-        fallback = self._MAP_COLORS["expansion"]
-        colors = np.array(
-            [self._MAP_COLORS.get("pin" if e.pinned else e.source, fallback)
-             for e in arc.entries], dtype=np.int64)
+        unit = (pts - lo) / span
 
-        out = (unit, lo, span, colors)
+        shown = [arc.entries[i] for i in idx]
+        values = map_view.scalar_values(shown, ast.map_color_by)
+        if values is None:
+            fallback = self._MAP_COLORS["expansion"]
+            colors = np.array(
+                [self._MAP_COLORS.get("pin" if e.pinned else e.source, fallback)
+                 for e in shown], dtype=np.int64)
+        else:
+            colors = map_view.ramp_colors(map_view.normalise(values))
+
+        out = (unit, lo, span, colors, idx)
         self._map_cache = (arc, proj, key, out)
         return out
+
+    def _render_map_controls(self, ast, arc) -> None:
+        """Colour / Show / Draw. Every default is the historical map, so the
+        plain scatter coloured by regime is always one combo away."""
+        w = 130
+        imgui.set_next_item_width(w)
+        changed, i = imgui.combo("Colour##map",
+                                 map_view.COLOR_MODES.index(ast.map_color_by)
+                                 if ast.map_color_by in map_view.COLOR_MODES else 0,
+                                 list(map_view.COLOR_MODES))
+        if changed:
+            ast.map_color_by = map_view.COLOR_MODES[i]
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Regime, or a ramp over novelty / liveness. Novelty is measured "
+                "in the full 512-d space, so it is the honest local-density "
+                "reading - dot crowding on this map is not.")
+
+        imgui.same_line()
+        imgui.set_next_item_width(w)
+        labels = [map_view.FILTER_LABELS[m] for m in map_view.FILTER_MODES]
+        changed, i = imgui.combo("Show##map",
+                                 map_view.FILTER_MODES.index(ast.map_filter)
+                                 if ast.map_filter in map_view.FILTER_MODES else 0,
+                                 labels)
+        if changed:
+            ast.map_filter = map_view.FILTER_MODES[i]
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Fewer points is the whole fix: measured, the map keeps 27% of "
+                "true neighbours at 500 entries and 3% at 13000. What is left "
+                "also expands to fill the canvas.")
+
+        imgui.same_line()
+        imgui.set_next_item_width(w)
+        changed, i = imgui.combo("Draw##map",
+                                 map_view.RENDER_MODES.index(ast.map_render)
+                                 if ast.map_render in map_view.RENDER_MODES else 0,
+                                 list(map_view.RENDER_MODES))
+        if changed:
+            ast.map_render = map_view.RENDER_MODES[i]
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Density bins the points on a log scale, so a crowded archive "
+                "reads as a heatmap instead of one solid blob.")
+
+        self._render_map_filter_arg(ast, arc)
+
+    def _render_map_filter_arg(self, ast, arc) -> None:
+        """The one extra control the chosen filter needs, and nothing else."""
+        if ast.map_filter == "recent":
+            imgui.set_next_item_width(200)
+            _, ast.map_recent_gens = imgui.slider_int(
+                "Generations##map", ast.map_recent_gens, 1, 2000)
+        elif ast.map_filter == "novel":
+            imgui.set_next_item_width(200)
+            _, ast.map_novel_pct = imgui.slider_int(
+                "Top %##map", ast.map_novel_pct, 1, 100)
+        elif ast.map_filter in ("goal", "source"):
+            field = "goal" if ast.map_filter == "goal" else "source"
+            attr = "map_filter_goal" if field == "goal" else "map_filter_source"
+            values = map_view.present_values(arc.entries, field)
+            if not values:
+                imgui.text_colored(imgui.ImVec4(*_DIM),
+                                   f"No entry carries a {field} yet.")
+                return
+            current = getattr(ast, attr)
+            if current not in values:
+                setattr(ast, attr, values[0])
+                current = values[0]
+            imgui.set_next_item_width(240)
+            changed, i = imgui.combo(f"{field.title()}##mapfilter",
+                                     values.index(current), values)
+            if changed:
+                setattr(ast, attr, values[i])
+
+    def _draw_density(self, draw, xs, ys, origin, size) -> None:
+        """A log-scaled heatmap of how many entries land in each screen cell.
+
+        Binned in SCREEN space so the resolution follows the zoom, and drawn
+        under the points: overlapping dots hide their own density, which is
+        exactly why a full archive reads as one blob.
+        """
+        counts, nx, ny, cell = map_view.density_grid(
+            xs, ys, (origin.x, origin.y), (size.x, size.y))
+        if not counts.any():
+            return
+        t = map_view.density_intensity(counts)
+        gy, gx = np.nonzero(counts)
+        cols = map_view.ramp_colors(t[gy, gx], alpha=200).tolist()
+        x0 = origin.x + gx * cell
+        y0 = origin.y + gy * cell
+        for x, y, c in zip(x0.tolist(), y0.tolist(), cols):
+            draw.add_rect_filled(imgui.ImVec2(x, y),
+                                 imgui.ImVec2(x + cell, y + cell), c)
+
+    def _render_map_legend(self, ast, shown: int, total: int) -> None:
+        """How much of the archive is on screen, and what the ramp means.
+
+        A ramp with no scale is unreadable, and "showing N of M" is the only
+        thing that makes a filtered map honest about what it is hiding.
+        """
+        imgui.text_colored(imgui.ImVec4(*_DIM), f"showing {shown} of {total}")
+        ramped = ast.map_color_by in ("novelty", "liveness")
+        if not ramped and ast.map_render == "points":
+            return
+
+        imgui.same_line()
+        label = ast.map_color_by if ramped else "entries per cell"
+        imgui.text_colored(imgui.ImVec4(*_DIM), f"   {label}  low")
+        for k, t in enumerate((0.0, 0.25, 0.5, 0.75, 1.0)):
+            imgui.same_line(0.0, 2.0)
+            c = int(map_view.ramp_colors(np.array([t], dtype=np.float32))[0])
+            # A real swatch widget: imgui.text renders "##" literally, and a
+            # coloured glyph depends on the font having a block character.
+            imgui.color_button(f"##ramp{k}",
+                               imgui.ImVec4((c & 255) / 255.0,
+                                            ((c >> 8) & 255) / 255.0,
+                                            ((c >> 16) & 255) / 255.0, 1.0),
+                               0, imgui.ImVec2(14, 14))
+        imgui.same_line(0.0, 4.0)
+        imgui.text_colored(imgui.ImVec4(*_DIM), "high")
 
     @staticmethod
     def _map_home(ast) -> None:
