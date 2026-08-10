@@ -298,6 +298,29 @@ class Bench:
 
 # ---- reporting -----------------------------------------------------------
 
+def cell_key(row: dict) -> tuple:
+    """What identifies one run within a sweep, for --resume.
+
+    Every run is independent - a fresh optimizer at a fixed seed, and a
+    generation seed derived from it - so nothing carries between cells and a
+    resumed sweep is EXACT rather than approximate. The signature rather than
+    the dimension, because Fourier at 19 centres and Gabor at 11 filters are
+    both 152 floats.
+    """
+    return (row.get("preset", ""), row["signature"], row["algorithm"],
+            row["prompt"], row["seed"])
+
+
+def load_previous(path: str) -> list[dict]:
+    p = Path(path)
+    if not p.is_file():
+        return []
+    try:
+        return json.loads(p.read_text()).get("runs", [])
+    except (ValueError, OSError):
+        return []
+
+
 def summarise(rows: list[dict]) -> dict:
     """Per (preset, modality, dim, algorithm): final best and gain over gen 0.
 
@@ -376,6 +399,8 @@ def main(argv) -> int:
     ap.add_argument("--gabor-input-scale", type=float, default=None,
                     help="the preset's measured |input| p90; see the module docstring")
     ap.add_argument("--out", default="")
+    ap.add_argument("--resume", action="store_true",
+                    help="keep the runs already in --out and do only the rest")
     ap.add_argument("--smoke", action="store_true",
                     help="one tiny run, to time a generation before committing")
     args = ap.parse_args(argv)
@@ -398,37 +423,40 @@ def main(argv) -> int:
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
 
     presets = [p.strip() for p in args.preset.split(",") if p.strip()]
+    rows: list[dict] = load_previous(args.out) if (args.resume and args.out) else []
+    done = {cell_key(r) for r in rows}
+
+    # Every cell listed, so the plan is visible before an hour of GPU time is
+    # spent on it - and so a resume says how much it is actually skipping.
+    plan = [(p, lay, a, pr, s) for p in presets for lay in layouts
+            for a in algorithms for pr in prompts for s in seeds]
+    todo = [c for c in plan
+            if (c[0], c[1].signature(), c[2], c[3], c[4]) not in done]
+
     bench = Bench(presets[0], args.world_size, args.density)
-    total = (len(presets) * len(layouts) * len(algorithms) * len(prompts)
-             * len(seeds))
     print(f"preset {'/'.join(presets)}   {bench.sim.entity_count} particles   "
           f"canvas {bench.sim.can.size}   grid {args.grid} "
           f"({args.grid ** 2} tiles)")
-    print(f"{total} runs x {args.generations} generations x "
-          f"{args.steps_per_gen} steps, {args.snapshots} snapshots\n")
+    print(f"{len(todo)} runs to do of {len(plan)} "
+          f"({len(rows)} already in {args.out or '-'}) x {args.generations} "
+          f"generations x {args.steps_per_gen} steps, "
+          f"{args.snapshots} snapshots\n")
 
-    rows: list[dict] = []
-    t0 = time.time()
+    t0, current = time.time(), None
     try:
-        for preset in presets:
-            bench.load_preset(preset)
-            for lay in layouts:
-                for algo in algorithms:
-                    for prompt in prompts:
-                        for seed in seeds:
-                            print(f"  {preset:12s} {lay.signature():18s} "
-                                  f"dim {lay.length:4d}  {algo:14s} "
-                                  f"seed {seed}  {prompt!r}")
-                            row = bench.run(
-                                lay, prompt, algo, args.generations, args.grid,
-                                seed, args.steps_per_gen, args.snapshots)
-                            row["preset"] = preset
-                            rows.append(row)
-                            if args.out:
-                                Path(args.out).parent.mkdir(
-                                    parents=True, exist_ok=True)
-                                Path(args.out).write_text(
-                                    json.dumps({"runs": rows}, indent=1))
+        for preset, lay, algo, prompt, seed in todo:
+            if preset != current:
+                bench.load_preset(preset)
+                current = preset
+            print(f"  {preset:12s} {lay.signature():18s} dim {lay.length:4d}  "
+                  f"{algo:14s} seed {seed}  {prompt!r}")
+            row = bench.run(lay, prompt, algo, args.generations, args.grid,
+                            seed, args.steps_per_gen, args.snapshots)
+            row["preset"] = preset
+            rows.append(row)
+            if args.out:
+                Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.out).write_text(json.dumps({"runs": rows}, indent=1))
     finally:
         bench.close()
 
