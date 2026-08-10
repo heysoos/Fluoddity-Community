@@ -29,6 +29,7 @@ Any advice or criticism is welcome. This is a toy I made for myself and I am mor
  - ffmpeg based video recording
  - Emboss visual effect (currently the only use for traditional density trails)
  - Experimental system for mixing different saved configs.
+ - Tournament mode: run a grid of creatures side by side and breed from the ones you like. Two automatic variants use CLIP to score the grid — **Auto**, which climbs toward a text prompt, and **Explore**, which builds a searchable archive of diverse patterns on its own (see [docs/imgep.md](docs/imgep.md)).
 ## Design
 Particles in Fluoddity have no direct interactions with each-other. Instead, they leave trails as they move. These trails decay and diffuse over time. Particles respond to the density and direction of trails around them.
 There is no fixed rule that determines how particles respond to their senses. Instead, each particle has a simple neural-net like brain with just 80 parameters. These parameters are randomized on startup, and then mutated as the user selects which lineages to explore.

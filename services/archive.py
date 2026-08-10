@@ -333,15 +333,12 @@ class Archive:
 
         `ignore_liveness` drops the CHANGE half of the alive gate, and nothing
         else - `cand.viable` (is this a black or blown-out frame) still has to
-        hold. Exactly one caller passes it: the expedition summit. Liveness is
-        a floor on the bulk of the archive, not a veto over a chosen entry, and
-        it is measurably the wrong test for this one - liveness is HIGHER
-        during the transient after a reset than once a pattern settles into its
-        attractor, so a settled attractor, which is precisely what a converging
-        expedition produces, scores low on it. Measured over the three real
-        archives the floor is nearly inert anyway: the 1st percentile of
-        admitted liveness is 0.0062-0.0078, three to four times 0.002, and
-        0.1-0.5% of entries sit within 2x of it.
+        hold. Two callers pass it: the expedition summit and a goal record.
+        Liveness is a floor on the bulk of the archive, not a veto over a
+        chosen entry, and it is measurably the wrong test for these two -
+        liveness is HIGHER during the transient after a reset than once a
+        pattern settles into its attractor, which is precisely what a
+        converging expedition produces.
 
         `separation` is passed in because the caller has the whole batch and can
         do one matmul for all of it; omitted, it is computed here.

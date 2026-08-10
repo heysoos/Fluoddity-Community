@@ -48,9 +48,9 @@ Physics runs entirely on the GPU via GLSL compute shaders. `Sim` manages shader 
 ### Orchestration Layer
 | File | Lines | Description |
 |------|-------|-------------|
-| `main.py` | 357 | App orchestrator: init, frame loop, recording/screenshot state machines |
-| `command_handler.py` | 417 | Processes one-shot UI commands (resets, config save/load, mouse clicks, history) |
-| `simulation_runner.py` | 250 | Physics stepping + frame assembly (motion blur / non-motion blur) |
+| `main.py` | 936 | App orchestrator: init, frame loop, recording/screenshot state machines |
+| `command_handler.py` | 1123 | Processes one-shot UI commands (resets, config save/load, mouse clicks, history) |
+| `simulation_runner.py` | 394 | Physics stepping + frame assembly (motion blur / non-motion blur) |
 | `camera_input.py` | 89 | WASD/QE camera movement + scroll-to-zoom (standalone function) |
 
 ### UI Package (`ui/`)
@@ -58,31 +58,31 @@ Mixin-based architecture. The `UI` class in `core.py` inherits all mixins via mu
 
 | File | Lines | Description |
 |------|-------|-------------|
-| `core.py` | 634 | UI class definition, `__init__`, GLFW callbacks, `get_state()`, render dispatch |
-| `physics_window.py` | 728 | Physics settings panel: all slider groups, multi-load mode |
-| `slider_widgets.py` | 386 | Slider with range menu, context menus, jitter, sweep/range buttons |
-| `help_windows.py` | 355 | Controls, tutorial, parameter sweeps, performance, video recording windows |
-| `menu_bar.py` | 282 | File/Reset/Help/Extras menus, load submenu with preview, auto-close |
-| `history_window.py` | 245 | Rule history display, tooltip shader rendering |
-| `preferences_window.py` | 232 | World size, physics frequency, mouse mode, view, appearance settings |
-| `config_browser.py` | 230 | Config file scanning, caching, hierarchical load submenu rendering |
+| `core.py` | 717 | UI class definition, `__init__`, GLFW callbacks, `get_state()`, render dispatch |
+| `physics_window.py` | 634 | Physics settings panel: all slider groups, multi-load mode |
+| `slider_widgets.py` | 450 | Slider with range menu, context menus, jitter, sweep/range buttons |
+| `help_windows.py` | 370 | Controls, tutorial, parameter sweeps, performance, video recording windows |
+| `menu_bar.py` | 433 | File/Reset/Help/Extras menus, load submenu with preview, auto-close |
+| `history_window.py` | 219 | Rule history display, tooltip shader rendering |
+| `preferences_window.py` | 367 | World size, physics frequency, mouse mode, view, appearance settings |
+| `config_browser.py` | 232 | Config file scanning, caching, hierarchical load submenu rendering |
 | `popup_modals.py` | 85 | Save/Overwrite/Delete confirmation dialogs |
-| `archive_window.py` | 528 | Explore (IMGEP) tab, archive picker, gallery, and the 2-D semantic map |
+| `archive_window.py` | 905 | Explore (IMGEP) tab, archive picker, gallery, and the 2-D semantic map |
 
 ### Simulation & Rendering
 | File | Lines | Description |
 |------|-------|-------------|
-| `sim.py` | 869 | GPU particle simulation: shaders, buffers, physics dispatch, parameter sweeps |
-| `camera.py` | 316 | Camera state, coordinate transforms, screen rendering |
+| `sim.py` | 1052 | GPU particle simulation: shaders, buffers, physics dispatch, parameter sweeps |
+| `camera.py` | 428 | Camera state, coordinate transforms, screen rendering |
 
 ### Services (`services/`)
 Stateless or near-stateless helpers owned by the orchestrator.
 
 | File | Lines | Description |
 |------|-------|-------------|
-| `config_saver.py` | 565 | Save/load physics configs (JSON + legacy binary formats) |
+| `config_saver.py` | 558 | Save/load physics configs (JSON + legacy binary formats) |
 | `multi_load_service.py` | 150 | Mix up to 64 configs simultaneously, cohort assignment |
-| `arrow_debug_service.py` | 93 | Debug overlay rendering trail flow vectors as arrows |
+| `arrow_debug_service.py` | 95 | Debug overlay rendering trail flow vectors as arrows |
 | `entity_picker.py` | 63 | Find nearest particle to mouse click (CPU readback) |
 | `rule_manager.py` | 60 | Rule history stack with push/pop/undo |
 | `video_recorder.py` | 45 | Thin facade over VidSaver for video recording |
@@ -91,19 +91,29 @@ Stateless or near-stateless helpers owned by the orchestrator.
 Auto (CLIP) mode and Explore (IMGEP) mode share one rollout machine
 (`AutoTournamentService`) and differ only in their `SearchDriver`.
 
+**`docs/imgep.md` is the reference for how Explore works** — the regime loop,
+every fitness and admission equation, and what each setting does.
+
 | File | Lines | Description |
 |------|-------|-------------|
-| `imgep_driver.py` | 361 | Bootstrap / expansion / expedition regimes; the archive admission call site |
-| `archive.py` | 377 | Admission gates, adaptive novelty threshold, capacity, novelty refresh |
-| `archive_io.py` | 183 | `index.jsonl` + atomic `vectors.npz` + thumbnails; degrades to a no-op on disk trouble |
-| `archive_library.py` | 207 | Named archive directories: safe names, listing, create / clear / delete |
-| `goal_source.py` | 220 | `Goal`, the user's text `GoalList`, and `latent_goal()` whitened frontier extrapolation |
+| `imgep_driver.py` | 831 | Bootstrap / expansion / expedition regimes; the archive admission call site |
+| `auto_tournament_service.py` | 410 | The rollout machine both modes share; scoring runs off the frame loop |
+| `clip_scorer.py` | 326 | CLIP ViT-B/32 via ONNX Runtime + DirectML; `embed_mean` multi-view averaging |
+| `capture_health.py` | 128 | Viability, spatial coherence, confounded-sweep detection |
+| `capture_view.py` | 243 | Re-renders the canvas at `grid*224` with an identity camera, blooming per tile |
+| `tile_geometry.py` | 43 | Integer tile-to-texel arithmetic, shared with the shaders |
+| `optimizers.py` | 331 | CMA-ES wrapper with a uniform ask/tell interface |
+| `genome_spec.py` / `physics_genome.py` | 96 / 141 | What `z` encodes, and the physics-parameter half of it |
+| `archive.py` | 565 | Admission gates, separation, capacity/eviction, novelty refresh |
+| `archive_io.py` | 222 | `index.jsonl` + atomic `vectors.npz` + thumbnails; degrades to a no-op on disk trouble |
+| `archive_library.py` | 253 | Named archive directories: safe names, listing, create / clear / delete |
+| `goal_source.py` | 271 | `Goal`, the user's text `GoalList`, and `latent_goal()` whitened frontier extrapolation |
 | `expedition_fitness.py` | 92 | Contrastive expedition objective; per-modality logit scales |
-| `prompt_driver.py` | 145 | Auto mode's driver: CMA-ES climbing a CLIP text prompt |
-| `novelty.py` | 131 | k-NN novelty, `NOV^alpha` parent sampling, the rejects ring |
+| `prompt_driver.py` | 153 | Auto mode's driver: CMA-ES climbing a CLIP text prompt |
+| `novelty.py` | 273 | k-NN novelty, `NOV^alpha` parent sampling, the rejects ring |
 | `thumb_cache.py` | 79 | LRU of GL textures for gallery thumbnails, with explicit release |
 | `descriptor.py` | 63 | Trajectory-centroid behaviour descriptor and ASAL liveness |
-| `archive_projection.py` | 69 | PCA: 2-D for the map view, 8-D (with variances) for latent goals |
+| `archive_projection.py` | 74 | PCA: 2-D for the map view, 8-D (with variances) for latent goals |
 | `search_driver.py` | 46 | The `SearchDriver` protocol both drivers implement |
 
 Archives live under `Documents/Fluoddity/archives/<name>/`, one directory per
@@ -119,10 +129,10 @@ Plain dataclasses. No logic, just fields with defaults.
 
 | File | Lines | Description |
 |------|-------|-------------|
-| `sim_state.py` | 113 | Physics parameters (ALL_CAPS), rule seed, view options, sweep config |
+| `sim_state.py` | 117 | Physics parameters (ALL_CAPS), rule seed, view options, sweep config |
 | `preferences_state.py` | 122 | User preferences: motion blur, recording, mouse mode, keybindings, active archive |
-| `ui_state.py` | 72 | Combined state snapshot returned by `UI.get_state()` |
-| `archive_state.py` | 97 | Explore (IMGEP) settings, browser view state, and one-shot flags |
+| `ui_state.py` | 94 | Combined state snapshot returned by `UI.get_state()` |
+| `archive_state.py` | 129 | Explore (IMGEP) settings, browser view state, and one-shot flags |
 | `multi_load_state.py` | 24 | Multi-load toggle and config list |
 | `camera_state.py` | 11 | Camera position + zoom |
 | `recording_state.py` | 7 | Recording active flag |
@@ -132,11 +142,11 @@ Plain dataclasses. No logic, just fields with defaults.
 |------|-------|-------------|
 | `ffmpeg_recorder.py` | 272 | FFmpeg pipe-based video encoder |
 | `save_frame_gpu.py` | 248 | GPU-side screenshot with supersampling |
-| `frame_assembler.py` | 195 | Temporal accumulation (motion blur) + final composite |
+| `frame_assembler.py` | 221 | Temporal accumulation (motion blur) + final composite |
 | `keybinding_management.py` | 146 | Rebindable keyboard shortcuts |
-| `paths.py` | 117 | Platform-aware path resolution (app dir vs user Documents) |
-| `gl_helpers.py` | 114 | OpenGL utilities (tryset, readback_rule, buffer helpers) |
-| `vid_saver.py` | 75 | Frame-buffered video saver (wraps ffmpeg_recorder) |
+| `paths.py` | 165 | Platform-aware path resolution (app dir vs user Documents) |
+| `gl_helpers.py` | 115 | OpenGL utilities (tryset, readback_rule, buffer helpers) |
+| `vid_saver.py` | 76 | Frame-buffered video saver (wraps ffmpeg_recorder) |
 
 ### Shaders (`shaders/`)
 | File | Description |

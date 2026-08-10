@@ -4,17 +4,7 @@ Expedition & Expansion (arXiv:2509.03863) on a substrate that runs N^2 rollouts
 per generation. E&E's loop is serial - one theta, one rollout, one embedding -
 so one generation here is a batch of 4 to 64 IMGEP samples at no extra cost.
 
-Three regimes, checked in this order:
-
-  EXPEDITION   an expedition is active: optimizer.ask, fitness <b, g>. First,
-               because a chase must pre-empt the cadence immediately.
-  BOOTSTRAP    archive < seed_n, or empty. z ~ N(0, sigma0): a scattered
-               population, and the archive admits on viability and liveness
-               only (5.2.2).
-  EXPANSION    otherwise: per tile, sample a parent with p ~ NOV^alpha,
-               re-encode it under the CURRENT physics origin, add Gaussian
-               noise. No optimizer, no covariance, no shared state between
-               tiles - the population is a sample, not a distribution.
+See docs/imgep.md for the loop, the regimes and every fitness equation.
 
 Deliberate deviation from E&E: every expedition generation's tiles also go
 through the admission gate, not just the endpoint. E&E archives only the final
@@ -161,10 +151,8 @@ class ImgepDriver:
     def phase(self) -> dict:
         """What this regime is working toward, and how far along it is.
 
-        Every regime has a finish line, and none of them were visible: the tab
-        showed the regime's NAME and nothing about where in it the search was.
-        -> (label, done, total, note); total 0 means there is no finish line to
-        show, which is the honest answer when expeditions are switched off.
+        -> (label, done, total, note); total 0 means there is no finish line,
+        which is the honest answer when expeditions are switched off.
         """
         r = self.regime
         if r == "expedition":
@@ -469,11 +457,10 @@ class ImgepDriver:
         if viable.any():
             cand_nov = np.where(viable, nov, -np.inf)
             keeper = int(np.argmax(cand_nov))
-        # Computed BEFORE the admission loop, not after it, so the summit
-        # ratchet can see this generation's fitness. Gated on shows_something
-        # rather than viable: see _summit.
         # One pass over the crops, reused by the fitness for every goal kind.
         coherence = structure(last)
+        # BEFORE the admission loop, not after it, so the summit ratchet can
+        # see this generation's fitness.
         fit = (self._expedition_fitness(snaps, nov, coherence)
                if source == "expedition" else None)
         summit = self._summit(fit, shows_something)
@@ -570,24 +557,17 @@ class ImgepDriver:
 
         -> {tile: (goal text, margin)}, at most one tile per goal.
 
-        The record book runs in EVERY regime, not just during an expedition
-        toward that goal, because the two are unrelated: a run chasing
-        "pepperoni pizza" wanders through shapes, and one of them can be the
-        best "a smiley face" ever produced. Nothing else in the pipeline would
-        keep it - novelty does not know the goal exists, and separation only
-        asks whether the archive already holds something similar, which is a
-        different question from whether the archive holds something BETTER.
+        Runs in EVERY regime, because the goal being chased and the goal being
+        beaten are unrelated: nothing else in the pipeline keeps a record -
+        novelty does not know the goal exists, and separation asks whether the
+        archive holds something SIMILAR, not something BETTER.
 
-        Scored on descriptors on both sides, with contrastive() and the
-        distractor set - the same objective `_seed_index` ranks seeds by. That
-        is what makes "nearer to the goal than any other point" literally true
-        of the number being compared. Per-snapshot averaging is deliberately
-        not used here even though the expedition fitness uses it: the archive
-        stores one descriptor per entry and has no snapshots to average, so
-        scoring the tiles that way would compare two different quantities.
-
-        A tile that breaks several records is credited with the largest
-        margin, and admitted once.
+        Scored on descriptors on both sides via contrastive() with the
+        distractor set - the same objective `_seed_index` ranks seeds by. The
+        expedition fitness's per-snapshot averaging is deliberately not used:
+        archive entries have no snapshots, so it would compare two different
+        quantities. A tile breaking several records is credited with the
+        largest margin and admitted once.
         """
         if self.goals is None or len(self.archive) == 0:
             return {}
@@ -634,17 +614,9 @@ class ImgepDriver:
         generation - expedition_gens, 50 by default - against the 64 a
         generation that flooding would produce.
 
-        LIVENESS DOES NOT GATE THIS, and viability still does. A tile that is
-        black or blown out is not a result whatever it scores, so
-        `shows_something` gates the argmax - but "is it still changing" is the
-        wrong question to ask of an expedition's endpoint. Liveness is measured
-        HIGHER during the transient after a reset than once a pattern settles
-        into its attractor, and a settled attractor is exactly what a
-        converging chase produces, so a liveness veto here discriminates
-        against the thing the expedition was for. It is a floor on the bulk of
-        the archive, not a veto over a chosen entry: `keeper` still respects
-        it, because keeper fires every generation forever and a dead preset
-        would otherwise deposit one frozen tile per generation without bound.
+        Gated on `shows_something` (viability), NOT on liveness - a settled
+        attractor is what a converging chase produces. See
+        Archive.consider(ignore_liveness=).
         """
         if fit is None or not len(fit) or not np.any(shows_something):
             return -1
@@ -661,16 +633,10 @@ class ImgepDriver:
     def _record(self, regime: str, admitted: int, tiles: int, fit) -> None:
         """One row per generation, for the Explore tab's plots.
 
-        Two separate stories, deliberately in one buffer so they share an x
-        axis: what the ARCHIVE is doing (size and mean novelty - is the search
-        still finding new territory, or filling in ground it already has?) and
-        what the current EXPEDITION is doing (best and mean goal match - is it
-        still climbing, or has it converged and started producing the same tile
-        64 times?). Reading either one alone is what made a stalled expedition
-        invisible.
-
-        Fitness is NaN outside an expedition rather than absent, so the two
-        series stay index-aligned and a gap in the plot is a real gap.
+        Two stories in one buffer so they share an x axis: what the ARCHIVE is
+        doing (size, mean novelty) and what the EXPEDITION is doing (best and
+        mean goal match). Fitness is NaN outside an expedition rather than
+        absent, so the series stay index-aligned and a gap is a real gap.
         """
         t = self.trace
         t["gen"].append(int(self.gen))
@@ -724,22 +690,12 @@ class ImgepDriver:
     def _refresh_count(self) -> int:
         """How many entries to re-score this generation.
 
-        A FRACTION of the archive, not a fixed count, because the quantity that
-        matters is how many generations a full sweep takes - i.e. how stale
-        novelty is allowed to get - and that has to hold as the archive grows.
-        The old fixed 64 gave a sweep of 75 generations at 4808 entries and 312
-        (14.6 minutes) at the 20000 capacity, where 64 tiles a generation are
-        also being ADMITTED: the sweep took exactly as long as a complete
-        turnover, so an entry's novelty could be a whole archive-lifetime old.
-
-        Staleness is not symmetric, which is why it matters. Expansion breeds
-        locally, so new entries land near old ones and a true novelty only ever
-        falls; a stale value is therefore systematically too HIGH - 41-59% of
-        entries measured inflated - and an inflated novelty makes an entry both
-        likelier to be chosen as a parent and likelier to survive eviction.
-
-        Measured cost at sweep=10: 0.9% of a 2.8 s generation at 4808 entries,
-        12.7% at 20000.
+        A FRACTION of the archive, not a fixed count: what matters is how many
+        generations a full sweep takes, and that has to hold as the archive
+        grows. Staleness is directional - expansion breeds locally, so true
+        novelty only falls and a stale value is systematically too HIGH, which
+        makes an entry both likelier to be picked as a parent and likelier to
+        survive eviction. See CLAUDE.md for the measured cost.
         """
         g = int(self.refresh_sweep_gens)
         if g <= 0:
@@ -762,15 +718,11 @@ class ImgepDriver:
         novelty already computed for admission this generation. That makes the
         expedition climb exactly the quantity the archive ranks on.
 
-        Everything is then multiplied by `coherence`, which is ~0.95 for a real
-        pattern and ~0 for static. See capture_health.structure: a latent or
-        chase goal contrasts against a single reference, which makes its
-        fitness a monotone squash of raw cosine, and raw cosine to an arbitrary
-        direction is maximised by noise. Measured, latent goals put their top
-        pick in the archive's roughest decile 34.0% of the time against a 10%
-        baseline. Applied to text goals too even though DEFAULT_DISTRACTORS
-        already defends them: at 0.93-0.98 for real entries it barely moves
-        their ranking, and one rule is easier to reason about than two.
+        Everything is then multiplied by `coherence` (~0.95 for a real pattern,
+        ~0 for static): a single-reference contrastive fitness is a monotone
+        squash of raw cosine, which noise maximises. See
+        capture_health.structure. Applied to text goals too, where it barely
+        moves ranking, because one rule beats two.
         """
         c = np.asarray(coherence, dtype=np.float32)
         if self._goal is not None and self._goal.kind == "novelty":
@@ -792,16 +744,12 @@ class ImgepDriver:
         goal UNDER THE SAME OBJECTIVE the expedition will be scored on.
 
         Not Archive.nearest(), which is argmax(embeddings @ goal). For a text
-        goal that ranking is degenerate, and its winner is a NOISE TEXTURE:
-        measured 2026-08-08 over 15 unrelated prompts - galaxy, flowing water, a
-        human face, ocean waves, fire, stained glass, smoke - raw cosine
-        returned just 6 distinct seeds, and one cyan static tile won 7 of them.
-        High-frequency noise has energy everywhere, so it carries a decent
+        goal that ranking is degenerate and its winner is a NOISE TEXTURE:
+        high-frequency noise has energy everywhere, so it carries a decent
         cosine to every phrase, and the modality gap leaves nothing else to
-        separate entries by. The same 15 prompts give 14 distinct seeds here.
-
-        That is why a text expedition visibly started from a bad image and
-        climbed nowhere: the fitness was fixed, the STARTING POINT was not.
+        separate entries by. Measured over 15 unrelated prompts, raw cosine
+        returned 6 distinct seeds and one cyan static tile won 7 of them;
+        contrastive gives 14.
 
         SAMPLED with p proportional to fit^alpha, not argmaxed - the same rule
         E&E uses to pick a parent, and the same `alpha`. An argmax would send

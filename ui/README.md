@@ -19,6 +19,13 @@ ImGui is immediate-mode: every frame, all widgets are re-rendered by calling fun
 | `history_window.py` | `HistoryWindowMixin` | Rule history list, tooltip shader rendering |
 | `config_browser.py` | `ConfigBrowserMixin` | Config file scanning/caching, hierarchical load submenu |
 | `popup_modals.py` | `PopupModalsMixin` | Save/Overwrite/Delete confirmation dialogs |
+| `advanced_drawing_window.py` | `AdvancedDrawingWindowMixin` | Brush and drawing controls |
+| `field_loader_window.py` | `FieldLoaderWindowMixin` | Loading an image or field as initial conditions |
+| `tournament_window.py` | `TournamentWindowMixin` | Manual tournament: grid size, tile selection, breeding |
+| `auto_tournament_window.py` | `AutoTournamentWindowMixin` | Auto (CLIP) mode: prompt, optimizer settings, status |
+| `archive_window.py` | `ArchiveWindowMixin` | Explore (IMGEP) mode: archive picker, goals, gallery, map |
+
+`physics_params.py` is a shared parameter table, not a mixin.
 
 ## Import Path
 

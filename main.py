@@ -435,10 +435,7 @@ class App:
             return 0
         if action is Action.SCORE:
             fit = svc.score_and_tell()
-            # None while the CLIP pass runs on the scoring thread. The frame is
-            # handed straight back to the UI instead of blocking on it - that
-            # pass is 92-97% of a generation's main-thread cost, and waiting on
-            # it here is what froze the app once a generation.
+            # None while the CLIP pass runs off-thread; retry next frame.
             if fit is not None:
                 self._after_generation(fit)
             return 0

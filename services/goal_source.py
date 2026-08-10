@@ -239,21 +239,11 @@ def latent_goal(archive, rng, projection, alpha: float = 4.0,
     if not np.isfinite(nrm) or nrm < 1e-6:
         return None
     # NO seed_index, deliberately. Seeding at the anchor looks obviously right
-    # - it is the archive's nearest point to the goal by construction, and it
-    # was drawn by p ~ NOV^alpha rather than by matching an extrapolated
-    # direction. Measured 2026-08-10 against the fraction of seeds landing in
-    # the archive's roughest decile, it is a REGRESSION:
-    #
-    #                     default   debug05
-    #   _seed_index         15.8%     16.8%
-    #   the anchor          27.0%     13.5%
-    #
-    # because _seed_index does not argmax - it samples with banded_alpha, which
-    # already spreads the draw - while p ~ NOV^4 concentrates hard, and novelty
-    # is itself mildly rough-biased. The 34% figure that motivated this is the
-    # fitness ARGMAX, i.e. what the objective ranks first, not where the
-    # expedition starts. That half is answered by the coherence factor in
-    # ImgepDriver._expedition_fitness.
+    # and measured as a REGRESSION - 15.8% -> 27.0% of seeds in the archive's
+    # roughest decile - because _seed_index samples with banded_alpha, which
+    # already spreads the draw, while p ~ NOV^alpha concentrates hard. The
+    # noisy-TOP-PICK half is answered by the coherence factor in
+    # ImgepDriver._expedition_fitness, not here.
     return Goal("latent", "", (g / nrm).astype(np.float32))
 
 
@@ -261,25 +251,18 @@ def novelty_goal(archive, rng, alpha: float = 4.0) -> Goal | None:
     """An expedition with NO target: climb novelty itself.
 
     Novelty search (Lehman & Stanley) as the inner loop, where E&E uses a
-    directed chase. It exists because a latent goal can be unreachable and its
-    objective cannot tell a genuinely new pattern from static, while novelty is
-    well-posed by construction - there is no point in embedding space that
-    might not be realisable, only a landscape defined by what the archive
-    already holds.
-
-    It is also the only thing in the search that optimises novelty WITHIN a
-    generation. Expansion samples parents by novelty and then mutates blindly;
-    this makes the 64 tiles of a generation a hill-climb on the same quantity
-    that decides admission and parent choice.
+    directed chase. Well-posed by construction: there is no point in embedding
+    space that might not be realisable, only a landscape defined by what the
+    archive already holds. It is also the only thing in the search that
+    optimises novelty WITHIN a generation - expansion samples parents by
+    novelty and then mutates blindly.
 
     The objective is deliberately non-stationary: entries admitted during the
-    expedition raise the local density and lower the novelty of everything near
-    them, so the optimizer chases a receding target. For an explorer that is
-    the desired behaviour rather than a defect, but it does mean CMA-ES is
-    adapting a covariance on shifting ground.
+    expedition lower the novelty of everything near them, so CMA-ES adapts a
+    covariance on shifting ground. For an explorer that is desired.
 
-    Carries no embedding - there is nothing to point at. The seed is drawn the
-    same way expansion draws a parent.
+    Carries no embedding - there is nothing to point at - so the seed is drawn
+    here, the same way expansion draws a parent.
     """
     if len(archive) == 0:
         return None

@@ -116,10 +116,10 @@ Use this after large refactors or significant new features. Items roughly ordere
 ## 13. Explore (IMGEP) mode
 - [ ] Enabling Explore forces a 1:1 canvas; disabling restores the previous ratio
 - [ ] Start with an empty archive: regime reads `bootstrap`, archive grows by up to N^2 per generation
-- [ ] At `seed_n` the regime becomes `expansion` and the admission rate settles near the target
-- [ ] `Documents/Fluoddity/archive/index.jsonl` gains one line per admission; `thumbs/` fills
+- [ ] At `seed_n` the regime becomes `expansion`; admission drops as separation starts rejecting
+- [ ] `Documents/Fluoddity/archives/<name>/index.jsonl` gains one line per admission; `thumbs/` fills
 - [ ] With `Expansion Between` = 3 and a goal in the list, an expedition fires and names the goal
-- [ ] With the goal list empty, every expedition reads `(latent)`
+- [ ] With the goal list empty, every expedition reads `(latent)` or `(novelty)`
 - [ ] `Expansion Between` = 0 never expeditions
 - [ ] Right-click a tile: an expedition starts immediately with goal `(chase)`
 - [ ] Left-click a tile: it enters the archive as pinned, bypassing the gates
