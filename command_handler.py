@@ -718,7 +718,8 @@ class CommandHandler:
 
         try:
             state = load_checkpoint(ats.load_checkpoint_path,
-                                    expect_signature=svc.spec.signature())
+                                    expect_signature=svc.spec.signature(),
+                                    expect_layout=svc.spec.layout.signature())
             svc.restore(state)
         except CheckpointError as exc:
             ats.warning = f"checkpoint not loaded: {exc}"

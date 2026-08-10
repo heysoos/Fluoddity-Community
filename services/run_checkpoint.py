@@ -24,7 +24,8 @@ _ARRAY_PREFIX = "arr__"
 _OPT_PREFIX = "opt__"
 
 _META_KEYS = (
-    "genome_spec_signature", "generation", "optimizer_name", "base_seed",
+    "genome_spec_signature", "brain_layout_signature", "generation",
+    "optimizer_name", "base_seed",
     "prompt", "distractors", "settings", "history", "best_fitness",
 )
 
@@ -81,7 +82,8 @@ def save_checkpoint(path, state: dict) -> None:
             tmp.unlink()
 
 
-def load_checkpoint(path, expect_signature: str | None = None) -> dict:
+def load_checkpoint(path, expect_signature: str | None = None,
+                    expect_layout: str | None = None) -> dict:
     p = Path(path)
     if not p.is_file():
         raise CheckpointError(f"no checkpoint at {p}")
@@ -101,6 +103,16 @@ def load_checkpoint(path, expect_signature: str | None = None) -> dict:
     if expect_signature is not None and sig != expect_signature:
         raise CheckpointError(
             f"checkpoint genome is {sig!r}, this build expects {expect_signature!r}"
+        )
+
+    # The width guard above cannot separate two modalities that happen to share
+    # one - Fourier at 21 centres and Gabor at 12 filters are both "brain:168" -
+    # and their z mean entirely different things. Absent in checkpoints written
+    # before the field existed, which are all Fourier and pass on width alone.
+    lay = meta.get("brain_layout_signature")
+    if expect_layout is not None and lay is not None and lay != expect_layout:
+        raise CheckpointError(
+            f"checkpoint brain is {lay!r}, this build expects {expect_layout!r}"
         )
 
     opt_state = dict(meta.get("optimizer_meta", {}))

@@ -446,6 +446,8 @@ class App:
             # no teardown, no reallocation.
             self.sim.set_brain_scales(layout)
             self.tournament_service.set_layout(layout)
+            if self.auto_service is not None:
+                self.auto_service.set_layout(layout)
             self._refresh_driver_specs(layout)
             return True
 
@@ -475,6 +477,8 @@ class App:
         # about; without this it keeps producing the old width and the tiles are
         # uploaded into slots that expect the new one.
         self.tournament_service.set_layout(layout)
+        if self.auto_service is not None:
+            self.auto_service.set_layout(layout)
 
         # The optimizer searches a different number of dimensions now, so its
         # covariance and population are meaningless. Reset rather than resize.

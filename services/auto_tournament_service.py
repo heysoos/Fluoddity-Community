@@ -18,7 +18,7 @@ from enum import Enum
 
 import numpy as np
 
-from services.genome_spec import BRAIN_PHYSICS_SPEC, BRAIN_SPEC
+from services.genome_spec import BRAIN_SPEC, physics_spec_for, spec_for
 from services.physics_genome import decode_physics
 from services.prompt_driver import PromptDriver
 
@@ -50,6 +50,10 @@ class AutoTournamentService:
         self.tournament = tournament_service
         self.logger = logger
         self.spec = spec
+        # The search space is DERIVED from the active brain. Holding the layout
+        # rather than the spec is what lets _resolve_spec re-derive it when the
+        # physics block is toggled without forgetting which brain it is for.
+        self._layout = spec.layout
         self.base_seed = int(base_seed)
         # The service owns the rollout machine; the driver owns what to run and
         # what the pictures mean. Injecting it is how Explore mode reuses this
@@ -153,11 +157,28 @@ class AutoTournamentService:
         """This generation's search vectors, or None before the first ask."""
         return self._z
 
+    def set_layout(self, layout) -> None:
+        """The active brain changed, so the search space did too.
+
+        Nothing else can do this. _resolve_spec runs on every generation, so a
+        spec set from outside is overwritten within one - which is exactly how
+        the search stayed on Fourier's 80 floats while the GPU ran a 168-float
+        Gabor brain.
+        """
+        self._layout = layout
+        self._resolve_spec()
+        self._sync_driver()
+
     def _resolve_spec(self) -> None:
-        """Point self.spec at the space the current settings imply."""
-        want = BRAIN_PHYSICS_SPEC if self.physics_enabled else BRAIN_SPEC
-        if self.spec is not want:
-            self.spec = want
+        """Point self.spec at the space the current settings imply.
+
+        Rebuilt rather than cached: a decode-scale change produces an equal-but-
+        distinct spec that must be adopted, since it is the layout's scales that
+        decide what a z decodes to. The drivers compare with same_space_as, so
+        rebuilding here does not disturb an optimizer mid-run.
+        """
+        self.spec = (physics_spec_for(self._layout) if self.physics_enabled
+                     else spec_for(self._layout))
 
     # ---- lifecycle -----------------------------------------------------
 
@@ -285,6 +306,10 @@ class AutoTournamentService:
         d = self.driver.checkpoint_state()
         return {
             "genome_spec_signature": self.spec.signature(),
+            # Widths alone cannot identify a search: Fourier at 21 centres and
+            # Gabor at 12 filters are both "brain:168". Restoring one under the
+            # other would hand CMA-ES a covariance about the wrong axes.
+            "brain_layout_signature": self.spec.layout.signature(),
             "generation": self.generation,
             "optimizer_name": d.get("optimizer_name", self.algorithm),
             "optimizer_state": d.get("optimizer_state", {}),
