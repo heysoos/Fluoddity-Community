@@ -285,6 +285,21 @@ mechanics these caveats assume.
   on a switch: it is keyed by thumbnail filename, which derives from the entry
   id, so reusing it shows the previous archive's pictures.
 
+- **Explore settings belong to the ARCHIVE, not to the app**, and live in
+  `settings.json` beside its `goals.json`. The settings that suit a
+  20000-entry archive are not the ones that suit an empty one, so reopening an
+  archive restores what it was last worked with. `PERSISTED_FIELDS` in
+  `state/archive_state.py` is an explicit **allowlist**: two thirds of
+  `ArchiveState` is one-shot commands and view buffers, and persisting
+  `start_requested` or `delete_entry_id` would replay a command on load. A new
+  field is therefore not persisted until it is named there. `enabled` is
+  deliberately absent — opening the app must not resume a search — and a
+  missing key keeps its current value, so `{}` means "keep what is on screen"
+  and a brand new archive inherits the settings you were just using. Written
+  before the store is closed (a switch, and quitting); `grid` is the one
+  restored field that also needs `grid_changed`, since the per-frame
+  `configure()` push does not rebuild the tournament grid.
+
 - **`Archive.maybe_flush` only rewrites `vectors.npz` every 200 admissions.**
   `index.jsonl` is flushed per entry, so anything that closes an archive —
   quitting, or switching — must call `maybe_flush(force=True)` first or lose
@@ -407,6 +422,28 @@ mechanics these caveats assume.
   when the other owns the driver.
 
 ### UI and platform
+
+- **There is ONE save dialog, and every Save button in the app opens it.**
+  A save is a *subject* — `(kind, arg, tiles)`, see `services/save_targets.py` —
+  and `UI.open_save_popup()` is the only way to start one; nothing writes a
+  config without asking for a name first. `CommandHandler._handle_file_save`
+  dispatches on `kind`, where `""` is the ordinary File > Save and must keep
+  behaving exactly as it did. Everything lands in the same user configs folder
+  and appears under File > Load > Custom, because a second folder is a second
+  place to look. Three rules this encodes, each from a real failure: several
+  selected tiles get **suffixed** names (`reef_tile1`, `reef_tile4`) since one
+  shared name reproduces the clobbering inside a single click; the overwrite
+  check covers **every** target, not just the first; and the typed name goes
+  through `safe_stem()`, because the old path interpolated it straight into a
+  filename, so a separator wrote outside the folder and then did not appear in
+  the load menu. An Auto **checkpoint** is deliberately outside all of this —
+  it resumes the optimizer, is not a config, and stays in the run folder.
+
+- **A save that only prints to the console reads as a no-op.** The file lands
+  somewhere not on screen, so every save path sets a `notice` (or `warning` on
+  failure) rendered by `ui/notices.py`. Pass a distinct `scope` — two tabs both
+  showing a "Dismiss" button would otherwise collide on the ImGui id, per the
+  caveat below.
 
 - **An ImGui widget's identity IS its label, and a duplicate silently kills the
   loser.** Two visible items hashing to one ID puts Dear ImGui's "conflicting

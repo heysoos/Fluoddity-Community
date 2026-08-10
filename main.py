@@ -315,6 +315,33 @@ class App:
         if self.thumb_cache is not None:
             self.thumb_cache.release()
 
+    def _save_archive_settings(self, ui_state):
+        """Persist the Explore settings into the archive's own folder.
+
+        Called before anything lets go of an archive - a switch, and quitting.
+        Settings that suit a 20000-entry archive are not the ones that suit an
+        empty one, so they belong to the archive rather than to the app.
+        """
+        if self.archive_store is None:
+            return
+        self.archive_store.save_settings(ui_state.archive.to_settings())
+
+    def _load_archive_settings(self, ui_state):
+        """Restore an archive's settings, and make a restored grid take effect.
+
+        `grid` is the one restored field the driver cannot pick up from the
+        per-frame configure() push: the tournament grid is rebuilt only on
+        `grid_changed`, so without this the sliders would read 8 while the
+        simulation still ran 4x4.
+        """
+        if self.archive_store is None:
+            return
+        ast = ui_state.archive
+        before = ast.grid
+        applied = ast.apply_settings(self.archive_store.load_settings())
+        if "grid" in applied and ast.grid != before:
+            ast.grid_changed = True
+
     def _switch_archive(self, name, ui_state):
         """Point the search at a different archive directory. -> success."""
         from services.archive_library import list_archives, resolve, safe_name
@@ -332,8 +359,11 @@ class App:
             ast.archive_list = list_archives(root)
             return False
 
+        # Before the release, while the outgoing store is still open.
+        self._save_archive_settings(ui_state)
         self._release_archive(ui_state)
         self._build_archive_set(path)
+        self._load_archive_settings(ui_state)
 
         ui_state.preferences.archive_name = safe
         ast.archive_name = safe
@@ -363,6 +393,10 @@ class App:
         ast = ui_state.archive
         path = self._archive_path_for(ui_state.preferences.archive_name, ast)
         self._build_archive_set(path)
+        # First open of the session: this is what makes relaunching the app and
+        # reopening an archive show that archive's settings rather than the
+        # class defaults.
+        self._load_archive_settings(ui_state)
 
         self.imgep_driver = ImgepDriver(
             self.tournament_service, self.clip_scorer,
@@ -919,6 +953,9 @@ class App:
             self.archive.maybe_flush(force=True)
         if self.goal_list is not None:
             self.goal_list.save()
+        # Before close(): quitting is how a session normally ends, so it is the
+        # main path that has to persist the archive's settings at all.
+        self._save_archive_settings(ui_state)
         if self.archive_store is not None:
             self.archive_store.close()
         if self.thumb_cache is not None:

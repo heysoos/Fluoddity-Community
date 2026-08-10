@@ -126,8 +126,8 @@ Use this after large refactors or significant new features. Items roughly ordere
 - [ ] Reset Search keeps the archive; the size readout does not drop
 - [ ] Quit and relaunch: archive size and goal list are preserved
 - [ ] Kill the app mid-run (no clean quit): the archive reloads, reporting the dropped trailing entries
-- [ ] Archive browser: sorting, pinned-only filter, hover stats, Export writes a loadable config
-- [ ] Archive browser opens large enough to show the thumbnails AND the Export/Seed/Delete row
+- [ ] Archive browser: sorting, pinned-only filter, hover stats, "Save as config..." writes a loadable config
+- [ ] Archive browser opens large enough to show the thumbnails AND the Save/Seed/Delete row
 - [ ] Map: the cloud grows outward; the goal marker sits outside it during a latent expedition
 - [ ] "Refit projection" does not mirror the layout
 - [ ] Switching Explore -> Auto -> Manual and back leaves each mode working
@@ -188,3 +188,23 @@ only the running app can answer.
       the expedition simply ending.
 - [ ] Switch to the Auto (CLIP) tab and confirm its prompt still works. Explore
       must never call `scorer.set_prompt()`, which owns that tab's cache.
+
+## 16. Saving from tournament modes
+- [ ] Manual: select tiles, "Save Selected..." opens a dialog prefilled `tile<N>` (one tile) or `tournament` (several)
+- [ ] Manual: with nothing selected the button is greyed and says "(select tiles first)"
+- [ ] Manual: saving two tiles writes `<name>_tile<a>.json` and `<name>_tile<b>.json`, both listed in the confirmation
+- [ ] Auto: "Save best genome..." opens a dialog prefilled `best_gen<NNNN>`
+- [ ] Auto: right-click a tile opens a dialog prefilled `tile<N>_gen<NNNN>`
+- [ ] Explore: "Save as config..." on a selected entry, and on the map, both open the dialog
+- [ ] Saving an existing name asks to overwrite; Cancel leaves the file untouched
+- [ ] Every save reports the filename on screen, and the file appears under File > Load > Custom
+- [ ] A name containing `/` or `\` still saves, into the configs folder, under a sanitised name
+- [ ] "Save checkpoint" says it is not a config and names the run folder
+
+## 17. Per-archive Explore settings
+- [ ] Change alpha / min separation / grid, switch archives, switch back: the values return
+- [ ] Two archives hold different settings independently
+- [ ] Quit and relaunch: the active archive reopens with its own settings, not the defaults
+- [ ] A brand new archive inherits the settings currently on screen rather than snapping to defaults
+- [ ] Restoring an archive saved at a different grid rebuilds the tournament grid to match
+- [ ] Deleting `settings.json` by hand loads defaults without crashing

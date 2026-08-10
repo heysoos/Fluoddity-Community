@@ -25,7 +25,13 @@ ImGui is immediate-mode: every frame, all widgets are re-rendered by calling fun
 | `auto_tournament_window.py` | `AutoTournamentWindowMixin` | Auto (CLIP) mode: prompt, optimizer settings, status |
 | `archive_window.py` | `ArchiveWindowMixin` | Explore (IMGEP) mode: archive picker, goals, gallery, map |
 
-`physics_params.py` is a shared parameter table, not a mixin.
+`physics_params.py` (shared parameter table) and `notices.py` (dismissable
+on-screen messages, used by several tabs) are plain modules, not mixins.
+
+`popup_modals.py` owns the app's **only** save dialog. Every Save button calls
+`self.open_save_popup(kind, ...)` rather than writing a file, so naming,
+overwrite confirmation and destination are decided in one place. See
+`services/save_targets.py`.
 
 ## Import Path
 

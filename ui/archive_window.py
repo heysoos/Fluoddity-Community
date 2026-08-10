@@ -9,12 +9,13 @@ from __future__ import annotations
 import numpy as np
 from imgui_bundle import imgui
 
+from services import save_targets
 from services.archive_library import safe_name
-
-_BAD = (1.0, 0.4, 0.3, 1.0)
-_WARN = (1.0, 0.6, 0.2, 1.0)
-_OK = (0.4, 0.9, 0.5, 1.0)
-_DIM = (0.6, 0.6, 0.6, 1.0)
+from ui.notices import BAD as _BAD
+from ui.notices import DIM as _DIM
+from ui.notices import OK as _OK
+from ui.notices import WARN as _WARN
+from ui.notices import render_banner
 
 # One sentence each. A tooltip wider than the window is not read, it is
 # dismissed - the long-form reasoning lives in the module docstrings.
@@ -22,7 +23,7 @@ GOAL_TOOLTIP = "Text goals for expeditions, cycled in order; leave empty for lat
 
 ALPHA_TOOLTIP = "How strongly parent choice favours novel entries (p ~ novelty^alpha); 0 is uniform."
 
-EXPORT_TOOLTIP = "Saves this entry to your configs folder as archive_<id>.json, openable from File > Load."
+EXPORT_TOOLTIP = "Asks for a name, then saves this entry to your configs folder, openable from File > Load."
 
 SEED_TOOLTIP = "Starts Auto (CLIP) mode's search from this genome; Explore mode picks its own parents."
 
@@ -140,14 +141,7 @@ class ArchiveWindowMixin:
 
     def _render_banner(self, ast, field, colour):
         """A dismissable message that may be arbitrarily long."""
-        text = getattr(ast, field)
-        if not text:
-            return
-        imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(*colour))
-        imgui.text_wrapped(text)
-        imgui.pop_style_color()
-        if imgui.button(f"Dismiss##{field}"):
-            setattr(ast, field, "")
+        render_banner(ast, field, colour, scope="explore")
 
     def _render_archive_row(self, ast):
         """Which archive is active is an experimental variable, so it sits at
@@ -657,8 +651,9 @@ class ArchiveWindowMixin:
         if ast.selected_entry_id >= 0:
             imgui.separator()
             imgui.text(f"Selected #{ast.selected_entry_id}")
-            if imgui.button("Export as config"):
-                ast.export_entry_id = ast.selected_entry_id
+            if imgui.button("Save as config..."):
+                self.open_save_popup(save_targets.ARCHIVE_ENTRY,
+                                     arg=ast.selected_entry_id)
             if imgui.is_item_hovered():
                 imgui.set_tooltip(EXPORT_TOOLTIP)
             imgui.same_line()
@@ -897,8 +892,8 @@ class ArchiveWindowMixin:
         imgui.text(f"novelty {entry.novelty:.3f}   liveness {entry.liveness:.3f}")
         imgui.text(f"goal: {entry.goal or '-'}")
         imgui.text_disabled(f"gen {entry.gen}   tile {entry.tile}   {entry.spec}")
-        if imgui.button("Export as config##map"):
-            ast.export_entry_id = entry.id
+        if imgui.button("Save as config...##map"):
+            self.open_save_popup(save_targets.ARCHIVE_ENTRY, arg=entry.id)
         imgui.same_line()
         if imgui.button("Delete##map"):
             ast.delete_entry_id = entry.id

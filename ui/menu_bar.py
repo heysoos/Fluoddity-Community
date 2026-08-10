@@ -58,9 +58,8 @@ class MenuBarMixin:
                 imgui.separator()
 
                 if imgui.menu_item("Save...", "", False)[0]:
-                    self.save_popup_open = True
-                    # Default to last loaded filename
-                    self.save_filename_buffer = self.currently_open_project
+                    # Defaults to the last loaded filename, via open_save_popup.
+                    self.open_save_popup()
                 self._delayed_tooltip("Save the current physics settings including particle rules.")
 
                 # Load submenu with preview - locks to current watercolor mode

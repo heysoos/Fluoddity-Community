@@ -6,8 +6,10 @@ from __future__ import annotations
 
 from imgui_bundle import imgui
 
+from services import save_targets
 from services.capture_health import sweeping_parameters
 from services.cohort_tiling import cohorts_for, max_variants
+from ui.notices import OK, render_banner
 
 ALGORITHM_NAMES = ["CMA-ES", "Sep-CMA-ES", "GA", "Random Search"]
 
@@ -112,6 +114,17 @@ class AutoTournamentWindowMixin:
             imgui.same_line()
             if imgui.button("Dismiss"):
                 ats.warning = ""
+        render_banner(ats, "notice", OK, scope="auto")
+
+        # A right-click on a tile asks for a name rather than saving silently.
+        # The orchestrator sets this because only it knows whether Explore mode
+        # has claimed the right-click for 'chase this tile' instead.
+        if ats.pending_save_tile >= 0:
+            svc = self.auto_service
+            self.open_save_popup(
+                save_targets.AUTO_TILE, arg=ats.pending_save_tile,
+                generation=int(getattr(svc, "generation", 0) or 0))
+            ats.pending_save_tile = -1
 
         sweeps = sweeping_parameters(self.state.sim)
         if sweeps:
@@ -384,11 +397,16 @@ class AutoTournamentWindowMixin:
                                f"{label} {min(finite):.4g} - {max(finite):.4g}  ")
 
     def _render_save_load(self, ats, svc):
-        if imgui.button("Save best genome"):
-            ats.save_best_requested = True
+        gen = int(getattr(svc, "generation", 0) or 0)
+        if imgui.button("Save best genome..."):
+            self.open_save_popup(save_targets.AUTO_BEST, generation=gen)
         imgui.same_line()
         if imgui.button("Save checkpoint"):
             ats.save_checkpoint_requested = True
+        imgui.set_item_tooltip(
+            "A checkpoint resumes the optimizer; it is not a config and does "
+            "not appear under File > Load. Right-click a tile to save that "
+            "tile as a named config.")
 
         _, self._auto_load_path = imgui.input_text(
             "Load path", getattr(self, "_auto_load_path", ""))

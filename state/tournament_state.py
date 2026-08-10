@@ -16,4 +16,9 @@ class TournamentState:
     next_gen_requested: bool = False
     undo_requested: bool = False
     reset_requested: bool = False
-    save_requested: bool = False
+    # No save flag: Save Selected opens the shared name dialog, which comes
+    # back as UIState.request_save_file with kind "tournament_tile".
+
+    # Persistent, dismissed by the user: a save lands in a folder that is not
+    # on screen, so a console print is not feedback.
+    notice: str = ""

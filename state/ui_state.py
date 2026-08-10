@@ -68,6 +68,12 @@ class UIState:
     request_load_file: bool = False
     request_delete_file: bool = False
     save_filename: str = ""  # Filename to save to (without extension)
+    # WHAT is being saved. "" is the live configuration (File > Save) and must
+    # keep behaving exactly as before; the rest are tournament subjects. See
+    # services/save_targets.
+    save_kind: str = ""
+    save_arg: int = -1       # tile index or archive entry id, per kind
+    save_tiles: tuple = ()   # the selected tiles, for a manual tournament save
     load_filename: str = ""  # Filename to load from (without extension)
     load_category: str = ""  # Category for load operation (Core, Custom, Advanced)
     delete_filename: str = ""  # Filename to delete (without extension)

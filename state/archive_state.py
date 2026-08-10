@@ -118,7 +118,8 @@ class ArchiveState:
     cancel_expedition_requested: bool = False
     chase_tile: int = -1
     pin_tile: int = -1
-    export_entry_id: int = -1
+    # No export flag: "Save as config" opens the shared name dialog, which
+    # comes back as UIState.request_save_file with kind "archive_entry".
     seed_entry_id: int = -1
     delete_entry_id: int = -1
     refit_projection_requested: bool = False
@@ -127,3 +128,73 @@ class ArchiveState:
     clear_archive_requested: bool = False
     delete_archive_requested: bool = False
     refresh_archive_list_requested: bool = False
+
+    def to_settings(self) -> dict:
+        """The tuning knobs, for `settings.json` in the archive's own folder."""
+        return {name: getattr(self, name) for name in PERSISTED_FIELDS}
+
+    def apply_settings(self, data: dict) -> list[str]:
+        """Overwrite the persisted fields from `data`; -> the names applied.
+
+        Anything missing keeps its current value, so a settings.json written
+        before a field existed still loads. A value of the wrong type is
+        skipped rather than raising: this runs during an archive switch, and a
+        hand-edited or truncated file must not take the app down.
+        """
+        applied = []
+        for name in PERSISTED_FIELDS:
+            if name not in data:
+                continue
+            want = type(getattr(self, name))
+            value = data[name]
+            try:
+                # bool BEFORE int, because bool is a subclass of int: checked
+                # the other way round, every checkbox would come back as 0/1.
+                if want is bool:
+                    value = bool(value)
+                elif want is int:
+                    value = int(value)
+                elif want is float:
+                    value = float(value)
+                elif want is str:
+                    value = str(value)
+                else:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            setattr(self, name, value)
+            applied.append(name)
+        return applied
+
+
+# What follows an archive from one session to the next, written to
+# `settings.json` beside its `goals.json`.
+#
+# An explicit ALLOWLIST, not "every field that is not a flag". Two thirds of
+# ArchiveState is one-shot commands, transient view state and text buffers, and
+# persisting `start_requested` or `delete_entry_id` would replay a command on
+# load. A new field is therefore NOT persisted until it is named here, which is
+# the safe default for a class whose main job is carrying one-shot flags.
+#
+# `enabled` is deliberately absent: opening the app should not resume a search
+# because one was running when it closed. `archive_name` is absent because it
+# lives in preferences and identifies which of these files to read in the first
+# place.
+PERSISTED_FIELDS = (
+    # rollout
+    "grid", "steps_per_gen", "sim_steps_per_frame", "snapshots_per_gen",
+    "n_views", "physics_enabled", "tile_mutation_enabled",
+    "variants_per_tile", "tile_mutation_strength",
+    # exploration
+    "sigma0", "sigma_expand", "alpha", "k", "seed_n", "liveness_min",
+    "capacity", "min_separation", "refresh_sweep_gens",
+    # expeditions
+    "expansion_between", "expedition_gens", "expedition_sigma",
+    "latent_share", "novelty_share", "goal_order",
+    "seed_ess_min", "seed_ess_max",
+    # browser and map view: per-archive, and restoring where you were looking
+    # is most of what "open it in its last state" means once the archive is
+    # large enough that the map does not fit on screen.
+    "show_browser", "sort_by", "pinned_only",
+    "map_zoom", "map_center_x", "map_center_y",
+)

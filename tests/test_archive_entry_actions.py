@@ -68,12 +68,13 @@ class _NoX0Driver:
 
 # ---- export -------------------------------------------------------------
 
-def test_export_writes_a_config_named_for_the_entry(tmp_path):
+def test_export_writes_a_config_under_the_name_the_user_chose(tmp_path):
+    """The name comes from the save dialog, not from the entry id. Auto-naming
+    was the reported problem: you could not tell what a save was called."""
     arc = archive_with()
     ch = handler(tmp_path, arc)
-    ch._export_archive_entry(UIState(), arc.entries[1].id)
-    path = tmp_path / f"archive_{arc.entries[1].id:06d}.json"
-    assert path.is_file()
+    ch._export_archive_entry(UIState(), arc.entries[1].id, "my creature")
+    assert (tmp_path / "my creature.json").is_file()
 
 
 def test_export_tells_the_user_where_the_file_went(tmp_path):
@@ -81,8 +82,8 @@ def test_export_tells_the_user_where_the_file_went(tmp_path):
     console print left the button looking like it had done nothing."""
     arc = archive_with()
     ui = UIState()
-    handler(tmp_path, arc)._export_archive_entry(ui, arc.entries[1].id)
-    assert f"archive_{arc.entries[1].id:06d}.json" in ui.archive.notice
+    handler(tmp_path, arc)._export_archive_entry(ui, arc.entries[1].id, "keeper")
+    assert "keeper.json" in ui.archive.notice
 
 
 def test_the_exported_config_round_trips_to_the_same_brain(tmp_path):
@@ -92,8 +93,8 @@ def test_the_exported_config_round_trips_to_the_same_brain(tmp_path):
 
     arc = archive_with()
     ch = handler(tmp_path, arc)
-    ch._export_archive_entry(UIState(), arc.entries[0].id)
-    path = tmp_path / f"archive_{arc.entries[0].id:06d}.json"
+    ch._export_archive_entry(UIState(), arc.entries[0].id, "chosen")
+    path = tmp_path / "chosen.json"
 
     z, n_clamped, meta = import_genome(path)
     brain = BRAIN_SPEC.decode(np.asarray(z, dtype=np.float32))["brain"]
@@ -107,9 +108,8 @@ def test_export_records_the_provenance_metadata(tmp_path):
     arc.entries[0].goal = "coral reef"
     arc.entries[0].source = "expedition"
     ch = handler(tmp_path, arc)
-    ch._export_archive_entry(UIState(), arc.entries[0].id)
-    blob = json.loads(
-        (tmp_path / f"archive_{arc.entries[0].id:06d}.json").read_text())
+    ch._export_archive_entry(UIState(), arc.entries[0].id, "chosen")
+    blob = json.loads((tmp_path / "chosen.json").read_text())
     meta = json.dumps(blob)
     assert "coral reef" in meta and "expedition" in meta
 
@@ -120,7 +120,7 @@ def test_exporting_a_physics_entry_applies_its_absolute_values(tmp_path):
     arc = archive_with(spec="brain:80,physics:8", physics=values)
     ch = handler(tmp_path, arc)
     ui_state = UIState()
-    ch._export_archive_entry(ui_state, arc.entries[0].id)
+    ch._export_archive_entry(ui_state, arc.entries[0].id, "chosen")
     for j, (name, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
         assert getattr(ui_state.sim, name) == pytest.approx(float(values[j]))
 
@@ -130,15 +130,17 @@ def test_a_brain_only_entry_leaves_physics_alone(tmp_path):
     ch = handler(tmp_path, arc)
     ui_state = UIState()
     before = {n: getattr(ui_state.sim, n) for n, _g, _lo, _hi in PHYSICS_PARAMS}
-    ch._export_archive_entry(ui_state, arc.entries[0].id)
+    ch._export_archive_entry(ui_state, arc.entries[0].id, "chosen")
     for name, was in before.items():
         assert getattr(ui_state.sim, name) == was
 
 
 def test_exporting_an_unknown_id_writes_nothing(tmp_path):
     ch = handler(tmp_path, archive_with())
-    ch._export_archive_entry(UIState(), 999)
-    assert list(tmp_path.glob("archive_*.json")) == []
+    ui = UIState()
+    ch._export_archive_entry(ui, 999, "chosen")
+    assert list(tmp_path.glob("*.json")) == []
+    assert "no longer in the archive" in ui.archive.warning
 
 
 # ---- seed ---------------------------------------------------------------

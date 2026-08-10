@@ -59,6 +59,10 @@ class ArchiveStore:
     def goals_path(self) -> Path:
         return self.root / "goals.json"
 
+    @property
+    def settings_path(self) -> Path:
+        return self.root / "settings.json"
+
     def thumb_path(self, name: str) -> Path:
         return self.root / "thumbs" / name
 
@@ -163,6 +167,25 @@ class ArchiveStore:
         except OSError as exc:
             print(f"[Archive] goal list not saved ({exc})")
 
+    def save_settings(self, data: dict) -> None:
+        """The Explore settings this archive was last worked with.
+
+        Beside the goal list, and for the same reason: the settings that suit a
+        20000-entry archive are not the ones that suit an empty one, so they
+        belong to the archive rather than to the app. Written whole and
+        atomically, like goals.json - a partially-written settings file would
+        load as defaults, which is precisely the failure it exists to prevent.
+        """
+        if not self.enabled:
+            return
+        tmp = self.settings_path.with_suffix(".json.tmp")
+        try:
+            tmp.write_text(json.dumps(dict(data), indent=2, sort_keys=True),
+                           encoding="utf-8")
+            os.replace(tmp, self.settings_path)
+        except (OSError, TypeError) as exc:
+            print(f"[Archive] settings not saved ({exc})")
+
     # ---- reading -------------------------------------------------------
 
     def load_goals(self) -> list[dict]:
@@ -170,6 +193,19 @@ class ArchiveStore:
             return json.loads(self.goals_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return []
+
+    def load_settings(self) -> dict:
+        """-> the saved settings, or {} for an archive that has none yet.
+
+        {} means "keep what is on screen", not "reset to defaults": a brand new
+        archive inherits the settings you were just using, which is the useful
+        behaviour when you make one to try a variation.
+        """
+        try:
+            data = json.loads(self.settings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
 
     def load(self) -> tuple[list[dict], dict]:
         """-> (index rows, arrays). Either may be empty; the caller reconciles."""

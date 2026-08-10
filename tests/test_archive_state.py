@@ -7,7 +7,7 @@ from state.ui_state import UIState
 ONE_SHOTS = (
     "start_requested", "pause_requested", "reset_requested",
     "add_goal_requested", "remove_goal_index", "move_goal_index",
-    "move_goal_delta", "chase_tile", "pin_tile", "export_entry_id",
+    "move_goal_delta", "chase_tile", "pin_tile",
     "seed_entry_id", "delete_entry_id", "refit_projection_requested",
     "grid_changed",
 )

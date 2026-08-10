@@ -57,6 +57,14 @@ class _FakeGoals:
 class _FakeStore:
     def __init__(self, log):
         self._log = log
+        self.saved_settings = None
+
+    def save_settings(self, data):
+        self._log.note("save_settings")
+        self.saved_settings = dict(data)
+
+    def load_settings(self):
+        return {}
 
     def close(self):
         self._log.note("close_store")
@@ -102,6 +110,19 @@ class _FakeApp:
         from main import App
 
         return App._release_archive(self, ui_state)
+
+    def _save_archive_settings(self, ui_state):
+        """Real too: a switch has to write the outgoing archive's settings
+        BEFORE the store is closed, and that ordering is what these tests
+        exist to pin down."""
+        from main import App
+
+        return App._save_archive_settings(self, ui_state)
+
+    def _load_archive_settings(self, ui_state):
+        from main import App
+
+        return App._load_archive_settings(self, ui_state)
 
 
 class _UIState:
@@ -149,7 +170,10 @@ def test_the_switch_happens_in_the_order_that_keeps_data(roots):
 
     assert switch(app, "dense-trails", ui) is True
 
-    assert log == ["pause", "end_expedition", "flush(force=True)", "save_goals",
+    # save_settings comes FIRST: the outgoing store is still open there, and
+    # closing it before writing would lose the settings for that archive.
+    assert log == ["save_settings", "pause", "end_expedition",
+                   "flush(force=True)", "save_goals",
                    "close_store", "release_thumbs"]
 
 

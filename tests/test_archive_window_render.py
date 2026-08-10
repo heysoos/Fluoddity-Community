@@ -316,7 +316,7 @@ def _button_labels(h, n=3):
     return button_labels(h.render_archive_window, n=n)
 
 
-ACTIONS = {"Export as config", "Seed a run from here", "Delete"}
+ACTIONS = {"Save as config...", "Seed a run from here", "Delete"}
 
 
 def test_the_actions_are_hidden_until_an_entry_is_selected(gui):
@@ -449,7 +449,7 @@ def test_the_map_prompts_you_to_click_when_nothing_is_selected(gui):
     h = Harness(archive=_populated())
     h.archive_projection = _spread(h.archive_obj)
     labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
-    assert "Export as config##map" not in labels
+    assert "Save as config...##map" not in labels
 
 
 def test_clicking_a_dot_shows_that_entrys_image_and_actions(gui):
@@ -459,7 +459,7 @@ def test_clicking_a_dot_shows_that_entrys_image_and_actions(gui):
     h.archive_projection = _spread(h.archive_obj)
     h.state.archive.selected_entry_id = 5
     labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
-    assert "Export as config##map" in labels
+    assert "Save as config...##map" in labels
     assert "Delete##map" in labels
 
 

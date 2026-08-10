@@ -12,7 +12,7 @@ def test_tournament_state_defaults():
     assert ts.next_gen_requested is False
     assert ts.undo_requested is False
     assert ts.reset_requested is False
-    assert ts.save_requested is False
+    assert ts.notice == ""
 
 
 def test_uistate_has_independent_tournament_states():

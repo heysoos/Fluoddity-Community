@@ -53,18 +53,36 @@ class _FakeSim:
         return (1024, 1024)
 
 
-def save(tmp_path, svc, sim_state, tile=None):
-    """CommandHandler._save_auto_genome with only the attributes it touches."""
+def _ui_state(sim_state):
+    from state.auto_tournament_state import AutoTournamentState
+
+    return type("UI", (), {"sim": sim_state,
+                           "auto_tournament": AutoTournamentState()})()
+
+
+def _handler(tmp_path, svc):
     from command_handler import CommandHandler
 
     handler = object.__new__(CommandHandler)
     handler.sim = _FakeSim()
     handler.user_configs_dir = tmp_path
+    handler.auto_service = svc
+    return handler
 
-    ui_state = type("UI", (), {"sim": sim_state})()
-    CommandHandler._save_auto_genome(handler, svc, ui_state, tile)
+
+def save(tmp_path, svc, sim_state, tile=None, name="chosen"):
+    """CommandHandler._save_auto_genome with only the attributes it touches.
+
+    The name now comes from the save dialog rather than being generated, so it
+    is an argument here too.
+    """
+    from command_handler import CommandHandler
+
+    ui_state = _ui_state(sim_state)
+    CommandHandler._save_auto_genome(_handler(tmp_path, svc), ui_state, name, tile)
     written = sorted(tmp_path.glob("*.json"))
     assert len(written) == 1, f"expected one file, got {written}"
+    assert written[0].stem == name, "the saved file must use the chosen name"
     return ConfigSaver().load_from_file(written[0])
 
 
@@ -160,11 +178,12 @@ def test_nothing_is_written_when_there_is_no_genome_yet(tmp_path):
 
     svc = _FakeService(np.zeros(DIM, dtype=np.float32))
     svc.optimizer = None
-    handler = object.__new__(CommandHandler)
-    handler.sim = _FakeSim()
-    handler.user_configs_dir = tmp_path
+    ui_state = _ui_state(SimState())
 
     CommandHandler._save_auto_genome(
-        handler, svc, type("UI", (), {"sim": SimState()})(), None)
+        _handler(tmp_path, svc), ui_state, "chosen", None)
 
     assert list(tmp_path.glob("*.json")) == []
+    # And it says so on screen. A save that quietly does nothing is the
+    # "did it even work?" half of the original report.
+    assert "Nothing to save" in ui_state.auto_tournament.warning

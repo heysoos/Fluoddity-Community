@@ -29,8 +29,8 @@ def test_all_one_shot_flags_default_false_or_empty():
     assert s.prompt_changed is False
     assert s.grid_changed is False
     assert s.save_checkpoint_requested is False
-    assert s.save_best_requested is False
     assert s.save_tile_requested == -1
+    assert s.pending_save_tile == -1
     assert s.load_checkpoint_path == ""
     assert s.load_genome_path == ""
     assert s.download_model_requested is False

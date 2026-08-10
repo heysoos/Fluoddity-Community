@@ -28,6 +28,9 @@ class AutoTournamentState:
 
     # persistent, not a one-shot: dismissed explicitly by the user
     warning: str = ""
+    # Same, for things that went RIGHT. A save lands in a folder that is not on
+    # screen, so a console print is not feedback.
+    notice: str = ""
 
     # one-shot request flags, cleared by CommandHandler
     start_requested: bool = False
@@ -36,8 +39,12 @@ class AutoTournamentState:
     prompt_changed: bool = False
     grid_changed: bool = False
     save_checkpoint_requested: bool = False
-    save_best_requested: bool = False
+    # No save_best flag: the button opens the shared name dialog directly.
     save_tile_requested: int = -1
+    # Set by CommandHandler, consumed by the UI: "ask for a name for this
+    # tile". The round trip exists because only the orchestrator knows whether
+    # Explore mode has claimed the right-click for 'chase this tile'.
+    pending_save_tile: int = -1
     load_checkpoint_path: str = ""
     load_genome_path: str = ""
     download_model_requested: bool = False

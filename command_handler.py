@@ -317,8 +317,8 @@ class CommandHandler:
             svc.undo()
         if ts.reset_requested:
             svc.reset()
-        if ts.save_requested:
-            self._save_tournament_selection(ui_state)
+        # Saving is not here: Save Selected opens the shared name dialog, and
+        # comes back through _handle_file_save like every other save.
 
         # These are one-shot: clear them now that they've been consumed.
         # (UI.get_state() returns the live state object and only clears its own
@@ -338,19 +338,35 @@ class CommandHandler:
         ts.next_gen_requested = False
         ts.undo_requested = False
         ts.reset_requested = False
-        ts.save_requested = False
 
-    def _save_tournament_selection(self, ui_state):
-        """Save each selected genome to a config JSON in the user configs dir."""
+    def _save_tournament_selection(self, ui_state, filename):
+        """Save each selected genome under the name the user chose.
+
+        Several tiles get suffixed names rather than one shared name - see
+        save_targets.target_stems. The tiles come from the request rather than
+        from the live selection, so the set that was named in the dialog is the
+        set that gets written even if a click lands while it is open.
+        """
+        from services import save_targets
+
         svc = self.tournament_service
-        if not svc.selected:
-            print("Tournament save: no tiles selected")
+        tiles = [t for t in (ui_state.save_tiles or sorted(svc.selected))
+                 if 0 <= t < len(svc.population)]
+        if not tiles:
+            ui_state.tournament.notice = "Nothing saved: no tiles were selected."
             return
-        for tile in sorted(svc.selected):
+        stems = save_targets.target_stems(
+            save_targets.TOURNAMENT_TILE, filename, tiles)
+        written = []
+        for tile, stem in zip(tiles, stems):
             config = self.config_saver.create_config(ui_state.sim, svc.population[tile])
-            filepath = self.user_configs_dir / f"tournament_tile{tile}.json"
+            filepath = self.user_configs_dir / f"{stem}.json"
             self.config_saver.save_to_file(config, filepath)
-            print(f"Saved tournament tile {tile} -> {filepath}")
+            written.append(filepath.name)
+        ui_state.tournament.notice = (
+            f"Saved {', '.join(written)} to your configs folder "
+            f"(File > Load > Custom).")
+        print(f"[tournament] saved {written}")
 
     # ------------------------------------------------------------------
     # Automatic (CLIP-guided) tournament
@@ -370,8 +386,9 @@ class CommandHandler:
         ats.prompt_changed = False
         ats.grid_changed = False
         ats.save_checkpoint_requested = False
-        ats.save_best_requested = False
         ats.save_tile_requested = -1
+        # pending_save_tile is deliberately NOT cleared here: it travels the
+        # other way, and the UI clears it when it opens the dialog.
         ats.load_checkpoint_path = ""
         ats.load_genome_path = ""
         ats.download_model_requested = False
@@ -427,12 +444,12 @@ class CommandHandler:
         if ats.start_requested and ats.prompt.strip():
             self._auto_capture_warned = False
             svc.start(ats.prompt)
-        if ats.save_best_requested:
-            self._save_auto_genome(svc, ui_state, tile=None)
         if ats.save_tile_requested >= 0:
-            self._save_auto_genome(svc, ui_state, tile=ats.save_tile_requested)
+            # Not saved here: handed back to the UI so it can ask for a name.
+            # Only this side knows Explore has not already claimed the click.
+            ats.pending_save_tile = ats.save_tile_requested
         if ats.save_checkpoint_requested:
-            self._save_auto_checkpoint(svc)
+            self._save_auto_checkpoint(svc, ats)
 
         ats.running = svc.phase.value == "rollout"
         self._clear_auto_flags(ats)
@@ -452,7 +469,6 @@ class CommandHandler:
         ast.cancel_expedition_requested = False
         ast.chase_tile = -1
         ast.pin_tile = -1
-        ast.export_entry_id = -1
         ast.seed_entry_id = -1
         ast.delete_entry_id = -1
         ast.refit_projection_requested = False
@@ -595,8 +611,6 @@ class CommandHandler:
                 and self.archive_projection is not None):
             self.archive_projection.fit(self.archive.embeddings)
 
-        if ast.export_entry_id >= 0:
-            self._export_archive_entry(ui_state, ast.export_entry_id)
         if ast.seed_entry_id >= 0:
             self._seed_from_archive(ast)
         if ast.delete_entry_id >= 0:
@@ -611,7 +625,7 @@ class CommandHandler:
                 return i
         return None
 
-    def _export_archive_entry(self, ui_state, entry_id):
+    def _export_archive_entry(self, ui_state, entry_id, filename):
         """Write an archive entry as an ordinary Fluoddity config, so it opens
         in the normal single-simulation view at any resolution."""
         from services.genome_io import export_genome
@@ -620,6 +634,8 @@ class CommandHandler:
 
         i = self._archive_index(entry_id)
         if i is None:
+            ui_state.archive.warning = (
+                f"Entry #{entry_id} is no longer in the archive.")
             return
         e = self.archive.entries[i]
         z, _clamped = encode(self.archive.brains[i])
@@ -631,12 +647,13 @@ class CommandHandler:
         meta = {"archive_id": int(e.id), "novelty": float(e.novelty),
                 "liveness": float(e.liveness), "source": e.source,
                 "goal": e.goal, "run_id": e.run_id, "spec": e.spec}
-        path = self.user_configs_dir / f"archive_{e.id:06d}.json"
+        path = self.user_configs_dir / f"{filename}.json"
         export_genome(path, z, sim_state, meta)
         print(f"[archive] saved {path}")
         # A console print is not feedback in a GUI: the file lands somewhere the
         # user cannot see, so the button looked like it did nothing.
-        ui_state.archive.notice = f"Exported to {path.name} in your configs folder."
+        ui_state.archive.notice = (
+            f"Saved {path.name} to your configs folder (File > Load > Custom).")
 
     def _seed_from_archive(self, ast):
         """Load an archive entry as a search starting point.
@@ -726,31 +743,40 @@ class CommandHandler:
         ats.sigma0 = svc.sigma0
         print(f"[auto] resumed at generation {svc.generation}")
 
-    def _save_auto_checkpoint(self, svc):
+    def _save_auto_checkpoint(self, svc, ats):
+        """A checkpoint resumes the OPTIMIZER, so it is not a config and does
+        not go through the name dialog or into the configs folder. It still has
+        to say where it went, which was the other half of the report."""
         from services.run_checkpoint import save_checkpoint
 
         if svc.logger is None or not svc.logger.enabled:
-            print("[auto] no run directory; checkpoint not saved")
+            ats.warning = ("No run folder yet, so the checkpoint was not "
+                           "saved. Start a run first.")
             return
         path = svc.logger.dir / f"checkpoint_gen{svc.generation:06d}.npz"
         save_checkpoint(path, svc.checkpoint_state())
+        ats.notice = f"Checkpoint saved to {path} (not a config)."
         print(f"[auto] saved {path}")
 
-    def _save_auto_genome(self, svc, ui_state, tile):
+    def _save_auto_genome(self, ui_state, filename, tile):
         import copy
 
         from services.genome_io import export_genome
         from services.physics_genome import decode_physics
 
+        svc = self.auto_service
+        ats = ui_state.auto_tournament
+        if svc is None:
+            ats.warning = "Auto mode is not running; there is nothing to save."
+            return
         if tile is None:
             z = svc.optimizer.best()[0] if svc.optimizer is not None else None
-            name = f"evolved_best_gen{svc.generation:04d}.json"
         else:
             cz = svc.current_z
             z = cz[tile] if cz is not None and tile < len(cz) else None
-            name = f"evolved_tile{tile}_gen{svc.generation:04d}.json"
         if z is None:
-            print("[auto] nothing to save yet")
+            ats.warning = ("Nothing to save yet - run at least one generation "
+                           "first.")
             return
 
         # With physics search on the genome is 88 wide: 80 brain genes then 8
@@ -783,8 +809,10 @@ class CommandHandler:
             "mutation_strength": float(svc.tile_mutation_strength),
             "variants_per_tile": int(svc.variants_per_tile),
         }
-        path = self.user_configs_dir / name
+        path = self.user_configs_dir / f"{filename}.json"
         export_genome(path, brain_z, sim_state, meta)
+        ats.notice = (f"Saved {path.name} to your configs folder "
+                      f"(File > Load > Custom).")
         print(f"[auto] saved {path}")
 
     def _handle_sweep_click(self, ui_state, tiling_mode):
@@ -883,11 +911,32 @@ class CommandHandler:
                     print(f"Config deleted: {filepath}")
 
     def _handle_file_save(self, ui_state):
-        """Handle file save from menu, including field texture PNG."""
+        """Every save in the app arrives here, named by the user.
+
+        The dialog decided the name and confirmed any overwrite; this only
+        decides WHAT to write. `kind` "" is the live configuration and keeps
+        its original behaviour exactly - see services/save_targets.
+        """
+        from services import save_targets
+
         filename = ui_state.save_filename
         if not filename:
             return
+        kind = getattr(ui_state, "save_kind", save_targets.CONFIG)
+        if kind == save_targets.TOURNAMENT_TILE:
+            return self._save_tournament_selection(ui_state, filename)
+        if kind == save_targets.AUTO_BEST:
+            return self._save_auto_genome(ui_state, filename, tile=None)
+        if kind == save_targets.AUTO_TILE:
+            return self._save_auto_genome(ui_state, filename,
+                                          tile=int(ui_state.save_arg))
+        if kind == save_targets.ARCHIVE_ENTRY:
+            return self._export_archive_entry(ui_state, int(ui_state.save_arg),
+                                              filename)
+        return self._save_live_config(ui_state, filename)
 
+    def _save_live_config(self, ui_state, filename):
+        """Handle file save from menu, including field texture PNG."""
         fh = self.field_handler
         current_rule = self.rule_manager.get_current_rule()
 

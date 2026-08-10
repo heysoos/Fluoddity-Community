@@ -1,6 +1,9 @@
 """Tournament mode UI: 4x4 tile selector + breeding controls."""
 from imgui_bundle import imgui
 
+from services import save_targets
+from ui.notices import OK, render_banner
+
 
 def ui_row_order(grid: int = 4) -> list[int]:
     """Canvas tile-rows (ty) in the order ImGui should draw them, top row first.
@@ -70,6 +73,8 @@ class TournamentWindowMixin:
                 if imgui.button(f"{tile}", imgui.ImVec2(40, 40)):
                     state.clicked_tile = tile
                 if imgui.is_item_clicked(imgui.MouseButton_.right):
+                    # Right-click is Auto mode's "save this tile"; in Explore
+                    # the orchestrator redirects the same flag to 'chase this'.
                     self.state.auto_tournament.save_tile_requested = tile
                 if is_sel:
                     imgui.pop_style_color(2)
@@ -96,7 +101,16 @@ class TournamentWindowMixin:
         if imgui.button("Reset Population"):
             state.reset_requested = True
         imgui.same_line()
-        if imgui.button("Save Selected"):
-            state.save_requested = True
+        # A disabled item does not receive hover, so the reason is plain text
+        # rather than a tooltip that would never appear.
+        imgui.begin_disabled(not selected)
+        if imgui.button("Save Selected..."):
+            self.open_save_popup(save_targets.TOURNAMENT_TILE,
+                                 tiles=sorted(selected))
+        imgui.end_disabled()
+        if not selected:
+            imgui.same_line()
+            imgui.text_disabled("(select tiles first)")
 
         imgui.text(f"Selected: {sorted(selected)}")
+        render_banner(state, "notice", OK, scope="tournament")

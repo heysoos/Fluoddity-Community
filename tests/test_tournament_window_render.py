@@ -229,3 +229,67 @@ def test_reset_empties_the_trace_the_ui_reads(gui, tmp_path):
     svc.reset()
     assert svc.logger.history()["fit_best"] == []
     frame(h.render_auto_tournament_tab)     # must fall back to the empty state
+
+
+# -- the save row ------------------------------------------------------------
+
+
+def button_labels(fn, n=3):
+    """Every button label `fn` emits.
+
+    Vertex counts cannot answer this: ImGui culls geometry below the fold, and
+    the shared module context means the window size is whatever an earlier
+    test left it at. Our Python code runs either way, so labels are honest.
+    """
+    seen = []
+    real = imgui.button
+
+    def spy(label, *a, **kw):
+        seen.append(label)
+        return real(label, *a, **kw)
+
+    imgui.button = spy
+    try:
+        frame(fn, n=n)
+    finally:
+        imgui.button = real
+    return seen
+
+
+def test_save_selected_renders_both_enabled_and_disabled(gui):
+    """begin_disabled/end_disabled must balance on both branches: an
+    unbalanced pair corrupts the whole frame, not just this button."""
+    h = Harness()
+    h.tournament_service.selected = set()
+    assert "Save Selected..." in button_labels(h.render_tournament_window)
+
+    h.tournament_service.selected = {2, 5}
+    assert "Save Selected..." in button_labels(h.render_tournament_window)
+
+
+def test_the_save_notice_is_shown_and_dismissable(gui):
+    """A save lands in a folder that is not on screen, so the confirmation has
+    to be in the window."""
+    h = Harness()
+    h.state.tournament.notice = "Saved reef.json to your configs folder."
+    labels = button_labels(h.render_tournament_window)
+    assert any(lbl.startswith("Dismiss") for lbl in labels)
+
+
+def test_the_dismiss_button_does_not_collide_with_the_explore_tab(gui):
+    """Two visible items with one ImGui id silently stop one of them
+    responding to the mouse - see the ID caveat in CLAUDE.md."""
+    from state.archive_state import ArchiveState
+    from ui.notices import OK, render_banner
+
+    a, b = TournamentState(), ArchiveState()
+    a.notice = b.notice = "x"
+    ids = []
+    for obj, scope in ((a, "tournament"), (b, "explore")):
+        imgui.new_frame()
+        imgui.begin("host", True)
+        render_banner(obj, "notice", OK, scope=scope)
+        ids.append(imgui.get_id(f"Dismiss##{scope}notice"))
+        imgui.end()
+        imgui.render()
+    assert ids[0] != ids[1]

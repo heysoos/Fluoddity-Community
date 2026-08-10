@@ -109,6 +109,11 @@ class UI(
         # File save/load state
         self.save_popup_open = False
         self.save_filename_buffer = ""
+        # What the open save dialog is about. "" is the live configuration
+        # (File > Save); tournament modes set a kind. See services/save_targets.
+        self.save_popup_kind = ""
+        self.save_popup_arg = -1
+        self.save_popup_tiles: tuple = ()
         # Physics configs: app dir for bundled (Core/Advanced), user dir for user-created
         self.app_configs_dir = get_app_physics_configs_dir()
         self.user_configs_dir = get_user_physics_configs_dir()
@@ -213,6 +218,9 @@ class UI(
         self._clipboard_config_index = -1
 
         self._save_filename = ""
+        self._save_kind = ""
+        self._save_arg = -1
+        self._save_tiles: tuple = ()
         self._load_filename = ""
         self._load_category = ""  # Category for load operation
         self._delete_filename = ""
@@ -467,6 +475,9 @@ class UI(
         self.state.field_load_image_path = self._field_load_image_path
 
         self.state.save_filename = self._save_filename
+        self.state.save_kind = self._save_kind
+        self.state.save_arg = self._save_arg
+        self.state.save_tiles = self._save_tiles
         self.state.load_filename = self._load_filename
         self.state.load_category = self._load_category
         self.state.delete_filename = self._delete_filename
@@ -521,6 +532,9 @@ class UI(
         self._request_load_strafe_field_image = False
         self._field_load_image_path = ""
         self._save_filename = ""
+        self._save_kind = ""
+        self._save_arg = -1
+        self._save_tiles = ()
         self._load_filename = ""
         self._load_category = ""
         self._delete_filename = ""
