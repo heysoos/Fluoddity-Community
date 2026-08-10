@@ -281,6 +281,30 @@ mechanics these caveats assume.
   `vectors.npz` — and without this a full archive at grid 8 orphans 64 JPEGs
   every ~2.8 s, about 12 MB a minute.
 
+- **`_next_id` comes from `index.jsonl`, NOT from the entries that survived
+  reconciliation.** The index is append-only, so it records every id ever
+  *issued*; `self.entries` holds only the ids still backed by `vectors.npz`.
+  Deriving the counter from the survivors restarts it at the first id whose
+  vectors were lost, and the next run re-issues ids that already exist —
+  overwriting those entries' thumbnails (the filename derives from the id) and
+  leaving duplicate rows that shadow the originals on the following load.
+  Measured in `debug09`: one unclean exit stranded 157 entries, and each of the
+  two runs after it re-issued 1005–1161. Eviction reaches this too, since
+  `prune_to_capacity` can remove the highest-id entry even on a clean quit.
+  Guarded by `tests/test_archive_id_reuse.py`.
+
+- **The frame loop is wrapped, because a crash used to cost the run.** An
+  exception in `orchestrate_frame` propagated out of `run()` and `cleanup()`
+  never ran, losing every admission since the last 200-admission vector flush,
+  the goal list, the settings, and any record of the cause — what reached the
+  user was a screenful of moderngl `Texture.__del__` errors, which are
+  interpreter *teardown* noise (`isinstance(x, None)` once module globals are
+  cleared) and never the bug. `run()` now writes the traceback to
+  `Documents/Fluoddity/crash.log`, runs cleanup in a `finally`, and re-raises.
+  Each step of `cleanup()` is individually guarded by `_step()` and ordered by
+  what is lost if it does not run: on a lost device every GL call raises, so
+  one unguarded failure would skip the archive flush below it.
+
 - **Entry ids restart at 0 in every archive**, so `ThumbCache` must be released
   on a switch: it is keyed by thumbnail filename, which derives from the entry
   id, so reusing it shows the previous archive's pictures.

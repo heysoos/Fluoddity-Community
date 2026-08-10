@@ -534,12 +534,56 @@ class App:
             print(f"Failed to load default config from {default_path}")
 
     def run(self):
-        while not glfw.window_should_close(self.window):
-            glfw.poll_events()
-            self.orchestrate_frame()
-            glfw.swap_buffers(self.window)
+        """The frame loop, and the guarantee that a crash is survivable.
 
-        self.cleanup()
+        Without the try/finally an exception in orchestrate_frame propagated
+        straight out and cleanup() never ran, which cost three things at once:
+        the archive entries admitted since the last 200-admission vector flush,
+        the goal list and settings, and any record of what went wrong. An
+        overnight run then presented as a screenful of `Texture.__del__` errors
+        from interpreter teardown, with the real traceback scrolled away.
+        """
+        try:
+            while not glfw.window_should_close(self.window):
+                glfw.poll_events()
+                self.orchestrate_frame()
+                glfw.swap_buffers(self.window)
+        except BaseException:
+            # Before cleanup, in case cleanup dies too on a lost GL context.
+            self._write_crash_log()
+            raise
+        finally:
+            self._cleanup_safely()
+
+    def _write_crash_log(self) -> None:
+        """Record the traceback where an overnight run can still find it."""
+        import traceback
+
+        text = traceback.format_exc()
+        print(text)
+        try:
+            from utilities.paths import get_user_data_dir
+
+            path = get_user_data_dir() / "crash.log"
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(f"\n===== {stamp} =====\n{text}")
+            print(f"[crash] traceback appended to {path}")
+        except Exception as exc:      # a logging failure must not mask the bug
+            print(f"[crash] could not write the crash log ({exc})")
+
+    def _cleanup_safely(self) -> None:
+        """cleanup(), but a failure in it must not replace the real exception.
+
+        On a lost device every GL call raises, and cleanup touches GL - so
+        without this the user would see the teardown error instead of the cause.
+        The archive flush inside cleanup is pure numpy and disk, and runs first,
+        so the valuable half survives a broken context.
+        """
+        try:
+            self.cleanup()
+        except BaseException as exc:
+            print(f"[cleanup] failed during shutdown ({exc!r})")
 
     def orchestrate_frame(self):
         """Main orchestration logic - reads UI state, coordinates components."""
@@ -943,29 +987,54 @@ class App:
             ui_state, self._auto_prev_aspect, self._auto_prev_speedmult,
             self._auto_prev_motion_blur)
 
-    def cleanup(self):
-        # Save preferences before cleanup
-        ui_state = self.ui.get_state()
-        self._restore_auto_overrides(ui_state)
-        if self.auto_service is not None:
-            self.auto_service.close()          # let go of the scoring thread
-        if self.archive is not None:
-            self.archive.maybe_flush(force=True)
-        if self.goal_list is not None:
-            self.goal_list.save()
-        # Before close(): quitting is how a session normally ends, so it is the
-        # main path that has to persist the archive's settings at all.
-        self._save_archive_settings(ui_state)
-        if self.archive_store is not None:
-            self.archive_store.close()
-        if self.thumb_cache is not None:
-            self.thumb_cache.release()
-        save_preferences(ui_state.preferences)
+    @staticmethod
+    def _step(label, fn, *args, **kwargs):
+        """Run one shutdown step; a failure must not skip the ones after it.
 
-        self.advanced_drawing_processor.cleanup()
-        self.video_service.cleanup()
-        self.ui.cleanup()
-        glfw.terminate()
+        cleanup() also runs on the crash path, where any single step can fail -
+        a lost GL context makes every GL call raise. Unguarded, the first such
+        failure would skip everything below it, and what is below is the part
+        worth saving.
+        """
+        try:
+            return fn(*args, **kwargs)
+        except BaseException as exc:
+            print(f"[cleanup] {label} failed ({exc!r}); continuing")
+            return None
+
+    def cleanup(self):
+        # Ordered by what is lost if the step does not run. The archive is
+        # hours of compute and its writes are pure numpy and disk; GLFW
+        # teardown costs nothing and touches the context most likely to be
+        # broken, so it goes last.
+        ui_state = self._step("read ui state", self.ui.get_state)
+
+        if self.archive is not None:
+            self._step("flush archive", self.archive.maybe_flush, force=True)
+        if self.goal_list is not None:
+            self._step("save goals", self.goal_list.save)
+        if ui_state is not None:
+            # Before the store closes: quitting is how a session normally ends,
+            # so it is the main path that persists the archive's settings.
+            self._step("save archive settings",
+                       self._save_archive_settings, ui_state)
+            self._step("restore auto overrides",
+                       self._restore_auto_overrides, ui_state)
+            self._step("save preferences", save_preferences, ui_state.preferences)
+
+        # The scoring thread only reads its own copy of the frame buffer, so
+        # closing it after the flush cannot race the archive.
+        if self.auto_service is not None:
+            self._step("close scoring thread", self.auto_service.close)
+        if self.archive_store is not None:
+            self._step("close archive store", self.archive_store.close)
+        if self.thumb_cache is not None:
+            self._step("release thumbnails", self.thumb_cache.release)
+
+        self._step("advanced drawing", self.advanced_drawing_processor.cleanup)
+        self._step("video", self.video_service.cleanup)
+        self._step("ui", self.ui.cleanup)
+        self._step("glfw", glfw.terminate)
 
 
 if __name__ == "__main__":

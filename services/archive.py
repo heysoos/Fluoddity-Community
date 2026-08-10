@@ -551,7 +551,20 @@ class Archive:
                 ts=float(r.get("ts", 0.0)),
                 thumb=str(r.get("thumb", "")),
             ))
-        self._next_id = max((e.id for e in self.entries), default=-1) + 1
+        # From the INDEX, not from the entries that survived reconciliation.
+        # index.jsonl is append-only, so it is the record of every id ever
+        # ISSUED; self.entries is only the ids still backed by vectors.npz.
+        # Deriving the counter from the survivors makes it restart at the first
+        # id whose vectors were lost, and the next run then re-issues ids that
+        # already exist - overwriting those entries' thumbnails, since the
+        # thumbnail filename derives from the id, and leaving index.jsonl with
+        # duplicate ids that shadow the originals on the following load.
+        # Observed in a real archive: an unclean exit lost 157 entries' vectors,
+        # and each of the two following runs re-issued ids 1005-1161.
+        # Eviction reaches this too - prune_to_capacity can remove the
+        # highest-id entry, so max(survivors) is not max(issued) even after a
+        # perfectly clean quit.
+        self._next_id = max(by_id, default=-1) + 1
         # Unconditional, even when the file carried a novelty array: the array
         # is only as fresh as the last round-robin sweep, and load is the one
         # moment a whole-archive pass is both affordable and necessary. This is
