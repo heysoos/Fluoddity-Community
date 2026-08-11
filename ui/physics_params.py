@@ -26,6 +26,9 @@ class PhysicsParamDef:
     hide_jitter: bool = False       # Hide jitter control in context menu
     is_power_scaled: bool = False   # Use power-scaled slider (Hazard Rate)
     power_exponent: float = 3.0     # Exponent for power scaling
+    # The top of the track disables the parameter outright rather than setting
+    # it to a large number. The shader must agree, or the readout lies.
+    off_at_max: bool = False
 
     @property
     def config_attr(self) -> str:
@@ -78,8 +81,8 @@ PHYSICS_PARAMS: list[PhysicsParamDef] = [
         default_min=0.0, default_max=0.1,
         hard_min=0.0, hard_max=0.1,
         hide_jitter=True,
-        is_power_scaled=True, power_exponent=4.0,
-        description="Caps how far a particle may travel in one step; at the top of the range nothing reaches the limit.",
+        is_power_scaled=True, power_exponent=4.0, off_at_max=True,
+        description="Caps how far a particle may travel in one step, including strafe and the drawing brush.",
     ),
     PhysicsParamDef(
         name='DRAG', label='Drag', group='forces',

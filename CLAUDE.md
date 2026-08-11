@@ -167,8 +167,13 @@ mechanics these caveats assume.
   preset at 14% of the track and the fastest at 82%. A linear or too-wide range
   crowds the whole library into the bottom and reads as a control that does
   nothing: the first attempt at `0..1` let a particle cross 79% of the canvas
-  in one frame. The default IS the range max, because a preset saved before
-  this parameter existed must load unbraked. Two traps when re-measuring:
+  in one frame. The default IS the range max, and the range max is an OFF
+  SWITCH — the shader skips the clamp entirely at `vraw >= vm.max_value`, and
+  the slider reads "Off" there (`PhysicsParamDef.off_at_max`). "Above every
+  preset" is a measurement a hand-tuned config can beat; off is a fact, and a
+  preset saved before this parameter existed must load unbrakeable rather than
+  merely unbraked. The two must agree or the readout lies. Two traps when
+  re-measuring:
   `particle_density` changes trail intensity and feeds back into speed — one
   preset runs 28x faster at 1.0 than at 0.25 — and a wrap, bounce or hazard
   respawn teleports a particle, so the peak `|dpos|` is a boundary event rather

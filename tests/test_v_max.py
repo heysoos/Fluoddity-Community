@@ -107,7 +107,7 @@ def test_the_limit_covers_strafe_and_not_just_velocity():
     accelerate = SHADER.index("e.vel = e.vel*calculate_setting(get_particle_drag()")
     hop = SHADER.index("vec2 hop = strafe*calculate_setting(get_particle_strafe_power(")
     delta = SHADER.index("vec2 step_delta = e.vel + hop;")
-    clamp = SHADER.index("if(smag > vlim)")
+    clamp = SHADER.index("if(vraw < vm.max_value && smag > vlim)")
     move = SHADER.index("e.pos += step_delta;")
     assert accelerate < hop < delta < clamp < move
     assert "e.pos += e.vel;" not in SHADER, "the unclamped move is back"
@@ -118,7 +118,7 @@ def test_the_limit_covers_the_advanced_drawing_field():
     force field feeds a velocity the cap has to reach as well."""
     delta = SHADER.index("vec2 step_delta = e.vel + hop;")
     brush = SHADER.index("vec4 draw_sample = get_field(")
-    clamp = SHADER.index("if(smag > vlim)")
+    clamp = SHADER.index("if(vraw < vm.max_value && smag > vlim)")
     assert delta < brush < clamp
     assert "step_delta += .01*strafe_field_strength*draw_sample.zw;" in SHADER
     assert "e.pos += .01*strafe_field_strength" not in SHADER
@@ -126,7 +126,7 @@ def test_the_limit_covers_the_advanced_drawing_field():
 
 def test_the_limit_also_scales_the_stored_velocity():
     """Otherwise speed piles up behind the cap and lurches when it is raised."""
-    body = SHADER[SHADER.index("if(smag > vlim)"):]
+    body = SHADER[SHADER.index("if(vraw < vm.max_value && smag > vlim)"):]
     body = body[:body.index("e.pos += step_delta;")]
     assert "step_delta *= k;" in body and "e.vel *= k;" in body
 
@@ -148,6 +148,22 @@ def test_v_max_is_a_registered_slider():
     assert (p.hard_min, p.hard_max) == (0.0, p.default_max)
     assert SimState().V_MAX == p.default_max
     assert PhysicsConfig().v_max == p.default_max
+
+
+def test_the_top_of_the_track_is_off_rather_than_a_large_number():
+    """"Above every preset" is a measurement, and a hand-tuned config can beat
+    it. Off is a fact."""
+    p = PARAM_BY_NAME["V_MAX"]
+    assert p.off_at_max
+    assert SimState().V_MAX >= p.default_max
+    assert "vraw < vm.max_value" in SHADER
+
+
+def test_the_readout_says_off_where_the_shader_switches_off():
+    """A slider showing 0.10000 while the limit is disabled is the same lie
+    the measured-headroom version told."""
+    src = (ROOT / "ui" / "slider_widgets.py").read_text(encoding="utf-8")
+    assert '"Off" if (pdef.off_at_max and value >= pdef.default_max)' in src
 
 
 def test_the_default_is_above_anything_the_preset_library_reaches():

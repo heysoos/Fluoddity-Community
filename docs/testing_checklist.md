@@ -261,7 +261,8 @@ only the running app can answer.
 - [ ] Scrolling over the icon still zooms the map
 
 ## 22. V Max (the per-step speed limit)
-- [ ] Physics > Forces shows a "V Max" slider sitting at the far right of its track on a fresh launch
+- [ ] Physics > Forces shows a "V Max" slider sitting at the far right of its track on a fresh launch, reading "Off"
+- [ ] Nudging it one notch down from the top turns the readout into a number, and dragging back to the top says "Off" again
 - [ ] Load several Core and Advanced presets: each looks exactly as it did before this parameter existed
 - [ ] Dragging V Max left slows particles down; the pattern shrinks in scale rather than freezing all at once
 - [ ] The change is visible well before the far left — around the middle of the track on a typical preset

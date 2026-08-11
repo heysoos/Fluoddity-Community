@@ -695,11 +695,15 @@ void main() {
 
     //Speed limit: the WHOLE step, not just e.vel. Strafe and the brush field are
     //added straight to position, so capping velocity alone caps nothing they do.
+    //The top of the track is OFF outright, not merely a number nothing reaches,
+    //so a preset saved without a limit can never be braked by one.
+    PhysicsSetting vm = get_particle_v_max();
+    float vraw = calculate_setting(vm,e.pos,cohort);
+    float smag = length(step_delta);
     //Scaled like every other length here, so one value means the same thing at
     //any world size.
-    float vlim = calculate_setting(get_particle_v_max(),e.pos,cohort)/SQRT_WORLD_SIZE;
-    float smag = length(step_delta);
-    if(smag > vlim){
+    float vlim = vraw/SQRT_WORLD_SIZE;
+    if(vraw < vm.max_value && smag > vlim){
         float k = vlim/smag;
         step_delta *= k;
         e.vel *= k;   //or velocity piles up behind the cap and lurches on release

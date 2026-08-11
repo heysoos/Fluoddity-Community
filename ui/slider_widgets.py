@@ -421,9 +421,12 @@ class SliderWidgetsMixin:
         if pdef.is_power_scaled:
             # Power-scaled slider (e.g. Hazard Rate): fine control at low values
             slider_pos = (value / pdef.default_max) ** (1.0 / pdef.power_exponent)
+            # The top of the track is a real off switch for a param that has
+            # one, so it must not read as a number.
             _, new_pos = imgui.slider_float(
                 display_label, slider_pos, 0.0, 1.0,
-                f"{value:.5f}"
+                "Off" if (pdef.off_at_max and value >= pdef.default_max)
+                else f"{value:.5f}"
             )
             # Check alt-click for lock toggle (intercept suppresses the value change)
             if not (pls and pls.handle_alt_click(pdef.name)):
