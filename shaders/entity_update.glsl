@@ -682,14 +682,22 @@ void main() {
 
     //Accelerate: Apply drag and add force to e.vel,
     e.vel = e.vel*calculate_setting(get_particle_drag(),e.pos,cohort) + force;
-    //Speed limit: shorten the velocity without turning it, scaled like every
-    //other length here so it means the same thing at any world size.
+    //Move: add e.vel and strafe to e.pos. Strafe is sampled at the position
+    //e.vel alone would have reached, which is where a sweep used to read it.
+    vec2 hop = strafe*calculate_setting(get_particle_strafe_power(),e.pos+e.vel,cohort);
+    vec2 step_delta = e.vel + hop;
+    //Speed limit: the WHOLE step, not just e.vel. Strafe is added straight to
+    //position, so capping velocity alone caps nothing a strafing preset does.
+    //Scaled like every other length here, so one value means the same thing at
+    //any world size.
     float vlim = calculate_setting(get_particle_v_max(),e.pos,cohort)/SQRT_WORLD_SIZE;
-    float vmag = length(e.vel);
-    if(vmag > vlim){ e.vel *= vlim/vmag; }
-    //Move: add e.vel and strafe to e.pos
-    e.pos += e.vel;
-    e.pos += strafe*calculate_setting(get_particle_strafe_power(),e.pos,cohort);
+    float smag = length(step_delta);
+    if(smag > vlim){
+        float k = vlim/smag;
+        step_delta *= k;
+        e.vel *= k;   //or velocity piles up behind the cap and lurches on release
+    }
+    e.pos += step_delta;
 
     //ADVANCED DRAWING force / strafe
     vec4 draw_sample =get_field(e.pos);

@@ -58,7 +58,7 @@ class PhysicsConfig:
     sensor_distance: float = 1.0
     # Unconstrained by default, so a preset saved before V Max existed keeps
     # the physics it was saved with.
-    v_max: float = 0.05
+    v_max: float = 0.1
     trail_persistence: float = 0.938
     trail_diffusion: float = 1.0
     hazard_rate: float = 0.0
@@ -202,7 +202,7 @@ class PhysicsConfig:
             sensor_angle=physics.get('sensor_angle', 0.45),
             global_force_mult=physics.get('global_force_mult', 1.0),
             sensor_distance=physics.get('sensor_distance', 1.0),
-            v_max=physics.get('v_max', 0.05),
+            v_max=physics.get('v_max', 0.1),
             trail_persistence=physics.get('trail_persistence', 0.938),
             trail_diffusion=physics.get('trail_diffusion', 1.0),
             hazard_rate=physics.get('hazard_rate', 0.0),

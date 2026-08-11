@@ -20,9 +20,11 @@ SHADER = (ROOT / "shaders" / "entity_update.glsl").read_text(encoding="utf-8")
 
 UNCONSTRAINED = PARAM_BY_NAME["V_MAX"].default_max
 
-# The fastest particle anywhere in the preset library, in V Max units.
+# The preset library's step distance in V Max units: the slowest preset's
+# median, and the fastest preset's p99.
 # Re-derive with `python -m tools.measure_speed`.
-LIBRARY_PEAK = 0.0204
+LIBRARY_FLOOR = 0.000036
+LIBRARY_PEAK = 0.0461
 
 
 # --- the preset format -------------------------------------------------
@@ -99,13 +101,23 @@ def test_v_max_reaches_the_shader():
     assert "configs[idx].v_max : V_MAX_SETTING" in SHADER
 
 
-def test_the_limit_applies_before_the_particle_moves():
-    """Clamping after `e.pos += e.vel` would let a step land anywhere and only
-    tidy up the velocity afterwards."""
+def test_the_limit_covers_strafe_and_not_just_velocity():
+    """Strafe is added STRAIGHT TO POSITION. Capping e.vel alone caps nothing a
+    strafing preset does - with V Max at zero its particles keep flying."""
     accelerate = SHADER.index("e.vel = e.vel*calculate_setting(get_particle_drag()")
-    clamp = SHADER.index("if(vmag > vlim)")
-    move = SHADER.index("e.pos += e.vel;")
-    assert accelerate < clamp < move
+    hop = SHADER.index("vec2 hop = strafe*calculate_setting(get_particle_strafe_power(")
+    delta = SHADER.index("vec2 step_delta = e.vel + hop;")
+    clamp = SHADER.index("if(smag > vlim)")
+    move = SHADER.index("e.pos += step_delta;")
+    assert accelerate < hop < delta < clamp < move
+    assert "e.pos += e.vel;" not in SHADER, "the unclamped move is back"
+
+
+def test_the_limit_also_scales_the_stored_velocity():
+    """Otherwise speed piles up behind the cap and lurches when it is raised."""
+    body = SHADER[SHADER.index("if(smag > vlim)"):]
+    body = body[:body.index("e.pos += step_delta;")]
+    assert "step_delta *= k;" in body and "e.vel *= k;" in body
 
 
 # --- the naming rule the SSBO writers depend on ------------------------
@@ -137,9 +149,61 @@ def test_the_library_spans_most_of_the_slider():
     """value = max * t**exponent. If the library crowds into the bottom of
     the track the control reads as doing nothing."""
     p = PARAM_BY_NAME['V_MAX']
-    slowest = (0.00004 / p.default_max) ** (1.0 / p.power_exponent)
+    slowest = (LIBRARY_FLOOR / p.default_max) ** (1.0 / p.power_exponent)
     peak = (LIBRARY_PEAK / p.default_max) ** (1.0 / p.power_exponent)
     assert slowest < 0.25 and peak > 0.6, (slowest, peak)
+
+
+@pytest.mark.gpu
+def test_a_zero_limit_actually_stops_a_strafing_preset():
+    """The source tests above all passed while V Max limited only e.vel and
+    particles kept moving. Only running the sim catches that."""
+    pytest.importorskip("moderngl")
+    import moderngl
+    import numpy as np
+
+    from sim import SIZE_OF_ENTITY_STRUCT, Sim
+
+    try:
+        ctx = moderngl.create_standalone_context(require=430)
+    except Exception as exc:  # pragma: no cover - environment dependent
+        pytest.skip(f"no GL context: {exc}")
+
+    cfg = ConfigSaver().load_from_file(
+        ROOT / "physics_configs" / "Core" / "_Default.json")
+    state = SimState()
+    rule = ConfigSaver().apply_config(cfg, state)
+    assert state.STRAFE_POWER > 0, "this preset must strafe or the test proves nothing"
+
+    def moved(v_max):
+        state.V_MAX = v_max
+        sim = Sim(ctx, world_size=0.02, canvas_aspect_ratio="1:1")
+        sim.apply_state(state)
+        sim.apply_rule(rule)
+        sim.reset()
+        for _ in range(80):
+            sim.apply_state(state)
+            sim.update(ctx)
+        ctx.finish()
+
+        def pos():
+            raw = np.frombuffer(sim.entities.read(), dtype=np.float32)
+            return raw.reshape(-1, SIZE_OF_ENTITY_STRUCT // 4)[:, 0:2].copy()
+
+        a = pos()
+        sim.apply_state(state)
+        sim.update(ctx)
+        ctx.finish()
+        d = np.linalg.norm((pos() - a).astype(np.float64), axis=1)
+        return float(np.median(d[d < 0.5]))
+
+    free = moved(UNCONSTRAINED)
+    pinned = moved(1e-9)
+    ctx.release()
+
+    assert free > 1e-5, "the preset has to move at all for this to mean anything"
+    assert pinned < free / 100.0, (
+        f"V Max near zero still moved {pinned:.7f}/step against {free:.7f} free")
 
 
 # --- the decision recorded in the archive's width ----------------------

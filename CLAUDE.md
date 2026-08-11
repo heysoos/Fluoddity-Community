@@ -143,17 +143,34 @@ mechanics these caveats assume.
   84% of a tile's trail. `tests/test_tile_isolation_gl.py` runs 647/8, 647/3
   and 641/7 on purpose.
 
+- **`V_MAX` caps the WHOLE STEP, because STRAFE IS ADDED STRAIGHT TO POSITION
+  and never touches `e.vel`.** A cap on velocity alone caps nothing a strafing
+  preset does: at `V_MAX = 1e-9` the default preset still covered 78% of its
+  free distance per frame, and Karst moved *further* clamped than unclamped,
+  the velocity it lost having partly opposed its hop. `entity_update.glsl`
+  therefore forms `step_delta = e.vel + hop` and scales BOTH that and `e.vel`
+  by the same factor — scaling only the step lets speed pile up behind the cap
+  and lurch when it is raised. `hop` samples `STRAFE_POWER` at `e.pos + e.vel`,
+  which is where the two-statement version read it, so a sweep on Strafe Power
+  is unchanged. The advanced-drawing strafe field is applied after and is
+  deliberately outside the cap. Guarded by
+  `tests/test_v_max.py::test_a_zero_limit_actually_stops_a_strafing_preset`,
+  which RUNS the sim — every source-level test passed while the bug was live.
+
 - **`V_MAX`'s range is measured, and its units are CANVAS UNITS PER STEP — not
-  a fraction of the screen.** Over the 131 presets, particle speed runs
-  0.000065 to 0.032 canvas units per step, a 500x span; the canvas is 2 units
-  wide, so even the fastest preset crosses 1.6% of it per frame. The slider is
-  therefore `0..0.05` with a FOURTH-power curve, putting the slowest preset at
-  17% of the track and the fastest at 80%. A linear or too-wide range crowds
-  the whole library into the bottom of the track and reads as a control that
-  does nothing. The default IS the range max, because a preset saved before
-  this parameter existed must load unbraked. Speed depends on
-  `particle_density` — one preset runs 28x faster at 1.0 than at 0.25 — so
-  re-measure at the app's own defaults with
+  a fraction of the screen.** Over the 131 presets, step distance runs 0.000036
+  (Ooze, median) to 0.046 (Shrimp, p99) in slider units, a 1000x span; the
+  canvas is 2 units wide, so even the fastest preset crosses under 4% of it per
+  frame. The slider is `0..0.1` with a FOURTH-power curve, putting the slowest
+  preset at 14% of the track and the fastest at 82%. A linear or too-wide range
+  crowds the whole library into the bottom and reads as a control that does
+  nothing: the first attempt at `0..1` let a particle cross 79% of the canvas
+  in one frame. The default IS the range max, because a preset saved before
+  this parameter existed must load unbraked. Two traps when re-measuring:
+  `particle_density` changes trail intensity and feeds back into speed — one
+  preset runs 28x faster at 1.0 than at 0.25 — and a wrap, bounce or hazard
+  respawn teleports a particle, so the peak `|dpos|` is a boundary event rather
+  than a step and the range must be set off a percentile.
   `python -m tools.measure_speed`.
 
 - **The `MultiLoadConfig` struct is written by OFFSET, and a physics
