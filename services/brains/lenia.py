@@ -46,8 +46,19 @@ class LeniaModality:
     glsl_file = "shaders/brains/lenia.glsl"
 
     def settings_schema(self) -> list[Setting]:
+        # Projection Scale before the two band settings, because it sets the
+        # AXIS they sit on: u = dot(x, w), and mu and sigma are positions and
+        # widths along u.
+        #
+        # It is a CEILING on a trained value, not a trained value itself - the
+        # projection is 4 searchable floats per bump and the optimizer moves
+        # them freely inside +/- this. Wide range because the effect is mild:
+        # measured over 0.5 to 12 against a realistic input, in-band coverage
+        # runs 27.4% to 17.4% and output p50 moves 18%. A narrow range would
+        # be a slider that does nothing.
         return [
             Setting("bumps", "Bumps", "int", 4, 48, 12),
+            Setting("w_scale", "Projection Scale", "float", 0.5, 12.0, W_SCALE),
             Setting("mu_scale", "Band Center", "float", 0.5, 4.0, MU_SCALE),
             Setting("sigma_max", "Band Width", "float", 0.05, 1.0, SIGMA_MAX),
         ]
