@@ -19,6 +19,7 @@ import pytest
 from services.auto_tournament_service import AutoTournamentService
 from services.brains import REGISTRY
 from services.genome_spec import physics_spec_for, spec_for
+from services.imgep_driver import ImgepDriver
 from services.physics_genome import PHYSICS_DIM
 from services.tournament_service import TournamentService
 
@@ -94,6 +95,54 @@ def test_toggling_physics_still_rebuilds_the_optimizer():
     svc._begin_generation()
     assert svc.driver.optimizer is not before
     assert svc.driver.spec.dim == layout("gabor").length + PHYSICS_DIM
+
+
+# ---- built AFTER the brain was switched -------------------------------
+# main._ensure_auto_service and _ensure_archive_service construct these lazily,
+# the first time Auto or Explore is opened - which can be long after the brain
+# was changed. Both wiring calls in _apply_brain_layout are guarded by
+# `is not None`, so a switch made before that first open is never delivered, and
+# _resolve_spec re-derives from the service's OWN layout every generation, so it
+# cannot self-correct either.
+#
+# The tests above all pass `spec=` explicitly, which is exactly the argument
+# production does not pass; that is how this survived them.
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_a_service_built_with_no_spec_inherits_the_tournaments_layout(name):
+    lay = layout(name)
+    ts = TournamentService(grid=2, layout=lay)
+    svc = AutoTournamentService(ts, scorer=None, logger=None)
+    assert svc.spec.dim == lay.length
+    assert svc.spec.layout == lay
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_a_service_built_with_no_spec_does_not_corrupt_the_population(name):
+    """The crash, end to end. An 80-float genome in a 168-float population is
+    not caught until something tries to breed it, and then it is a ValueError
+    inside orchestrate_frame - which takes the app down."""
+    lay = layout(name)
+    ts = TournamentService(grid=2, layout=lay)
+    ts.init_population()
+    svc = AutoTournamentService(ts, scorer=None, logger=None)
+    svc.start("anything")
+    assert all(np.asarray(g).size == lay.length for g in ts.population)
+    ts.next_generation()          # ValueError before the fix
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_the_imgep_driver_built_with_no_spec_inherits_it_too(name):
+    lay = layout(name)
+    ts = TournamentService(grid=2, layout=lay)
+    assert ImgepDriver(ts, None, None).spec.dim == lay.length
+
+
+def test_a_driver_with_no_tournament_still_builds():
+    """tests/test_archive_state.py introspects ImgepDriver(None, None, []), and
+    the archive window can outlive its tournament. Falling back beats raising."""
+    assert ImgepDriver(None, None, []).spec.dim > 0
 
 
 def test_a_layout_switch_mid_run_moves_the_search_with_it():

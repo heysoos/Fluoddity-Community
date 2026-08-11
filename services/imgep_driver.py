@@ -34,7 +34,7 @@ from services.expedition_fitness import (
     TEXT_LOGIT_SCALE,
     contrastive,
 )
-from services.genome_spec import BRAIN_SPEC, encode
+from services.genome_spec import encode, layout_of, spec_for
 from services.goal_source import LATENT_DIMS, Goal, latent_goal
 from services.novelty import (
     banded_alpha,
@@ -53,12 +53,15 @@ class ImgepDriver:
     name = "imgep"
 
     def __init__(self, tournament, scorer, archive, goals=None,
-                 spec=BRAIN_SPEC, rng=None):
+                 spec=None, rng=None):
         self.tournament = tournament
         self.scorer = scorer
         self.archive = archive
         self.goals = goals
-        self.spec = spec
+        # From the tournament when unnamed, never Fourier by default - see
+        # genome_spec.layout_of. main builds this the first time Explore is
+        # opened, which can be long after the brain was switched.
+        self.spec = spec if spec is not None else spec_for(layout_of(tournament))
         self.rng = rng if rng is not None else np.random.default_rng()
 
         # pushed by AutoTournamentService._sync_driver

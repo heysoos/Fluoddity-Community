@@ -152,6 +152,21 @@ class GenomeSpec:
         return np.concatenate(pieces).astype(np.float32)
 
 
+def layout_of(tournament) -> BrainLayout:
+    """The layout a search should adopt when it was not given a spec.
+
+    The TournamentService is the object that already knows which brain is
+    running, and every search is built around one, so asking it removes the
+    chance of the two disagreeing at construction. Defaulting to Fourier
+    instead is what let a search built after a brain switch produce genomes of
+    the wrong width.
+
+    Falls back rather than raising: the archive window can outlive its
+    tournament, and a driver that refuses to build takes a panel down with it.
+    """
+    return getattr(tournament, "layout", None) or default_layout()
+
+
 def spec_for(layout: BrainLayout) -> GenomeSpec:
     return GenomeSpec([Block("brain", layout.length)], layout)
 

@@ -18,7 +18,7 @@ from enum import Enum
 
 import numpy as np
 
-from services.genome_spec import BRAIN_SPEC, physics_spec_for, spec_for
+from services.genome_spec import layout_of, physics_spec_for, spec_for
 from services.physics_genome import decode_physics
 from services.prompt_driver import PromptDriver
 
@@ -46,14 +46,24 @@ def snapshot_steps(steps_per_gen: int, n: int) -> list[int]:
 
 class AutoTournamentService:
     def __init__(self, tournament_service, scorer=None, logger=None,
-                 spec=BRAIN_SPEC, base_seed: int = 1000, driver=None):
+                 spec=None, base_seed: int = 1000, driver=None):
         self.tournament = tournament_service
         self.logger = logger
-        self.spec = spec
         # The search space is DERIVED from the active brain. Holding the layout
         # rather than the spec is what lets _resolve_spec re-derive it when the
         # physics block is toggled without forgetting which brain it is for.
-        self._layout = spec.layout
+        #
+        # With no spec the layout comes from the TOURNAMENT, which is the object
+        # that already knows which brain is running. It used to default to
+        # Fourier, and main builds this lazily the first time Auto mode is
+        # opened - so a brain selected before that was never delivered, and
+        # _resolve_spec re-derived from the stale layout every generation rather
+        # than correcting it. The service then wrote Fourier-width genomes into
+        # the tournament's population, which the next manual generation could
+        # not breed.
+        self._layout = (spec.layout if spec is not None
+                        else layout_of(tournament_service))
+        self.spec = spec if spec is not None else spec_for(self._layout)
         self.base_seed = int(base_seed)
         # The service owns the rollout machine; the driver owns what to run and
         # what the pictures mean. Injecting it is how Explore mode reuses this

@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.genome_spec import BRAIN_SPEC
+from services.genome_spec import layout_of, spec_for
 from services.optimizers import make_optimizer
 
 
 class PromptDriver:
     name = "prompt"
 
-    def __init__(self, tournament, scorer=None, spec=BRAIN_SPEC):
+    def __init__(self, tournament, scorer=None, spec=None):
         self.tournament = tournament
         self.scorer = scorer
-        self.spec = spec
+        # From the tournament when unnamed, never Fourier by default - see
+        # genome_spec.layout_of.
+        self.spec = spec if spec is not None else spec_for(layout_of(tournament))
         self.algorithm = "CMA-ES"
         self.sigma0 = 0.5
         self.base_seed = 1000
