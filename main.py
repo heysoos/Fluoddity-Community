@@ -353,20 +353,18 @@ class App:
         # Start.
         return True
 
-    def _ensure_archive_service(self, ui_state):
-        """Build the archive, goal list and IMGEP driver on first use.
+    def _open_archive(self, ui_state):
+        """Load the archive directory into memory, if it is not already.
 
-        Reuses the same AutoTournamentService as Auto mode, swapping only
-        its driver. Imports stay lazy.
+        Deliberately CLIP-FREE: browsing, the map and live preview need the
+        entries, their thumbnails and the projection, none of which involve the
+        scorer. Building the ONNX sessions to open a window would cost a second
+        for nothing, and would fail outright wherever the optional packages are
+        missing - where browsing still ought to work.
         """
-        if not self._ensure_auto_service():
-            self.ui.archive_unavailable = self.ui.auto_unavailable
-            return False
-        if self.imgep_driver is not None:
-            return True
-
+        if self.archive is not None:
+            return
         from services.archive_library import list_archives
-        from services.imgep_driver import ImgepDriver
         from utilities.paths import get_archives_root
 
         ast = ui_state.archive
@@ -376,15 +374,42 @@ class App:
         # reopening an archive show that archive's settings rather than the
         # class defaults.
         self._load_archive_settings(ui_state)
+        ast.archive_name = path.name
+        ast.archive_list = list_archives(get_archives_root())
+        ui_state.preferences.archive_name = path.name
 
+    def _open_archive_browser(self, ui_state):
+        """Extras > Archive Browser: show the gallery with no tournament mode.
+
+        show_browser is set AFTER the archive's settings load, because it is
+        one of the settings - restoring an archive last closed would otherwise
+        shut the window the user just asked for.
+        """
+        self._open_archive(ui_state)
+        ui_state.archive.show_browser = True
+
+    def _ensure_archive_service(self, ui_state):
+        """Build the archive, goal list and IMGEP driver on first use.
+
+        Reuses the same AutoTournamentService as Auto mode, swapping only
+        its driver. Imports stay lazy.
+        """
+        if not self._ensure_auto_service():
+            self.ui.archive_unavailable = self.ui.auto_unavailable
+            return False
+        # Idempotent, and it may already have happened: the browser opens the
+        # archive on its own, without ever building a driver.
+        self._open_archive(ui_state)
+        if self.imgep_driver is not None:
+            return True
+
+        from services.imgep_driver import ImgepDriver
+
+        # The archive, its name and the settings are _open_archive's job.
         self.imgep_driver = ImgepDriver(
             self.tournament_service, self.clip_scorer,
             self.archive, self.goal_list)
         self.prompt_driver = self.auto_service.driver
-
-        ast.archive_name = path.name
-        ast.archive_list = list_archives(get_archives_root())
-        ui_state.preferences.archive_name = path.name
 
         self.ui.archive_driver = self.imgep_driver
         self.ui.archive_service = self.auto_service
@@ -564,6 +589,13 @@ class App:
             if self.auto_service is not None:
                 self.auto_service.pause()
         self._auto_was_enabled = auto.enabled
+
+        # Extras > Archive Browser. Before process_commands, which is where the
+        # browser's own flags are read, and cleared first so a failure to open
+        # cannot retry every frame.
+        if ui_state.archive.open_browser_requested:
+            ui_state.archive.open_browser_requested = False
+            self._open_archive_browser(ui_state)
 
         # Explore mode reuses Auto mode's rollout machine and capture path;
         # only the driver is swapped.

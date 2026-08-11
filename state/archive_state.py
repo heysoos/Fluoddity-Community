@@ -140,6 +140,10 @@ class ArchiveState:
     clear_archive_requested: bool = False
     delete_archive_requested: bool = False
     refresh_archive_list_requested: bool = False
+    # Extras > Archive Browser. Its own flag rather than watching show_browser,
+    # because opening from the menu may need the archive LOADED first and that
+    # is the orchestrator's job, not the UI's.
+    open_browser_requested: bool = False
 
     def to_settings(self) -> dict:
         """The tuning knobs, for `settings.json` in the archive's own folder."""

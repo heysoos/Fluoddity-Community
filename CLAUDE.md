@@ -488,6 +488,15 @@ mechanics these caveats assume.
   showing a "Dismiss" button would otherwise collide on the ImGui id, per the
   caveat below.
 
+- **Browsing an archive costs no CLIP, and `_open_archive` is where that line
+  is drawn.** Extras > Archive Browser loads the entries, thumbnails and
+  projection and nothing else; `_ensure_archive_service` calls the same
+  (idempotent) helper and only then builds the scorer and the driver. Two
+  consequences worth keeping: opening the gallery does not pay the ONNX
+  session cost, and the browser still works where the optional packages are
+  absent — which is the same rule manual tournament mode already follows. A
+  reload is what must not happen twice: `load_from_store` rescores everything.
+
 - **A closed Tournament window must turn its sub-modes OFF, and only the tab
   that is drawn can do that.** `render_tournament_window` returns early when
   the window is shut, so neither tab runs and neither clears its own

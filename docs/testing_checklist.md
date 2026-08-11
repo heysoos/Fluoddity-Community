@@ -234,6 +234,10 @@ only the running app can answer.
 - [ ] Zoom still centres on the point under the cursor, and drag-to-pan still works
 
 ## 20. Live preview from the archive browser
+- [ ] Extras > Archive Browser opens the gallery straight from a fresh launch, with no Tournament window and no visible model-loading pause
+- [ ] Unticking it closes the window; reticking reopens it without reloading the archive
+- [ ] Opening it, then opening Explore, does not reload the archive a second time (watch the console for a second '[archive] loaded' line)
+- [ ] An archive last closed with the browser shut still opens when picked from the menu
 - [ ] Open the Explore tab, open the Archive Browser, then CLOSE the Tournament window: the canvas goes back to one simulation, not a grid
 - [ ] "Live preview" is disabled while the Tournament window is open, and says why
 - [ ] With it on, hovering a gallery thumbnail runs that creature in the live sim

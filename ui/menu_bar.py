@@ -328,6 +328,17 @@ class MenuBarMixin:
                 )
                 self._delayed_tooltip("Evolve brains interactively: a 4x4 grid of live sims.\nClick tiles you like, then breed the next generation.")
 
+                # Archive Browser, on its own - no tournament mode needed, and
+                # no CLIP either. The orchestrator loads the archive.
+                changed, want = imgui.checkbox(
+                    "Archive Browser",
+                    self.state.archive.show_browser
+                )
+                if changed:
+                    self.state.archive.show_browser = want
+                    self.state.archive.open_browser_requested = want
+                self._delayed_tooltip("Browse saved creatures and preview them live.")
+
                 # Load Field submenu
                 if imgui.begin_menu("Load Field"):
                     if imgui.menu_item("Load Force Field...", "", False)[0]:
