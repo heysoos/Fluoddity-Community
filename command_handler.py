@@ -60,6 +60,7 @@ class CommandHandler:
         rule = self.config_saver.apply_config(config, ui_state.sim, watercolor_override)
         if pls:
             pls.restore_locked(ui_state.sim, ui_state.preferences, snapshot)
+        self._restore_brain_settings(config, ui_state)
         return rule
 
     def _push_and_apply_rule(self, rule, ui_state):
@@ -410,14 +411,44 @@ class CommandHandler:
             return sig == lay.signature()
         return int(np.asarray(config.rule).size) == int(lay.length)
 
-    def _brain_signature(self) -> str:
-        """The BrainLayout signature to stamp on a saved config.
+    def _brain_layout(self):
+        """The layout to stamp on a saved config, or None.
 
         From the sim, which is the one holder of the layout the rule was
         actually decoded under.
         """
-        lay = getattr(getattr(self, "sim", None), "brain_layout", None)
-        return lay.signature() if lay is not None else ""
+        return getattr(getattr(self, "sim", None), "brain_layout", None)
+
+    def _restore_brain_settings(self, config, ui_state) -> None:
+        """Put the Brain window back where the creature was authored.
+
+        Loading a config already moves every physics slider; the brain's
+        settings are part of the same preset, and leaving them behind is what
+        makes a reloaded creature un-editable. Its rule plays back correctly
+        either way - the stored rule is decoded - but re-encoding it under
+        different scales pins coordinates at the rails, and a pinned coordinate
+        never comes back.
+
+        _handle_brain_layout runs every frame and applies whatever it finds
+        here, so writing the state IS applying it. Nothing to request.
+        """
+        sig = getattr(config, "brain_layout", "")
+        bst = getattr(ui_state, "brain", None)
+        if not sig or bst is None:
+            return                  # pre-modality file: Fourier, nothing to say
+        settings = dict(getattr(config, "brain_settings", None) or {})
+        bst.modality = sig.split("-")[0]
+        bst.settings = settings
+        if settings:
+            from ui.brain_window import layout_for
+
+            got = layout_for(bst.modality, settings).signature()
+            if got != sig:
+                # The file disagrees with itself. Reachable if a modality's
+                # defaults move between builds, and worth saying out loud: the
+                # rule will still play, but it is not the brain named on the tin.
+                print(f"[brain] {sig} was saved, but its settings rebuild "
+                      f"{got}; loading the settings")
 
     def _save_tournament_selection(self, ui_state):
         """Save each selected genome to a config JSON in the user configs dir."""
@@ -429,8 +460,7 @@ class CommandHandler:
             # The TOURNAMENT's layout, not the sim's: these genomes are its
             # population, and it is the object that bred them.
             config = self.config_saver.create_config(
-                ui_state.sim, svc.population[tile],
-                brain_layout=svc.layout.signature())
+                ui_state.sim, svc.population[tile], layout=svc.layout)
             filepath = self.user_configs_dir / f"tournament_tile{tile}.json"
             self.config_saver.save_to_file(config, filepath)
             print(f"Saved tournament tile {tile} -> {filepath}")
@@ -912,7 +942,7 @@ class CommandHandler:
 
             config = self.config_saver.create_config(
                 ui_state.sim, current_rule, field_strengths=field_strengths,
-                brain_layout=self._brain_signature())
+                layout=self._brain_layout())
             config_string = self.config_saver.encode_clipboard(config)
             self.ui.set_clipboard(config_string)
             self.ui.add_to_config_clipboard(
@@ -969,7 +999,7 @@ class CommandHandler:
 
         config = self.config_saver.create_config(
             ui_state.sim, current_rule, field_strengths=field_strengths,
-            brain_layout=self._brain_signature())
+            layout=self._brain_layout())
         filepath = self.user_configs_dir / f"{filename}.json"
         self.config_saver.save_to_file(config, filepath)
 
@@ -1104,8 +1134,7 @@ class CommandHandler:
                 if not self.clipboard_preview_active:
                     current_rule = self.rule_manager.get_current_rule()
                     self._clipboard_cached_config = self.config_saver.create_config(
-                        ui_state.sim, current_rule,
-                        brain_layout=self._brain_signature())
+                        ui_state.sim, current_rule, layout=self._brain_layout())
                     if fh:
                         fh.cache_for_clipboard_preview(ui_state)
 

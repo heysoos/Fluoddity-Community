@@ -97,6 +97,33 @@ def default_layout() -> BrainLayout:
     return REGISTRY["fourier"].layout_from_settings({})
 
 
+def settings_of(layout: BrainLayout) -> dict:
+    """The settings dict that reproduces `layout`.
+
+    The signature carries only what changes the parameter COUNT - Fourier's
+    centres, Gabor's filters, MLP's hidden width and activation. Everything
+    else a modality declares is a decode SCALE, and those are deliberately
+    absent from it: they change what a z means, not how many there are, so
+    they must not split an archive or reset a search.
+
+    That is right for identity and wrong for provenance. A saved rule is
+    DECODED, so it plays back the same whatever the scales say - but anything
+    that re-encodes it divides by them, and encode() clips at the rails. So a
+    file needs this as well as the signature.
+
+    Derived from the modality's own settings_schema rather than a hand-written
+    map, because the hand-written map is what let two declared-but-never-read
+    settings through before.
+    """
+    m = get(layout.modality)
+    out: dict = {k: float(v) for k, v in layout.scales}
+    structural = [s for s in m.settings_schema() if s.kind in ("int", "choice")]
+    for i, s in enumerate(structural):
+        if i < len(layout.shape):
+            out[s.key] = int(layout.shape[i])
+    return out
+
+
 def brain_rng(seed: float) -> np.random.Generator:
     """The generator every "draw brains for this seed" path shares.
 

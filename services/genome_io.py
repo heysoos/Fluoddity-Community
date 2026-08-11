@@ -31,9 +31,7 @@ def export_genome(path, z: np.ndarray, sim_state, meta: dict | None = None,
     both ends of a round trip that looked like it had worked.
     """
     rule = decode(np.asarray(z, dtype=np.float32), layout)
-    config = ConfigSaver().create_config(
-        sim_state, rule,
-        brain_layout=layout.signature() if layout is not None else "")
+    config = ConfigSaver().create_config(sim_state, rule, layout=layout)
     data = json.loads(config.to_json())
     data[META_KEY] = dict(meta or {})
     p = Path(path)
