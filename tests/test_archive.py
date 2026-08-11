@@ -216,7 +216,7 @@ def test_pruning_keeps_arrays_and_entries_in_lockstep():
     a.prune_to_capacity()
     assert len(a) == 3
     assert a.embeddings.shape == (3, 4)
-    assert a.brains.shape == (3, 10, 8)
+    assert a.brains.shape == (3, 80)   # flat and layout-wide, not Fourier (10, 8)
     assert a.physics.shape == (3, 8)
     assert len(a.entries) == 3
 
@@ -251,11 +251,11 @@ def test_eviction_deletes_the_thumbnail(tmp_path):
     crop = np.zeros((8, 8, 3), dtype=np.uint8)
     doomed = a.consider(cand([1, 0, 0, 0]), novelty=0.1, thumb_crop=crop)
     a.consider(cand([0, 1, 0, 0]), novelty=0.9, thumb_crop=crop)
-    assert (tmp_path / "thumbs" / doomed.thumb).is_file()
+    assert store.thumb_path(doomed.thumb).is_file()
 
     assert a.prune_to_capacity() == 1
-    assert not (tmp_path / "thumbs" / doomed.thumb).exists()
-    assert len(list((tmp_path / "thumbs").iterdir())) == 1
+    assert not store.thumb_path(doomed.thumb).exists()
+    assert len(list((store.root / "thumbs").iterdir())) == 1
     store.close()
 
 
@@ -490,7 +490,7 @@ def test_a_flush_writes_the_current_novelty_not_the_admitted_one(tmp_path):
     a.maybe_flush(force=True)
     store.close()
 
-    with np.load(tmp_path / "vectors.npz", allow_pickle=False) as z:
+    with np.load(store.vectors_path, allow_pickle=False) as z:
         assert "novelty" in z.files
         assert z["novelty"] == pytest.approx(np.float32(live), abs=1e-6)
 
@@ -501,14 +501,14 @@ def test_an_archive_saved_before_novelty_was_persisted_still_loads(tmp_path):
     a.maybe_flush(force=True)
     store.close()
 
-    with np.load(tmp_path / "vectors.npz", allow_pickle=False) as z:
+    with np.load(store.vectors_path, allow_pickle=False) as z:
         old = {k: z[k] for k in z.files if k != "novelty"}
-    np.savez(tmp_path / "vectors.npz", **old)
+    np.savez(store.vectors_path, **old)
 
     b = Archive(store=ArchiveStore(tmp_path), dim=8)
     loaded, dropped = b.load_from_store()
     assert (loaded, dropped) == (12, 0)
-    assert not (tmp_path / "vectors.npz").with_suffix(".npz.bad").exists()
+    assert not store.vectors_path.with_suffix(".npz.bad").exists()
     assert not any(e.novelty >= 0.999 for e in b.entries)
 
 

@@ -14,10 +14,15 @@ from state.tournament_state import TournamentState
 
 class _FakeService:
     def __init__(self, n=16):
+        from services.brains import default_layout
+
         rng = np.random.default_rng(0)
         self.population = [rng.normal(0, 0.5, (10, 8)).astype(np.float32)
                            for _ in range(n)]
         self.selected = set()
+        # The real TournamentService always carries one, and the save stamps it
+        # on the config: these genomes belong to the brain that bred them.
+        self.layout = default_layout()
 
 
 def _handler(tmp_path, svc):
@@ -62,8 +67,10 @@ def test_the_saved_config_is_that_tile_s_genome(tmp_path):
     svc = _FakeService()
     save(tmp_path, [7], name="seven", svc=svc)
     cfg = ConfigSaver().load_from_file(tmp_path / "seven.json")
-    assert np.allclose(np.asarray(cfg.rule, dtype=np.float32),
-                       svc.population[7], atol=1e-5)
+    # Flat on the way back: a config's rule is a bare float vector, since
+    # (10, 8) is Fourier's own structure and no other modality has it.
+    assert np.allclose(np.asarray(cfg.rule, dtype=np.float32).reshape(-1),
+                       svc.population[7].reshape(-1), atol=1e-5)
 
 
 def test_the_user_is_told_where_the_files_went(tmp_path):
@@ -90,8 +97,8 @@ def test_the_named_tiles_win_over_a_selection_that_moved(tmp_path):
     CommandHandler._save_tournament_selection(_handler(tmp_path, svc), ui, "reef")
 
     cfg = ConfigSaver().load_from_file(tmp_path / "reef.json")
-    assert np.allclose(np.asarray(cfg.rule, dtype=np.float32),
-                       svc.population[3], atol=1e-5)
+    assert np.allclose(np.asarray(cfg.rule, dtype=np.float32).reshape(-1),
+                       svc.population[3].reshape(-1), atol=1e-5)
 
 
 def test_a_tile_outside_the_population_is_dropped(tmp_path):

@@ -1,9 +1,14 @@
 """Mapping between the optimizer's search space and real genomes.
 
-The optimizer searches an unbounded z in R^80. Decoding applies a bounded tanh
-squash, so it can never wander to freq=50, and - unlike clipping - no repair
-bias is introduced at the boundary. Clipping would map many distinct z to the
-same genome, which distorts CMA-ES's covariance estimate.
+The optimizer searches an unbounded z; decoding applies a bounded squash, so it
+can never wander to freq=50, and - unlike clipping - no repair bias is
+introduced at the boundary. Clipping would map many distinct z to the same
+genome, which distorts CMA-ES's covariance estimate.
+
+The squash itself belongs to the MODALITY, not to this module: each brain has
+its own parameter ranges, and Fourier's flat 3.0 was measurably mismatched
+against the low-frequency bias its own random generator uses. This module now
+only routes to the active modality and describes block layout.
 """
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from services.brains import BrainLayout, default_layout, get
 from services.genome import N_CENTERS
 
 FREQ_SCALE = 3.0
@@ -20,29 +26,45 @@ EPS = 1e-4
 DIM = N_CENTERS * 8  # 80
 
 
-def decode(z: np.ndarray) -> np.ndarray:
-    """(80,) -> (10, 8) float32, matching services.genome.random_genome ranges."""
-    z = np.asarray(z, dtype=np.float32).reshape(N_CENTERS * 2, 4)
-    freq = FREQ_SCALE * np.tanh(z[:N_CENTERS])
-    amp = AMP_SCALE * np.tanh(z[N_CENTERS:])
-    return np.concatenate([freq, amp], axis=1).astype(np.float32)
+def _active(layout: BrainLayout | None):
+    layout = layout or default_layout()
+    return get(layout.modality), layout
 
 
-def encode(genome: np.ndarray) -> tuple[np.ndarray, int]:
-    """(10, 8) -> ((80,) float32, n_clamped).
+def present(flat, layout: BrainLayout) -> np.ndarray:
+    """The shape callers expect a brain of this modality to arrive in.
 
-    A config file may hold values outside the squash range (legacy generator,
-    hand editing). Those are clamped, which is lossy at the extremes but keeps
-    x0 finite. The clamp count is returned so a badly out-of-range file is
-    visible rather than silent.
+    Shape (N, 8) is preserved for Fourier so legacy callers that reshape or
+    index by centre are unaffected. Other modalities have no such 2D structure
+    and stay flat.
     """
-    g = np.asarray(genome, dtype=np.float32).reshape(N_CENTERS, 8)
-    freq = g[:, :4] / FREQ_SCALE
-    amp = g[:, 4:] / AMP_SCALE
-    raw = np.concatenate([freq, amp], axis=0)
-    n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
-    z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))
-    return z.reshape(-1).astype(np.float32), n_clamped
+    flat = np.asarray(flat, dtype=np.float32).reshape(-1)
+    if layout.modality == "fourier":
+        return flat.reshape(layout.shape[0], 8)
+    return flat
+
+
+def decode(z: np.ndarray, layout: BrainLayout | None = None) -> np.ndarray:
+    """(dim,) -> params."""
+    m, layout = _active(layout)
+    return present(m.decode(z, layout), layout)
+
+
+def random_genome_for(rng, layout: BrainLayout | None = None) -> np.ndarray:
+    """A fresh brain of `layout`, in the same presentation decode() produces.
+
+    The generic replacement for services.genome.random_genome, which is
+    hardcoded to Fourier's (10, 8) and was what the interactive tournament bred
+    whatever modality was selected.
+    """
+    m, layout = _active(layout)
+    return present(m.random(rng, layout), layout)
+
+
+def encode(genome: np.ndarray, layout: BrainLayout | None = None):
+    """params -> ((dim,) float32, n_clamped)."""
+    m, layout = _active(layout)
+    return m.encode(np.asarray(genome, dtype=np.float32).reshape(-1), layout)
 
 
 @dataclass(frozen=True)
@@ -54,12 +76,13 @@ class Block:
 class GenomeSpec:
     """Ordered named blocks of the search vector.
 
-    Adding physics later means appending Block("physics", 12); the optimizer,
-    scorer, logger and loop are all dimension-agnostic.
+    Carries the BrainLayout so the brain block knows how to decode itself; the
+    optimizer, scorer, logger and loop stay dimension-agnostic.
     """
 
-    def __init__(self, blocks: list[Block]):
+    def __init__(self, blocks: list[Block], layout: BrainLayout | None = None):
         self.blocks = list(blocks)
+        self.layout = layout or default_layout()
 
     @property
     def dim(self) -> int:
@@ -69,13 +92,34 @@ class GenomeSpec:
         """Stable string used to reject incompatible checkpoints."""
         return ",".join(f"{b.name}:{b.size}" for b in self.blocks)
 
+    def same_space_as(self, other) -> bool:
+        """Would an optimizer built for `other` still be valid here?
+
+        Not `is`, and not signature() either. Signature is widths alone, and
+        Fourier at 21 centres is 168 floats exactly as Gabor at 12 filters is -
+        the same dimension over completely different meanings. The layout is
+        what separates them.
+
+        BrainLayout compares with `scales` excluded, so a decode-scale change
+        counts as the SAME space on purpose: it changes what a z means, not how
+        many there are, and the covariance a run has spent generations learning
+        is still about the right axes. Callers hold specs by value, not by
+        identity - main._refresh_driver_specs builds a fresh one every time it
+        is called - so comparing objects reset the search on every scale tweak.
+        """
+        return self.blocks == other.blocks and self.layout == other.layout
+
     def decode(self, z: np.ndarray) -> dict[str, np.ndarray]:
         z = np.asarray(z, dtype=np.float32)
         out: dict[str, np.ndarray] = {}
         off = 0
         for b in self.blocks:
             chunk = z[off:off + b.size]
-            out[b.name] = decode(chunk) if b.name == "brain" else chunk.copy()
+            # Routes through the module-level decode, NOT the modality directly:
+            # that is what preserves the (N, 8) shape for Fourier. Callers all
+            # over the app index brains by centre, and handing them a flat
+            # vector fails far from here.
+            out[b.name] = decode(chunk, self.layout) if b.name == "brain" else chunk.copy()
             off += b.size
         return out
 
@@ -101,9 +145,37 @@ class GenomeSpec:
         for b in self.blocks:
             v = parts[b.name]
             pieces.append(
-                encode(v)[0] if b.name == "brain" else np.asarray(v).reshape(-1)
+                get(self.layout.modality).encode(
+                    np.asarray(v, dtype=np.float32).reshape(-1), self.layout)[0]
+                if b.name == "brain" else np.asarray(v).reshape(-1)
             )
         return np.concatenate(pieces).astype(np.float32)
+
+
+def layout_of(tournament) -> BrainLayout:
+    """The layout a search should adopt when it was not given a spec.
+
+    The TournamentService is the object that already knows which brain is
+    running, and every search is built around one, so asking it removes the
+    chance of the two disagreeing at construction. Defaulting to Fourier
+    instead is what let a search built after a brain switch produce genomes of
+    the wrong width.
+
+    Falls back rather than raising: the archive window can outlive its
+    tournament, and a driver that refuses to build takes a panel down with it.
+    """
+    return getattr(tournament, "layout", None) or default_layout()
+
+
+def spec_for(layout: BrainLayout) -> GenomeSpec:
+    return GenomeSpec([Block("brain", layout.length)], layout)
+
+
+def physics_spec_for(layout: BrainLayout) -> GenomeSpec:
+    from services.physics_genome import PHYSICS_DIM
+
+    return GenomeSpec(
+        [Block("brain", layout.length), Block("physics", PHYSICS_DIM)], layout)
 
 
 BRAIN_SPEC = GenomeSpec([Block("brain", DIM)])

@@ -85,22 +85,35 @@ DEFAULT_MIN_SEPARATION = 0.02
 class Archive:
     def __init__(self, store=None, capacity: int = 20000, k: int = 10,
                  liveness_min: float = 0.002, dim: int = 512,
-                 min_separation: float = DEFAULT_MIN_SEPARATION):
+                 min_separation: float = DEFAULT_MIN_SEPARATION,
+                 layout=None):
         # seed_n lives on the driver (it picks bootstrap vs expansion), not
         # here - admission has no novelty gate to hold off.
+        from services.brains import default_layout
+
+
         self.store = store
         self.capacity = int(capacity)
         self.k = int(k)
         self.liveness_min = float(liveness_min)
         self.min_separation = float(min_separation)
         self._dim = int(dim)
+        # Falls back to the store's layout, then to Fourier, so the many call
+        # sites that build a bare Archive() keep working unchanged.
+        self.layout = (layout
+                       or getattr(store, "layout", None)
+                       or default_layout())
 
         self.entries: list[ArchiveEntry] = []
         self.admission = AdmissionRate()
         self.rejects = RejectsRing(dim=self._dim)
 
         self._emb = np.zeros((0, self._dim), dtype=np.float32)
-        self._brain = np.zeros((0, 10, 8), dtype=np.float32)
+        # FLAT and layout-wide. (10, 8) was Fourier's own structure, which no
+        # other modality has - Gabor is 14 floats a filter, MLP is not a grid at
+        # all. Every consumer already flattens before use (genome_spec.encode
+        # reshapes internally), so the 2D form bought nothing.
+        self._brain = np.zeros((0, self.layout.length), dtype=np.float32)
         self._phys = np.zeros((0, 8), dtype=np.float32)
         self._n = 0
 
@@ -299,7 +312,9 @@ class Archive:
         self._grow(1)
         i = self._n
         self._emb[i] = cand.embedding
-        self._brain[i] = cand.brain
+        # Flattened on the way in: Fourier candidates arrive as (10, 8) because
+        # genome_spec.decode preserves that shape for its legacy callers.
+        self._brain[i] = np.asarray(cand.brain, dtype=np.float32).reshape(-1)
         self._phys[i] = cand.physics
         self._n += 1
 
@@ -381,7 +396,7 @@ class Archive:
             return b
 
         self._emb = _re(self._emb, (self._dim,))
-        self._brain = _re(self._brain, (10, 8))
+        self._brain = _re(self._brain, (self.layout.length,))
         self._phys = _re(self._phys, (8,))
 
     # ---- persistence ---------------------------------------------------
@@ -412,7 +427,16 @@ class Archive:
 
         ids = np.asarray(arrays["ids"], dtype=np.int64)
         emb = np.asarray(arrays["embeddings"], dtype=np.float32)
+        # Archives written before brain modalities stored (N, 10, 8); flatten so
+        # both forms load. A width that does not match the layout is a genuine
+        # mismatch and the entries are dropped rather than reinterpreted -
+        # though the signature in the path should make that unreachable.
         brains = np.asarray(arrays["brains"], dtype=np.float32)
+        brains = brains.reshape(len(brains), -1) if len(brains) else brains
+        if brains.shape[1:] != (self.layout.length,):
+            print(f"[Archive] brains are {brains.shape[1:]}, this layout wants "
+                  f"({self.layout.length},); ignoring the stored brains")
+            brains = np.zeros((len(ids), self.layout.length), dtype=np.float32)
         phys = np.asarray(arrays["physics"], dtype=np.float32)
         # vectors.npz is the authority for novelty when it carries it - the
         # index row only ever holds the at-admission value. Older archives

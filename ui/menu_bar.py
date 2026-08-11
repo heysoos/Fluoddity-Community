@@ -339,6 +339,13 @@ class MenuBarMixin:
                     self.state.archive.open_browser_requested = want
                 self._delayed_tooltip("Browse saved creatures and preview them live.")
 
+                # Which function the particles' brains actually compute
+                _, self.state.brain.enabled = imgui.checkbox(
+                    "Brain Modality",
+                    self.state.brain.enabled
+                )
+                self._delayed_tooltip("Swap the brain the particles run: Fourier, Gabor, Lenia or MLP.\nChanging the parameter count resets the search and switches archive.")
+
                 # Load Field submenu
                 if imgui.begin_menu("Load Field"):
                     if imgui.menu_item("Load Force Field...", "", False)[0]:

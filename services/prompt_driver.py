@@ -8,17 +8,19 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.genome_spec import BRAIN_SPEC
+from services.genome_spec import layout_of, spec_for
 from services.optimizers import make_optimizer
 
 
 class PromptDriver:
     name = "prompt"
 
-    def __init__(self, tournament, scorer=None, spec=BRAIN_SPEC):
+    def __init__(self, tournament, scorer=None, spec=None):
         self.tournament = tournament
         self.scorer = scorer
-        self.spec = spec
+        # From the tournament when unnamed, never Fourier by default - see
+        # genome_spec.layout_of.
+        self.spec = spec if spec is not None else spec_for(layout_of(tournament))
         self.algorithm = "CMA-ES"
         self.sigma0 = 0.5
         self.base_seed = 1000
@@ -51,8 +53,11 @@ class PromptDriver:
     # ---- configuration -------------------------------------------------
 
     def set_spec(self, spec) -> None:
-        if spec is not self.spec:
-            self.spec = spec
+        # Always adopt the object - its scales decide what decode() produces -
+        # but only discard the optimizer when the SPACE actually changed.
+        same = self.spec.same_space_as(spec)
+        self.spec = spec
+        if not same:
             self._optimizer = None
 
     def set_prompt(self, text: str) -> None:
@@ -85,6 +90,7 @@ class PromptDriver:
             self._optimizer = make_optimizer(
                 self.algorithm, self.spec.dim, popsize,
                 self.sigma0, self.base_seed, self._x0,
+                layout=self.spec.layout,
             )
 
     def ask(self, n: int) -> np.ndarray:

@@ -35,8 +35,21 @@ _OPTIONAL_ARRAY_KEYS = ("novelty",)
 
 
 class ArchiveStore:
-    def __init__(self, root):
-        self.root = Path(root)
+    def __init__(self, root, layout=None):
+        """`root` is the named archive's directory; the store lives in a
+        subdirectory named for the BRAIN LAYOUT signature.
+
+        A stored genome is a bare float vector and the layout is the only thing
+        that says what those floats mean. Two layouts sharing a directory does
+        not error - it decodes a Gabor brain through the Fourier squash and
+        scores the result, which is worse than a crash because every number
+        along the way looks reasonable. The signature in the path makes the
+        mistake unrepresentable rather than merely unlikely.
+        """
+        from services.brains import default_layout
+
+        self.layout = layout or default_layout()
+        self.root = Path(root) / self.layout.signature()
         self.enabled = True
         self._fh = None
         try:
@@ -296,3 +309,49 @@ class ArchiveStore:
         if self._fh is not None:
             self._fh.close()
             self._fh = None
+
+
+# Every member of a store, because every one of them now resolves inside the
+# signature directory. A member missing from this list is left at the top level
+# where nothing will ever read it again: the Explore settings would silently
+# revert to defaults, and `runs` would take each entry's physics with it.
+_LEGACY_MEMBERS = ("index.jsonl", "vectors.npz", "goals.json", "settings.json",
+                   "thumbs", "runs")
+
+
+def migrate_to_signature_dir(archive_dir) -> Path | None:
+    """Move a pre-modality archive down into `<archive_dir>/fourier-n10/`.
+
+    `archive_dir` is one NAMED archive - the directory that used to hold
+    index.jsonl directly. Everything written before brain modalities was Fourier
+    at 10 centres, so that is the signature it lands under.
+
+    A move, not a copy: an archive runs to hundreds of megabytes of thumbnails.
+
+    -> the new directory, or None if there was nothing to do. Distinct from
+    utilities.paths.migrate_legacy_archive, which moves the whole pre-2026-08-08
+    archive under archives/default; this one is the level below.
+    """
+    from services.brains import default_layout
+
+    base = Path(archive_dir)
+    target = base / default_layout().signature()
+    try:
+        present = [m for m in _LEGACY_MEMBERS if (base / m).exists()]
+        if not present:
+            return None                 # already migrated, or a fresh archive
+        if target.exists():
+            # A restored backup sitting beside an already-migrated archive.
+            # Swallowing it into a directory that has contents would merge two
+            # unrelated runs, so leave both exactly where they are.
+            print(f"[Archive] {base.name}: legacy files found beside an "
+                  f"existing {target.name}; left in place")
+            return None
+        target.mkdir(parents=True)
+        for name in present:
+            os.replace(base / name, target / name)
+    except OSError as exc:
+        print(f"[Archive] could not migrate {base.name} ({exc}); left in place")
+        return None
+    print(f"[Archive] {base.name}: moved into {target.name}")
+    return target

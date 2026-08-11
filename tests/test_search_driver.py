@@ -161,3 +161,34 @@ def test_status_reports_what_the_log_and_ui_need():
     st = d.status()
     assert set(st) >= {"prompt", "algorithm", "sigma", "nan_replaced", "elites_injected"}
     assert st["sigma"] > 0
+
+
+def test_an_equal_spec_does_not_restart_the_search():
+    """main._refresh_driver_specs builds a fresh spec_for(layout) each call and
+    passes reset=False on a scales-only change, because "throwing away the
+    optimizer's covariance would cost the run for nothing". Comparing spec
+    objects by identity defeated that: nudging a decode-scale slider silently
+    restarted CMA-ES mid-run, with nothing on screen to say so."""
+    from services.brains import REGISTRY
+    from services.genome_spec import spec_for
+
+    m = REGISTRY["fourier"]
+    d, _ = make()
+    d.set_spec(spec_for(m.layout_from_settings({"freq_scale": 3.0})))
+    d.ask(4)
+    before = d.optimizer
+    assert before is not None
+
+    scaled = spec_for(m.layout_from_settings({"freq_scale": 1.5}))
+    d.set_spec(scaled)
+    assert d.optimizer is before, "a scale tweak restarted the search"
+    # The NEW object must still be adopted - decode() reads its scales.
+    assert d.spec is scaled
+
+
+def test_a_real_space_change_still_discards_the_optimizer():
+    d, _ = make()
+    d.ask(4)
+    assert d.optimizer is not None
+    d.set_spec(BRAIN_PHYSICS_SPEC)
+    assert d.optimizer is None

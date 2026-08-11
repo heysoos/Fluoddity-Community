@@ -662,6 +662,82 @@ mechanics these caveats assume.
 
 - **Shaders must be in `shaders/`** relative to the executable for builds to work.
 
+### Brains and modalities
+
+- **The sim does not reproduce itself run to run, so a trajectory diff cannot
+  validate a shader change.** Particles splat additively into a shared texture,
+  which races. Measured at 30k particles / 200 steps, the *same tree run twice*
+  moves 93.6% of particles by more than 1e-3 — as much as two genuinely
+  different shaders do. Aggregate velocity statistics are equally blind. Compare
+  a shader change by evaluating the affected function as a PURE function over a
+  fixed input grid (`purefn` pattern: one invocation per point, no shared
+  writes), which IS bit-reproducible. That is the only instrument that resolved
+  a 56%-of-signal mutation defect which parameter checksums had scored as
+  "within 1–3%".
+
+- **The brain's input scale is a property of the PRESET, and it varies ~900x.**
+  Measured over all 23 of `physics_configs/Core` by
+  `tools/brain_input_scale.py`, the median `|input|` per preset runs **0.0016**
+  (Searching) to **1.43** (Bubbles), median 0.057, median p90 0.36, median p99
+  0.68. No constant can suit all of them, which is why Gabor's `Input Scale` is
+  a setting and not a number in the module. Read a preset's figure off the tool,
+  or watch the Inspector — at the right setting the tiles are blobs, at the
+  wrong one they are broad ramps.
+
+  Gabor is the modality that cares, because it compares `x` DIRECTLY to a
+  centre in 4-D: at the old spread of 2.0, `||c|| ~ 4` against `||x|| ~ 0.4`, so
+  the envelope was constant over everything a particle reads and a Gabor filter
+  degenerated into a plain oscillation. Measured as the correlation between a
+  unit and the same unit with its envelope removed (1.0 = it IS a Fourier), the
+  median preset scored 0.85 at spread 2.0 against 0.74 at 0.35, and presets
+  with room to work moved much further (Salt 0.84 -> 0.61, Bubbles 0.71 -> 0.35).
+  Lenia does NOT need it: its bump compares `w.x`, and the projection amplifies
+  by `W_SCALE` and sums four terms, which already lands near its `mu` range.
+
+  For roughly a third of the presets the input barely moves at all (Searching
+  p50 0.0016, p90 0.0032). Over a range that small every smooth brain is
+  approximately linear, so the modality cannot matter much and the lever is
+  `SENSOR_GAIN`, not the brain.
+
+- **A setting that is declared but never read is the recurring defect here.**
+  It has happened twice: every non-count slider before `BrainLayout.scales`
+  existed, and `fourier.low_freq_bias` after. Both rendered, both moved, both
+  did nothing. `tests/test_brain_scales.py` derives its cases from
+  `settings_schema()` rather than a hand-written list, because the hand-written
+  list is what let the second one through.
+
+- **"No rule loaded" means one generated brain PER COHORT, for every modality,
+  and there is no blank-brain state.** It used to mean two different things:
+  Fourier answered an all-zero buffer with a GPU-side generator, and the other
+  three got one CPU brain shared by every cohort. Since `MUTATION_SCALE`
+  defaults to **0.0** and `num_cohorts` to **64**, that was 64 independent rules
+  against 64 copies of one — a monoculture — and the GPU path could never have
+  been shared, because it builds `FourierCenter`s. `generated_brains()` now
+  draws them on the host via the registry, into the cohort slots
+  (`COHORT_BRAIN_SLOT0`, mirrored in `_header.glsl`), selected by
+  `BRAIN_PER_COHORT`. Fourier lost nothing: `generate_random_centers()` and
+  `FourierModality.random()` are the same formula.
+
+- **An all-zero rule is the "no brain" marker AT THE RIGHT WIDTH TOO.** The Z
+  key, the undo history and `_Default.json` all send a zeroed `(10, 8)`, which
+  *is* 80 floats. While the GPU fallback existed this was harmless; uploaded
+  verbatim it is a brain that outputs zero for every input. Measured on
+  `_Default` when `apply_rule` accepted it: the brain's own p90 output fell from
+  0.431 to **0.034**. Anything that fills a slot — `apply_rule`,
+  `_write_multi_load_ssbo`, `write_tournament_rules` — must substitute a
+  generated brain rather than write zeros, or that slot is silent.
+
+- **A brain's mutation belongs to its modality, not to a generic per-float
+  helper.** The Fourier mutation is structured: ONE scalar scales all four
+  components of a centre's frequency (so the frequency *vector* keeps its
+  direction and only changes length), amplitudes take a vec4 from a single
+  `hash4()` per centre, and the seed is hashed from the rule's own CONTENT plus
+  the cohort. Jittering the four frequency components independently rotates the
+  vector instead — a different function, 56% mean deviation, and it still looks
+  plausible on screen. A modality that mutates structurally implements it in its
+  own `.glsl` and exposes `<modality>_param_at()` so the click-to-adopt
+  writeback returns the rule the particle was actually running.
+
 ## Key Documentation
 
 - `docs/imgep.md` — **how Explore mode works**: the regime loop, every fitness

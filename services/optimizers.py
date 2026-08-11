@@ -12,8 +12,6 @@ from typing import Protocol
 
 import numpy as np
 
-from services.genome import crossover, mutate
-
 
 class Optimizer(Protocol):
     name: str
@@ -70,7 +68,11 @@ def _restore_rng(rng, d: dict) -> None:
 class _BaseOptimizer:
     name = "base"
 
-    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None):
+    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
+        # Only the GA reads the layout - it is the one operator with structure.
+        # It lives on the base anyway so make_optimizer can forward it without
+        # knowing which algorithm it is building.
+        self._layout = layout
         self._dim = int(dim)
         self._popsize = int(popsize)
         self._sigma0 = float(sigma0)
@@ -135,8 +137,8 @@ class _CMAFamily(_BaseOptimizer):
 
     _cls = None
 
-    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None):
-        super().__init__(dim, popsize, sigma0, seed, x0)
+    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
+        super().__init__(dim, popsize, sigma0, seed, x0, layout)
         self._cma = self._new()
 
     def _new(self):
@@ -229,8 +231,8 @@ class RandomSearchOptimizer(_BaseOptimizer):
 
     name = "Random Search"
 
-    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None):
-        super().__init__(dim, popsize, sigma0, seed, x0)
+    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
+        super().__init__(dim, popsize, sigma0, seed, x0, layout)
         self._rng = np.random.default_rng(seed)
 
     @property
@@ -259,16 +261,33 @@ class RandomSearchOptimizer(_BaseOptimizer):
 class GAOptimizer(_BaseOptimizer):
     """Manual mode's operator, driven by CLIP instead of by a human.
 
-    Reuses services.genome.mutate/crossover, applied in z-space by reshaping to
-    the (10, 8) layout those operators expect.
+    Elitist: the top ELITES survive untouched and every child is bred from two
+    of them. See _breed() for why the operator is layout-agnostic even though
+    the decoded brains it produces are not.
     """
 
     name = "GA"
     ELITES = 4
     MUT = 0.25
+    # Fraction of genes a child mutates. Sparsity is what makes the operator
+    # work at all: perturbing EVERY gene adds dim*MUT^2 to a sphere each
+    # generation - 5.0 at dim 80, 27 at the MLP's 436 - which selection over 16
+    # samples cannot claw back, and the suite duly caught the GA improving by
+    # exactly 0.0 over 40 generations.
+    #
+    # Swept over 20 seeds, gain after 40 generations (scratchpad/ga_rate.py):
+    #   rate    sphere d=80   sphere d=436   rastrigin d=80
+    #   1.00        +1.74          +0.00          +107
+    #   0.10       +10.66         +20.06          +426
+    #   0.05       +10.84         +25.77          +455
+    #   0.02        +9.95         +29.45          +439
+    # 0.05 is at the peak on two of the three and close on the third. High-dim
+    # sphere keeps improving as the rate falls, but that is the one landscape
+    # where doing less is always better; rastrigin is the one with structure.
+    MUT_RATE = 0.05
 
-    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None):
-        super().__init__(dim, popsize, sigma0, seed, x0)
+    def __init__(self, dim, popsize, sigma0=0.5, seed=0, x0=None, layout=None):
+        super().__init__(dim, popsize, sigma0, seed, x0, layout)
         self._rng = np.random.default_rng(seed)
         self._pop = self._fresh(popsize)
         self._told = False
@@ -297,12 +316,36 @@ class GAOptimizer(_BaseOptimizer):
         elites = z[order[: min(self.ELITES, n)]]
         nxt = [e.copy() for e in elites]
         while len(nxt) < n:
-            a = elites[self._rng.integers(len(elites))].reshape(-1, 8)
-            b = elites[self._rng.integers(len(elites))].reshape(-1, 8)
-            child = crossover(a, b, self._rng)
-            child = mutate(child, self.MUT, self._rng)
-            nxt.append(child.reshape(-1).astype(np.float32))
+            a = elites[self._rng.integers(len(elites))]
+            b = elites[self._rng.integers(len(elites))]
+            nxt.append(self._breed(a, b))
         self._pop = np.array(nxt[:n], dtype=np.float32)
+
+    def _breed(self, a, b):
+        """One child from two elites, in Z-SPACE.
+
+        Uniform per-gene crossover then additive Gaussian, for every modality.
+        Blending is deliberately not an option: an averaged gene is a value
+        neither parent held, which is a mutation wearing a crossover's name.
+
+        There used to be a per-CENTRE branch for Fourier, on the reasoning that
+        a centre is a unit worth keeping whole. That reasoning was about the
+        PHENOTYPE, and z is not the phenotype: FourierModality.decode reads z as
+        [all N frequencies, then all N amplitudes], so the (-1, 8) reshape
+        called z[4:8] an amplitude when it is centre 1's frequency, and a
+        crossed "centre" was two centres' frequency vectors. It also masked with
+        a hardcoded N_CENTERS=10, so it raised at every Fourier width except the
+        default - 4, 20 and 48 centres all measured as ValueError.
+
+        The layout cannot fix that, because the z ordering belongs to the squash
+        rather than to the modality. Per-unit crossover is right on decoded
+        brains, and services.brains.crossover does it there; here, per-gene is.
+        """
+        take_a = self._rng.random(a.shape) < 0.5
+        child = np.where(take_a, a, b)
+        hit = self._rng.random(a.shape) < self.MUT_RATE
+        child = child + hit * self.MUT * self._rng.normal(0, 1, a.shape)
+        return child.astype(np.float32)
 
     def state_dict(self) -> dict:
         d = self._base_state()
@@ -327,5 +370,13 @@ ALGORITHMS: dict[str, type] = {
 }
 
 
-def make_optimizer(name, dim, popsize, sigma0=0.5, seed=0, x0=None) -> Optimizer:
-    return ALGORITHMS[name](dim, popsize, sigma0, seed, x0)
+def make_optimizer(name, dim, popsize, sigma0=0.5, seed=0, x0=None,
+                   layout=None) -> Optimizer:
+    """`layout` is the BrainLayout the brain block of z decodes under.
+
+    Only the GA reads it, but it must be forwarded unconditionally: this is the
+    single route the app uses, and while it did not take the argument at all,
+    GAOptimizer._breed fell back to its Fourier branch for every modality and
+    raised on three of the four.
+    """
+    return ALGORITHMS[name](dim, popsize, sigma0, seed, x0, layout)

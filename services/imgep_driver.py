@@ -19,7 +19,7 @@ from services.expedition_fitness import (
     TEXT_LOGIT_SCALE,
     contrastive,
 )
-from services.genome_spec import BRAIN_SPEC, encode
+from services.genome_spec import encode, layout_of, spec_for
 from services.goal_source import (
     LATENT_DIMS,
     Goal,
@@ -43,12 +43,15 @@ class ImgepDriver:
     name = "imgep"
 
     def __init__(self, tournament, scorer, archive, goals=None,
-                 spec=BRAIN_SPEC, rng=None):
+                 spec=None, rng=None):
         self.tournament = tournament
         self.scorer = scorer
         self.archive = archive
         self.goals = goals
-        self.spec = spec
+        # From the tournament when unnamed, never Fourier by default - see
+        # genome_spec.layout_of. main builds this the first time Explore is
+        # opened, which can be long after the brain was switched.
+        self.spec = spec if spec is not None else spec_for(layout_of(tournament))
         self.rng = rng if rng is not None else np.random.default_rng()
 
         # pushed by AutoTournamentService._sync_driver
@@ -201,8 +204,12 @@ class ImgepDriver:
     # ---- driver interface ----------------------------------------------
 
     def set_spec(self, spec) -> None:
-        if spec is not self.spec:
-            self.spec = spec
+        # Adopt the object either way; abandon the expedition only if the space
+        # moved under it. A scale tweak mid-expedition would otherwise throw
+        # away the goal it was climbing toward.
+        same = self.spec.same_space_as(spec)
+        self.spec = spec
+        if not same:
             # The search dimension changed; an optimizer for the old one is
             # meaningless, and the archive is unaffected because it stores
             # phenotypes rather than z.
@@ -265,8 +272,13 @@ class ImgepDriver:
         """Re-encode an archived PHENOTYPE into z under the CURRENT origin.
 
         The archive stores decoded values precisely so this works: a z archived
-        under one preset would mean a different creature under another."""
-        zb, _clamped = encode(self.archive.brains[i])
+        under one preset would mean a different creature under another.
+
+        Encoded under the ARCHIVE's layout, which is what its stored brains
+        were decoded under. Omitting it falls back to Fourier, so every parent
+        drawn from a Gabor, Lenia or MLP archive came back through the wrong
+        squash."""
+        zb, _clamped = encode(self.archive.brains[i], self.archive.layout)
         if self.spec.dim <= len(zb):
             return zb[: self.spec.dim].astype(np.float32)
         entry = self.archive.entries[i]
@@ -324,6 +336,7 @@ class ImgepDriver:
             self.algorithm, self.spec.dim, self.tournament.tiles,
             self.expedition_sigma, self.base_seed + self.gen,
             self._parent_z(self._x0_index).astype(np.float64),
+            layout=self.spec.layout,
         )
         return True
 

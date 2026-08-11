@@ -98,7 +98,9 @@ def test_the_exported_config_round_trips_to_the_same_brain(tmp_path):
 
     z, n_clamped, meta = import_genome(path)
     brain = BRAIN_SPEC.decode(np.asarray(z, dtype=np.float32))["brain"]
-    assert np.allclose(brain, arc.brains[0], atol=1e-3)
+    # decode() keeps Fourier's (10, 8) for its legacy callers; the archive
+    # column is flat and layout-wide.
+    assert np.allclose(brain.reshape(-1), arc.brains[0], atol=1e-3)
     assert n_clamped == 0, "an archived brain is already inside the squash range"
     assert meta.get("archive_id") == arc.entries[0].id
 

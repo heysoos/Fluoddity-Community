@@ -104,7 +104,7 @@ def test_saving_during_a_physics_search_does_not_crash(tmp_path):
 def test_the_saved_brain_is_the_brain_half_of_the_genome(tmp_path):
     z = brain_physics_z()
     cfg = save(tmp_path, _FakeService(z, physics=True), SimState())
-    assert np.allclose(cfg.rule, decode(z[:DIM]), atol=1e-5)
+    assert np.allclose(cfg.rule, decode(z[:DIM]).reshape(-1), atol=1e-5)
 
 
 def test_the_saved_config_carries_the_evolved_physics(tmp_path):
@@ -150,7 +150,7 @@ def test_the_physics_origin_is_respected(tmp_path):
 def test_a_tile_genome_saves_too(tmp_path):
     z = brain_physics_z(seed=3)
     cfg = save(tmp_path, _FakeService(z, physics=True), SimState(), tile=0)
-    assert np.allclose(cfg.rule, decode(z[:DIM]), atol=1e-5)
+    assert np.allclose(cfg.rule, decode(z[:DIM]).reshape(-1), atol=1e-5)
 
 
 # ---- brain-only searches are unaffected ---------------------------------
@@ -158,7 +158,7 @@ def test_a_tile_genome_saves_too(tmp_path):
 def test_a_brain_only_genome_still_saves(tmp_path):
     z = np.random.default_rng(1).normal(0, 0.5, DIM).astype(np.float32)
     cfg = save(tmp_path, _FakeService(z, physics=False), SimState())
-    assert np.allclose(cfg.rule, decode(z), atol=1e-5)
+    assert np.allclose(cfg.rule, decode(z).reshape(-1), atol=1e-5)
 
 
 def test_a_brain_only_save_uses_the_sliders_physics(tmp_path):

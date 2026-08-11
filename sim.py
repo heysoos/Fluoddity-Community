@@ -2,7 +2,14 @@ import moderngl
 import time
 import math
 import numpy as np
-from utilities.gl_helpers import read_shader, shader_prepend, prepend_defines, tryset, set_rule_uniform
+from utilities.gl_helpers import read_shader, shader_prepend, prepend_defines, tryset, pack_brains
+# NOTE: services.brains is imported LAZILY inside methods, never at module
+# scope. Importing it here pulls in services/__init__ -> config_saver ->
+# ui.physics_params -> ui/__init__ -> ui.core -> services.config_saver, a
+# pre-existing cycle that only resolves when `ui` is imported first. main.py
+# imports sim before ui, so a top-level import here fails at startup - and it
+# fails ONLY in the real app, because tests/conftest.py and
+# tools/shader_compile_check.py both prime `ui` first.
 from state import SimState
 
 # Global constants
@@ -79,16 +86,40 @@ class Sim:
         canvas_dim_x,canvas_dim_y = self.get_canvas_dimensions()
         canvas_shape = (canvas_dim_x, canvas_dim_y)
 
+        # Set before any brain buffer is sized: both allocations below derive
+        # from it. Preserved across setup_simulation_state calls so a canvas or
+        # world resize does not silently revert to the default layout.
+        from services.brains import (MAX_BRAIN_FLOATS, MAX_COHORT_BRAINS,
+                                     default_layout)
+        if getattr(self, '_brain_layout', None) is None:
+            self._brain_layout = default_layout()
+
         # Allocate state buffers
         self.entities = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_ENTITY_STRUCT)
-        self.rule_buffer = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_RULE_STRUCT)
+        # Per-particle brains, for click-to-adopt. Sized to the ACTIVE brain
+        # length, never MAX_BRAIN_FLOATS: at the max stride this would be ~1 KB
+        # per particle, about 600 MB. realloc_brain_buffers resizes it.
+        self.rule_buffer = self.ctx.buffer(
+            reserve=self.entity_count * self._brain_layout.length * 4)
 
         # Multi-load config buffer (see MULTI_LOAD_CONFIG_SIZE above).
         MAX_MULTI_LOAD_CONFIGS = 64
         self.multi_load_buffer = self.ctx.buffer(reserve=MAX_MULTI_LOAD_CONFIGS * MULTI_LOAD_CONFIG_SIZE)
 
-        # Multi-load rule buffer (64 rules * SIZE_OF_RULE_STRUCT bytes per rule)
-        self.multi_load_rule_buffer = self.ctx.buffer(reserve=MAX_MULTI_LOAD_CONFIGS * SIZE_OF_RULE_STRUCT)
+        # The flat brain buffer, 208 slots of MAX_BRAIN_FLOATS floats (416 KB):
+        # MAX_MULTI_LOAD_CONFIGS of them for configs and tournament tiles, then
+        # MAX_COHORT_BRAINS holding one generated brain per cohort for when no
+        # rule is loaded. Slot 0 is manual mode's brain, tournament mode indexes
+        # by tile, multi-load by config - one buffer for all of them, at a fixed
+        # stride, so a layout change never resizes it.
+        # Explicitly zeroed: ctx.buffer(reserve=) does NOT zero memory, and
+        # every slot is read as a brain whether anything has written it or not.
+        # Measured: a bare reserve left 13 nonzero floats in this buffer.
+        self.multi_load_rule_buffer = self.ctx.buffer(
+            reserve=(MAX_MULTI_LOAD_CONFIGS + MAX_COHORT_BRAINS)
+            * MAX_BRAIN_FLOATS * 4)
+        self.multi_load_rule_buffer.clear()
+        self._brain_per_cohort = False
 
         # Bind entity and rule buffers
         self.entities.bind_to_storage_buffer(0)
@@ -138,6 +169,18 @@ class Sim:
 
         # 1. Entity update compute shader
         self.entity_update_source = read_shader('shaders/entity_update.glsl')
+        # shader_prepend inserts right after the #version line, so the LAST
+        # prepend ends up FIRST. Reading bottom-up, the resulting file order is:
+        #   fourier4_4, _header, fourier, gabor, lenia, mlp, _dispatch, entity_update
+        # which is what every declaration needs: hash() before _header uses it,
+        # the brain functions before _dispatch branches on them.
+        self.entity_update_source = shader_prepend(
+            self.entity_update_source, read_shader('shaders/brains/_dispatch.glsl'))
+        for _brain in ('mlp', 'lenia', 'gabor', 'fourier'):
+            self.entity_update_source = shader_prepend(
+                self.entity_update_source, read_shader(f'shaders/brains/{_brain}.glsl'))
+        self.entity_update_source = shader_prepend(
+            self.entity_update_source, read_shader('shaders/brains/_header.glsl'))
         self.entity_update_source = shader_prepend(self.entity_update_source, read_shader('shaders/fourier4_4.glsl'))
         self.entity_update_source = prepend_defines(self.entity_update_source, self.entity_count)
 
@@ -205,6 +248,30 @@ class Sim:
 
         # Only write rules to buffer when explicitly requested (avoids 192MB/frame cost)
         tryset(self.entity_update_program, 'WRITE_RULES', self._pending_rule_buffer_update)
+        # ...and only for the ONE particle that is about to be read back.
+        # readback_rule() takes a single entity's slice and nothing else ever
+        # reads this buffer, so writing all 600k was work thrown away. It is
+        # also no longer free: a brain now carries its mutation on read, so the
+        # write has to re-derive it per particle rather than store a struct that
+        # was already live in registers. Measured click cost 13.0 ms; 0.1 ms
+        # once only the adopted particle writes. -1 writes every particle.
+        tryset(self.entity_update_program, 'WRITE_RULES_INDEX',
+               -1 if self._pending_entity_id is None
+               else int(self._pending_entity_id))
+
+        # Brain dispatch. BRAIN_SHAPE carries each modality's structural ints
+        # (Fourier: centre count; MLP: hidden width and activation).
+        from services.brains import get as get_brain_modality
+
+        _bl = self._brain_layout
+        tryset(self.entity_update_program, 'BRAIN_MODALITY',
+               get_brain_modality(_bl.modality).modality_id)
+        tryset(self.entity_update_program, 'BRAIN_LEN', int(_bl.length))
+        tryset(self.entity_update_program, 'BRAIN_PER_COHORT',
+               1 if self.brain_per_cohort else 0)
+        tryset(self.entity_update_program, 'BRAIN_SHAPE',
+               (int(_bl.shape[0]),
+                int(_bl.shape[1]) if len(_bl.shape) > 1 else 0, 0, 0))
 
         # Multi-load mode: set uniform arrays for all loaded configs
         if multi_load_service and multi_load_service.is_active() and not is_preview_active:
@@ -752,25 +819,100 @@ class Sim:
         # Write config data to SSBO
         self.multi_load_buffer.write(bytes(data))
 
-        # Write rules to separate rule buffer
-        rule_data = bytearray()
+        # Write brains to the flat brain buffer, one MAX_BRAIN_FLOATS slot per
+        # config.
+        brains = []
         for i in range(config_count):
             config = multi_load_service.get_config(i)
             if config is None or config.rule is None:
-                # Write zeros for missing rules
-                rule_data.extend(bytes(SIZE_OF_RULE_STRUCT))
-            else:
-                # Write rule as flat float32 array (10 centers * 8 floats = 80 floats)
-                rule_data.extend(config.rule.astype(np.float32).tobytes())
+                # A generated brain of its own, not zeros: an all-zero brain
+                # outputs zero for every input, so the config would freeze.
+                from services.brains import generated_brains
 
-        self.multi_load_rule_buffer.write(bytes(rule_data))
+                brains.append(generated_brains(
+                    self._brain_layout,
+                    float(getattr(config, "rule_seed", 0.0) or 0.0) + i,
+                    1)[0])
+            else:
+                brains.append(config.rule.astype(np.float32).reshape(-1))
+
+        self.multi_load_rule_buffer.write(pack_brains(brains, self._brain_layout))
 
     def apply_rule(self, rule: np.ndarray | None) -> None:
-        """Apply a rule to the shader."""
-        if rule is None:
-            set_rule_uniform(self.entity_update_program, np.zeros((10, 8), dtype=np.float32))
+        """Apply a brain to slot 0, which is what manual mode reads.
+
+        Signature unchanged from when this set 20 individual uniforms: callers
+        hand it a (10, 8) Fourier genome, a flat brain of the active layout, or
+        None.
+
+        A rule of the WRONG WIDTH is ignored rather than reinterpreted. Presets,
+        the undo history and the Z key all carry (10, 8) Fourier genomes, and
+        under another layout those 80 floats mean something else entirely -
+        before this guard they raised inside pack_brains and took the app down.
+        """
+        from utilities.gl_helpers import pack_brains
+
+        layout = self._brain_layout
+        params = None
+        if rule is not None:
+            flat = np.asarray(rule, dtype=np.float32).reshape(-1)
+            if not flat.any():
+                # An all-zero rule is this codebase's "no brain" marker, and it
+                # arrives at the RIGHT width as well as the wrong one - the Z
+                # key, the undo history and _Default.json all send a zeroed
+                # (10, 8). It used to be harmless because the GPU answered zeros
+                # with a generated rule; now it would be uploaded verbatim, and
+                # a brain of all zeros outputs zero for every input. Measured on
+                # _Default: p90 of the brain's own output fell from 0.431 to
+                # 0.034 before this branch existed.
+                params = None
+            elif flat.size == layout.length:
+                params = flat
+            else:
+                print(f"[brain] ignoring a {flat.size}-float rule under "
+                      f"{layout.signature()}, which wants {layout.length}")
+        if params is None:
+            # No rule loaded: generate one brain PER COHORT, for whichever
+            # modality is active. Slot 0 gets cohort 0's copy so anything
+            # reading "the current rule" still finds a real brain.
+            params = self._write_cohort_brains(layout)
         else:
-            set_rule_uniform(self.entity_update_program, rule)
+            self._brain_per_cohort = False
+        self._slot0 = np.asarray(params, dtype=np.float32).reshape(-1).copy()
+        # A new rule arrives DECODED; its search vector is unknown until a scale
+        # change needs one. See set_brain_scales.
+        self._slot0_z = None
+        self.multi_load_rule_buffer.write(pack_brains([params], layout))
+
+    def _write_cohort_brains(self, layout) -> np.ndarray:
+        """Fill the cohort slots with independent brains. -> cohort 0's.
+
+        This is the whole of "no brain loaded", and every modality takes the
+        same path; see CLAUDE.md for why it has to be per cohort.
+        """
+        from services.brains import (COHORT_BRAIN_SLOT0, MAX_BRAIN_FLOATS,
+                                     MAX_COHORT_BRAINS, generated_brains)
+        from utilities.gl_helpers import pack_brains
+
+        seed = float(getattr(getattr(self, "_state", None), "rule_seed", 0.0) or 0.0)
+        n = int(getattr(getattr(self, "_state", None), "num_cohorts", 0) or 0)
+        n = max(1, min(n or MAX_COHORT_BRAINS, MAX_COHORT_BRAINS))
+        brains = generated_brains(layout, seed, n)
+        self.multi_load_rule_buffer.write(
+            pack_brains(brains, layout),
+            offset=COHORT_BRAIN_SLOT0 * MAX_BRAIN_FLOATS * 4)
+        self._brain_per_cohort = True
+        return brains[0]
+
+    @property
+    def brain_per_cohort(self) -> bool:
+        """Is each cohort running its own generated brain?
+
+        True exactly when no rule is loaded. Read by the uniform push and by the
+        Brain window, which says so rather than leaving the user to wonder why
+        the canvas holds several different behaviours at once.
+        """
+        return bool(getattr(self, "_brain_per_cohort", False))
 
     def apply_tournament(self, enabled: bool, grid: int = 4,
                          mutation: float = 0.0, plain_colour: bool = False,
@@ -846,8 +988,113 @@ class Sim:
         self.multi_load_buffer.write(bytes(data))
 
     def write_tournament_rules(self, rule_bytes: bytes) -> None:
-        """Upload 16 packed genomes into the (reused) multi-load rule buffer."""
-        self.multi_load_rule_buffer.write(rule_bytes)
+        """Upload the tournament genomes into the (reused) flat brain buffer.
+
+        RE-STRIDES on the way in. The caller packs genomes back to back at the
+        LAYOUT length (80 floats for Fourier), but a slot in this buffer is
+        MAX_BRAIN_FLOATS. Writing the bytes raw put genome 1 inside slot 0's
+        padding and left slots 3..15 unwritten.
+
+        Short uploads are PADDED with generated brains, because a slot the
+        caller does not fill keeps whatever was there - zero at startup, and an
+        all-zero brain outputs zero for every input, which is a frozen tile. The
+        padding is the same generated brain every other "no rule" path uses.
+        """
+        n = self._brain_layout.length
+        flat = np.frombuffer(rule_bytes, dtype=np.float32)
+        genomes = [flat[i * n:(i + 1) * n] for i in range(len(flat) // n)]
+        tiles = int(getattr(self, "_tournament_grid", 0) or 0) ** 2
+        if tiles > len(genomes):
+            from services.brains import generated_brains
+
+            seed = float(getattr(self._state, "rule_seed", 0.0) or 0.0)
+            genomes = genomes + generated_brains(
+                self._brain_layout, seed, tiles - len(genomes))
+        self.multi_load_rule_buffer.write(
+            pack_brains(genomes, self._brain_layout))
+
+    @property
+    def brain_layout(self):
+        """The active brain layout. Read by anything that needs the buffer
+        stride - click-to-adopt readback, in particular."""
+        return self._brain_layout
+
+    @property
+    def slot0_params(self):
+        """The decoded brain last written to slot 0, or None.
+
+        The Brain Inspector needs it to reach the same 'is this blank' verdict
+        the shader does, and reading it back off the GPU would sync the pipeline
+        every frame.
+        """
+        return getattr(self, "_slot0", None)
+
+    def set_brain_scales(self, layout) -> None:
+        """Adopt a layout of the SAME width - a decode-scale change only.
+
+        Separate from realloc_brain_buffers because that releases and
+        reallocates the per-particle buffer, which is 192 MB at the default
+        count. A slider tick must not pay for that.
+
+        The GPU holds DECODED parameters, so a new scale does not reach it on
+        its own - it only changes what future z decode to. That made every scale
+        slider look dead: Band Center, Freq Scale and the rest changed nothing
+        on screen until a count change forced a rebuild. So the live brain is
+        re-decoded here.
+
+        Through the STORED z, not by re-encoding each time. encode() clamps at
+        the rails, so round-tripping on every frame of a drag would grind a
+        parameter that leaves the range down and never let it come back. One
+        encode, then every later scale moves decode from that same z.
+        """
+        if layout.length != self._brain_layout.length:
+            raise ValueError(
+                f"set_brain_scales needs the same width: {layout.length} vs "
+                f"{self._brain_layout.length}; use realloc_brain_buffers")
+        from utilities.gl_helpers import pack_brains
+
+        from services.brains import get
+
+        old, self._brain_layout = self._brain_layout, layout
+        # Generated brains do not come from a z at all - they are drawn by the
+        # modality's own random(). Re-generating under the new scales is the
+        # honest rescale, and it keeps the cohort slots consistent with slot 0.
+        if self.brain_per_cohort:
+            self._slot0 = self._write_cohort_brains(layout)
+            self._slot0_z = None
+            self.multi_load_rule_buffer.write(pack_brains([self._slot0], layout))
+            return
+        params = getattr(self, "_slot0", None)
+        if params is None:
+            return
+        m = get(layout.modality)
+        try:
+            if getattr(self, "_slot0_z", None) is None:
+                self._slot0_z = m.encode(params, old)[0]
+            decoded = np.asarray(m.decode(self._slot0_z, layout),
+                                 dtype=np.float32).reshape(-1)
+        except (ValueError, TypeError) as exc:
+            print(f"[brain] could not rescale the live rule ({exc})")
+            return
+        self._slot0 = decoded
+        self.multi_load_rule_buffer.write(pack_brains([decoded], layout))
+
+    def realloc_brain_buffers(self, layout) -> None:
+        """Resize the per-particle brain buffer for a new layout.
+
+        It is BRAIN_LEN floats per particle, NOT MAX_BRAIN_FLOATS: at the max
+        stride this would be ~1 KB per particle, about 600 MB at the default
+        count. The flat brain buffer needs no resize - its slots are a fixed
+        stride wide whatever the layout.
+
+        Called on every layout change, which already resets the optimizer and
+        switches archive, so the reallocation cost is invisible.
+        """
+        self._brain_layout = layout
+        self.rule_buffer.release()
+        self.rule_buffer = self.ctx.buffer(
+            reserve=self.entity_count * layout.length * 4)
+        self.rule_buffer.bind_to_storage_buffer(2)
 
     def get_entity_buffer(self) -> moderngl.Buffer:
         """Expose entity buffer for EntityPicker."""

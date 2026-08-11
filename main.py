@@ -106,6 +106,9 @@ class App:
         self.goal_list = None
         self.archive_projection = None
         self.thumb_cache = None
+        # Brain Inspector: None until the window is first opened, False if it
+        # could not be built (a diagnostic panel must not take the app down).
+        self.brain_preview = None
         self._last_projection_size = 0
         self._explore_was_enabled = False
         self.advanced_drawing_processor = AdvancedDrawingProcessor(self.ctx)
@@ -137,6 +140,7 @@ class App:
         # rather than reaching into App.
         self.command_handler.switch_archive = self._switch_archive
         self.command_handler.release_archive = self._release_archive
+        self.command_handler.apply_brain_layout = self._apply_brain_layout
         # Xbox controller (FPS camera for shader-driven field)
         self.controller_cam = ControllerCam()
         self.joystick_state = {'joystick_id': find_joystick(), 'prev_buttons': []}
@@ -232,10 +236,23 @@ class App:
         from services.goal_source import GoalList
         from services.thumb_cache import ThumbCache, gl_loader
 
-        store = ArchiveStore(path)
-        archive = Archive(store=store)
+        from services.archive_io import migrate_to_signature_dir
+
+        # An archive belongs to ONE brain layout: the floats it stores mean
+        # nothing without it. Entries live in <archive>/<signature>/, so
+        # switching modality moves to a sibling directory and both survive.
+        from services.brains import default_layout
+
+        migrate_to_signature_dir(path)
+        # From the sim when there is one. Falling back rather than requiring it
+        # keeps this callable before the sim exists, and from the switch path.
+        layout = (getattr(getattr(self, "sim", None), "brain_layout", None)
+                  or default_layout())
+        store = ArchiveStore(path, layout)
+        archive = Archive(store=store, layout=layout)
         loaded, dropped = archive.load_from_store()
-        print(f"[archive] {path.name}: loaded {loaded} entries ({dropped} dropped)")
+        print(f"[archive] {path.name}/{layout.signature()}: "
+              f"loaded {loaded} entries ({dropped} dropped)")
 
         goals = GoalList(store=store)
         goals.load()
@@ -358,6 +375,139 @@ class App:
         ast.selected_entry_id = -1
         # Deliberately NOT resumed: the user pressed a management button, not
         # Start.
+        return True
+
+    def _render_brain_preview(self, ui_state) -> None:
+        """Draw the Inspector atlas, if the Brain window is open.
+
+        Built lazily and never rebuilt: the shader is fixed, only its uniforms
+        change with the layout. A failure here must never stop the app - it is a
+        diagnostic panel - so it degrades to no texture and the window says so.
+        """
+        bst = ui_state.brain
+        if not bst.enabled:
+            return
+        if self.brain_preview is None:
+            try:
+                from services.brain_preview import BrainPreview
+
+                self.brain_preview = BrainPreview(self.ctx)
+                self.ui.brain_preview = self.brain_preview
+            except Exception as exc:
+                print(f"[brain] inspector unavailable ({exc})")
+                self.brain_preview = False      # do not retry every frame
+                return
+        if self.brain_preview is False:
+            return
+
+        from services.brain_preview import AXES
+        from ui.brain_window import layout_for
+
+        axes = AXES[min(bst.preview_axes, len(AXES) - 1)][1]
+        layout = layout_for(bst.modality, bst.settings)
+        # Slot 0 is always a real brain now - the loaded rule, or cohort 0's
+        # generated one - so the Inspector just draws it. It used to have to
+        # re-derive the shader's "is this buffer blank" verdict, and when it did
+        # not, it drew the blank buffer: black tiles while the particles ran.
+        bst.preview_per_cohort = self.sim.brain_per_cohort
+        try:
+            self.ui.brain_preview_tex = self.brain_preview.render(
+                layout,
+                self.sim.multi_load_rule_buffer,
+                axes=axes,
+                channel=bst.preview_channel,
+                value_range=bst.preview_range,
+                gain=bst.preview_gain,
+                seed=bst.preview_seed,
+            )
+        except Exception as exc:
+            print(f"[brain] inspector render failed ({exc})")
+            self.ui.brain_preview_tex = None
+            self.brain_preview = False
+
+    def _refresh_driver_specs(self, layout, reset: bool = False) -> None:
+        """Point every driver's genome spec at `layout`.
+
+        reset=True only when the WIDTH changed: a decode-scale change leaves the
+        search dimension and the archive intact, so throwing away the optimizer's
+        covariance would cost the run for nothing.
+        """
+        from services.genome_spec import physics_spec_for, spec_for
+
+        for drv in (getattr(self.auto_service, "driver", None),
+                    self.imgep_driver):
+            if drv is None:
+                continue
+            physics = bool(getattr(drv, "physics_enabled", False))
+            spec = physics_spec_for(layout) if physics else spec_for(layout)
+            if hasattr(drv, "set_spec"):
+                drv.set_spec(spec)
+            if reset and hasattr(drv, "reset"):
+                drv.reset()
+
+    def _apply_brain_layout(self, layout, ui_state) -> bool:
+        """Switch the brain layout. A hard reset of the search, never partial.
+
+        The archive changes because its directory is keyed by the layout
+        signature, so a layout change IS an archive switch - to a sibling
+        directory under the same archive name. It therefore runs the same
+        sequence a name switch does, rather than an inline copy of it: the
+        settings are saved while the outgoing store is still open, and
+        _release_archive is what flushes, closes and drops the thumbnails.
+        """
+        from services.archive_library import resolve
+        from services.genome_spec import physics_spec_for, spec_for
+        from utilities.paths import get_archives_root
+
+        current = self.sim.brain_layout
+        if layout == current:
+            if tuple(layout.scales) == tuple(current.scales):
+                return False
+            # SCALES ONLY. What a z means changed, but not how wide it is, so
+            # the archive stays valid (it stores decoded brains) and the
+            # optimizer keeps its covariance. Refresh the decode and stop -
+            # no teardown, no reallocation.
+            self.sim.set_brain_scales(layout)
+            self.tournament_service.set_layout(layout)
+            if self.auto_service is not None:
+                self.auto_service.set_layout(layout)
+            self._refresh_driver_specs(layout)
+            return True
+
+        # Before the release, while the outgoing store is still open.
+        self._save_archive_settings(ui_state)
+        self._release_archive(ui_state)
+
+        # The GPU side first: the per-particle readback buffer is sized by the
+        # active length, and slot 0 is re-uploaded from whatever rule is live.
+        self.sim.realloc_brain_buffers(layout)
+        # The old genome's floats mean something else under a new layout, so it
+        # is dropped. apply_rule(None) then seeds what "no rule" means: one
+        # generated brain per cohort, for every modality alike.
+        self.sim.apply_rule(None)
+
+        # The interactive tournament breeds genomes of the layout it is told
+        # about; without this it keeps producing the old width and the tiles are
+        # uploaded into slots that expect the new one.
+        self.tournament_service.set_layout(layout)
+        if self.auto_service is not None:
+            self.auto_service.set_layout(layout)
+
+        # The optimizer searches a different number of dimensions now, so its
+        # covariance and population are meaningless. Reset rather than resize.
+        self._refresh_driver_specs(layout, reset=True)
+
+        if self.archive is not None or self.archive_store is not None:
+            path = resolve(get_archives_root(),
+                           ui_state.preferences.archive_name)
+            self._build_archive_set(path)
+            # settings.json lives inside the signature directory, so the
+            # incoming layout has its own. As in _switch_archive, the switch
+            # may open the browser but must never close it under the user.
+            ast = ui_state.archive
+            was_open = ast.show_browser
+            self._load_archive_settings(ui_state)
+            ast.show_browser = ast.show_browser or was_open
         return True
 
     def _open_archive(self, ui_state):
@@ -625,6 +775,11 @@ class App:
         result = self.command_handler.process_commands(ui_state, tiling_mode)
         if result == 'screenshot_pending' and not self.screenshot_pending and not self.screenshot_in_progress:
             self.screenshot_pending = True
+
+        # 2.5. Brain Inspector atlas. Rendered HERE rather than in the mixin
+        # because the UI is passive - it places the texture, it does not draw
+        # into GPU targets. Only while the window is open.
+        self._render_brain_preview(ui_state)
 
         # 3. Process continuous input (camera movement)
         current_time = time.time()

@@ -23,7 +23,10 @@ def test_exported_file_loads_with_the_normal_config_loader(tmp_path, sim_state):
 
     cfg = ConfigSaver().load_from_file(p)
     assert cfg is not None
-    assert np.allclose(cfg.rule, decode(z), atol=1e-5)
+    # PhysicsConfig.rule is FLAT whatever the brain - it used to be reshaped to
+    # Fourier's (10, 8) on the way in, which made any other brain's config
+    # unloadable. Compare contents; the presentation is decode()'s business.
+    assert np.allclose(cfg.rule, decode(z).reshape(-1), atol=1e-5)
 
 
 def test_export_records_provenance_metadata(tmp_path, sim_state):

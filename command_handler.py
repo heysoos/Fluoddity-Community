@@ -43,6 +43,8 @@ class CommandHandler:
         self.switch_archive = None
         # App._release_archive - see _handle_archive_management.
         self.release_archive = None
+        # App._apply_brain_layout, wired by the orchestrator at startup.
+        self.apply_brain_layout = None
 
         # Preview state
         self.preview_rule_active = False  # File->load preview
@@ -70,6 +72,7 @@ class CommandHandler:
         rule = self.config_saver.apply_config(config, ui_state.sim, watercolor_override)
         if pls:
             pls.restore_locked(ui_state.sim, ui_state.preferences, snapshot)
+        self._restore_brain_settings(config, ui_state)
         return rule
 
     def _push_and_apply_rule(self, rule, ui_state):
@@ -101,8 +104,11 @@ class CommandHandler:
         entity_id, entity_pos, entity_cohort = self._pending_entity_selection
         self._pending_entity_selection = None
 
-        # Read back the rule (buffer was just written by entity_update)
-        rule = readback_rule(self.sim.get_rule_buffer(), entity_id)
+        # Read back the rule (buffer was just written by entity_update).
+        # The buffer's stride is the active brain length, so the layout must
+        # come from the sim rather than defaulting to Fourier.
+        rule = readback_rule(self.sim.get_rule_buffer(), entity_id,
+                             self.sim.brain_layout)
         self.rule_manager.push_rule(rule, ui_state.sim.rule_seed)
         self.sim.apply_rule(rule)
         self.sim.update_sliders_from_particle(entity_pos, entity_cohort)
@@ -183,6 +189,10 @@ class CommandHandler:
                 ui_state.archive.chase_tile = ui_state.auto_tournament.save_tile_requested
                 ui_state.auto_tournament.save_tile_requested = -1
 
+        # Brain layout, before anything that runs a generation: it reallocates
+        # the GPU buffers and resets the optimizer.
+        self._handle_brain_layout(ui_state)
+
         # Automatic (CLIP-guided) tournament mode
         self._handle_auto_tournament(ui_state)
 
@@ -198,6 +208,44 @@ class CommandHandler:
         self._handle_archive_preview(ui_state)
 
         return None
+
+    def _handle_brain_layout(self, ui_state):
+        """Apply a requested brain layout, and keep the window's readout live.
+
+        Reads and clears the one-shot flag; App._apply_brain_layout does the
+        work, because it owns the archive teardown and rebuild.
+        """
+        from ui.brain_window import layout_for
+
+        bst = ui_state.brain
+        bst.archive_entries = len(self.archive) if self.archive is not None else 0
+        bst.best_z = self._active_best_z()
+
+        bst.request_layout_change = False
+        if self.apply_brain_layout is None:
+            return
+        # Called every frame, not only on the flag: a count slider commits on
+        # release and a scale slider immediately, and both have to reach the
+        # decode. _apply_brain_layout early-returns when nothing differs and
+        # takes a light path when only the scales do.
+        self.apply_brain_layout(layout_for(bst.modality, bst.settings), ui_state)
+
+    def _active_best_z(self):
+        """The best search vector the running driver has found, or None.
+
+        Whichever driver owns the search: Auto's is auto_service.driver, Explore
+        swaps its own in. None when no optimizer exists yet, and also when one
+        exists but has never been told a fitness - best() answers zeros and -inf
+        there, and reporting zeros as an unsaturated genome would be a lie.
+        """
+        import numpy as np
+
+        drv = getattr(self.auto_service, "driver", None) or self.imgep_driver
+        opt = getattr(drv, "optimizer", None)
+        if opt is None:
+            return None
+        z, f = opt.best()
+        return z if np.isfinite(f) else None
 
     def _handle_world_size_change(self, ui_state):
         """Handle world size change request (also handles aspect ratio changes)."""
@@ -310,7 +358,11 @@ class CommandHandler:
             return
         ts = ui_state.tournament
 
-        # Sync persistent controls
+        # Sync persistent controls. Above the `enabled` early-return, and ahead
+        # of _handle_brain_layout in process_commands, so a layout switch this
+        # frame reseeds from the CURRENT seed - that switch is what rerolls the
+        # tiles, and it happens whether or not the tournament is on screen.
+        svc.seed = float(getattr(ui_state.sim, "rule_seed", 0.0) or 0.0)
         svc.mutation_strength = ts.mutation_strength
         svc.inject_randoms = ts.inject_randoms
         svc.crossover_enabled = ts.crossover_enabled
@@ -353,6 +405,67 @@ class CommandHandler:
         ts.undo_requested = False
         ts.reset_requested = False
 
+    def _rule_fits(self, config) -> bool:
+        """Does this config's brain belong to the layout that is running?
+
+        A rule saved under another brain cannot be converted - its floats mean
+        different things - so it is dropped rather than reinterpreted.
+        sim.apply_rule refuses it too; this exists so that HOVERING the Load
+        menu under a different brain does not print one line per config it
+        passes over, which is what buried the real errors.
+
+        With no signature the width is all there is to go on. That is not a
+        weaker check by choice: files written before brains were swappable are
+        Fourier, and a width match is what lets a tile saved by an earlier build
+        of this branch still load.
+        """
+        lay = getattr(getattr(self, "sim", None), "brain_layout", None)
+        if lay is None or config is None or getattr(config, "rule", None) is None:
+            return True
+        sig = getattr(config, "brain_layout", "")
+        if sig:
+            return sig == lay.signature()
+        return int(np.asarray(config.rule).size) == int(lay.length)
+
+    def _brain_layout(self):
+        """The layout to stamp on a saved config, or None.
+
+        From the sim, which is the one holder of the layout the rule was
+        actually decoded under.
+        """
+        return getattr(getattr(self, "sim", None), "brain_layout", None)
+
+    def _restore_brain_settings(self, config, ui_state) -> None:
+        """Put the Brain window back where the creature was authored.
+
+        Loading a config already moves every physics slider; the brain's
+        settings are part of the same preset, and leaving them behind is what
+        makes a reloaded creature un-editable. Its rule plays back correctly
+        either way - the stored rule is decoded - but re-encoding it under
+        different scales pins coordinates at the rails, and a pinned coordinate
+        never comes back.
+
+        _handle_brain_layout runs every frame and applies whatever it finds
+        here, so writing the state IS applying it. Nothing to request.
+        """
+        sig = getattr(config, "brain_layout", "")
+        bst = getattr(ui_state, "brain", None)
+        if not sig or bst is None:
+            return                  # pre-modality file: Fourier, nothing to say
+        settings = dict(getattr(config, "brain_settings", None) or {})
+        bst.modality = sig.split("-")[0]
+        bst.settings = settings
+        if settings:
+            from ui.brain_window import layout_for
+
+            got = layout_for(bst.modality, settings).signature()
+            if got != sig:
+                # The file disagrees with itself. Reachable if a modality's
+                # defaults move between builds, and worth saying out loud: the
+                # rule will still play, but it is not the brain named on the tin.
+                print(f"[brain] {sig} was saved, but its settings rebuild "
+                      f"{got}; loading the settings")
+
     def _save_tournament_selection(self, ui_state, filename):
         """Save each selected genome under the chosen name (tiles get suffixed
         names, see save_targets.target_stems). Uses the tiles from the
@@ -370,7 +483,10 @@ class CommandHandler:
             save_targets.TOURNAMENT_TILE, filename, tiles)
         written = []
         for tile, stem in zip(tiles, stems):
-            config = self.config_saver.create_config(ui_state.sim, svc.population[tile])
+            # The TOURNAMENT's layout, not the sim's: these genomes are its
+            # population, and it is the object that bred them.
+            config = self.config_saver.create_config(
+                ui_state.sim, svc.population[tile], layout=svc.layout)
             filepath = self.user_configs_dir / f"{stem}.json"
             self.config_saver.save_to_file(config, filepath)
             written.append(filepath.name)
@@ -632,7 +748,11 @@ class CommandHandler:
             return
         from services.config_saver import ConfigSaver
 
-        cfg = ConfigSaver().create_config(ui_state.sim, None)
+        # Stamped with the layout so the run's decode scales survive the round
+        # trip: _restore_brain_settings declines a config that names no brain,
+        # and the store's own signature directory cannot supply the scales.
+        cfg = ConfigSaver().create_config(ui_state.sim, None,
+                                          layout=self._brain_layout())
         if self.archive_store.save_run_config(run_id, cfg.to_json()):
             self._run_physics_written = run_id
 
@@ -783,7 +903,12 @@ class CommandHandler:
                 f"Entry #{entry_id} is no longer in the archive.")
             return
         e = self.archive.entries[i]
-        z, _clamped = encode(self.archive.brains[i])
+        # The ARCHIVE's layout, not the sim's: its brains are stored decoded
+        # under it, and an archive is keyed by signature so the two can differ.
+        # Both of these defaulted to Fourier, so exporting a Gabor entry
+        # re-encoded it through Fourier's squash and wrote the result out.
+        layout = self.archive.layout
+        z, _clamped = encode(self.archive.brains[i], layout)
         sim_state = ui_state.sim
         if "physics" in e.spec:
             # Archive physics is stored ABSOLUTE, so no origin is needed here.
@@ -793,7 +918,7 @@ class CommandHandler:
                 "liveness": float(e.liveness), "source": e.source,
                 "goal": e.goal, "run_id": e.run_id, "spec": e.spec}
         path = self.user_configs_dir / f"{filename}.json"
-        export_genome(path, z, sim_state, meta)
+        export_genome(path, z, sim_state, meta, layout=layout)
         print(f"[archive] saved {path}")
         ui_state.archive.notice = (
             f"Saved {path.name} to your configs folder (File > Load > Custom).")
@@ -810,7 +935,9 @@ class CommandHandler:
             ast.warning = ("'Seed a run from here' applies to the Auto (CLIP) "
                            "tab; Explore picks its own parents from the archive.")
             return
-        z, _ = encode(self.archive.brains[i])
+        # The ARCHIVE's layout, as in _save_archive_entry: its brains are
+        # stored decoded under it, and the fallback is Fourier.
+        z, _ = encode(self.archive.brains[i], self.archive.layout)
         self.auto_service.set_x0(z)
         ast.notice = (f"Auto mode's search will start from #{ast.seed_entry_id} "
                       "on its next generation.")
@@ -848,7 +975,8 @@ class CommandHandler:
         from services.genome_io import import_genome
 
         try:
-            z, clamped, _meta = import_genome(ats.load_genome_path)
+            z, clamped, _meta = import_genome(ats.load_genome_path,
+                                             layout=svc.spec.layout)
         except (OSError, ValueError, KeyError) as exc:
             ats.warning = f"could not load genome: {exc}"
             print(f"[auto] {ats.warning}")
@@ -864,7 +992,8 @@ class CommandHandler:
 
         try:
             state = load_checkpoint(ats.load_checkpoint_path,
-                                    expect_signature=svc.spec.signature())
+                                    expect_signature=svc.spec.signature(),
+                                    expect_layout=svc.spec.layout.signature())
             svc.restore(state)
         except CheckpointError as exc:
             ats.warning = f"checkpoint not loaded: {exc}"
@@ -942,7 +1071,7 @@ class CommandHandler:
             "variants_per_tile": int(svc.variants_per_tile),
         }
         path = self.user_configs_dir / f"{filename}.json"
-        export_genome(path, brain_z, sim_state, meta)
+        export_genome(path, brain_z, sim_state, meta, layout=svc.spec.layout)
         ats.notice = (f"Saved {path.name} to your configs folder "
                       f"(File > Load > Custom).")
         print(f"[auto] saved {path}")
@@ -999,7 +1128,8 @@ class CommandHandler:
                 fh.snapshot_with_strengths(ui_state) if fh else (None, None))
 
             config = self.config_saver.create_config(
-                ui_state.sim, current_rule, field_strengths=field_strengths)
+                ui_state.sim, current_rule, field_strengths=field_strengths,
+                layout=self._brain_layout())
             config_string = self.config_saver.encode_clipboard(config)
             self.ui.set_clipboard(config_string)
             self.ui.add_to_config_clipboard(
@@ -1072,7 +1202,8 @@ class CommandHandler:
             fh.snapshot_with_strengths(ui_state) if fh else (None, None))
 
         config = self.config_saver.create_config(
-            ui_state.sim, current_rule, field_strengths=field_strengths)
+            ui_state.sim, current_rule, field_strengths=field_strengths,
+            layout=self._brain_layout())
         filepath = self.user_configs_dir / f"{filename}.json"
         self.config_saver.save_to_file(config, filepath)
 
@@ -1166,7 +1297,7 @@ class CommandHandler:
                         fh.cache_for_preview(ui_state)
 
                     pls = self.param_lock_service
-                    if not (pls and pls.should_block_rule_push()):
+                    if not (pls and pls.should_block_rule_push()) and self._rule_fits(config):
                         if not (pls and pls.is_locked('rule_seed')):
                             ui_state.sim.rule_seed = config.rule_seed
                         self.rule_manager.push_rule(config.rule, ui_state.sim.rule_seed)
@@ -1207,7 +1338,7 @@ class CommandHandler:
                 if not self.clipboard_preview_active:
                     current_rule = self.rule_manager.get_current_rule()
                     self._clipboard_cached_config = self.config_saver.create_config(
-                        ui_state.sim, current_rule)
+                        ui_state.sim, current_rule, layout=self._brain_layout())
                     if fh:
                         fh.cache_for_clipboard_preview(ui_state)
 

@@ -103,6 +103,21 @@ class PhysicsConfig:
     force_field_strength: float | None = None
     strafe_field_strength: float | None = None
 
+    # Which brain the rule belongs to, as a BrainLayout signature. A rule's
+    # floats mean nothing without it: 80 of them are a 10-centre Fourier or an
+    # 8-bump Lenia, and 168 are a 21-centre Fourier or a 12-filter Gabor.
+    #
+    # Empty on every file written before brains were swappable, and those are
+    # Fourier by history rather than by assumption.
+    brain_layout: str = ""
+
+    # The modality's full settings, including the decode SCALES the signature
+    # deliberately leaves out - Gabor's Input Scale, Fourier's Freq Scale,
+    # Lenia's Band Center. The stored rule is decoded, so it plays back the same
+    # without them; anything that re-ENCODES it divides by them, and encode()
+    # clips at the rails, so a coordinate lost there never comes back.
+    brain_settings: dict = field(default_factory=dict)
+
     def to_dict(self) -> dict:
         """Convert config to JSON-serializable dict."""
         d = {
@@ -149,6 +164,8 @@ class PhysicsConfig:
                 'emboss_smoothness': self.emboss_smoothness,
             },
             'rule': self.rule.flatten().tolist(),
+            'brain_layout': self.brain_layout,
+            'brain_settings': dict(self.brain_settings),
             'notes': self.notes,
         }
         if self.force_field_strength is not None:
@@ -172,9 +189,16 @@ class PhysicsConfig:
         force_field_strength = field_strengths['force'] if field_strengths else None
         strafe_field_strength = field_strengths['strafe'] if field_strengths else None
 
-        # Parse rule from flat list
+        # Parse rule from flat list, and KEEP it flat. This was an
+        # unconditional reshape(10, 8), which meant a config saved under any
+        # brain but Fourier could never be read back: saving a Gabor tournament
+        # tile wrote 168 floats and loading it raised
+        # "cannot reshape array of size 168 into shape (10,8)".
+        #
+        # Flat is what every consumer wants anyway - sim.apply_rule and
+        # genome_spec.encode both reshape(-1) on the way in.
         rule_list = data.get('rule', [0.0] * 80)
-        rule = np.array(rule_list, dtype=np.float32).reshape(10, 8)
+        rule = np.array(rule_list, dtype=np.float32).reshape(-1)
 
         # Ensure sweep dicts have all params (fill missing with 0.0)
         x_sweeps = _default_sweeps()
@@ -230,6 +254,8 @@ class PhysicsConfig:
             notes=notes,
             force_field_strength=force_field_strength,
             strafe_field_strength=strafe_field_strength,
+            brain_layout=str(data.get('brain_layout', '')),
+            brain_settings=dict(data.get('brain_settings') or {}),
         )
 
     def to_json(self, indent: int = 2) -> str:
@@ -246,14 +272,23 @@ class ConfigSaver:
     """Service for saving/loading physics configurations."""
 
     def create_config(self, sim_state: SimState, rule: np.ndarray | None,
-                      field_strengths: tuple[float, float] | None = None) -> PhysicsConfig:
+                      field_strengths: tuple[float, float] | None = None,
+                      layout=None) -> PhysicsConfig:
         """Create a PhysicsConfig from current state.
 
         Args:
             field_strengths: Optional (force_field_strength, strafe_field_strength) tuple.
                 Only set when a non-zero field texture is being saved alongside.
+            layout: the BrainLayout the rule was decoded under. Callers that save
+                a real brain must pass it: the signature says which of two
+                same-width brains this is, and the settings carry the decode
+                scales the signature leaves out.
         """
+        from services.brains import settings_of
         if rule is None:
+            # Zeros are the "no brain" marker at every width - sim.apply_rule
+            # tests emptiness before it tests the width - so the Fourier shape
+            # here carries no claim about the active layout.
             rule = np.zeros((10, 8), dtype=np.float32)
 
         return PhysicsConfig(
@@ -294,6 +329,8 @@ class ConfigSaver:
             notes=sim_state.notes,
             force_field_strength=field_strengths[0] if field_strengths else None,
             strafe_field_strength=field_strengths[1] if field_strengths else None,
+            brain_layout=layout.signature() if layout is not None else "",
+            brain_settings=settings_of(layout) if layout is not None else {},
         )
 
     def apply_config(self, config: PhysicsConfig, sim_state: SimState,

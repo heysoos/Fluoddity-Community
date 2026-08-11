@@ -29,6 +29,7 @@ from .field_loader_window import FieldLoaderWindowMixin
 from .tournament_window import TournamentWindowMixin
 from .auto_tournament_window import AutoTournamentWindowMixin
 from .archive_window import ArchiveWindowMixin
+from .brain_window import BrainWindowMixin
 
 
 @dataclass
@@ -52,6 +53,7 @@ class UI(
     TournamentWindowMixin,
     AutoTournamentWindowMixin,
     ArchiveWindowMixin,
+    BrainWindowMixin,
 ):
     """Passive UI - renders widgets, exposes state, handles no logic."""
 
@@ -700,6 +702,7 @@ class UI(
         if self.show_sidebar:
             self.render_tournament_window()
             self.render_archive_window()
+            self.render_brain_window()
 
         if self.show_demo_window:
             imgui.show_demo_window()

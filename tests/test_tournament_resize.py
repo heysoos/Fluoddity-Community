@@ -65,12 +65,17 @@ def test_handler_without_tournament_service_still_resizes():
     sim.setup_simulation_state.assert_called_once()
 
 
-def test_shader_has_zero_rule_fallback():
-    """Defence in depth: an all-zero tournament genome must not freeze the tile."""
+def test_a_short_genome_upload_does_not_freeze_a_tile():
+    """Defence in depth: an all-zero tournament genome must not freeze the tile.
+
+    An unwritten slot is zero, and an all-zero brain outputs zero for every
+    input. The host pads a short upload with generated brains so no tile can be
+    left silent, for every modality alike.
+    """
     from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "shaders" / "entity_update.glsl").read_text()
-    # Anchor on the rule-selection block specifically (not the reset-scatter block,
-    # which also tests TOURNAMENT_MODE).
-    i = src.index("current_rule = target_rules[htile]")
-    block = src[i:i + 500]
-    assert "generate_random_centers" in block, "no fallback for a zeroed genome buffer"
+
+    host = (Path(__file__).resolve().parent.parent / "sim.py").read_text()
+    i = host.index("def write_tournament_rules")
+    body = host[i:i + 2000]
+    assert "generated_brains" in body, "a short upload leaves tiles silent"
+    assert "tiles > len(genomes)" in body

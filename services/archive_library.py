@@ -108,9 +108,27 @@ def list_archives(root) -> list[dict]:
 
 
 def _count_entries(path: Path) -> int:
-    """How many entries a load would actually yield.
+    """How many entries a load would actually yield, across every brain layout.
 
-    vectors.npz is the honest source. index.jsonl is APPEND-ONLY - Archive
+    Entries live in <archive>/<layout-signature>/, so one named archive can hold
+    several layouts side by side. This reports what the FOLDER holds - the live
+    count for the layout currently loaded comes from the Archive itself. Looking
+    only at the top level reports every migrated archive as empty.
+    """
+    subs = []
+    try:
+        subs = [p for p in path.iterdir() if p.is_dir() and p.name != "thumbs"]
+    except OSError:
+        pass
+    if subs:
+        total = sum(_count_one(p) for p in subs)
+        if total:
+            return total
+    return _count_one(path)             # not yet migrated
+
+
+def _count_one(path: Path) -> int:
+    """vectors.npz is the honest source. index.jsonl is APPEND-ONLY - Archive
     never rewrites it - so after an eviction or a user delete the row survives
     while the id is gone from the arrays, and load_from_store keeps only the
     intersection. Counting lines would have this number drift above the

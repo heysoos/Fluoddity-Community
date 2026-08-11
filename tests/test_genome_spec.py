@@ -66,3 +66,53 @@ def test_decoded_range_is_comparable_to_random_genome():
     assert 0.2 < auto[:, :, 4:].std() < manual[:, :, 4:].std() * 1.5
     # frequencies: same order of magnitude, not 10x off
     assert 0.25 < auto[:, :, :4].std() / manual[:, :, :4].std() < 4.0
+
+
+# ---- same_space_as: what keeps an optimizer valid -------------------------
+#
+# Callers hold specs BY VALUE - main._refresh_driver_specs builds a fresh
+# spec_for(layout) every call - so the drivers' old `spec is not self.spec`
+# check threw the optimizer away even when nothing about the space had moved.
+
+
+def _spec(name, **settings):
+    from services.brains import REGISTRY
+    from services.genome_spec import spec_for
+
+    return spec_for(REGISTRY[name].layout_from_settings(settings))
+
+
+def test_an_equal_spec_is_the_same_space():
+    a, b = _spec("fourier"), _spec("fourier")
+    assert a is not b
+    assert a.same_space_as(b)
+
+
+def test_a_decode_scale_change_is_the_same_space():
+    """The archive stores decoded brains and the covariance is about the z
+    axes, so a change to what a z MEANS invalidates neither."""
+    assert _spec("fourier", freq_scale=3.0).same_space_as(
+        _spec("fourier", freq_scale=1.5))
+
+
+def test_a_different_width_is_a_different_space():
+    assert not _spec("fourier", centers=10).same_space_as(
+        _spec("fourier", centers=20))
+
+
+def test_the_same_width_under_another_modality_is_a_different_space():
+    """Fourier at 21 centres and Gabor at 12 filters are both 168 floats.
+    signature() is widths alone and cannot separate them, which is why this
+    compares the layout instead."""
+    f, g = _spec("fourier", centers=21), _spec("gabor", filters=12)
+    assert f.dim == g.dim == 168
+    assert f.signature() == g.signature()
+    assert not f.same_space_as(g)
+
+
+def test_adding_the_physics_block_is_a_different_space():
+    from services.brains import REGISTRY
+    from services.genome_spec import physics_spec_for, spec_for
+
+    lay = REGISTRY["fourier"].layout_from_settings({})
+    assert not spec_for(lay).same_space_as(physics_spec_for(lay))

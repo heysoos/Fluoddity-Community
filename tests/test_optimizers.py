@@ -59,6 +59,25 @@ def test_learning_optimizers_improve_on_sphere(name):
     assert end > start
 
 
+@pytest.mark.parametrize("dim", [80, 436])
+def test_the_ga_still_learns_at_the_widest_layout(dim):
+    """The mutation step grows with the dimension unless the RATE holds it back,
+    and 436 is the MLP at its widest. At full rate the GA gained exactly 0.00
+    here over 40 generations - it could not beat its own generation-1 elite."""
+    opt = make_optimizer("GA", dim, POP, 0.5, 0)
+    gains = []
+    for gens in (1, 40):
+        opt = make_optimizer("GA", dim, POP, 0.5, 0)
+        best = -np.inf
+        for _ in range(gens):
+            z = opt.ask(POP)
+            f = np.array([sphere(zi) for zi in z], dtype=np.float32)
+            opt.tell(z, f)
+            best = max(best, float(f.max()))
+        gains.append(best)
+    assert gains[1] > gains[0] + 1.0, f"dim {dim}: gained only {gains[1] - gains[0]:.2f}"
+
+
 @pytest.mark.parametrize("name", ["CMA-ES", "Sep-CMA-ES"])
 def test_cma_converges_on_sphere(name):
     best, _ = run(name, sphere, 150)

@@ -47,3 +47,7 @@ __pycache__/
 .pytest_cache/
 models/
 runs/
+
+# Claude Code local state (worktrees, per-machine settings)
+.claude/settings.local.json
+.claude/worktrees/

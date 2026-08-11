@@ -135,3 +135,91 @@ def test_set_grid_to_same_value_is_a_no_op():
     before = [g.copy() for g in svc.population]
     svc.set_grid(4)
     assert all((a == b).all() for a, b in zip(before, svc.population))
+
+
+# ---- the active modality ------------------------------------------------
+#
+# init_population, set_grid and reset all called services.genome.random_genome,
+# which is hardcoded to Fourier's (10, 8). Under any other modality the manual
+# tournament bred 80-float genomes and handed them to a GPU expecting 168, 120
+# or 148 - and sim.write_tournament_rules re-slices at layout.length, so 16
+# genomes arrived as 7 straddling ones plus 9 generated fillers.
+
+import pytest  # noqa: E402
+
+from services.brains import REGISTRY  # noqa: E402
+
+MODALITIES = sorted(REGISTRY)
+
+
+def a_service(name, grid=2, seed=0):
+    lay = REGISTRY[name].layout_from_settings({})
+    svc = TournamentService(grid=grid, rng=np.random.default_rng(seed),
+                            layout=lay)
+    svc.init_population()
+    return svc, lay
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_a_fresh_population_matches_the_active_layout(name):
+    svc, lay = a_service(name)
+    assert all(np.asarray(g).size == lay.length for g in svc.population)
+    assert all(np.asarray(g).dtype == np.float32 for g in svc.population)
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_breeding_stays_in_the_active_layout(name):
+    svc, lay = a_service(name)
+    svc.crossover_enabled = True
+    svc.toggle_select(0)
+    svc.toggle_select(1)
+    svc.next_generation()
+    assert all(np.asarray(g).size == lay.length for g in svc.population)
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_the_pack_is_exactly_one_genome_per_tile(name):
+    svc, lay = a_service(name, grid=4)
+    flat = np.frombuffer(svc.pack_rule_bytes(), dtype=np.float32)
+    assert flat.size == svc.tiles * lay.length
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_mutation_moves_the_genome_without_leaving_the_layout(name):
+    svc, lay = a_service(name)
+    svc.mutation_strength = 0.5
+    svc.inject_randoms = 0
+    svc.toggle_select(0)
+    parent = np.asarray(svc.population[0]).reshape(-1).copy()
+    svc.next_generation()
+    kids = [np.asarray(g).reshape(-1) for i, g in enumerate(svc.population)
+            if i != 0]
+    assert all(k.size == lay.length for k in kids)
+    assert any(not np.allclose(k, parent) for k in kids)
+
+
+def test_a_layout_switch_repopulates_at_the_new_width():
+    svc, _ = a_service("fourier")
+    gab = REGISTRY["gabor"].layout_from_settings({})
+    svc.set_layout(gab)
+    assert all(np.asarray(g).size == gab.length for g in svc.population)
+    assert svc.selected == set()
+
+
+def test_a_scales_only_layout_change_leaves_the_population_alone():
+    """Scales change what a genome MEANS, not how wide it is. Rerolling here
+    would throw away the tiles the user is in the middle of selecting."""
+    m = REGISTRY["fourier"]
+    svc = TournamentService(grid=2, layout=m.layout_from_settings({}))
+    svc.init_population()
+    before = [np.asarray(g).copy() for g in svc.population]
+    svc.set_layout(m.layout_from_settings({"freq_scale": 1.5}))
+    assert all(np.array_equal(a, b) for a, b in zip(before, svc.population))
+
+
+def test_the_default_layout_is_still_fourier_shaped():
+    """Everything above this section constructs TournamentService without a
+    layout and expects (10, 8); that presentation must survive."""
+    svc = TournamentService(grid=2)
+    svc.init_population()
+    assert all(np.asarray(g).shape == GENOME_SHAPE for g in svc.population)

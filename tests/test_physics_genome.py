@@ -112,17 +112,22 @@ def make(physics):
     return svc, ts
 
 
+# `is BRAIN_SPEC` was the wrong assertion, and it enshrined a real bug: the
+# module-level constants are permanently Fourier, so a service that satisfied it
+# was one that ignored the selected brain. The space is what matters, and
+# same_space_as is what compares it.
+
 def test_brain_only_produces_no_per_tile_physics():
     svc, _ = make(False)
     svc.start("coral")
     assert svc.tile_physics == []
-    assert svc.spec is BRAIN_SPEC
+    assert svc.spec.same_space_as(BRAIN_SPEC)
 
 
 def test_physics_search_produces_one_block_per_tile():
     svc, ts = make(True)
     svc.start("coral")
-    assert svc.spec is BRAIN_PHYSICS_SPEC
+    assert svc.spec.same_space_as(BRAIN_PHYSICS_SPEC)
     assert len(svc.tile_physics) == ts.tiles
     for block in svc.tile_physics:
         assert set(block) == {n for n, _g, _lo, _hi in PHYSICS_PARAMS}
@@ -215,7 +220,7 @@ def test_starting_with_physics_already_enabled_does_not_crash():
     svc, ts = make(True)
     svc.physics_origin = {n: (lo + hi) / 2 for n, _g, lo, hi in PHYSICS_PARAMS}
     svc.start("coral")                      # must not raise
-    assert svc.spec is BRAIN_PHYSICS_SPEC
+    assert svc.spec.same_space_as(BRAIN_PHYSICS_SPEC)
     assert len(svc.tile_physics) == ts.tiles
 
 

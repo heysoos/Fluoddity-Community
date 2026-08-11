@@ -61,6 +61,9 @@ def test_the_index_never_gains_a_duplicate_id(tmp_path):
     shadows the original entry on every subsequent load."""
     root = tmp_path / "arc"
     arc = Archive(store=ArchiveStore(root))
+    # store.root, not root: a store lives in a subdirectory named for its brain
+    # layout signature, so the files are one level down from the archive.
+    store_root = arc.store.root
     _fill(arc, 10)
     arc.maybe_flush(force=True)
     _fill(arc, 5, start=10)
@@ -72,7 +75,7 @@ def test_the_index_never_gains_a_duplicate_id(tmp_path):
     back.maybe_flush(force=True)
     back.store.close()
 
-    ids = _ids_in_index(root / "index.jsonl")
+    ids = _ids_in_index(store_root / "index.jsonl")
     assert len(ids) == len(set(ids)), f"duplicate ids: {len(ids) - len(set(ids))}"
 
 
@@ -87,7 +90,11 @@ def test_a_reused_id_would_overwrite_a_thumbnail(tmp_path):
     arc.maybe_flush(force=True)
     for i in range(4):
         arc.consider(_cand(50 + i), novelty=1.0, force=True, thumb_crop=crop)
-    doomed = sorted(p.name for p in (root / "thumbs").glob("*.jpg"))[-4:]
+    # store.root, not root - see test_the_index_never_gains_a_duplicate_id.
+    # Globbing the archive directory finds nothing and the assertion below
+    # passes without testing anything.
+    doomed = sorted(p.name for p in (arc.store.root / "thumbs").glob("*.jpg"))[-4:]
+    assert doomed, "no thumbnails were written, so this proves nothing"
     arc.store.close()
 
     back = Archive(store=ArchiveStore(root))
