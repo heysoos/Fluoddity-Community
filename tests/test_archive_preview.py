@@ -14,9 +14,10 @@ from state.sim_state import SimState
 
 
 class _Entry:
-    def __init__(self, i, spec="brain:80"):
+    def __init__(self, i, spec="brain:80", run_id="run-a"):
         self.id = i
         self.spec = spec
+        self.run_id = run_id
 
 
 class _FakeArchive:
@@ -85,11 +86,29 @@ class _UI:
         self.auto_tournament = AutoTournamentState()
 
 
-def _handler(archive=None):
+class _FakeStore:
+    """Only what the preview asks of a store: one config per run id."""
+
+    def __init__(self, configs=None):
+        self.configs = dict(configs or {})
+        self.saved = {}
+
+    def load_run_config(self, run_id):
+        return self.configs.get(run_id)
+
+    def save_run_config(self, run_id, config_json):
+        self.saved.setdefault(run_id, config_json)
+        return True
+
+
+def _handler(archive=None, store=None):
     from command_handler import CommandHandler
 
     h = object.__new__(CommandHandler)
     h.archive = archive if archive is not None else _FakeArchive()
+    h.archive_store = store
+    h._run_config_cache = {}
+    h._run_physics_written = ""
     h.sim = _Sim()
     h.rule_manager = _RuleManager(np.zeros((10, 8), dtype=np.float32))
     h.param_lock_service = None
@@ -401,3 +420,99 @@ def test_a_switch_while_still_hovering_shows_the_new_archives_entry():
     assert h.rule_manager.depth == 1, "still exactly one push"
     assert np.allclose(h.sim.applied[-1], fresh.brains[2])
     assert not np.allclose(fresh.brains[2], old.brains[2])
+
+
+# ---- the run's own physics -------------------------------------------------
+#
+# An entry stores its brain and, with physics search on, the deltas the
+# optimizer moved. The config those deltas are RELATIVE to lives in a per-run
+# file, because with search off it is the entry's physics entirely.
+
+def _run_config(**overrides):
+    from services.config_saver import ConfigSaver
+
+    state = SimState()
+    for name, value in overrides.items():
+        setattr(state, name, value)
+    return ConfigSaver().create_config(state, None).to_json()
+
+
+def test_a_brain_only_entry_brings_the_physics_of_its_run():
+    """The whole bug: with physics search off nothing about an entry's physics
+    was recorded, so it replayed under whatever the sliders happened to say."""
+    store = _FakeStore({"run-a": _run_config(SENSOR_GAIN=3.5, TRAIL_PERSISTENCE=0.5)})
+    h, ui = _handler(store=store), _UI()
+    ui.sim.SENSOR_GAIN = 0.1
+    ui.archive.live_preview = True
+
+    hover(h, ui, 1)
+    assert ui.sim.SENSOR_GAIN == pytest.approx(3.5)
+    # Not a physics slider, and exactly why the whole config is recorded.
+    assert ui.sim.TRAIL_PERSISTENCE == pytest.approx(0.5)
+
+
+def test_the_searched_deltas_win_over_the_runs_config():
+    """Two layers: the run config is the base, the entry's own vector overrides
+    it for the parameters the optimizer actually moved."""
+    store = _FakeStore({"run-a": _run_config(SENSOR_GAIN=3.5, TRAIL_PERSISTENCE=0.5)})
+    h, ui = _handler(_FakeArchive(spec="brain:80+physics:8"), store=store), _UI()
+    ui.archive.live_preview = True
+
+    hover(h, ui, 1)
+    assert ui.sim.SENSOR_GAIN == pytest.approx(0.25)   # searched, from _phys
+    assert ui.sim.TRAIL_PERSISTENCE == pytest.approx(0.5)  # not searched, from the run
+
+
+def test_leaving_puts_back_everything_the_run_config_touched():
+    store = _FakeStore({"run-a": _run_config(SENSOR_GAIN=3.5, TRAIL_PERSISTENCE=0.5)})
+    h, ui = _handler(store=store), _UI()
+    ui.sim.SENSOR_GAIN, ui.sim.TRAIL_PERSISTENCE = 0.1, 0.9
+    ui.archive.live_preview = True
+
+    hover(h, ui, 1)
+    hover(h, ui, -1)
+    assert ui.sim.SENSOR_GAIN == pytest.approx(0.1)
+    assert ui.sim.TRAIL_PERSISTENCE == pytest.approx(0.9)
+
+
+def test_moving_between_entries_restores_the_user_not_the_previous_entry():
+    """The snapshot is taken once, before the FIRST push."""
+    store = _FakeStore({"run-a": _run_config(SENSOR_GAIN=3.5),
+                        "run-b": _run_config(SENSOR_GAIN=1.5)})
+    arc = _FakeArchive()
+    arc.entries[2].run_id = "run-b"
+    h, ui = _handler(arc, store=store), _UI()
+    ui.sim.SENSOR_GAIN = 0.1
+    ui.archive.live_preview = True
+
+    hover(h, ui, 1)
+    hover(h, ui, 2)
+    assert ui.sim.SENSOR_GAIN == pytest.approx(1.5)
+    hover(h, ui, -1)
+    assert ui.sim.SENSOR_GAIN == pytest.approx(0.1)
+
+
+def test_a_run_recorded_before_this_existed_leaves_the_sliders_alone():
+    """Every archive on disk predates run configs. A missing file must mean
+    'do nothing', which is exactly what those entries did before."""
+    h, ui = _handler(store=_FakeStore()), _UI()
+    ui.sim.SENSOR_GAIN = 0.1
+    ui.archive.live_preview = True
+
+    hover(h, ui, 1)
+    assert ui.sim.SENSOR_GAIN == pytest.approx(0.1)
+    assert h._archive_preview_physics is None, "nothing to restore, nothing snapshotted"
+
+
+def test_the_run_config_is_read_once_per_run():
+    """The browser hovers on every frame."""
+    store = _FakeStore({"run-a": _run_config(SENSOR_GAIN=3.5)})
+    reads = []
+    inner = store.load_run_config
+    store.load_run_config = lambda rid: (reads.append(rid), inner(rid))[1]
+
+    h, ui = _handler(store=store), _UI()
+    ui.archive.live_preview = True
+    for entry_id in (1, 2, 3, 1, 2):
+        hover(h, ui, entry_id)
+    assert reads == ["run-a"]

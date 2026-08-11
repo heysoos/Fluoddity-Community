@@ -246,6 +246,10 @@ only the running app can answer.
 - [ ] Clicking an entry keeps it after the pointer leaves, and says which one it loaded
 - [ ] The same works by hovering and clicking dots on the Map tab
 - [ ] An entry saved from a physics-search run brings its physics sliders, and leaving puts your sliders back
+- [ ] Run Explore briefly, then hover the entries it made: they recreate their thumbnails, whatever your sliders were set to beforehand
+- [ ] Move every physics slider somewhere else and hover them again: still recreated, and leaving puts your own sliders back
+- [ ] `<archive>/runs/<run_id>.json` appears when a run starts, and a pause-and-resume does not add a second file or change the first
+- [ ] Entries from an archive made before this (no `runs/` folder) still preview, and leave the sliders alone
 - [ ] Toggling Live preview off while hovering restores immediately
 - [ ] Deleting the entry you are hovering does not crash
 - [ ] The toggle's state is remembered per archive across a relaunch

@@ -1,7 +1,38 @@
 # Recording the physics an archive entry ran under
 
-Status: designed, deferred until `worktree-brain-modalities` merges into
-`tournament-mode`.
+Status: the RUN-LEVEL half is built. The per-entry half below is still deferred
+until `worktree-brain-modalities` merges into `tournament-mode`.
+
+## What the first version of this document got wrong
+
+It framed the problem as "widen the searched physics vector so `V_MAX` joins
+it". That is a real gap, but it is the smaller one and it does not fix the
+symptom at all: with `physics_enabled` off there IS no searched vector, so
+there is nothing to widen. Every entry in a brain-only run stored `zeros(8)`,
+and replaying it used whatever the sliders said at browse time.
+
+The fix that matters is therefore a level up. The archive now writes the whole
+`PhysicsConfig` to `<archive>/runs/<run_id>.json` when a run starts, and the
+browser preview applies it before pushing the brain. Two layers:
+
+- the **run config** is the base — every slider, plus trails, boundary mode,
+  cohorts, hue sensitivity and `rule_seed`, which the searched vector never
+  covered under any setting;
+- the entry's **`_phys` vector** overrides it for the parameters the optimizer
+  actually moved, when there are any.
+
+Base plus deltas reconstructs an entry exactly. A run recorded before this
+existed has no file, `load_run_config` returns `None`, and the preview leaves
+the sliders alone — which is what those entries already did.
+
+It deliberately touches none of `Archive.__init__`, `_grow`, `load_from_store`
+or `ArchiveStore.__init__`, so it does not collide with the brain-modalities
+merge and did not have to wait for it.
+
+The rest of this document — the per-entry `RECORDED_PHYSICS` column — is still
+worth doing, because a run config cannot describe a tile whose physics the
+search moved off the base. It is no longer urgent: the deltas for those
+parameters are already stored, and the base they are relative to now is too.
 
 ## The problem
 

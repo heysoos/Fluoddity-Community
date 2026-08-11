@@ -256,6 +256,7 @@ class App:
         self.ui.archive_projection = self.archive_projection
         self.ui.thumb_cache = self.thumb_cache
         self.command_handler.archive = archive
+        self.command_handler.archive_store = store
         self.command_handler.goal_list = goals
         self.command_handler.archive_projection = self.archive_projection
 

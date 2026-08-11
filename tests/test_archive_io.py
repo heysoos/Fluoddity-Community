@@ -154,3 +154,41 @@ def test_an_unwritable_root_disables_persistence_without_raising(tmp_path):
     assert s.write_thumb(0, np.zeros((8, 8, 3), np.uint8)) == ""
     assert s.load_goals() == []
     s.close()
+
+
+# ---- the physics a run was carried out under -------------------------------
+
+def test_a_run_config_round_trips(tmp_path):
+    s = ArchiveStore(tmp_path)
+    assert s.save_run_config("20260811-021952", '{"physics": {"drag": 0.5}}')
+    assert s.load_run_config("20260811-021952") == '{"physics": {"drag": 0.5}}'
+
+
+def test_a_run_that_was_never_recorded_reads_as_none(tmp_path):
+    s = ArchiveStore(tmp_path)
+    assert s.load_run_config("20260810-010606") is None
+    assert s.load_run_config("") is None
+
+
+def test_a_run_id_names_one_set_of_physics(tmp_path):
+    """A resume writing a second config would silently reinterpret every entry
+    already filed under that run id."""
+    s = ArchiveStore(tmp_path)
+    s.save_run_config("r1", '"first"')
+    assert s.save_run_config("r1", '"second"')      # succeeds, changes nothing
+    assert s.load_run_config("r1") == '"first"'
+
+
+def test_a_run_id_cannot_write_outside_the_archive(tmp_path):
+    s = ArchiveStore(tmp_path)
+    s.save_run_config("../../escaped", '"x"')
+    assert not (tmp_path.parent.parent / "escaped.json").exists()
+    assert list((tmp_path / "runs").glob("*.json"))
+
+
+def test_run_configs_do_not_disturb_the_index_or_vectors(tmp_path):
+    """runs/ is additive: an archive written before it existed still loads."""
+    s = ArchiveStore(tmp_path)
+    s.save_run_config("r1", '"x"')
+    rows, arrays = s.load()
+    assert rows == [] and arrays == {}

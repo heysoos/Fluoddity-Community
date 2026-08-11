@@ -55,13 +55,19 @@ class _Handler:
         self.tournament_service = None
         self.goal_list = None
         self.archive_projection = None
+        # No store, so the run's physics is not filed - covered in
+        # tests/test_archive_preview.py rather than here.
+        self.archive_store = None
+        self._run_physics_written = ""
         self._clear_explore_flags = CommandHandler._clear_explore_flags
+        self._record_run_physics = CommandHandler._record_run_physics.__get__(self)
 
 
 class _Svc:
     def __init__(self, drv):
         self.driver = drv
         self.phase = type("P", (), {"value": "rollout"})()
+        self.run_id = "run-a"
 
     def configure(self, **kw):
         pass

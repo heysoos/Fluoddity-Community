@@ -20,6 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
+from services.save_targets import safe_stem
+
 FORMAT_VERSION = 1
 THUMB_PX = 160
 THUMB_QUALITY = 85
@@ -65,6 +67,9 @@ class ArchiveStore:
 
     def thumb_path(self, name: str) -> Path:
         return self.root / "thumbs" / name
+
+    def run_config_path(self, run_id: str) -> Path:
+        return self.root / "runs" / f"{safe_stem(run_id)}.json"
 
     # ---- writing -------------------------------------------------------
 
@@ -180,7 +185,48 @@ class ArchiveStore:
         except (OSError, TypeError) as exc:
             print(f"[Archive] settings not saved ({exc})")
 
+    def save_run_config(self, run_id: str, config_json: str) -> bool:
+        """Record the physics a run is about to be carried out under.
+
+        An entry stores its brain and, when physics is searched, the deltas the
+        optimizer moved. It has never stored the config those deltas are
+        relative to - so replaying an entry used whatever the sliders happened
+        to say, and with physics search OFF that is the entry's physics
+        entirely. Written once per run, because with search off every entry in
+        the run shares one config; `run_id` is already on every index row.
+
+        Never overwrites: a run id names one set of physics, and a resume that
+        wrote a second would silently reinterpret the entries already filed
+        under it. -> whether a file is now on disk for this run.
+        """
+        if not self.enabled or not run_id:
+            return False
+        path = self.run_config_path(run_id)
+        if path.exists():
+            return True
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(config_json, encoding="utf-8")
+            os.replace(tmp, path)
+            return True
+        except OSError as exc:
+            print(f"[Archive] run config not saved ({exc}); "
+                  f"entries from this run will replay under the live sliders")
+            return False
+
     # ---- reading -------------------------------------------------------
+
+    def load_run_config(self, run_id: str) -> str | None:
+        """-> the run's config JSON, or None for a run recorded before this
+        existed. None means "leave the sliders alone", which is what every
+        entry did before run configs were written."""
+        if not run_id:
+            return None
+        try:
+            return self.run_config_path(run_id).read_text(encoding="utf-8")
+        except OSError:
+            return None
 
     def load_goals(self) -> list[dict]:
         try:

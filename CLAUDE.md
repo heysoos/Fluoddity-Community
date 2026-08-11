@@ -245,6 +245,20 @@ mechanics these caveats assume.
 
 ### The archive and admission
 
+- **An entry's physics is TWO layers, and the base is per RUN, not per entry.**
+  `<archive>/runs/<run_id>.json` holds the whole `PhysicsConfig` the run was
+  carried out under; the entry's `_phys` vector overrides it for the parameters
+  the optimizer searched. The vector alone is not enough and never was: with
+  `physics_enabled` off it is `zeros(8)`, so a brain-only entry replayed under
+  whatever the sliders happened to say — which is the entry's whole physics.
+  Nothing in `_phys` ever covered trails, boundary mode, cohorts, hue
+  sensitivity or `rule_seed` under any setting. Written from
+  `_record_run_physics` off `ast.running` rather than off `start_requested`, so
+  a resume and a run already going both reach it, and `save_run_config` refuses
+  to overwrite — a run id names ONE set of physics, and a second would
+  reinterpret the entries already filed under it. A missing file means "leave
+  the sliders alone", so every archive written before this still opens.
+
 - **The archive stores decoded phenotypes, never `z`.** With physics search on,
   `z` is relative to `physics_origin` — the preset loaded at the time — so a `z`
   archived under one preset decodes to a different creature under another. See

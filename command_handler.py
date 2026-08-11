@@ -32,8 +32,13 @@ class CommandHandler:
         # Explore (IMGEP) mode; set by App._ensure_archive_service().
         self.imgep_driver = None
         self.archive = None
+        self.archive_store = None
         self.goal_list = None
         self.archive_projection = None
+        # Which run's physics is already on disk, and the configs read back for
+        # the preview. Both are per-archive and cleared on a switch.
+        self._run_physics_written = ""
+        self._run_config_cache = {}
         # App._switch_archive; None until Explore mode has been opened once.
         self.switch_archive = None
         # App._release_archive - see _handle_archive_management.
@@ -607,7 +612,29 @@ class CommandHandler:
             self._delete_archive_entry(ast)
 
         ast.running = svc.phase.value == "rollout"
+        if ast.running:
+            self._record_run_physics(ui_state, svc.run_id)
         self._clear_explore_flags(ast)
+
+    def _record_run_physics(self, ui_state, run_id):
+        """File the physics this run is producing entries under.
+
+        Driven off `running` rather than off start_requested, so a resume, a
+        reset and a run already going when the app opened all reach it; the
+        store refuses to overwrite, so calling it every frame files exactly one
+        config per run. Without it an entry replays under whatever the sliders
+        say at browse time, which - with physics search off - is the entry's
+        whole physics.
+        """
+        if self.archive_store is None or not run_id:
+            return
+        if run_id == self._run_physics_written:
+            return
+        from services.config_saver import ConfigSaver
+
+        cfg = ConfigSaver().create_config(ui_state.sim, None)
+        if self.archive_store.save_run_config(run_id, cfg.to_json()):
+            self._run_physics_written = run_id
 
     def _archive_index(self, entry_id):
         for i, e in enumerate(self.archive.entries):
@@ -635,9 +662,12 @@ class CommandHandler:
             return
 
         # Ids restart at 0 in every archive, so after a switch the id being
-        # previewed names a different creature - or none.
+        # previewed names a different creature - or none. Run ids do not
+        # restart, but they are looked up in the store that just changed.
         if self._archive_preview_arc is not self.archive:
             self._end_archive_preview(ui_state)
+            self._run_config_cache = {}
+            self._run_physics_written = ""
 
         if ast.load_entry_id >= 0:
             # The previewed rule is already on the GPU and on the rule stack;
@@ -659,23 +689,55 @@ class CommandHandler:
         if want >= 0:
             self._show_archive_preview(ui_state, want)
 
+    def _run_config_for(self, entry):
+        """-> the PhysicsConfig this entry's RUN was carried out under, or None
+        for a run that predates run configs. Cached: the browser asks once per
+        hovered entry, and a run has one config."""
+        if self.archive_store is None:
+            return None
+        run_id = getattr(entry, "run_id", "")
+        if run_id not in self._run_config_cache:
+            from services.config_saver import PhysicsConfig
+
+            raw = self.archive_store.load_run_config(run_id)
+            try:
+                cfg = PhysicsConfig.from_json(raw) if raw is not None else None
+            except (ValueError, KeyError, TypeError) as exc:
+                print(f"[archive] run {run_id}'s physics is unreadable ({exc})")
+                cfg = None
+            self._run_config_cache[run_id] = cfg
+        return self._run_config_cache[run_id]
+
     def _show_archive_preview(self, ui_state, entry_id):
-        """Push entry `entry_id`'s brain, and its physics if it carries any."""
+        """Push entry `entry_id`'s brain, and the physics it actually ran under.
+
+        Two layers, because the search only ever moves part of the physics: the
+        RUN's config is the base, and the entry's own vector overrides it for
+        the parameters the optimizer searched. With physics search off there is
+        no vector and the run config is the entry's physics entirely.
+        """
+        from services.config_saver import ConfigSaver
         from services.physics_genome import PHYSICS_PARAMS
 
         i = self._archive_index(entry_id)
         if i is None:
             return
         sim_state = ui_state.sim
-        # Snapshotted before the first push and restored as a whole, because a
-        # genome searched with physics on is not the same creature under the
-        # sliders that happen to be set.
-        if "physics" in self.archive.entries[i].spec:
-            self._archive_preview_physics = {
-                name: getattr(sim_state, name)
-                for name, _g, _lo, _hi in PHYSICS_PARAMS}
-            for j, (name, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
-                setattr(sim_state, name, float(self.archive.physics[i][j]))
+        entry = self.archive.entries[i]
+        run_config = self._run_config_for(entry)
+        searched = "physics" in entry.spec
+        # Snapshotted WHOLE before the first push and restored whole, because a
+        # genome is not the same creature under the sliders that happen to be
+        # set, and the run config reaches trails and boundaries as well.
+        if run_config is not None or searched:
+            saver = ConfigSaver()
+            if self._archive_preview_physics is None:
+                self._archive_preview_physics = saver.create_config(sim_state, None)
+            if run_config is not None:
+                saver.apply_config(run_config, sim_state)
+            if searched:
+                for j, (name, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
+                    setattr(sim_state, name, float(self.archive.physics[i][j]))
 
         rule = np.asarray(self.archive.brains[i], dtype=np.float32)
         pls = self.param_lock_service
@@ -700,8 +762,9 @@ class CommandHandler:
             if prev_rule is not None:
                 self.sim.apply_rule(prev_rule)
         if self._archive_preview_physics is not None:
-            for name, value in self._archive_preview_physics.items():
-                setattr(ui_state.sim, name, value)
+            from services.config_saver import ConfigSaver
+
+            ConfigSaver().apply_config(self._archive_preview_physics, ui_state.sim)
         self._archive_preview_id = -1
         self._archive_preview_physics = None
         self._archive_preview_pushed = False
