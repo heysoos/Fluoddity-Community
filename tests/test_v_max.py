@@ -113,6 +113,17 @@ def test_the_limit_covers_strafe_and_not_just_velocity():
     assert "e.pos += e.vel;" not in SHADER, "the unclamped move is back"
 
 
+def test_the_limit_covers_the_advanced_drawing_field():
+    """The brush's strafe field is another straight-to-position term, and its
+    force field feeds a velocity the cap has to reach as well."""
+    delta = SHADER.index("vec2 step_delta = e.vel + hop;")
+    brush = SHADER.index("vec4 draw_sample = get_field(")
+    clamp = SHADER.index("if(smag > vlim)")
+    assert delta < brush < clamp
+    assert "step_delta += .01*strafe_field_strength*draw_sample.zw;" in SHADER
+    assert "e.pos += .01*strafe_field_strength" not in SHADER
+
+
 def test_the_limit_also_scales_the_stored_velocity():
     """Otherwise speed piles up behind the cap and lurches when it is raised."""
     body = SHADER[SHADER.index("if(smag > vlim)"):]

@@ -152,8 +152,10 @@ mechanics these caveats assume.
   by the same factor — scaling only the step lets speed pile up behind the cap
   and lurch when it is raised. `hop` samples `STRAFE_POWER` at `e.pos + e.vel`,
   which is where the two-statement version read it, so a sweep on Strafe Power
-  is unchanged. The advanced-drawing strafe field is applied after and is
-  deliberately outside the cap. Guarded by
+  is unchanged. The advanced-drawing field is folded in before the cap for the
+  same reason — its strafe half is a third straight-to-position term — and it is
+  sampled at `e.pos + step_delta`, which is the point the two-statement version
+  read it at, so an unbraked brush is unchanged. Guarded by
   `tests/test_v_max.py::test_a_zero_limit_actually_stops_a_strafing_preset`,
   which RUNS the sim — every source-level test passed while the bug was live.
 

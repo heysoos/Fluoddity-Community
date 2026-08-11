@@ -269,6 +269,7 @@ only the running app can answer.
 - [ ] Dragging it fully left stops the particles dead, and dragging back right revives them
 - [ ] It stops them dead on a preset with high Strafe Power too (Zipper, Adrift, Shrimp) — strafe moves particles without touching velocity
 - [ ] Holding it low for a while and then releasing it does not make particles lurch
+- [ ] With V Max fully left, painting a strong strafe field in Advanced Drawing does not move particles either; with V Max at the top the brush pushes exactly as it always did
 - [ ] Take a preset that blows up (high Sensor Gain, Drag near 1) and lower V Max: it settles instead of tearing
 - [ ] Save a preset, relaunch, load it: V Max comes back at the value you saved
 - [ ] Copy to clipboard and paste back: same
