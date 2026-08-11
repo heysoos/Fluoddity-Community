@@ -54,3 +54,8 @@ class BrainState:
     # canvas holds several different behaviours at once. The Inspector shows
     # cohort 0's and says so.
     preview_per_cohort: bool = False
+    # True while the tournament grid is running, when slot 0 is TILE 0's genome
+    # rather than any cohort's. The Inspector draws slot 0 either way, so
+    # without this it names the wrong thing - and a grid of 16 or 64 distinct
+    # brains showing one of them unlabelled reads as the whole grid.
+    preview_tile0: bool = False

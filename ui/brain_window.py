@@ -181,7 +181,11 @@ class BrainWindowMixin:
             return
 
         n = preview.unit_count(layout)
-        if state.preview_per_cohort:
+        if state.preview_tile0:
+            # The grid owns slot 0, so this is ONE tile of however many are on
+            # screen - not the grid, and not a cohort.
+            imgui.text_disabled("tile 0 of the tournament grid")
+        elif state.preview_per_cohort:
             # A statement, not a warning. Every modality does this when no rule
             # is loaded, and it is what makes a fresh canvas interesting.
             imgui.text_disabled("cohort 0 of an unsaved random brain per cohort")

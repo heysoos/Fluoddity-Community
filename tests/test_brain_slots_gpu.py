@@ -115,3 +115,22 @@ def test_multi_load_configs_land_one_per_slot(sim):
     for i, rule in enumerate(rules):
         want = np.asarray(rule, dtype=np.float32).reshape(-1)
         assert np.array_equal(got[i, :n], want), f"config {i} in the wrong slot"
+
+
+def test_a_tournament_upload_stops_claiming_the_slots_are_per_cohort(sim):
+    """These slots are owned by TILE once the grid runs, and the Brain window
+    captions its picture off this flag. Leaving it set has the Inspector name
+    tile 0's evolved genome "cohort 0 of a random brain per cohort"."""
+    from services.genome import random_genome
+
+    sim.apply_rule(None)                       # the per-cohort state
+    assert sim.brain_per_cohort
+
+    n = sim.brain_layout.length
+    sim._tournament_grid = 2
+    genomes = [random_genome(np.random.default_rng(s)) for s in range(4)]
+    sim.write_tournament_rules(
+        b"".join(np.asarray(g, dtype=np.float32).reshape(-1)[:n].tobytes()
+                 for g in genomes))
+
+    assert not sim.brain_per_cohort

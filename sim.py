@@ -1012,6 +1012,16 @@ class Sim:
                 self._brain_layout, seed, tiles - len(genomes))
         self.multi_load_rule_buffer.write(
             pack_brains(genomes, self._brain_layout))
+        # These slots are owned by TILE now, not by cohort. Leaving the flag set
+        # has the Brain window caption its picture "cohort 0 of a random brain
+        # per cohort" while it is in fact drawing tile 0's evolved genome.
+        self._brain_per_cohort = False
+
+    @property
+    def tournament_enabled(self) -> bool:
+        """Is the grid running? Read by the Brain window, which draws slot 0 -
+        cohort 0's brain ordinarily, and tile 0's under a tournament."""
+        return bool(self._tournament_enabled)
 
     @property
     def brain_layout(self):

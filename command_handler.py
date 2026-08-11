@@ -45,6 +45,9 @@ class CommandHandler:
         self.release_archive = None
         # App._apply_brain_layout, wired by the orchestrator at startup.
         self.apply_brain_layout = None
+        # A rule that arrived on a config naming a brain other than the one
+        # running. Lives exactly one frame; see take_pending_brain_rule.
+        self._pending_brain_rule = None
 
         # Preview state
         self.preview_rule_active = False  # File->load preview
@@ -81,7 +84,23 @@ class CommandHandler:
         if pls and pls.should_block_rule_push():
             return
         self.rule_manager.push_rule(rule, ui_state.sim.rule_seed)
+        if self._switch_will_apply(rule):
+            return
         self.sim.apply_rule(rule)
+
+    def _switch_will_apply(self, rule) -> bool:
+        """Is a layout switch already going to apply this rule, this frame?
+
+        Its config named another brain, so _handle_brain_layout switches and
+        hands it over. Pushing it here first only reaches apply_rule's width
+        guard, which prints an 'ignoring' line for a load that then succeeds -
+        a load that worked, reported as one that did not.
+        """
+        pending = self._pending_brain_rule
+        if pending is None or rule is None or self.apply_brain_layout is None:
+            return False
+        lay = getattr(getattr(self, "sim", None), "brain_layout", None)
+        return lay is not None and pending[1] != lay.signature()
 
     @property
     def has_pending_entity_selection(self):
@@ -229,6 +248,9 @@ class CommandHandler:
         # decode. _apply_brain_layout early-returns when nothing differs and
         # takes a light path when only the scales do.
         self.apply_brain_layout(layout_for(bst.modality, bst.settings), ui_state)
+        # One frame only. A same-brain load needs no switch, so nothing consumed
+        # it, and a rule left here would be applied by the next unrelated one.
+        self._pending_brain_rule = None
 
     def _active_best_z(self):
         """The best search vector the running driver has found, or None.
@@ -465,6 +487,27 @@ class CommandHandler:
                 # rule will still play, but it is not the brain named on the tin.
                 print(f"[brain] {sig} was saved, but its settings rebuild "
                       f"{got}; loading the settings")
+
+        # Hand the creature to the switch this config just asked for. The rule
+        # was already pushed, under the OLD layout, where apply_rule refused it
+        # on width - and the switch would then seed a generated brain over it.
+        rule = getattr(config, "rule", None)
+        if rule is not None:
+            self._pending_brain_rule = (
+                np.asarray(rule, dtype=np.float32).reshape(-1).copy(), sig)
+
+    def take_pending_brain_rule(self, signature):
+        """-> the rule a just-loaded config carried, if it is `signature`'s.
+
+        Consumed, so it can never be applied twice. Matched on SIGNATURE and
+        never on width: Fourier at 10 centres and a Lenia layout can both be 80
+        floats, over completely different meanings.
+        """
+        pending, self._pending_brain_rule = self._pending_brain_rule, None
+        if pending is None:
+            return None
+        rule, sig = pending
+        return rule if sig == signature else None
 
     def _save_tournament_selection(self, ui_state, filename):
         """Save each selected genome under the chosen name (tiles get suffixed

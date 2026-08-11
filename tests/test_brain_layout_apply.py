@@ -66,6 +66,7 @@ class _StubApp:
 
     auto_service = imgep_driver = archive = None
     goal_list = archive_store = thumb_cache = None
+    command_handler = None
 
     def __init__(self, layout=None):
         layout = layout or default_layout()

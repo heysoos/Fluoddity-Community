@@ -213,3 +213,15 @@ def test_a_closed_window_draws_nothing(gui):
     ui = _StubUI()
     ui.state.brain.enabled = False
     ui.render_brain_window()
+
+
+def test_the_caption_names_the_tile_when_the_grid_is_running(gui):
+    """The Inspector draws slot 0 whatever is running, and under a tournament
+    that is TILE 0 - not a cohort, and not the grid. The two captions are
+    mutually exclusive: preview_per_cohort survives a rule-less startup, so
+    both flags are set at once and the tile has to win."""
+    ui = _StubUI()
+    ui.state.brain.preview_per_cohort = True
+    ui.state.brain.preview_tile0 = True
+    gui.set_next_item_open(True)
+    ui.render_brain_window()

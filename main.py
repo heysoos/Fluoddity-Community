@@ -410,6 +410,7 @@ class App:
         # re-derive the shader's "is this buffer blank" verdict, and when it did
         # not, it drew the blank buffer: black tiles while the particles ran.
         bst.preview_per_cohort = self.sim.brain_per_cohort
+        bst.preview_tile0 = self.sim.tournament_enabled
         try:
             self.ui.brain_preview_tex = self.brain_preview.render(
                 layout,
@@ -482,9 +483,18 @@ class App:
         # active length, and slot 0 is re-uploaded from whatever rule is live.
         self.sim.realloc_brain_buffers(layout)
         # The old genome's floats mean something else under a new layout, so it
-        # is dropped. apply_rule(None) then seeds what "no rule" means: one
-        # generated brain per cohort, for every modality alike.
-        self.sim.apply_rule(None)
+        # is dropped - UNLESS a config naming this very layout was loaded in the
+        # same frame, because the switch is that config's own doing and its
+        # creature is what the user asked for. The load runs first and pushes
+        # the rule while the OLD brain is still live, so apply_rule refuses it
+        # on width; without this handoff the switch then buries it under a
+        # generated brain. Otherwise apply_rule(None) seeds what "no rule"
+        # means: one generated brain per cohort, for every modality alike.
+        pending = None
+        if self.command_handler is not None:
+            pending = self.command_handler.take_pending_brain_rule(
+                layout.signature())
+        self.sim.apply_rule(pending)
 
         # The interactive tournament breeds genomes of the layout it is told
         # about; without this it keeps producing the old width and the tiles are
