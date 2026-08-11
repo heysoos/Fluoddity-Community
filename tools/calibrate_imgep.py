@@ -2,6 +2,7 @@
 
     python -m tools.calibrate_imgep              # sigma_expand, offline
     python -m tools.calibrate_imgep --liveness   # liveness_min, needs GL + CLIP
+    python -m tools.calibrate_imgep --speed      # V Max's range, needs GL
 
 sigma_expand: the decoded spread of a mutated population should be visibly
 related to, but narrower than, a fresh random population. This compares the
@@ -13,6 +14,11 @@ between what a frozen preset scores and what a lively one scores. Guessing it
 is exactly the mistake this file exists to prevent - and it CANNOT be inferred
 offline, because liveness is a property of rendered frames. The --liveness mode
 therefore runs real presets through the real Camera at production settings.
+
+V Max's range: the slider must reach below the slowest preset and sit above the
+fastest, or the control appears to do nothing. Speed is a property of the
+running sim and depends on particle density, so --speed steps each preset at the
+app's own world size and density and reads |vel| straight off the entity buffer.
 """
 from __future__ import annotations
 
@@ -195,6 +201,101 @@ def measure_liveness(preset_names, steps, snapshots, seed=12345, limit=0):
     return out
 
 
+def measure_speed(preset_names, steps, seed=12345, limit=0):
+    """Run each preset and report the distribution of |vel| in canvas units.
+
+    No Camera and no CLIP: this reads the entity buffer directly. Density is
+    taken from PreferencesState because it changes trail intensity, which feeds
+    back into speed - one preset runs 28x faster at 1.0 than at 0.25.
+    """
+    import moderngl
+
+    from services.config_saver import ConfigSaver
+    from sim import Sim, SIZE_OF_ENTITY_STRUCT
+    from state import SimState
+    from state.preferences_state import PreferencesState
+    from utilities.paths import get_app_physics_configs_dir
+
+    root = get_app_physics_configs_dir()
+    paths = []
+    for sub in ("Core", "Advanced"):
+        for p in sorted((root / sub).glob("*.json")):
+            if not preset_names or p.stem in preset_names:
+                paths.append(p)
+    if limit:
+        paths = paths[:: max(1, len(paths) // int(limit))][: int(limit)]
+    if not paths:
+        print("no presets matched")
+        return []
+
+    ctx = moderngl.create_standalone_context(require=430)
+    prefs = PreferencesState()
+    saver = ConfigSaver()
+
+    print(f"{len(paths)} presets, {steps} steps, world_size={prefs.world_size}, "
+          f"density={prefs.particle_density}\n")
+    print(f"{'preset':30s} {'p50':>10s} {'p99':>10s} {'max':>10s}")
+
+    out = []
+    for path in paths:
+        config = saver.load_from_file(path)
+        if config is None:
+            continue
+        state = SimState()
+        rule = saver.apply_config(config, state)
+
+        sim = Sim(ctx, world_size=prefs.world_size, canvas_aspect_ratio="1:1",
+                  particle_density=prefs.particle_density)
+        sim.apply_state(state)
+        sim.apply_rule(rule)
+        sim.reset_seed = float(seed)
+        sim.reset()
+        for _ in range(steps):
+            sim.apply_state(state)
+            sim.update(ctx)
+        ctx.finish()
+
+        raw = np.frombuffer(sim.entities.read(), dtype=np.float32)
+        vel = raw.reshape(-1, SIZE_OF_ENTITY_STRUCT // 4)[:, 2:4]
+        mag = np.linalg.norm(vel.astype(np.float64), axis=1)
+        mag = mag[np.isfinite(mag)]
+        if not mag.size:
+            continue
+        p50, p99 = np.percentile(mag, [50, 99])
+        out.append((path.stem, float(p50), float(p99), float(mag.max())))
+        print(f"{path.stem:30s} {p50:10.6f} {p99:10.6f} {mag.max():10.6f}")
+
+    ctx.release()
+    return out
+
+
+def report_speed(rows):
+    """V Max is stored pre-scaling, so the slider's units are |vel|*sqrt(ws)."""
+    if not rows:
+        return
+    from state.preferences_state import PreferencesState
+    from ui.physics_params import PARAM_BY_NAME
+
+    scale = float(np.sqrt(PreferencesState().world_size))
+    p50 = np.array([r[1] for r in rows]) * scale
+    peak = np.array([r[3] for r in rows]) * scale
+    pdef = PARAM_BY_NAME["V_MAX"]
+
+    slowest, fastest = float(p50.min()), float(peak.max())
+    print("\n--- speed in V Max units (|vel| * sqrt(world_size)) ---")
+    print(f"n                    {len(rows)}")
+    print(f"slowest preset p50   {slowest:.6f}   ({min(rows, key=lambda r: r[1])[0]})")
+    print(f"median preset p50    {float(np.median(p50)):.6f}")
+    print(f"fastest particle     {fastest:.6f}   ({max(rows, key=lambda r: r[3])[0]})")
+
+    print(f"\nslider is 0..{pdef.default_max} with exponent {pdef.power_exponent}")
+    for label, v in (("slowest", slowest), ("fastest", fastest)):
+        t = (v / pdef.default_max) ** (1.0 / pdef.power_exponent)
+        print(f"  {label:8s} sits at {t * 100:5.1f}% of the track")
+    if fastest >= pdef.default_max:
+        print("\n  FAIL: the default range would brake the fastest preset on load")
+
+
 def report_liveness(rows):
     if len(rows) < 2:
         print("\nnot enough presets measured to place a floor")
@@ -227,6 +328,8 @@ def main(argv) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--liveness", action="store_true",
                     help="measure liveness over presets (needs GL and CLIP)")
+    ap.add_argument("--speed", action="store_true",
+                    help="measure particle speed over presets, for V Max's range")
     ap.add_argument("--sweep", action="store_true",
                     help="also print a sigma_expand sweep")
     ap.add_argument("--steps", type=int, default=2000)
@@ -235,14 +338,23 @@ def main(argv) -> int:
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args(argv)
 
+    names = {s.strip() for s in args.only.split(",") if s.strip()}
+
+    if args.speed:
+        # 400 is enough for a pattern to settle; liveness needs the longer run.
+        rows = measure_speed(names, min(args.steps, 400), limit=args.limit)
+        report_speed(rows)
+        return 0
+
     if not args.liveness:
         report_sigma(args.sweep)
         print()
         print("liveness_min must be measured with rendered frames:")
         print("    python -m tools.calibrate_imgep --liveness")
+        print("V Max's range must be measured with a running sim:")
+        print("    python -m tools.calibrate_imgep --speed")
         return 0
 
-    names = {s.strip() for s in args.only.split(",") if s.strip()}
     rows = measure_liveness(names, args.steps, args.snapshots, limit=args.limit)
     report_liveness(rows)
     return 0

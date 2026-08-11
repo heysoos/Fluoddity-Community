@@ -18,6 +18,12 @@ from ui.physics_params import PARAM_BY_NAME, PHYSICS_PARAMS
 ROOT = Path(__file__).resolve().parent.parent
 SHADER = (ROOT / "shaders" / "entity_update.glsl").read_text(encoding="utf-8")
 
+UNCONSTRAINED = PARAM_BY_NAME["V_MAX"].default_max
+
+# The fastest particle anywhere in the preset library, in V Max units.
+# Re-derive with `python -m tools.calibrate_imgep --speed`.
+LIBRARY_PEAK = 0.0204
+
 
 # --- the preset format -------------------------------------------------
 
@@ -28,18 +34,18 @@ def test_a_preset_saved_before_v_max_existed_is_unconstrained():
     del data["physics"]["v_max"]
 
     cfg = PhysicsConfig.from_dict(data)
-    assert cfg.v_max == 1.0
+    assert cfg.v_max == UNCONSTRAINED
 
     state = SimState()
     state.V_MAX = 0.004
     ConfigSaver().apply_config(cfg, state)
-    assert state.V_MAX == 1.0
+    assert state.V_MAX == UNCONSTRAINED
 
 
 def test_a_real_preset_on_disk_still_loads():
     cfg = ConfigSaver().load_from_file(ROOT / "physics_configs" / "Core" / "_Default.json")
     assert cfg is not None
-    assert cfg.v_max == 1.0
+    assert cfg.v_max == UNCONSTRAINED
 
 
 def test_v_max_round_trips_through_json():
@@ -57,12 +63,12 @@ def test_v_max_round_trips_through_json():
 
 def test_v_max_round_trips_through_the_clipboard():
     state = SimState()
-    state.V_MAX = 0.25
+    state.V_MAX = 0.006
     saver = ConfigSaver()
 
     out = SimState()
     assert saver.load_from_string(saver.save_to_string(state, None), out) is not None
-    assert out.V_MAX == pytest.approx(0.25)
+    assert out.V_MAX == pytest.approx(0.006)
 
 
 # --- the shader and the two writers that feed it -----------------------
@@ -116,8 +122,24 @@ def test_v_max_is_a_registered_slider():
     p = PARAM_BY_NAME["V_MAX"]
     assert p.group == "forces"
     assert p.is_power_scaled          # useful values sit near the bottom
-    assert (p.hard_min, p.hard_max) == (0.0, 1.0)
-    assert SimState().V_MAX == p.default_max   # the default must not bind
+    assert (p.hard_min, p.hard_max) == (0.0, p.default_max)
+    assert SimState().V_MAX == p.default_max
+    assert PhysicsConfig().v_max == p.default_max
+
+
+def test_the_default_is_above_anything_the_preset_library_reaches():
+    """The default has to be a no-op, or loading a preset saved before this
+    parameter existed would quietly brake it."""
+    assert UNCONSTRAINED > LIBRARY_PEAK
+
+
+def test_the_library_spans_most_of_the_slider():
+    """value = max * t**exponent. If the library crowds into the bottom of
+    the track the control reads as doing nothing."""
+    p = PARAM_BY_NAME['V_MAX']
+    slowest = (0.00004 / p.default_max) ** (1.0 / p.power_exponent)
+    peak = (LIBRARY_PEAK / p.default_max) ** (1.0 / p.power_exponent)
+    assert slowest < 0.25 and peak > 0.6, (slowest, peak)
 
 
 # --- the decision recorded in the archive's width ----------------------

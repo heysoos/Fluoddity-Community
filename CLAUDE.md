@@ -143,6 +143,19 @@ mechanics these caveats assume.
   84% of a tile's trail. `tests/test_tile_isolation_gl.py` runs 647/8, 647/3
   and 641/7 on purpose.
 
+- **`V_MAX`'s range is measured, and its units are CANVAS UNITS PER STEP — not
+  a fraction of the screen.** Over the 131 presets, particle speed runs
+  0.000065 to 0.032 canvas units per step, a 500x span; the canvas is 2 units
+  wide, so even the fastest preset crosses 1.6% of it per frame. The slider is
+  therefore `0..0.05` with a FOURTH-power curve, putting the slowest preset at
+  17% of the track and the fastest at 80%. A linear or too-wide range crowds
+  the whole library into the bottom of the track and reads as a control that
+  does nothing. The default IS the range max, because a preset saved before
+  this parameter existed must load unbraked. Speed depends on
+  `particle_density` — one preset runs 28x faster at 1.0 than at 0.25 — so
+  re-measure at the app's own defaults with
+  `python -m tools.calibrate_imgep --speed`.
+
 - **The `MultiLoadConfig` struct is written by OFFSET, and a physics
   parameter's label must be `title()` of its field name.** Two raw std430
   writers pack it in declaration order — `_write_multi_load_ssbo` and

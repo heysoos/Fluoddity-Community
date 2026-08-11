@@ -222,7 +222,7 @@ class Sim:
             self._assign_physics_setting('SENSOR_ANGLE_SETTING', self._state.SENSOR_ANGLE, 'Sensor Angle', 'SENSOR_ANGLE', -1.0, 1.0)
             self._assign_physics_setting('GLOBAL_FORCE_MULT_SETTING', self._state.GLOBAL_FORCE_MULT, 'Global Force Mult', 'GLOBAL_FORCE_MULT', 0.0, 2.0)
             self._assign_physics_setting('SENSOR_DISTANCE_SETTING', self._state.SENSOR_DISTANCE, 'Sensor Distance', 'SENSOR_DISTANCE', 0.0, 4.0)
-            self._assign_physics_setting('V_MAX_SETTING', self._state.V_MAX, 'V Max', 'V_MAX', 0.0, 1.0)
+            self._assign_physics_setting('V_MAX_SETTING', self._state.V_MAX, 'V Max', 'V_MAX', 0.0, 0.05)
             tryset(self.entity_update_program, 'DISABLE_SYMMETRY', self._state.DISABLE_SYMMETRY)
             tryset(self.entity_update_program, 'ABSOLUTE_ORIENTATION', self._state.ABSOLUTE_ORIENTATION)
             tryset(self.entity_update_program, 'ORIENTATION_MIX', self._state.ORIENTATION_MIX)
@@ -716,7 +716,7 @@ class Sim:
                 ('global_force_mult', 'GLOBAL_FORCE_MULT', 0.0, 2.0),
                 ('sensor_distance', 'SENSOR_DISTANCE', 0.0, 4.0),
                 ('hazard_rate', 'HAZARD_RATE', 0.0, 0.05),
-                ('v_max', 'V_MAX', 0.0, 1.0),
+                ('v_max', 'V_MAX', 0.0, 0.05),
             ]
 
             for attr_name, param_name, default_min, default_max in params:
@@ -806,7 +806,7 @@ class Sim:
         ('GLOBAL_FORCE_MULT', 0.0, 2.0),
         ('SENSOR_DISTANCE', 0.0, 4.0),
         ('HAZARD_RATE', 0.0, 0.05),
-        ('V_MAX', 0.0, 1.0),
+        ('V_MAX', 0.0, 0.05),
     ]
 
     def write_tournament_physics(self, per_tile: list[dict]) -> None:

@@ -17,9 +17,10 @@ class SimState:
     SENSOR_ANGLE: float = .45
     GLOBAL_FORCE_MULT: float = 1.0
     SENSOR_DISTANCE: float = 1.0
-    # Speed limit in canvas units per step. The default sits far above any speed
-    # a settled pattern reaches, so a preset saved without it is unconstrained.
-    V_MAX: float = 1.0
+    # Speed limit in canvas units per step. The default is the top of the
+    # slider's range, above any speed the preset library reaches, so a preset
+    # saved without it is unconstrained. See the V Max caveat in CLAUDE.md.
+    V_MAX: float = 0.05
     TRAIL_PERSISTENCE: float = 0.938
     TRAIL_DIFFUSION: float = 1.0
     HAZARD_RATE: float = 0.0

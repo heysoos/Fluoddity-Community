@@ -75,10 +75,10 @@ PHYSICS_PARAMS: list[PhysicsParamDef] = [
     ),
     PhysicsParamDef(
         name='V_MAX', label='V Max', group='forces',
-        default_min=0.0, default_max=1.0,
-        hard_min=0.0, hard_max=1.0,
+        default_min=0.0, default_max=0.05,
+        hard_min=0.0, hard_max=0.05,
         hide_jitter=True,
-        is_power_scaled=True, power_exponent=3.0,
+        is_power_scaled=True, power_exponent=4.0,
         description="Caps how far a particle may travel in one step; at the top of the range nothing reaches the limit.",
     ),
     PhysicsParamDef(

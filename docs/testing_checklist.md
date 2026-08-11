@@ -264,6 +264,8 @@ only the running app can answer.
 - [ ] Physics > Forces shows a "V Max" slider sitting at the far right of its track on a fresh launch
 - [ ] Load several Core and Advanced presets: each looks exactly as it did before this parameter existed
 - [ ] Dragging V Max left slows particles down; the pattern shrinks in scale rather than freezing all at once
+- [ ] The change is visible well before the far left — around the middle of the track on a typical preset
+- [ ] On a fast preset (Zipper, Karst, Shrimp) the top third of the track already bites
 - [ ] Dragging it fully left stops the particles dead, and dragging back right revives them
 - [ ] Take a preset that blows up (high Sensor Gain, Drag near 1) and lower V Max: it settles instead of tearing
 - [ ] Save a preset, relaunch, load it: V Max comes back at the value you saved
