@@ -11,10 +11,11 @@ from ui.physics_params import PARAM_BY_NAME
 
 # All lockable SimState parameter names
 LOCKABLE_SIM_PARAMS = [
-    # 12 physics sliders
+    # 13 physics sliders
     'SENSOR_GAIN', 'SENSOR_ANGLE', 'SENSOR_DISTANCE', 'MUTATION_SCALE',
     'GLOBAL_FORCE_MULT', 'DRAG', 'AXIAL_FORCE', 'LATERAL_FORCE',
     'STRAFE_POWER', 'TRAIL_PERSISTENCE', 'TRAIL_DIFFUSION', 'HAZARD_RATE',
+    'V_MAX',
     # Additional settings
     'rule_seed', 'boundary_conditions', 'initial_conditions', 'num_cohorts',
     'DISABLE_SYMMETRY', 'ABSOLUTE_ORIENTATION', 'ORIENTATION_MIX',

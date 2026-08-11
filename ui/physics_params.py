@@ -74,6 +74,14 @@ PHYSICS_PARAMS: list[PhysicsParamDef] = [
         description="Scales axial and lateral forces applied to particles, and scales strafe power. Often tuned in the opposite direction to Sensor Gain and Drag to offset exploding/vanishing particle speed.",
     ),
     PhysicsParamDef(
+        name='V_MAX', label='V Max', group='forces',
+        default_min=0.0, default_max=1.0,
+        hard_min=0.0, hard_max=1.0,
+        hide_jitter=True,
+        is_power_scaled=True, power_exponent=3.0,
+        description="Caps how far a particle may travel in one step; at the top of the range nothing reaches the limit.",
+    ),
+    PhysicsParamDef(
         name='DRAG', label='Drag', group='forces',
         default_min=-1.0, default_max=1.0,
         hard_min=-1.0, hard_max=1.0,

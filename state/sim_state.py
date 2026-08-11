@@ -17,6 +17,9 @@ class SimState:
     SENSOR_ANGLE: float = .45
     GLOBAL_FORCE_MULT: float = 1.0
     SENSOR_DISTANCE: float = 1.0
+    # Speed limit in canvas units per step. The default sits far above any speed
+    # a settled pattern reaches, so a preset saved without it is unconstrained.
+    V_MAX: float = 1.0
     TRAIL_PERSISTENCE: float = 0.938
     TRAIL_DIFFUSION: float = 1.0
     HAZARD_RATE: float = 0.0
@@ -67,6 +70,7 @@ class SimState:
         'SENSOR_ANGLE': 0.0,
         'GLOBAL_FORCE_MULT': 0.0,
         'SENSOR_DISTANCE': 0.0,
+        'V_MAX': 0.0,
         'TRAIL_PERSISTENCE': 0.0,
         'TRAIL_DIFFUSION': 0.0,
         'HAZARD_RATE': 0.0,
@@ -81,6 +85,7 @@ class SimState:
         'SENSOR_ANGLE': 0.0,
         'GLOBAL_FORCE_MULT': 0.0,
         'SENSOR_DISTANCE': 0.0,
+        'V_MAX': 0.0,
         'TRAIL_PERSISTENCE': 0.0,
         'TRAIL_DIFFUSION': 0.0,
         'HAZARD_RATE': 0.0,
@@ -95,6 +100,7 @@ class SimState:
         'SENSOR_ANGLE': 0.0,
         'GLOBAL_FORCE_MULT': 0.0,
         'SENSOR_DISTANCE': 0.0,
+        'V_MAX': 0.0,
         'TRAIL_PERSISTENCE': 0.0,
         'TRAIL_DIFFUSION': 0.0,
         'HAZARD_RATE': 0.0,
@@ -111,6 +117,7 @@ class SimState:
         'SENSOR_ANGLE': 0.0,
         'GLOBAL_FORCE_MULT': 0.0,
         'SENSOR_DISTANCE': 0.0,
+        'V_MAX': 0.0,
         'TRAIL_PERSISTENCE': 0.0,
         'TRAIL_DIFFUSION': 0.0,
         'HAZARD_RATE': 0.0,

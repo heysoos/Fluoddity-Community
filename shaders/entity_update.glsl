@@ -49,6 +49,7 @@ uniform PhysicsSetting LATERAL_FORCE_SETTING;
 uniform PhysicsSetting SENSOR_GAIN_SETTING;
 uniform PhysicsSetting MUTATION_SCALE_SETTING;
 uniform PhysicsSetting HAZARD_RATE_SETTING;
+uniform PhysicsSetting V_MAX_SETTING;
 uniform float HUE_SENSITIVITY;
 uniform bool COLOR_BY_COHORT;
 uniform bool DISABLE_SYMMETRY;
@@ -81,7 +82,8 @@ uniform bool MULTI_LOAD_PER_CONFIG_HAZARD_RATE; // If true, use per-config hazar
 
 // Multi-load config data (large arrays, packed into SSBO)
 struct MultiLoadConfig {
-    // Physics parameters as PhysicsSetting structs (10 params * 6 floats = 60 floats)
+    // Physics parameters as PhysicsSetting structs (11 params * 7 floats).
+    // Order is load bearing: sim.py writes this block raw, by offset.
     PhysicsSetting axial_force;
     PhysicsSetting lateral_force;
     PhysicsSetting sensor_gain;
@@ -92,6 +94,7 @@ struct MultiLoadConfig {
     PhysicsSetting global_force_mult;
     PhysicsSetting sensor_distance;
     PhysicsSetting hazard_rate;
+    PhysicsSetting v_max;
 
     // Simulation settings (6 ints)
     int disable_symmetry;      // bool as int for alignment
@@ -345,6 +348,11 @@ PhysicsSetting get_particle_global_force_mult() {
 PhysicsSetting get_particle_sensor_distance() {
     int idx = get_particle_config_index();
     return idx >= 0 ? configs[idx].sensor_distance : SENSOR_DISTANCE_SETTING;
+}
+
+PhysicsSetting get_particle_v_max() {
+    int idx = get_particle_config_index();
+    return idx >= 0 ? configs[idx].v_max : V_MAX_SETTING;
 }
 
 bool get_particle_disable_symmetry() {
@@ -674,6 +682,11 @@ void main() {
 
     //Accelerate: Apply drag and add force to e.vel,
     e.vel = e.vel*calculate_setting(get_particle_drag(),e.pos,cohort) + force;
+    //Speed limit: shorten the velocity without turning it, scaled like every
+    //other length here so it means the same thing at any world size.
+    float vlim = calculate_setting(get_particle_v_max(),e.pos,cohort)/SQRT_WORLD_SIZE;
+    float vmag = length(e.vel);
+    if(vmag > vlim){ e.vel *= vlim/vmag; }
     //Move: add e.vel and strafe to e.pos
     e.pos += e.vel;
     e.pos += strafe*calculate_setting(get_particle_strafe_power(),e.pos,cohort);

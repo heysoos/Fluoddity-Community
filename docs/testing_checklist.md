@@ -259,3 +259,18 @@ only the running app can answer.
 - [ ] The map's recentre icon sits inside the canvas, top-right, and lights up on hover
 - [ ] Clicking it resets zoom and centre; the hover card for a dot underneath does not fight it
 - [ ] Scrolling over the icon still zooms the map
+
+## 22. V Max (the per-step speed limit)
+- [ ] Physics > Forces shows a "V Max" slider sitting at the far right of its track on a fresh launch
+- [ ] Load several Core and Advanced presets: each looks exactly as it did before this parameter existed
+- [ ] Dragging V Max left slows particles down; the pattern shrinks in scale rather than freezing all at once
+- [ ] Dragging it fully left stops the particles dead, and dragging back right revives them
+- [ ] Take a preset that blows up (high Sensor Gain, Drag near 1) and lower V Max: it settles instead of tearing
+- [ ] Save a preset, relaunch, load it: V Max comes back at the value you saved
+- [ ] Copy to clipboard and paste back: same
+- [ ] Right-click the slider > "Reset value to ..." puts back the loaded preset's value
+- [ ] Alt-click locks it, and a preset load leaves a locked V Max alone
+- [ ] Change World Size: the same V Max produces the same apparent speed
+- [ ] Multi-load two presets with different V Max values: each config's particles obey their own limit
+- [ ] Run a tournament: every tile obeys the global V Max, and lowering it mid-run affects all tiles together
+- [ ] Run Explore with physics search on: V Max stays where you left it and is not varied between tiles

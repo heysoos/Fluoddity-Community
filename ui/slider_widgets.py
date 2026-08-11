@@ -430,7 +430,11 @@ class SliderWidgetsMixin:
                 new_value = pdef.default_max * (new_pos ** pdef.power_exponent)
                 setattr(self.state.sim, pdef.name, new_value)
             # Context menu without jitter (power-scaled params hide jitter)
-            self.add_slider_context_menu(pdef.label, pdef.default_min, pdef.default_max)
+            _, _, reset_requested, _ = self.add_slider_context_menu(
+                pdef.label, pdef.default_min, pdef.default_max)
+            if reset_requested:
+                setattr(self.state.sim, pdef.name,
+                        self.current_physics_defaults.values.get(pdef.name, value))
         else:
             # Standard slider with range menu
             _, new_value = self.slider_float_with_range_menu(

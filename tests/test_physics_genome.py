@@ -200,8 +200,12 @@ def test_ssbo_write_matches_the_glsl_struct_size():
               for i in range(16)]
     sim.write_tournament_physics(blocks)   # must not raise or overflow
 
-    # 10 PhysicsSetting * 7 floats + 6 ints + 3 floats
-    assert sim.multi_load_buffer.size >= 64 * 316
+    from sim import MULTI_LOAD_CONFIG_SIZE
+    assert sim.multi_load_buffer.size >= 64 * MULTI_LOAD_CONFIG_SIZE
+    # Every block the writer emits must be exactly one struct wide, or tile i
+    # reads tile i-1's tail.
+    assert len(Sim._TOURNAMENT_PHYSICS_ORDER) * 7 * 4 + 6 * 4 + 3 * 4 \
+        == MULTI_LOAD_CONFIG_SIZE
     ctx.release()
 
 

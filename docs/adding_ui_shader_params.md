@@ -121,6 +121,31 @@ _, self.state.sim.PARAM = imgui.input_float("Label", self.state.sim.PARAM)
 | 3 | `sim.py` | Add `tryset()` call in update method |
 | 4 | `ui/physics_window.py` | Add ImGui widget in appropriate slider group |
 
+## A full physics slider is longer than this
+
+The four steps above cover a plain uniform. A parameter that belongs in the
+Physics window — one with a slider range, sweeps, jitter, and a place in saved
+presets — reaches the shader as a `PhysicsSetting` struct instead, and touches
+seven files. `V_MAX` is the worked example; follow its diff.
+
+| File | Action |
+|------|--------|
+| `state/sim_state.py` | Field, plus a key in `x_sweeps`/`y_sweeps`/`cohort_sweeps`/`jitters` |
+| `ui/physics_params.py` | A `PhysicsParamDef` in the registry (this renders the slider) |
+| `shaders/entity_update.glsl` | `uniform PhysicsSetting X_SETTING`, a `MultiLoadConfig` member, a `get_particle_x()` accessor, and the use |
+| `sim.py` | `_assign_physics_setting`, the `params` list in `_write_multi_load_ssbo`, `_TOURNAMENT_PHYSICS_ORDER`, and `MULTI_LOAD_CONFIG_SIZE` |
+| `services/config_saver.py` | Field on `PhysicsConfig`, plus `to_dict`, `from_dict`, `create_config`, `apply_config` |
+| `services/parameter_lock_service.py` | `LOCKABLE_SIM_PARAMS` |
+| `ui/core.py` | Both `PhysicsDefaults` dicts, so the right-click reset works |
+
+Three rules the machinery does not enforce for you:
+
+- The label must be `title()` of the field name, or the SSBO writers lose the
+  custom slider range without saying so.
+- The struct members and both Python writers must stay in the same order.
+- `from_dict` must default the new key to a value that reproduces the old
+  behaviour, because every preset on disk predates it.
+
 ## Notes
 
 - **No wiring needed** - The orchestrator pattern handles the connection automatically

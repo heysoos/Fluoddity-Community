@@ -8,6 +8,11 @@ from state import SimState
 # Global constants
 SIZE_OF_ENTITY_STRUCT = 4*12  # 4 bytes per 32bit value. 12 values (pos:2, vel:2, size:1, padding:3, color:4)
 SIZE_OF_RULE_STRUCT = 4*4*20  # 4 bytes per float32. 4 floats per vec4. 20 vec4s per rule
+# One MultiLoadConfig in entity_update.glsl: 11 PhysicsSetting * 7 floats,
+# 6 ints, 3 floats. Defined once - the reserve and the zero-fill below both
+# use it, and a std430 write that disagrees with the struct reads as garbage
+# physics rather than as an error.
+MULTI_LOAD_CONFIG_SIZE = 11*7*4 + 6*4 + 3*4
 
 class Sim:
     def __init__(self, ctx: moderngl.Context, world_size: float = 1.0, canvas_aspect_ratio: str = "1:1",
@@ -78,11 +83,7 @@ class Sim:
         self.entities = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_ENTITY_STRUCT)
         self.rule_buffer = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_RULE_STRUCT)
 
-        # Multi-load config buffer. Each MultiLoadConfig is
-        # 10 PhysicsSetting * 7 floats (280) + 6 ints (24) + 3 floats (12).
-        # This was 248, which under-reserved the buffer by 68 bytes per config -
-        # harmless only because nothing had yet written all 64 entries.
-        MULTI_LOAD_CONFIG_SIZE = 316
+        # Multi-load config buffer (see MULTI_LOAD_CONFIG_SIZE above).
         MAX_MULTI_LOAD_CONFIGS = 64
         self.multi_load_buffer = self.ctx.buffer(reserve=MAX_MULTI_LOAD_CONFIGS * MULTI_LOAD_CONFIG_SIZE)
 
@@ -221,6 +222,7 @@ class Sim:
             self._assign_physics_setting('SENSOR_ANGLE_SETTING', self._state.SENSOR_ANGLE, 'Sensor Angle', 'SENSOR_ANGLE', -1.0, 1.0)
             self._assign_physics_setting('GLOBAL_FORCE_MULT_SETTING', self._state.GLOBAL_FORCE_MULT, 'Global Force Mult', 'GLOBAL_FORCE_MULT', 0.0, 2.0)
             self._assign_physics_setting('SENSOR_DISTANCE_SETTING', self._state.SENSOR_DISTANCE, 'Sensor Distance', 'SENSOR_DISTANCE', 0.0, 4.0)
+            self._assign_physics_setting('V_MAX_SETTING', self._state.V_MAX, 'V Max', 'V_MAX', 0.0, 1.0)
             tryset(self.entity_update_program, 'DISABLE_SYMMETRY', self._state.DISABLE_SYMMETRY)
             tryset(self.entity_update_program, 'ABSOLUTE_ORIENTATION', self._state.ABSOLUTE_ORIENTATION)
             tryset(self.entity_update_program, 'ORIENTATION_MIX', self._state.ORIENTATION_MIX)
@@ -699,11 +701,10 @@ class Sim:
         for i in range(config_count):
             config = multi_load_service.get_config(i)
             if config is None:
-                # Write zeros for missing configs (10×7 floats + 6 ints + 3 floats = 316 bytes)
-                data.extend(bytes(316))
+                data.extend(bytes(MULTI_LOAD_CONFIG_SIZE))
                 continue
 
-            # Pack physics parameters (10 PhysicsSetting structs, each 7 floats)
+            # Pack physics parameters (11 PhysicsSetting structs, each 7 floats)
             params = [
                 ('axial_force', 'AXIAL_FORCE', -1.0, 1.0),
                 ('lateral_force', 'LATERAL_FORCE', -1.0, 1.0),
@@ -715,6 +716,7 @@ class Sim:
                 ('global_force_mult', 'GLOBAL_FORCE_MULT', 0.0, 2.0),
                 ('sensor_distance', 'SENSOR_DISTANCE', 0.0, 4.0),
                 ('hazard_rate', 'HAZARD_RATE', 0.0, 0.05),
+                ('v_max', 'V_MAX', 0.0, 1.0),
             ]
 
             for attr_name, param_name, default_min, default_max in params:
@@ -791,7 +793,7 @@ class Sim:
         self._tournament_plain_colour = bool(plain_colour) and enabled
         self._tournament_physics = bool(physics) and enabled
 
-    # 10 PhysicsSetting structs in GLSL declaration order. Order is load
+    # 11 PhysicsSetting structs in GLSL declaration order. Order is load
     # bearing: this is a raw std430 write, not a named one.
     _TOURNAMENT_PHYSICS_ORDER = [
         ('AXIAL_FORCE', -1.0, 1.0),
@@ -804,6 +806,7 @@ class Sim:
         ('GLOBAL_FORCE_MULT', 0.0, 2.0),
         ('SENSOR_DISTANCE', 0.0, 4.0),
         ('HAZARD_RATE', 0.0, 0.05),
+        ('V_MAX', 0.0, 1.0),
     ]
 
     def write_tournament_physics(self, per_tile: list[dict]) -> None:

@@ -143,6 +143,17 @@ mechanics these caveats assume.
   84% of a tile's trail. `tests/test_tile_isolation_gl.py` runs 647/8, 647/3
   and 641/7 on purpose.
 
+- **The `MultiLoadConfig` struct is written by OFFSET, and a physics
+  parameter's label must be `title()` of its field name.** Two raw std430
+  writers pack it in declaration order — `_write_multi_load_ssbo` and
+  `write_tournament_physics` — so a member the shader has and Python does not
+  shifts every field after it into the wrong slot. Both also look a custom
+  slider range up by `NAME.replace('_', ' ').title()`, which does not raise
+  when it misses: it silently hands that tile the default range. `V_MAX` is
+  therefore labelled "V Max". `MULTI_LOAD_CONFIG_SIZE` in `sim.py` is the one
+  definition of the struct's width, used by both the buffer reserve and the
+  zero-fill. Guarded by `tests/test_v_max.py`.
+
 - **`canvas_view_rect` returns a GL texture coordinate (v=0 at the BOTTOM);
   `tex_to_screen` returns top-down window coordinates.** The flip cancels
   exactly when the canvas is centred, so a centred camera validates any
@@ -201,6 +212,12 @@ mechanics these caveats assume.
   `z` is relative to `physics_origin` — the preset loaded at the time — so a `z`
   archived under one preset decodes to a different creature under another. See
   `tests/test_physics_origin_roundtrip.py`.
+
+- **Widening `services/physics_genome.PHYSICS_PARAMS` widens `Archive._phys`,
+  and every `vectors.npz` already on disk holds the current width.** A new
+  physics parameter is a PRESET parameter by default — `HAZARD_RATE` and
+  `V_MAX` are both excluded from the search — and joining the search space
+  needs a load-time migration before it needs anything else.
 
 - **Admission does not gate on novelty; capacity prunes.** Everything finite,
   viable and alive is admitted, and `prune_to_capacity()` evicts the least

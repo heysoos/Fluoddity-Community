@@ -46,7 +46,7 @@ def _default_slider_ranges() -> dict[str, list[float]]:
 class PhysicsConfig:
     """Complete physics configuration: all state from Physics Settings window."""
 
-    # Physics parameters (12 sliders)
+    # Physics parameters (13 sliders)
     axial_force: float = 0.371
     lateral_force: float = -0.707
     sensor_gain: float = 0.116
@@ -56,6 +56,9 @@ class PhysicsConfig:
     sensor_angle: float = 0.45
     global_force_mult: float = 1.0
     sensor_distance: float = 1.0
+    # Unconstrained by default, so a preset saved before V Max existed keeps
+    # the physics it was saved with.
+    v_max: float = 1.0
     trail_persistence: float = 0.938
     trail_diffusion: float = 1.0
     hazard_rate: float = 0.0
@@ -114,6 +117,7 @@ class PhysicsConfig:
                 'sensor_angle': self.sensor_angle,
                 'global_force_mult': self.global_force_mult,
                 'sensor_distance': self.sensor_distance,
+                'v_max': self.v_max,
                 'trail_persistence': self.trail_persistence,
                 'trail_diffusion': self.trail_diffusion,
                 'hazard_rate': self.hazard_rate,
@@ -198,6 +202,7 @@ class PhysicsConfig:
             sensor_angle=physics.get('sensor_angle', 0.45),
             global_force_mult=physics.get('global_force_mult', 1.0),
             sensor_distance=physics.get('sensor_distance', 1.0),
+            v_max=physics.get('v_max', 1.0),
             trail_persistence=physics.get('trail_persistence', 0.938),
             trail_diffusion=physics.get('trail_diffusion', 1.0),
             hazard_rate=physics.get('hazard_rate', 0.0),
@@ -261,6 +266,7 @@ class ConfigSaver:
             sensor_angle=sim_state.SENSOR_ANGLE,
             global_force_mult=sim_state.GLOBAL_FORCE_MULT,
             sensor_distance=sim_state.SENSOR_DISTANCE,
+            v_max=sim_state.V_MAX,
             trail_persistence=sim_state.TRAIL_PERSISTENCE,
             trail_diffusion=sim_state.TRAIL_DIFFUSION,
             hazard_rate=sim_state.HAZARD_RATE,
@@ -313,6 +319,7 @@ class ConfigSaver:
         sim_state.SENSOR_ANGLE = config.sensor_angle
         sim_state.GLOBAL_FORCE_MULT = config.global_force_mult
         sim_state.SENSOR_DISTANCE = config.sensor_distance
+        sim_state.V_MAX = config.v_max
         sim_state.TRAIL_PERSISTENCE = config.trail_persistence
         sim_state.TRAIL_DIFFUSION = config.trail_diffusion
         sim_state.HAZARD_RATE = config.hazard_rate
