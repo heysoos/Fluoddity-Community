@@ -388,6 +388,37 @@ class CommandHandler:
         ts.reset_requested = False
         ts.save_requested = False
 
+    def _rule_fits(self, config) -> bool:
+        """Does this config's brain belong to the layout that is running?
+
+        A rule saved under another brain cannot be converted - its floats mean
+        different things - so it is dropped rather than reinterpreted.
+        sim.apply_rule refuses it too; this exists so that HOVERING the Load
+        menu under a different brain does not print one line per config it
+        passes over, which is what buried the real errors.
+
+        With no signature the width is all there is to go on. That is not a
+        weaker check by choice: files written before brains were swappable are
+        Fourier, and a width match is what lets a tile saved by an earlier build
+        of this branch still load.
+        """
+        lay = getattr(getattr(self, "sim", None), "brain_layout", None)
+        if lay is None or config is None or getattr(config, "rule", None) is None:
+            return True
+        sig = getattr(config, "brain_layout", "")
+        if sig:
+            return sig == lay.signature()
+        return int(np.asarray(config.rule).size) == int(lay.length)
+
+    def _brain_signature(self) -> str:
+        """The BrainLayout signature to stamp on a saved config.
+
+        From the sim, which is the one holder of the layout the rule was
+        actually decoded under.
+        """
+        lay = getattr(getattr(self, "sim", None), "brain_layout", None)
+        return lay.signature() if lay is not None else ""
+
     def _save_tournament_selection(self, ui_state):
         """Save each selected genome to a config JSON in the user configs dir."""
         svc = self.tournament_service
@@ -395,7 +426,11 @@ class CommandHandler:
             print("Tournament save: no tiles selected")
             return
         for tile in sorted(svc.selected):
-            config = self.config_saver.create_config(ui_state.sim, svc.population[tile])
+            # The TOURNAMENT's layout, not the sim's: these genomes are its
+            # population, and it is the object that bred them.
+            config = self.config_saver.create_config(
+                ui_state.sim, svc.population[tile],
+                brain_layout=svc.layout.signature())
             filepath = self.user_configs_dir / f"tournament_tile{tile}.json"
             self.config_saver.save_to_file(config, filepath)
             print(f"Saved tournament tile {tile} -> {filepath}")
@@ -651,7 +686,12 @@ class CommandHandler:
         if i is None:
             return
         e = self.archive.entries[i]
-        z, _clamped = encode(self.archive.brains[i])
+        # The ARCHIVE's layout, not the sim's: its brains are stored decoded
+        # under it, and an archive is keyed by signature so the two can differ.
+        # Both of these defaulted to Fourier, so exporting a Gabor entry
+        # re-encoded it through Fourier's squash and wrote the result out.
+        layout = self.archive.layout
+        z, _clamped = encode(self.archive.brains[i], layout)
         sim_state = ui_state.sim
         if "physics" in e.spec:
             # The archive stores ABSOLUTE physics, so applying it needs no origin.
@@ -661,7 +701,7 @@ class CommandHandler:
                 "liveness": float(e.liveness), "source": e.source,
                 "goal": e.goal, "run_id": e.run_id, "spec": e.spec}
         path = self.user_configs_dir / f"archive_{e.id:06d}.json"
-        export_genome(path, z, sim_state, meta)
+        export_genome(path, z, sim_state, meta, layout=layout)
         print(f"[archive] saved {path}")
         # A console print is not feedback in a GUI: the file lands somewhere the
         # user cannot see, so the button looked like it did nothing.
@@ -723,7 +763,8 @@ class CommandHandler:
         from services.genome_io import import_genome
 
         try:
-            z, clamped, _meta = import_genome(ats.load_genome_path)
+            z, clamped, _meta = import_genome(ats.load_genome_path,
+                                             layout=svc.spec.layout)
         except (OSError, ValueError, KeyError) as exc:
             ats.warning = f"could not load genome: {exc}"
             print(f"[auto] {ats.warning}")
@@ -814,7 +855,8 @@ class CommandHandler:
             "variants_per_tile": int(svc.variants_per_tile),
         }
         path = self.user_configs_dir / name
-        export_genome(path, brain_z, sim_state, meta)
+        export_genome(path, brain_z, sim_state, meta,
+                      layout=svc.spec.layout)
         print(f"[auto] saved {path}")
 
     def _handle_sweep_click(self, ui_state, tiling_mode):
@@ -869,7 +911,8 @@ class CommandHandler:
                 fh.snapshot_with_strengths(ui_state) if fh else (None, None))
 
             config = self.config_saver.create_config(
-                ui_state.sim, current_rule, field_strengths=field_strengths)
+                ui_state.sim, current_rule, field_strengths=field_strengths,
+                brain_layout=self._brain_signature())
             config_string = self.config_saver.encode_clipboard(config)
             self.ui.set_clipboard(config_string)
             self.ui.add_to_config_clipboard(
@@ -925,7 +968,8 @@ class CommandHandler:
             fh.snapshot_with_strengths(ui_state) if fh else (None, None))
 
         config = self.config_saver.create_config(
-            ui_state.sim, current_rule, field_strengths=field_strengths)
+            ui_state.sim, current_rule, field_strengths=field_strengths,
+            brain_layout=self._brain_signature())
         filepath = self.user_configs_dir / f"{filename}.json"
         self.config_saver.save_to_file(config, filepath)
 
@@ -1019,7 +1063,7 @@ class CommandHandler:
                         fh.cache_for_preview(ui_state)
 
                     pls = self.param_lock_service
-                    if not (pls and pls.should_block_rule_push()):
+                    if not (pls and pls.should_block_rule_push()) and self._rule_fits(config):
                         if not (pls and pls.is_locked('rule_seed')):
                             ui_state.sim.rule_seed = config.rule_seed
                         self.rule_manager.push_rule(config.rule, ui_state.sim.rule_seed)
@@ -1060,7 +1104,8 @@ class CommandHandler:
                 if not self.clipboard_preview_active:
                     current_rule = self.rule_manager.get_current_rule()
                     self._clipboard_cached_config = self.config_saver.create_config(
-                        ui_state.sim, current_rule)
+                        ui_state.sim, current_rule,
+                        brain_layout=self._brain_signature())
                     if fh:
                         fh.cache_for_clipboard_preview(ui_state)
 
