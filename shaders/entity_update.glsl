@@ -129,7 +129,6 @@ layout(std430, binding = 4) buffer MultiLoadRuleBuffer {
 // top half of the tournament grid would render empty.
 #define ACTIVE_COUNT float(ENTITY_COUNT)
 #define SQRT_WORLD_SIZE (sqrt(WORLD_SIZE))
-#define SQRT_WORLD_SIZE (sqrt(WORLD_SIZE))
 // Multi-load helper: Calculate which config index this particle should use
 int tournament_home_tile(uint index);   // defined below
 
