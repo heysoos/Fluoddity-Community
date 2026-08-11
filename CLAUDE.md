@@ -154,7 +154,7 @@ mechanics these caveats assume.
   this parameter existed must load unbraked. Speed depends on
   `particle_density` — one preset runs 28x faster at 1.0 than at 0.25 — so
   re-measure at the app's own defaults with
-  `python -m tools.calibrate_imgep --speed`.
+  `python -m tools.measure_speed`.
 
 - **The `MultiLoadConfig` struct is written by OFFSET, and a physics
   parameter's label must be `title()` of its field name.** Two raw std430

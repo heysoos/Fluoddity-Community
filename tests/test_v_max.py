@@ -21,7 +21,7 @@ SHADER = (ROOT / "shaders" / "entity_update.glsl").read_text(encoding="utf-8")
 UNCONSTRAINED = PARAM_BY_NAME["V_MAX"].default_max
 
 # The fastest particle anywhere in the preset library, in V Max units.
-# Re-derive with `python -m tools.calibrate_imgep --speed`.
+# Re-derive with `python -m tools.measure_speed`.
 LIBRARY_PEAK = 0.0204
 
 
