@@ -97,6 +97,17 @@ def default_layout() -> BrainLayout:
     return REGISTRY["fourier"].layout_from_settings({})
 
 
+def brain_rng(seed: float) -> np.random.Generator:
+    """The generator every "draw brains for this seed" path shares.
+
+    One home for the seed mapping, so the cohort brains and the tournament's
+    tiles agree about what a seed means. Two copies of this would drift, and the
+    symptom - a modality round trip landing somewhere new - is invisible until
+    someone goes back and forth looking for the brain they had.
+    """
+    return np.random.default_rng(int(abs(float(seed)) * 1e9) % (2 ** 32))
+
+
 def generated_brains(layout: BrainLayout, seed: float, count: int):
     """`count` independent brains of `layout`, deterministic in `seed`.
 

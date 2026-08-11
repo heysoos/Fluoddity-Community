@@ -340,7 +340,11 @@ class CommandHandler:
             return
         ts = ui_state.tournament
 
-        # Sync persistent controls
+        # Sync persistent controls. Above the `enabled` early-return, and ahead
+        # of _handle_brain_layout in process_commands, so a layout switch this
+        # frame reseeds from the CURRENT seed - that switch is what rerolls the
+        # tiles, and it happens whether or not the tournament is on screen.
+        svc.seed = float(getattr(ui_state.sim, "rule_seed", 0.0) or 0.0)
         svc.mutation_strength = ts.mutation_strength
         svc.inject_randoms = ts.inject_randoms
         svc.crossover_enabled = ts.crossover_enabled

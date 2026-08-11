@@ -13,16 +13,25 @@ that straddled the originals.
 """
 import numpy as np
 
-from services.brains import BrainLayout, crossover, default_layout, mutate
+from services.brains import (BrainLayout, brain_rng, crossover, default_layout,
+                             mutate)
 from services.genome_spec import random_genome_for
 
 
 class TournamentService:
     def __init__(self, grid: int = 4, rng: np.random.Generator | None = None,
-                 layout: BrainLayout | None = None):
+                 layout: BrainLayout | None = None, seed: float = 0.0):
         self.grid = int(grid)
         self.tiles = self.grid * self.grid
-        self._rng = rng if rng is not None else np.random.default_rng()
+        # The app's own randomness control, kept live: main pushes SimState's
+        # rule_seed onto it, and it is what decides the tiles a modality switch
+        # lands on. Turning it must change them, so it is an attribute rather
+        # than something baked into the generator at construction.
+        self.seed = float(seed)
+        # A SEPARATE stream for breeding and rerolls, spawned from the seed's.
+        # It must not start where _seeded_population starts, or the first Reset
+        # would hand back the very grid the session opened on.
+        self._rng = rng if rng is not None else brain_rng(self.seed).spawn(2)[1]
         self._layout = layout or default_layout()
         self.population: list[np.ndarray] = [
             self._blank() for _ in range(self.tiles)
@@ -49,6 +58,18 @@ class TournamentService:
     def _random(self) -> np.ndarray:
         return random_genome_for(self._rng, self._layout)
 
+    def _seeded_population(self) -> list[np.ndarray]:
+        """The tiles this (layout, seed) means, from a FRESH generator.
+
+        Drawn afresh rather than from the instance generator so that a modality
+        round trip returns to where it started instead of to wherever breeding
+        and resets had since carried the stream. Same formula and same seed
+        mapping as generated_brains, so a tile and a no-rule cohort brain are
+        the same draw.
+        """
+        rng = brain_rng(self.seed)
+        return [random_genome_for(rng, self._layout) for _ in range(self.tiles)]
+
     def set_layout(self, layout) -> None:
         """Repopulate for a new brain layout.
 
@@ -62,12 +83,13 @@ class TournamentService:
         self._layout = layout
         self.selected.clear()
         self._undo_stack.clear()
-        self.population = [self._random() for _ in range(self.tiles)]
+        self.population = self._seeded_population()
         self.mark_dirty()
 
     # --- lifecycle ---
     def init_population(self) -> None:
-        self.population = [self._random() for _ in range(self.tiles)]
+        # Seeded, so the grid a session opens on is the seed's, not the clock's.
+        self.population = self._seeded_population()
         self.selected.clear()
         self._undo_stack.clear()
         self.initialized = True
