@@ -343,7 +343,13 @@ class App:
         self._save_archive_settings(ui_state)
         self._release_archive(ui_state)
         self._build_archive_set(path)
+        # show_browser is one of the restored settings, and the switch can be
+        # driven FROM the browser - so an archive last closed with it shut must
+        # not make the window vanish under the user. A switch may open the
+        # browser; it may never close it.
+        was_open = ast.show_browser
         self._load_archive_settings(ui_state)
+        ast.show_browser = ast.show_browser or was_open
 
         ui_state.preferences.archive_name = safe
         ast.archive_name = safe

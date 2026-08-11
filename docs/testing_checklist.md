@@ -249,3 +249,13 @@ only the running app can answer.
 - [ ] Toggling Live preview off while hovering restores immediately
 - [ ] Deleting the entry you are hovering does not crash
 - [ ] The toggle's state is remembered per archive across a relaunch
+
+## 21. The picker and the map's Home icon
+- [ ] The Archive Browser has its own archive combo; switching from it changes what the gallery and map show
+- [ ] Switching from the browser does NOT close the browser, even for an archive last closed with it shut
+- [ ] New / Empty / Delete / Refresh all work from the browser, and their dialogs appear
+- [ ] With Live preview on, switching archives mid-hover puts your own creature back rather than leaving the old one running
+- [ ] Both the Explore tab and the browser can be open at once with no ImGui "conflicting ID" dialog
+- [ ] The map's recentre icon sits inside the canvas, top-right, and lights up on hover
+- [ ] Clicking it resets zoom and centre; the hover card for a dot underneath does not fight it
+- [ ] Scrolling over the icon still zooms the map

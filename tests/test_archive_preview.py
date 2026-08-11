@@ -20,8 +20,11 @@ class _Entry:
 
 
 class _FakeArchive:
-    def __init__(self, n=4, spec="brain:80"):
-        rng = np.random.default_rng(0)
+    # `seed` because two archives must hold DIFFERENT creatures: with one
+    # fixed seed, "switched to another archive" is indistinguishable from
+    # "did nothing", and every assertion about it passes vacuously.
+    def __init__(self, n=4, spec="brain:80", seed=0):
+        rng = np.random.default_rng(seed)
         self.entries = [_Entry(i, spec) for i in range(n)]
         self.brains = rng.normal(0, 0.5, (n, 10, 8)).astype(np.float32)
         # PHYSICS_PARAMS is 8 long; values are absolute, not offsets.
@@ -93,6 +96,7 @@ def _handler(archive=None):
     h._archive_preview_id = -1
     h._archive_preview_pushed = False
     h._archive_preview_physics = None
+    h._archive_preview_arc = None
     return h
 
 
@@ -339,3 +343,61 @@ def test_leaving_with_nothing_underneath_does_not_apply_a_none_rule():
     hover(h, ui, 1)
     hover(h, ui, -1)
     assert all(r is not None for r in h.sim.applied)
+
+
+# ---- switching archives under a live preview ------------------------------
+
+def test_switching_archives_ends_the_preview():
+    """Entry ids restart at 0 in every archive, so the id being previewed
+    names a different creature in the new one - or none at all."""
+    h, ui = _handler(), _UI()
+    ui.archive.live_preview = True
+    hover(h, ui, 2)
+    assert h.rule_manager.depth == 1
+
+    # A switch rebuilds the Archive object, and the pointer is over the combo
+    # rather than the gallery on that frame.
+    h.archive = _FakeArchive(seed=1)
+    hover(h, ui, -1)
+    assert h.rule_manager.depth == 0
+    assert np.allclose(h.sim.applied[-1], h.rule_manager.base[0])
+
+
+def test_after_a_switch_hovering_previews_the_new_archive():
+    h, ui = _handler(), _UI()
+    ui.archive.live_preview = True
+    hover(h, ui, 2)
+
+    fresh = _FakeArchive(seed=1)
+    h.archive = fresh
+    hover(h, ui, 2)
+    assert h.rule_manager.depth == 1
+    assert np.allclose(h.sim.applied[-1], fresh.brains[2])
+
+
+def test_a_switch_restores_the_physics_of_the_archive_that_set_them():
+    h = _handler(_FakeArchive(spec="brain:80+physics:8"))
+    ui = _UI()
+    ui.archive.live_preview = True
+    before = {n: getattr(ui.sim, n) for n in _physics_names()}
+    hover(h, ui, 1)
+
+    h.archive = _FakeArchive(spec="brain:80+physics:8", seed=1)
+    hover(h, ui, -1)
+    assert {n: getattr(ui.sim, n) for n in _physics_names()} == before
+
+
+def test_a_switch_while_still_hovering_shows_the_new_archives_entry():
+    """Not a bug: id 2 of the new archive is what hovering row 2 now means.
+    What must not happen is the OLD archive's brain staying on the GPU."""
+    h, ui = _handler(), _UI()
+    ui.archive.live_preview = True
+    hover(h, ui, 2)
+    old = h.archive
+
+    fresh = _FakeArchive(seed=1)
+    h.archive = fresh
+    h._handle_archive_preview(ui)          # preview_entry_id is still 2
+    assert h.rule_manager.depth == 1, "still exactly one push"
+    assert np.allclose(h.sim.applied[-1], fresh.brains[2])
+    assert not np.allclose(fresh.brains[2], old.brains[2])

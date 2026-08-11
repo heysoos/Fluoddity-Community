@@ -46,6 +46,7 @@ class CommandHandler:
         self._archive_preview_id = -1
         self._archive_preview_pushed = False
         self._archive_preview_physics = None
+        self._archive_preview_arc = None
         self.clipboard_preview_active = False  # Config clipboard preview
         self._clipboard_rule_was_pushed = False  # Whether clipboard preview actually pushed a rule
         self._clipboard_cached_config = None  # Full config saved before clipboard preview
@@ -633,6 +634,11 @@ class CommandHandler:
             ast.load_entry_id = -1
             return
 
+        # Ids restart at 0 in every archive, so after a switch the id being
+        # previewed names a different creature - or none.
+        if self._archive_preview_arc is not self.archive:
+            self._end_archive_preview(ui_state)
+
         if ast.load_entry_id >= 0:
             # The previewed rule is already on the GPU and on the rule stack;
             # committing is dropping the restore point, not applying anything.
@@ -678,6 +684,7 @@ class CommandHandler:
             self.sim.apply_rule(rule)
             self._archive_preview_pushed = True
         self._archive_preview_id = int(entry_id)
+        self._archive_preview_arc = self.archive
 
     def _end_archive_preview(self, ui_state):
         """Put back whatever was running before the preview."""
@@ -698,6 +705,7 @@ class CommandHandler:
         self._archive_preview_id = -1
         self._archive_preview_physics = None
         self._archive_preview_pushed = False
+        self._archive_preview_arc = None
 
     def _export_archive_entry(self, ui_state, entry_id, filename):
         """Write an archive entry as an ordinary Fluoddity config, so it opens

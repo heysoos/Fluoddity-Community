@@ -131,13 +131,24 @@ class ArchiveWindowMixin:
         if imgui.button("Open Archive Browser"):
             ast.show_browser = True
 
-    def _render_banner(self, ast, field, colour):
-        """A dismissable message that may be arbitrarily long."""
-        render_banner(ast, field, colour, scope="explore")
+    def _render_banner(self, ast, field, colour, scope="explore"):
+        """A dismissable message that may be arbitrarily long.
 
-    def _render_archive_row(self, ast):
+        Distinct scopes for the tab and the browser: both can be on screen at
+        once, and two Dismiss buttons sharing an ImGui id kills one of them.
+        """
+        render_banner(ast, field, colour, scope=scope)
+
+    def _render_archive_row(self, ast, show_summary=True):
         """Which archive is active is an experimental variable, so it sits at
-        the top of the tab rather than in a menu."""
+        the top of the tab rather than in a menu.
+
+        Drawn in the browser window too - it is a whole window about one
+        archive, and picking which one had no control in it. Safe to draw
+        twice: a widget's ID includes its window, so the two combos do not
+        collide. `show_summary` is off there because the browser prints its own
+        entry count immediately below.
+        """
         m = archive_row_model(ast)
         right = layout.row_right_edge()
         layout.push_settings_width()
@@ -165,7 +176,8 @@ class ArchiveWindowMixin:
         if imgui.button("Refresh##archive"):
             ast.refresh_archive_list_requested = True
 
-        layout.text_colored_wrapped(_DIM, m["summary"])
+        if show_summary:
+            layout.text_colored_wrapped(_DIM, m["summary"])
         self._render_archive_modals(ast)
 
     def _render_archive_modals(self, ast):
@@ -530,6 +542,12 @@ class ArchiveWindowMixin:
             imgui.end()
             return
 
+        # The picker belongs here as much as on the tab: this is a whole
+        # window about one archive, and opened from Extras the tab may never
+        # be on screen to switch from.
+        self._render_archive_row(ast, show_summary=False)
+        self._render_banner(ast, "warning", _BAD, scope="browser")
+        self._render_banner(ast, "notice", _OK, scope="browser")
         st = arc.stats()
         imgui.text_wrapped(f"{st['size']} / {st['capacity']} entries   "
                            f"{st['n_pinned']} pinned   "
@@ -719,18 +737,54 @@ class ArchiveWindowMixin:
             ast.refit_projection_requested = True
         if imgui.is_item_hovered():
             imgui.set_tooltip("Recompute the projection over the current archive.")
-        layout.wrap_row(right, layout.button_width("Home"))
-        if imgui.button("Home##map"):
-            self._map_home(ast)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Reset zoom and recentre.")
         hint = f"{ast.map_zoom:.1f}x - scroll to zoom, drag to pan"
         layout.wrap_row(right, imgui.calc_text_size(hint).x)
         imgui.text_colored(imgui.ImVec4(*_DIM), hint)
 
+    _HOME_PX = 22.0
+    _HOME_PAD = 6.0
+
+    def _render_map_home(self, ast, draw, origin, size) -> bool:
+        """A recentre icon in the canvas's own top-right corner.
+
+        Drawn AFTER the canvas hit-target, which is what gives it the click:
+        the canvas declares set_next_item_allow_overlap so a later widget over
+        it takes priority. -> whether the pointer is on it, so the map can stop
+        treating that as a hover on the dots underneath.
+
+        Drawn rather than lettered - the default font carries no icon set, and
+        a word at this size clips to nonsense.
+        """
+        s = self._HOME_PX
+        x = origin.x + size.x - s - self._HOME_PAD
+        y = origin.y + self._HOME_PAD
+        imgui.set_cursor_screen_pos(imgui.ImVec2(x, y))
+        if imgui.invisible_button("maphome", imgui.ImVec2(s, s)):
+            self._map_home(ast)
+        hovered = imgui.is_item_hovered()
+        if hovered:
+            imgui.set_tooltip("Reset zoom and recentre.")
+
+        bg = (imgui.IM_COL32(70, 80, 100, 235) if hovered
+              else imgui.IM_COL32(45, 50, 62, 170))
+        fg = (imgui.IM_COL32(240, 245, 255, 255) if hovered
+              else imgui.IM_COL32(175, 185, 205, 230))
+        draw.add_rect_filled(imgui.ImVec2(x, y), imgui.ImVec2(x + s, y + s),
+                             bg, 4.0)
+        # A target: a ring with four ticks pointing in at it.
+        cx, cy, r = x + s * 0.5, y + s * 0.5, s * 0.20
+        draw.add_circle(imgui.ImVec2(cx, cy), r, fg, 0, 1.5)
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            draw.add_line(
+                imgui.ImVec2(cx + dx * (r + 2.0), cy + dy * (r + 2.0)),
+                imgui.ImVec2(cx + dx * s * 0.36, cy + dy * s * 0.36), fg, 1.5)
+        return hovered
+
     def _draw_map(self, ast, arc, proj, pts, size):
         """Draw the canvas. -> (entry under the cursor or None, was it clicked)."""
         origin = imgui.get_cursor_screen_pos()
+        # Lets the Home button, drawn last, sit on top and take the click.
+        imgui.set_next_item_allow_overlap()
         imgui.invisible_button("map_hit", size)
         hovering = imgui.is_item_hovered()
         clicked = self._map_interact(ast, origin, size, hovering)
@@ -773,6 +827,11 @@ class ArchiveWindowMixin:
             draw.add_circle(imgui.ImVec2(float(gx[0]), float(gy[0])), 7.0,
                             imgui.IM_COL32(255, 90, 90, 255), 0, 2.0)
         draw.pop_clip_rect()
+
+        # Over the Home button is not over the dots beneath it, or the hover
+        # card covers the button you are reaching for.
+        if self._render_map_home(ast, draw, origin, size):
+            hovering = False
 
         # Through pts.idx: with a filter on, row i is not entry i, and hovering
         # the wrong entry is worse than not hovering at all.

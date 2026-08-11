@@ -320,6 +320,25 @@ def _button_labels(h, n=3):
     return button_labels(h.render_archive_window, n=n)
 
 
+def invisible_button_labels(fn, n=3):
+    """Every invisible_button id `fn` emits. The map's canvas and its recentre
+    icon are both invisible buttons - the icon is DRAWN, so there is no label
+    for button_labels to catch."""
+    seen = []
+    real = imgui.invisible_button
+
+    def spy(str_id, *a, **kw):
+        seen.append(str_id)
+        return real(str_id, *a, **kw)
+
+    imgui.invisible_button = spy
+    try:
+        frame(fn, n=n)
+    finally:
+        imgui.invisible_button = real
+    return seen
+
+
 def checkbox_labels(fn, n=3):
     """Every checkbox label `fn` emits. Same reasoning as button_labels: a
     disabled or below-the-fold widget still runs our Python."""
@@ -704,7 +723,8 @@ def test_the_map_renders_zoomed_in(gui):
     h.state.archive.map_center_x = 0.2
     labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
     assert "Refit projection" in labels
-    assert "Home##map" in labels
+    assert "maphome" in invisible_button_labels(
+        lambda: h._render_map(h.state.archive, h.archive_obj))
 
 
 def test_the_hover_card_renders_with_a_thumbnail(gui):
@@ -1200,7 +1220,8 @@ def test_the_map_keeps_its_buttons_at_the_minimum_width(gui):
     h.archive_projection = _spread(h.archive_obj)
     h.state.archive.selected_entry_id = 0
     labels = narrow_button_labels(_mapped(h))
-    assert "Refit projection" in labels and "Home##map" in labels
+    assert "Refit projection" in labels
+    assert "maphome" in invisible_button_labels(_mapped(h))
     assert "Save as config...##map" in labels and "Delete##map" in labels
 
 
@@ -1260,3 +1281,55 @@ def test_the_toggle_renders_disabled_during_tournament_mode(gui, mode):
     getattr(h.state, mode).enabled = True
     assert frame(_browser(h)) > host_only()
     assert "Live preview" in checkbox_labels(_browser(h))
+
+
+# ---- the archive picker lives in the browser too --------------------------
+
+def test_the_browser_can_switch_archives_on_its_own(gui):
+    """Opened from Extras the Explore tab may never be on screen, so the tab
+    cannot be the only place with a picker."""
+    h = Harness(archive=_populated())
+    h.state.archive.archive_list = [
+        {"name": "default", "entries": 8, "size_mb": 1.0},
+        {"name": "reef", "entries": 40, "size_mb": 5.0},
+    ]
+    labels = button_labels(_browser(h))
+    for want in ("New##archive", "Empty##archive", "Delete##archive",
+                 "Refresh##archive"):
+        assert want in labels
+
+
+def test_the_picker_and_the_tab_do_not_collide(gui, monkeypatch):
+    """Both windows draw a combo labelled "Archive". A widget's ID includes
+    its window, so these are distinct - but only if they really are in
+    separate windows."""
+    h = Harness(driver=_FakeDriver(), archive=_populated(), goals=GoalList())
+    h.state.archive.show_browser = True
+
+    def draw():
+        h.render_explore_tab()
+        h.render_archive_window()
+
+    assert not id_clashes(monkeypatch, draw)
+
+
+def test_the_browser_summary_is_not_printed_twice(gui):
+    """The browser prints its own entry count, so the row's summary would be
+    the same number on two consecutive lines."""
+    h = Harness(archive=_populated())
+    h.state.archive.archive_list = [
+        {"name": "default", "entries": 8, "size_mb": 1.25}]
+    seen = []
+    real = imgui.text_wrapped
+
+    def spy(text, *a, **kw):
+        seen.append(text)
+        return real(text, *a, **kw)
+
+    imgui.text_wrapped = spy
+    try:
+        frame(_browser(h))
+    finally:
+        imgui.text_wrapped = real
+    assert not any("1.2 MB" in t for t in seen)
+    assert any("8 / 20000 entries" in t for t in seen)
