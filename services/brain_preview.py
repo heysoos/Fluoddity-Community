@@ -155,14 +155,18 @@ class BrainPreview:
 
     def render(self, layout, brain_buffer, *, axes=(0, 2), channel: int = 0,
                value_range: float = 2.0, gain: float = 1.0, seed: int = 0,
-               include_total: bool = True) -> moderngl.Texture:
+               include_total: bool = True, slot: int = 0) -> moderngl.Texture:
         """-> the atlas texture. Tile 0 is the whole brain when include_total.
+
+        `slot` indexes the flat brain buffer: 0 is the loaded rule or the
+        tournament's tile 0, and the cohort slots hold one brain each when no
+        rule is loaded.
 
         Re-rendered on demand rather than cached: at 96 px a full 48-unit brain
         is ~450k fragments of pure arithmetic, far below one simulation step,
         and caching would need invalidating on every parameter write.
         """
-        from services.brains import get
+        from services.brains import MAX_BRAIN_FLOATS, get
 
         n = self.unit_count(layout)
         tiles = n + (1 if include_total else 0)
@@ -182,6 +186,7 @@ class BrainPreview:
         u, v = basis_for(axes, seed)
         tryset(p, "PREVIEW_U", tuple(float(c) for c in u))
         tryset(p, "PREVIEW_V", tuple(float(c) for c in v))
+        tryset(p, "PREVIEW_BASE", max(int(slot), 0) * MAX_BRAIN_FLOATS)
         tryset(p, "PREVIEW_CHANNEL", int(channel))
         tryset(p, "PREVIEW_RANGE", float(value_range))
         tryset(p, "PREVIEW_GAIN", float(gain))

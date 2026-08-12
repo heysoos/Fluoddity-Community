@@ -96,6 +96,8 @@ class BrainWindowMixin:
             state.request_layout_change = True
             self._brain_draft.clear()
 
+        self._render_source_selector(state)
+
         modality = get(state.modality)
         settings = dict(state.settings)
         for s in modality.settings_schema():
@@ -159,6 +161,59 @@ class BrainWindowMixin:
         self._render_brain_inspector(state, layout)
         imgui.end()
 
+    # ---- which brain ------------------------------------------------------
+
+    @staticmethod
+    def source_kind(state) -> str:
+        """"rule", "cohort" or "tile" - which brain the window is pointing at.
+
+        Decided by the sim, not by the user, because only one of the three
+        exists at a time: a loaded rule is what EVERY particle reads, no rule
+        loaded means one generated brain per cohort, and a tournament means one
+        per tile. The tile case wins, because a rule-less startup leaves the
+        per-cohort flag set underneath it.
+        """
+        if state.preview_tile0:
+            return "tile"
+        return "cohort" if state.preview_per_cohort else "rule"
+
+    def _render_source_selector(self, state) -> None:
+        kind = self.source_kind(state)
+        n = max(1, int(state.source_count))
+        if kind == "rule":
+            state.source_index = 0
+            imgui.text("Source    Loaded rule")
+            return
+
+        word = "Cohort" if kind == "cohort" else "Tile"
+        i = min(max(int(state.source_index), 0), n - 1)
+        ch, v = imgui.combo("Source", i, [f"{word} {k}" for k in range(n)])
+        if ch:
+            state.source_index = int(v)
+        else:
+            state.source_index = i
+
+        if kind == "tile":
+            # The grid owns these slots and rewrites them every generation, so
+            # there is nothing an edit could survive.
+            imgui.text_disabled("   the tournament owns these; read only")
+            return
+        imgui.same_line()
+        if imgui.button("Adopt as loaded rule"):
+            state.adopt_requested = True
+        imgui.text_disabled("   edits show at once; File > Save writes the "
+                            "loaded rule, so adopt to keep one")
+
+    def _source_locked(self, state) -> str:
+        """Why layer operations are refused right now, or "" if they are not."""
+        if self.source_kind(state) == "tile":
+            return "the tournament owns this brain"
+        if state.borrow_active:
+            # Slot 0 holds someone else's brain for as long as the pointer sits
+            # on a menu item, and the commit path would keep the edit.
+            return "a preview is borrowing this brain"
+        return ""
+
     # ---- the layer stack ---------------------------------------------------
 
     def _render_layer_rows(self, state, settings, s) -> None:
@@ -177,6 +232,7 @@ class BrainWindowMixin:
         committed = [list(p) for p in layers]    # what is on the GPU right now
         acts = list(s.choices)
         drafts: dict[int, int] = {}              # widths a slider is still held on
+        row_hovered: dict[int, bool] = {}
         removed = None
 
         imgui.text("Layers")
@@ -197,6 +253,9 @@ class BrainWindowMixin:
                                      int(s.lo), self._max_width(
                                          state, settings, s, layers, i))
             imgui.pop_item_width()
+            # Captured HERE, because the draft commit below asks the same
+            # question of the last item and the popup would answer for it.
+            row_hovered[i] = imgui.is_item_hovered()
             if ch:
                 self._brain_draft[key] = v
             drafts[i] = int(self._brain_draft.get(key, w))
@@ -218,6 +277,7 @@ class BrainWindowMixin:
             imgui.end_disabled()
             if imgui.is_item_hovered():
                 imgui.set_tooltip("remove this layer")
+            self._render_layer_menu(state, i, layers[i], row_hovered[i])
 
         if removed is not None:
             layers.pop(removed)
@@ -254,6 +314,87 @@ class BrainWindowMixin:
             if i < len(shown):
                 shown[i][0] = w
         self._render_budget(state, settings, s, layers, shown)
+
+    def _render_layer_menu(self, state, i, layer, hovered) -> None:
+        """Right-click a layer: reroll, rescale or redistribute its WEIGHTS.
+
+        A genome edit, not a layout edit - it is free, it is undoable with Z,
+        and it touches nothing structural. That is why this menu carries none of
+        the warning the row's own controls do.
+        """
+        pid = f"layer_ctx_{i}"
+        if hovered and imgui.is_mouse_clicked(1):
+            imgui.open_popup(pid)
+        if not imgui.begin_popup(pid):
+            if self._layer_popup == i:
+                # Closed: one history entry for the whole drag, not one a frame.
+                self._layer_popup = None
+                state.layer_op = (i, "scale_end", None)
+            return
+        if self._layer_popup != i:
+            self._layer_popup = i
+            self._layer_scale = 1.0
+            state.layer_op = (i, "scale_begin", None)
+
+        # The physics panel's auto-close, so a menu left behind by the pointer
+        # goes away on its own.
+        pos, size = imgui.get_window_pos(), imgui.get_window_size()
+        mouse = imgui.get_mouse_pos()
+        dx = max(pos.x - mouse.x, 0.0, mouse.x - (pos.x + size.x))
+        dy = max(pos.y - mouse.y, 0.0, mouse.y - (pos.y + size.y))
+        if ((dx * dx + dy * dy) ** 0.5
+                > self.state.preferences.menu_close_threshold):
+            imgui.close_current_popup()
+
+        imgui.text(f"Layer {i + 1} - {int(layer[0])} units")
+        locked = self._source_locked(state)
+        if locked:
+            imgui.text_disabled(locked)
+        imgui.begin_disabled(bool(locked))
+
+        dists = list(getattr(get(state.modality), "distributions", ()))
+        cur = int(state.layer_dist.get(i, 0)) if dists else 0
+        imgui.push_item_width(imgui.calc_text_size("heavy-tail").x + 48.0)
+        if dists:
+            ch, v = imgui.combo("Distribution", min(cur, len(dists) - 1), dists)
+            if ch:
+                state.layer_dist[i] = int(v)
+                cur = int(v)
+        # Relative to a snapshot taken when the popup opened. Applied per frame
+        # it would compound over a drag and the layer would explode.
+        ch, v = imgui.slider_float("Scale", float(self._layer_scale), 0.0, 4.0)
+        imgui.pop_item_width()
+        if ch:
+            self._layer_scale = float(v)
+            state.layer_op = (i, "scale", float(v))
+        imgui.separator()
+        for label, op in (("Reroll weights", "reroll_weights"),
+                          ("Reroll biases", "reroll_biases")):
+            if imgui.button(label):
+                state.layer_op = (i, op, cur)
+        imgui.separator()
+        if imgui.button("Reset layer"):
+            state.layer_op = (i, "reset", None)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("back to how this layer was when the menu opened")
+        imgui.end_disabled()
+        imgui.end_popup()
+
+    @property
+    def _layer_popup(self):
+        return getattr(self, "_layer_popup_index", None)
+
+    @_layer_popup.setter
+    def _layer_popup(self, value):
+        self._layer_popup_index = value
+
+    @property
+    def _layer_scale(self) -> float:
+        return float(getattr(self, "_layer_scale_value", 1.0))
+
+    @_layer_scale.setter
+    def _layer_scale(self, value) -> None:
+        self._layer_scale_value = float(value)
 
     def _render_budget(self, state, settings, s, layers, shown) -> None:
         length = layout_for(state.modality, settings).length

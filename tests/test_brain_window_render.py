@@ -139,16 +139,22 @@ def test_nothing_opens_a_modal(gui):
     """There is no confirmation dialog, by request. A count change is deferred
     to slider release instead, which fixes the problem the modal existed for -
     a drag firing one archive rebuild per frame - without interrupting anyone.
+
+    The layer menu is a context popup, which is not a modal and is not opened by
+    drawing: nothing here right-clicks, so nothing here opens one.
     """
     from pathlib import Path
 
-    ui = _StubUI("gabor", {"filters": 12})
-    ui.render_brain_window()
-    assert not gui.is_popup_open("", gui.PopupFlags_.any_popup_id)
+    for modality in MODALITIES:
+        _StubUI(modality).render_brain_window()
+        assert not gui.is_popup_open("", gui.PopupFlags_.any_popup_id), modality
     src = (Path(__file__).resolve().parent.parent
            / "ui" / "brain_window.py").read_text()
-    assert "imgui.open_popup(" not in src
     assert "imgui.begin_popup_modal(" not in src
+    assert "imgui.open_popup(" in src, (
+        "the layer menu must open on right-click and only on right-click"
+    )
+    assert "imgui.is_mouse_clicked(1)" in src
 
 
 def test_a_pending_count_commits_once_the_slider_is_released(gui):
@@ -274,6 +280,58 @@ def test_a_second_layer_narrows_the_first_and_the_state_follows(gui):
     w = ui._add_layer_width(st, dict(st.settings), s, [[48, 0]])
     built = ui._built(st, dict(st.settings), s, [[48, 0], [w, 0]])
     assert built == [[MAX_DEEP_WIDTH, 0], [w, 0]]
+
+
+# ---- the Source selector and the layer menu --------------------------------
+
+@pytest.mark.parametrize("per_cohort,tile0,kind",
+                         [(False, False, "rule"), (True, False, "cohort"),
+                          (True, True, "tile"), (False, True, "tile")])
+@pytest.mark.parametrize("modality", MODALITIES)
+def test_every_source_kind_renders(gui, modality, per_cohort, tile0, kind):
+    from ui.brain_window import BrainWindowMixin
+
+    ui = _StubUI(modality)
+    ui.state.brain.preview_per_cohort = per_cohort
+    ui.state.brain.preview_tile0 = tile0
+    ui.state.brain.source_count = 16
+    ui.state.brain.source_index = 5
+    gui.set_next_item_open(True)
+    ui.render_brain_window()
+    assert BrainWindowMixin.source_kind(ui.state.brain) == kind
+    # A rule is ONE brain every particle reads, so there is nothing to choose.
+    assert ui.state.brain.source_index == (0 if kind == "rule" else 5)
+
+
+def test_a_source_index_past_the_count_is_pulled_back(gui):
+    """The cohort count follows SimState, so it can shrink under a selection."""
+    ui = _StubUI("mlp")
+    ui.state.brain.preview_per_cohort = True
+    ui.state.brain.source_count = 4
+    ui.state.brain.source_index = 30
+    ui.render_brain_window()
+    assert ui.state.brain.source_index == 3
+
+
+def test_the_layer_menu_is_locked_where_an_edit_could_not_survive(gui):
+    ui = _StubUI("mlp")
+    bst = ui.state.brain
+    assert ui._source_locked(bst) == ""
+    bst.borrow_active = True
+    assert "borrow" in ui._source_locked(bst)
+    bst.borrow_active = False
+    bst.preview_tile0 = True
+    assert "tournament" in ui._source_locked(bst)
+
+
+def test_drawing_the_rows_emits_no_layer_op(gui):
+    """The menu is a right-click. Rendering must never fire an edit by itself -
+    an op that ran every frame would rewrite the brain continuously."""
+    ui = _StubUI("mlp", {"layers": [[8, 0], [6, 1]]})
+    for _ in range(3):
+        ui.render_brain_window()
+        assert ui.state.brain.layer_op is None
+        assert ui.state.brain.adopt_requested is False
 
 
 def test_add_layer_is_refused_at_the_depth_cap(gui):

@@ -899,8 +899,39 @@ class Sim:
         self.multi_load_rule_buffer.write(
             pack_brains(brains, layout),
             offset=COHORT_BRAIN_SLOT0 * MAX_BRAIN_FLOATS * 4)
+        # Kept so the Brain window can name one of them - editing or adopting a
+        # cohort's brain needs the floats, and nothing else reads them back.
+        self._cohort_brains = brains
         self._brain_per_cohort = True
         return brains[0]
+
+    def cohort_brain(self, i: int):
+        """Cohort i's generated brain, or None when a rule is loaded."""
+        brains = getattr(self, "_cohort_brains", None)
+        if not self.brain_per_cohort or not brains:
+            return None
+        return brains[int(i) % len(brains)]
+
+    def write_cohort_brain(self, i: int, params) -> None:
+        """Replace ONE cohort's generated brain.
+
+        Visible immediately and saved by nothing: File > Save writes slot 0, so
+        an edited cohort has to be adopted to be kept. The Brain window says so.
+        """
+        from services.brains import COHORT_BRAIN_SLOT0, MAX_BRAIN_FLOATS
+        from utilities.gl_helpers import pack_brains
+
+        brains = getattr(self, "_cohort_brains", None)
+        if not self.brain_per_cohort or not brains:
+            return
+        i = int(i) % len(brains)
+        flat = np.asarray(params, dtype=np.float32).reshape(-1)
+        if flat.size != self._brain_layout.length:
+            return
+        brains[i] = flat
+        self.multi_load_rule_buffer.write(
+            pack_brains([flat], self._brain_layout),
+            offset=(COHORT_BRAIN_SLOT0 + i) * MAX_BRAIN_FLOATS * 4)
 
     @property
     def brain_per_cohort(self) -> bool:
@@ -1022,6 +1053,12 @@ class Sim:
         return bool(self._tournament_enabled)
 
     @property
+    def tournament_grid(self) -> int:
+        """The grid side length. Read by the Brain window, whose Source list is
+        one entry per tile while the grid is running."""
+        return max(1, int(getattr(self, "_tournament_grid", 1) or 1))
+
+    @property
     def brain_layout(self):
         """The active brain layout. Read by anything that needs the buffer
         stride - click-to-adopt readback, in particular."""
@@ -1041,8 +1078,8 @@ class Sim:
         """Adopt a layout of the SAME width - a decode-scale change only.
 
         Separate from realloc_brain_buffers because that releases and
-        reallocates the per-particle buffer, which is 192 MB at the default
-        count. A slider tick must not pay for that.
+        reallocates the adopted-brain buffer. A slider tick must not pay for
+        that.
 
         The GPU holds DECODED parameters, so a new scale does not reach it on
         its own - it only changes what future z decode to. That made every scale

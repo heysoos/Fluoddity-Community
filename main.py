@@ -444,11 +444,29 @@ class App:
                 value_range=bst.preview_range,
                 gain=bst.preview_gain,
                 seed=bst.preview_seed,
+                slot=self._brain_preview_slot(bst),
             )
         except Exception as exc:
             print(f"[brain] inspector render failed ({exc})")
             self.ui.brain_preview_tex = None
             self.brain_preview = False
+
+    @staticmethod
+    def _brain_preview_slot(bst) -> int:
+        """Which slot of the flat brain buffer the Inspector draws.
+
+        Slot 0 holds the loaded rule, and tile 0 under a tournament; the cohort
+        slots hold one generated brain each when no rule is loaded, which is the
+        only case where there is a choice to make.
+        """
+        from services.brains import COHORT_BRAIN_SLOT0, MAX_COHORT_BRAINS
+        from ui.brain_window import BrainWindowMixin
+
+        kind = BrainWindowMixin.source_kind(bst)
+        i = max(0, int(bst.source_index))
+        if kind == "cohort":
+            return COHORT_BRAIN_SLOT0 + min(i, MAX_COHORT_BRAINS - 1)
+        return i if kind == "tile" else 0
 
     def _refresh_driver_specs(self, layout, reset: bool = False) -> None:
         """Point every driver's genome spec at `layout`.

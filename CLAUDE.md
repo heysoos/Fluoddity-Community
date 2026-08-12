@@ -892,6 +892,36 @@ mechanics these caveats assume.
   or stale came back as the modality's defaults — the wrong brain, silently, and
   then the genome refused on width.
 
+- **A layer operation needs THREE snapshots, and they answer three different
+  questions.** `_layer_open` is the genome as the menu opened and is what Reset
+  puts back; `_layer_base` is what Scale multiplies, REBASED after a reroll so
+  the next drag scales what is on screen; `_layer_live` is what the GPU holds,
+  because a scale in progress has not been pushed onto the rule stack and so
+  cannot be read back from it. Collapsing open into base makes Reset a no-op
+  after two rerolls — it undoes the edits it was rebased by. Scale multiplies a
+  snapshot rather than the live value, or a drag compounds and the layer
+  explodes; it pushes ONE history entry on close, and none at all if the slider
+  never moved. Guarded by `tests/test_brain_layer_ops.py`.
+
+- **Scale is deliberately unclamped, and what it costs is only SEEDING.** The
+  archive stores decoded params, so a rescaled layer saves and plays back
+  exactly as it looks. `imgep_driver.py` and `command_handler.py` call
+  `encode(archive.brain_at(i))` to start CMA-ES from an entry, and `encode` is
+  `arctanh(params / W_SCALE)`, which clips — so an expedition seeded from a
+  past-the-rail creature starts from a clipped version of it. If creatures out
+  there turn out to be interesting the conclusion is that `W_SCALE` is wrong,
+  not that the region should be fenced; promoting it to a `Setting(kind=
+  "float")` makes it a decode scale, which neither splits the archive nor
+  resets a search.
+
+- **A layer edit has an OWNER, and two states have none.** Under a tournament
+  slot 0 is tile 0 of a running grid, which is rewritten every generation, so
+  nothing an edit could survive; during a hover borrow slot 0 holds someone
+  else's brain and the commit path would keep the edit. Both are refused in
+  `_handle_brain_source`, and the Source combo says which. With no rule loaded
+  there is no single brain at all — every cohort has its own — which is why the
+  Source selector exists rather than the window guessing.
+
 - **The Inspector draws the LAST hidden layer's units.** They are the only ones
   that decompose additively into the output; a unit in an earlier layer reaches
   it through further nonlinearities and has no contribution to show. `shape[0]`

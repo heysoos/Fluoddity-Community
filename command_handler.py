@@ -242,6 +242,9 @@ class CommandHandler:
         bst.archive_entries = len(self.archive) if self.archive is not None else 0
         bst.best_z = self._active_best_z()
 
+        bst.borrow_active = self._borrow is not None
+        self._handle_brain_source(ui_state)
+
         bst.request_layout_change = False
         if self.apply_brain_layout is None:
             return
@@ -258,6 +261,146 @@ class CommandHandler:
         # One frame only. A same-brain load needs no switch, so nothing consumed
         # it, and a rule left here would be applied by the next unrelated one.
         self._pending_brain_rule = None
+
+    def _handle_brain_source(self, ui_state) -> None:
+        """The Adopt button and the per-layer operations menu.
+
+        Both are GENOME edits: they go through apply_rule and push onto the rule
+        stack, so Z undoes them like anything else, and neither touches the
+        layout, the archive or the optimizer.
+        """
+        from ui.brain_window import BrainWindowMixin
+
+        bst = ui_state.brain
+        op, bst.layer_op = bst.layer_op, None
+        adopt, bst.adopt_requested = bst.adopt_requested, False
+        sim = getattr(self, "sim", None)
+        if sim is None:
+            return
+
+        kind = BrainWindowMixin.source_kind(bst)
+        bst.source_count = self._brain_source_count(ui_state, sim, kind)
+        if kind == "tile" or self._borrow is not None:
+            # Slot 0 is the grid's, or someone else's for the length of a hover.
+            self._layer_base = None
+            return
+
+        i = int(bst.source_index)
+        if adopt and kind == "cohort":
+            params = sim.cohort_brain(i)
+            if params is not None:
+                self.rule_manager.push_rule(np.asarray(params),
+                                            ui_state.sim.rule_seed)
+                sim.apply_rule(params)
+            return
+        if op is None:
+            return
+        self._apply_layer_op(ui_state, sim, kind, i, op)
+
+    def _brain_source_count(self, ui_state, sim, kind: str) -> int:
+        if kind == "cohort":
+            from services.brains import MAX_COHORT_BRAINS
+
+            return max(1, min(int(ui_state.sim.num_cohorts or 1),
+                              MAX_COHORT_BRAINS))
+        if kind == "tile":
+            return sim.tournament_grid ** 2
+        return 1
+
+    def _current_brain(self, sim, kind: str, i: int):
+        """The genome the layer menu is editing, as a flat float32 vector."""
+        if kind == "cohort":
+            params = sim.cohort_brain(i)
+        else:
+            params = self.rule_manager.get_current_rule()
+        if params is None:
+            return None
+        flat = np.asarray(params, dtype=np.float32).reshape(-1)
+        return flat if flat.size == sim.brain_layout.length else None
+
+    def _put_brain(self, ui_state, sim, kind: str, i: int, params,
+                   push: bool) -> None:
+        if kind == "cohort":
+            sim.write_cohort_brain(i, params)
+            return
+        if push:
+            self.rule_manager.push_rule(np.asarray(params),
+                                        ui_state.sim.rule_seed)
+        sim.apply_rule(params)
+
+    def _apply_layer_op(self, ui_state, sim, kind: str, i: int, op) -> None:
+        """One operation on one layer.
+
+        Three snapshots, because they answer three different questions.
+        `_layer_open` is the genome as the menu opened and is what Reset puts
+        back. `_layer_base` is what Scale multiplies - rebased after a reroll,
+        so the next drag scales what is on screen rather than jumping back past
+        it - and multiplying a snapshot rather than the live value is what stops
+        a drag compounding. `_layer_live` is what the GPU currently holds, since
+        a scale in progress has not been pushed onto the rule stack and so
+        cannot be read back from it.
+        """
+        from services.brains import get
+
+        index, name, arg = op
+        layout = sim.brain_layout
+        modality = get(layout.modality)
+        parts = getattr(modality, "layer_parts", None)
+        if parts is None:
+            return                      # this modality has no editable layers
+        try:
+            spans = parts(layout, int(index))
+        except (IndexError, ValueError, TypeError):
+            return                      # the stack changed under the menu
+
+        if name == "scale_begin":
+            self._layer_open = self._layer_base = self._current_brain(
+                sim, kind, i)
+            self._layer_live = None
+            return
+        if name == "scale_end":
+            base = getattr(self, "_layer_base", None)
+            live = getattr(self, "_layer_live", None)
+            self._layer_open = self._layer_base = self._layer_live = None
+            # ONE history entry for the whole drag, and none at all if the
+            # slider never moved.
+            if base is not None and live is not None \
+                    and not np.array_equal(base, live):
+                self._put_brain(ui_state, sim, kind, i, live, push=True)
+            return
+
+        base = getattr(self, "_layer_base", None)
+        if base is None or base.size != layout.length:
+            return
+        out = (getattr(self, "_layer_live", None) if name == "scale"
+               else self._current_brain(sim, kind, i))
+        out = base.copy() if out is None else out.copy()
+
+        if name == "scale":
+            for lo, hi in spans.values():
+                out[lo:hi] = base[lo:hi] * float(arg)
+            self._layer_live = out
+            self._put_brain(ui_state, sim, kind, i, out, push=False)
+            return
+        if name in ("reroll_weights", "reroll_biases"):
+            part = "weights" if name.endswith("weights") else "biases"
+            lo, hi = spans[part]
+            out[lo:hi] = modality.layer_reroll(
+                np.random.default_rng(), layout, int(index), part, int(arg or 0))
+        elif name == "reset":
+            opened = getattr(self, "_layer_open", None)
+            if opened is None or opened.size != out.size:
+                return
+            for lo, hi in spans.values():
+                out[lo:hi] = opened[lo:hi]
+        else:
+            return
+        # The next Scale is relative to what is on screen now, not to what was
+        # there before the reroll. Reset keeps its own snapshot, or it would be
+        # rebased by the very edits it exists to undo.
+        self._layer_base = out.copy()
+        self._layer_live = None
+        self._put_brain(ui_state, sim, kind, i, out, push=True)
 
     def _active_best_z(self):
         """The best search vector the running driver has found, or None.

@@ -311,6 +311,32 @@ def test_a_deep_stack_draws_its_final_layers_units(ctx, preview, layers):
     buf.release()
 
 
+def test_the_inspector_can_draw_a_slot_other_than_zero(ctx, preview):
+    """With no rule loaded every cohort has its own brain, so slot 0 is one of
+    however many are running. PREVIEW_BASE is what lets the window point at the
+    one it names."""
+    from services.brains import COHORT_BRAIN_SLOT0, MAX_BRAIN_FLOATS, REGISTRY
+    from utilities.gl_helpers import pack_brains
+
+    layout = REGISTRY["mlp"].layout_from_settings({})
+    slot = COHORT_BRAIN_SLOT0 + 3
+    raw = np.zeros((slot + 1, MAX_BRAIN_FLOATS), dtype=np.float32)
+    for i, seed in ((0, 11), (slot, 22)):
+        p = np.asarray(REGISTRY["mlp"].random(np.random.default_rng(seed),
+                                              layout), dtype=np.float32)
+        raw[i, : layout.length] = np.frombuffer(
+            pack_brains([p], layout), dtype=np.float32)[: layout.length]
+    buf = ctx.buffer(raw.tobytes())
+
+    a = atlas(preview, preview.render(layout, buf, axes=None, seed=1)).copy()
+    b = atlas(preview, preview.render(layout, buf, axes=None, seed=1,
+                                      slot=slot)).copy()
+    assert not np.array_equal(a, b), "PREVIEW_BASE does nothing"
+    again = atlas(preview, preview.render(layout, buf, axes=None, seed=1))
+    assert np.array_equal(a, again), "slot 0 moved"
+    buf.release()
+
+
 def test_the_tile_uv_is_flipped_for_imgui(preview, ctx):
     """The framebuffer's origin is bottom-left and ImGui's is top-left; handing
     it the raw range draws every tile upside down."""

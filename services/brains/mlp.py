@@ -33,6 +33,14 @@ W_SCALE = 2.0
 B_SCALE = 1.0
 EPS = 1e-4
 
+# What a layer's Reroll draws from, BEFORE the decode - so a reroll is always
+# representable and always lands inside the rails. `normal` is what random()
+# uses. `sparse` sets most of z to zero, and z = 0 decodes to exactly 0, so
+# sparsity in z is sparsity in the weights.
+DISTRIBUTIONS = ("normal", "uniform", "sparse", "heavy-tail")
+SPARSITY = 0.8
+CAUCHY_SCALE = 0.25
+
 IN_DIM = 4          # the four sensor taps
 OUT_DIM = 4         # force xy and strafe xy
 
@@ -104,6 +112,18 @@ def _shape_from_layers(layers) -> tuple[int, ...]:
     return tuple(shape) or (16, 0)
 
 
+def _draw_z(rng, n: int, dist: int) -> np.ndarray:
+    if dist == 1:
+        return rng.uniform(-1.0, 1.0, n)
+    if dist == 2:
+        z = rng.normal(0.0, 1.0, n)
+        z[rng.random(n) < SPARSITY] = 0.0
+        return z
+    if dist == 3:
+        return rng.standard_cauchy(n) * CAUCHY_SCALE
+    return rng.normal(0.0, 0.5, n)          # what random() draws
+
+
 class MLPModality:
     name = "mlp"
     modality_id = 3
@@ -172,6 +192,34 @@ class MLPModality:
         additively into the output. An earlier layer's unit reaches the output
         through further nonlinearities and has no contribution to show."""
         return int(layout.shape[-2]) if len(layout.shape) >= 2 else 0
+
+    # ---- per-layer operations -------------------------------------------
+
+    distributions = DISTRIBUTIONS
+
+    def layer_parts(self, layout: BrainLayout, i: int) -> dict:
+        """{'weights': (lo, hi), 'biases': (lo, hi)} for hidden layer i.
+
+        What the Brain window's right-click menu edits. Half-open, in floats,
+        into the decoded genome. The output layer has no row of its own, so it
+        is not addressable here - rerolling the last hidden layer leaves the
+        output weights alone, which is what makes the op readable on screen.
+        """
+        hidden, _out_w, _out_b, _n = layer_spans(layout.shape)
+        w_off, b_off, _fan_in, w = hidden[i]
+        return {"weights": (w_off, b_off), "biases": (b_off, b_off + w)}
+
+    def layer_reroll(self, rng, layout: BrainLayout, i: int, part: str,
+                     dist: int) -> np.ndarray:
+        """Fresh DECODED values for one part of one layer.
+
+        Drawn in z and then squashed, exactly as decode() would, so a reroll is
+        always a genome the search could also have produced.
+        """
+        lo, hi = self.layer_parts(layout, i)[part]
+        scale = W_SCALE if part == "weights" else B_SCALE
+        return (scale * np.tanh(_draw_z(rng, hi - lo, int(dist)))
+                ).astype(np.float32)
 
     # ---- mutation and crossover ----------------------------------------
 

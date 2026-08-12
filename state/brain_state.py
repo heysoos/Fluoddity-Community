@@ -59,3 +59,27 @@ class BrainState:
     # without this it names the wrong thing - and a grid of 16 or 64 distinct
     # brains showing one of them unlabelled reads as the whole grid.
     preview_tile0: bool = False
+
+    # ---- which brain the Inspector draws, and the layer menu edits ---------
+    #
+    # There is not always ONE brain to point at: with no rule loaded every
+    # cohort has its own, and under a tournament every tile does. Naming which
+    # is what makes editing a layer mean something. The KIND follows the sim -
+    # only one of the three exists at a time - so only the index is a choice.
+    source_index: int = 0
+    # How many cohorts or tiles there are, pushed in by the orchestrator.
+    source_count: int = 1
+    # One-shot: promote the named brain into slot 0, the collapse
+    # click-to-adopt performs, as a button rather than a side effect.
+    adopt_requested: bool = False
+
+    # One-shot layer operation, as (layer index, op, argument). Read and
+    # cleared by CommandHandler, which owns the rule stack.
+    layer_op: object = None
+    # Which distribution each layer's Reroll draws from, by layer index. A UI
+    # preference, not part of the genome, the layout or the signature - the
+    # weights are what a preset saves, so there is no round trip to break.
+    layer_dist: dict = field(default_factory=dict)
+    # True while a hover preview holds someone else's brain in slot 0. Pushed
+    # in by the orchestrator; the layer menu refuses to edit through it.
+    borrow_active: bool = False

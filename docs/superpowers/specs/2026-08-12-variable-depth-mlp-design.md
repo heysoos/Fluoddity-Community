@@ -1,7 +1,7 @@
 # Variable-depth MLP
 
 **Date:** 2026-08-12
-**Status:** phases 0 and 1 implemented; phase 2 not started.
+**Status:** implemented.
 
 One decision the measurement overturned: the deep path's width cap is paid by
 the depth-1 path too, so `MAX_MLP_WIDTH` had to fall to 8 and a lone layer keeps

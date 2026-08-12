@@ -14,6 +14,10 @@ in vec2 texcoord;
 out vec4 frag;
 
 uniform int   PREVIEW_UNIT;     // -1 = the whole brain, >=0 = that unit alone
+// Where the drawn brain starts in brain_params: slot * MAX_BRAIN_FLOATS. Slot 0
+// is the loaded rule or tile 0; the cohort slots hold one brain each when no
+// rule is loaded, and there is no single brain to point at then.
+uniform int   PREVIEW_BASE;
 uniform int   PREVIEW_CHANNEL;  // 0..3 = one output, 4 = |force|, 5 = |strafe|,
                                 // 6 = project onto PREVIEW_OUT,
                                 // 7 = project onto PREVIEW_RGB, one per colour
@@ -60,8 +64,9 @@ void main() {
     vec2 p = (texcoord * 2.0 - 1.0) * PREVIEW_RANGE;
     vec4 x = PREVIEW_U * p.x + PREVIEW_V * p.y;
 
-    vec4 r = (PREVIEW_UNIT < 0) ? eval_brain(0u, x)
-                                : eval_brain_unit(0u, PREVIEW_UNIT, x);
+    uint base = uint(max(PREVIEW_BASE, 0));
+    vec4 r = (PREVIEW_UNIT < 0) ? eval_brain(base, x)
+                                : eval_brain_unit(base, PREVIEW_UNIT, x);
 
     vec3 rgb;
     if (PREVIEW_CHANNEL == PREVIEW_CHANNEL_RGB) {
