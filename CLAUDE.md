@@ -834,6 +834,70 @@ mechanics these caveats assume.
   is refused — which breaks the ordinary same-brain preview, not just the
   cross-brain one.
 
+### The MLP layer stack
+
+- **A DEEP stack's width cap is paid by every MLP, including the one-layer
+  ones.** Any depth above 1 must materialise a layer's activations, so
+  `mlp.glsl` ping-pongs two `float[MAX_MLP_WIDTH]` locals — and the driver
+  allocates those per invocation whatever the `BRAIN_DEPTH <= 1` branch does.
+  Against the pre-stack shader, at 300k particles, a depth-1 `mlp-n16-a0` step
+  costs **1.02x at cap 8, 1.22x at 12, 1.41x at 16 and 4.09x at 48**. So a LONE
+  layer keeps its historical 48 (`MAX_WIDTH`) and every layer of a deeper stack
+  is capped at 8 (`MAX_DEEP_WIDTH`) — which is why adding a second layer
+  NARROWS the first, and the Brain window says so before you click. Depth costs
+  roughly what its float count costs: against depth-1 `[16]`, `[8,8]` is 1.07x,
+  `[8]x8` 2.16x, and the historical `[48]` 1.47x. The Inspector's redraw stays
+  under 0.26 ms throughout. `python -m tools.measure_brain_depth`; the trap when
+  re-measuring is that the shader must be swapped inside ONE process against ONE
+  entity snapshot, or what is timed is the laptop's thermal state.
+
+- **The float budget is slack now, and the WIDTH cap is the only limit that
+  bites.** The deepest reachable stack is `[8]x8` = 580 floats against
+  `MAX_BRAIN_FLOATS` 1024 — still past 512, so the raise is load-bearing, but
+  nothing the UI can build goes over. `+ Add layer` is stopped by `MAX_DEPTH`
+  alone: a width-1 layer makes a brain SMALLER, because it narrows the output
+  layer's fan-in from `w_k` to 1. The UI derives both limits by asking whether
+  the layout BUILDS and comes back unclamped, never by repeating the packing
+  formula — which already has two homes, `layer_spans()` and `mlp.glsl`, guarded
+  by the GPU-versus-NumPy parity test.
+
+- **Depth 1 is bit-identical, and that is what makes the rest safe.** `shape` is
+  `(w1, a1, w2, a2, …)`, so a one-layer stack is `(16, 0)` — the same length
+  `9h+4`, the same field offsets, the same flat decode, the same initial draw,
+  and a signature of `mlp-n16-a0` character for character. Deeper stacks grow
+  parts: `mlp-n16.8-a0.1`. Nothing on disk was renamed or rewritten, and
+  `hidden`/`activation` remain accepted as input forever.
+
+- **`decode` is FLAT in every layer; fan-in normalisation is INITIALISATION
+  only.** A gain folded into `decode` would not be a normalisation but a cap —
+  `W_SCALE · sqrt(4/16) = 1.0` on hidden→hidden weights — putting a whole region
+  out of reach of the search and of live editing. `random()` instead scales only
+  the hidden→hidden slices of `z`, which leaves a depth-1 draw untouched. The
+  cost is conditioning, which CMA-ES adapts to.
+
+- **A modality may own its signature AND the parser that reads it back.**
+  `signature_of`, `settings_from_signature`, `settings_of`, `unit_count` and
+  `layout_uniforms` are optional hooks; `layout_from_signature` keeps its
+  parse → rebuild → **compare** verification either way, which is what makes a
+  modality-owned parser safe. The generic parser used to take `kind == "int"`
+  only while `settings_of` emitted `int` and `choice`, so `mlp-n16-a1` rebuilt
+  as activation 0 and was correctly refused — every sin and gelu archive entry
+  was unadoptable and unpreviewable, and a same-WIDTH mismatch is invisible to
+  `apply_rule`'s width check. Both directions now use `STRUCTURAL_KINDS`.
+
+- **A config's SIGNATURE wins over its `brain_settings`.** The signature is what
+  the rule was decoded under and what `apply_rule` measures width against; the
+  settings only carry the decode scales it leaves out. `_restore_brain_settings`
+  used to load the settings, so a non-default layout whose settings were missing
+  or stale came back as the modality's defaults — the wrong brain, silently, and
+  then the genome refused on width.
+
+- **The Inspector draws the LAST hidden layer's units.** They are the only ones
+  that decompose additively into the output; a unit in an earlier layer reaches
+  it through further nonlinearities and has no contribution to show. `shape[0]`
+  would size the atlas off layer 1 and index past the units that exist, so
+  `unit_count()` is a modality hook.
+
 ## Key Documentation
 
 - `docs/imgep.md` — **how Explore mode works**: the regime loop, every fitness

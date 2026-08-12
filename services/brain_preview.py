@@ -13,17 +13,22 @@ import math
 import moderngl
 import numpy as np
 
-from utilities.gl_helpers import read_shader, shader_prepend, tryset
+from utilities.gl_helpers import (read_shader, set_brain_layout_uniforms,
+                                  shader_prepend, tryset)
 
 # Order matters and is the same as sim.py's: shader_prepend inserts after
 # #version, so the LAST prepend lands FIRST in the compiled source.
 _BRAINS = ("mlp", "lenia", "gabor", "fourier")
 
 CHANNELS = ("force axial", "force lateral", "strafe axial", "strafe lateral",
-            "|force|", "|strafe|", "random projection")
-# Index of the random-projection entry, which the shader handles as a dot with
-# PREVIEW_OUT rather than by picking a component.
-CHANNEL_RANDOM = len(CHANNELS) - 1
+            "|force|", "|strafe|", "random projection",
+            "random projection (RGB)")
+# The two projection entries, which the shader handles by dotting the response
+# with PREVIEW_OUT / PREVIEW_RGB rather than by picking a component. Named
+# explicitly rather than derived from the length: `len(CHANNELS) - 1` was right
+# while there was one of them and silently wrong the moment there were two.
+CHANNEL_RANDOM = 6
+CHANNEL_RANDOM_RGB = 7
 # The 4D input is (L.axial, L.lateral, R.axial, R.lateral) in the particle's own
 # frame. Sweeping the two AXIAL taps is the pair that drives steering, so it is
 # the default.
@@ -80,6 +85,23 @@ def output_direction(seed: int = 0) -> np.ndarray:
     return (v / np.linalg.norm(v)).astype(np.float32)
 
 
+def output_basis(seed: int = 0) -> np.ndarray:
+    """-> (3, 4), three ORTHONORMAL directions in the 4D output space.
+
+    One per colour channel, so a unit that acts across the four outputs shows
+    as a HUE rather than having to be hunted for one view at a time.
+    Orthonormal for the same reason the input plane is: three merely random
+    directions would be correlated, and two nearly parallel draws would collapse
+    two of the channels into one.
+
+    Same seed offset as output_direction, so one Reseed press moves both.
+    """
+    rng = np.random.default_rng((int(seed) ^ 0x9E3779B9) & 0xFFFFFFFF)
+    q, r = np.linalg.qr(rng.standard_normal((4, 3)))
+    q = q * np.sign(np.diag(r))
+    return q.T.astype(np.float32)
+
+
 class BrainPreview:
     def __init__(self, ctx: moderngl.Context, tile: int = 96):
         self.ctx = ctx
@@ -108,8 +130,12 @@ class BrainPreview:
 
     @staticmethod
     def unit_count(layout) -> int:
-        """Units in this brain: centres, filters, bumps or hidden units."""
-        return int(layout.shape[0]) if layout.shape else 0
+        """Units in this brain: centres, filters, bumps, or - for a layer stack
+        - the FINAL hidden layer's units, which are the only ones that
+        decompose additively into the output."""
+        from services.brains import unit_count
+
+        return unit_count(layout)
 
     def _ensure_target(self, tiles: int) -> None:
         grid = max(1, math.ceil(math.sqrt(tiles)))
@@ -146,12 +172,13 @@ class BrainPreview:
         brain_buffer.bind_to_storage_buffer(4)
         p = self.program
         tryset(p, "PREVIEW_OUT", tuple(float(c) for c in output_direction(seed)))
+        tryset(p, "PREVIEW_RGB",
+               [tuple(float(c) for c in row) for row in output_basis(seed)])
         tryset(p, "BRAIN_MODALITY", get(layout.modality).modality_id)
         # No BRAIN_LEN: it bounds the click-to-adopt writeback, which this
         # shader never calls, so GLSL drops the uniform and setting it only
         # printed a warning. See tests/test_brain_preview_gpu.py.
-        shape = (tuple(layout.shape) + (0, 0, 0, 0))[:4]
-        tryset(p, "BRAIN_SHAPE", tuple(int(v) for v in shape))
+        set_brain_layout_uniforms(p, layout)
         u, v = basis_for(axes, seed)
         tryset(p, "PREVIEW_U", tuple(float(c) for c in u))
         tryset(p, "PREVIEW_V", tuple(float(c) for c in v))

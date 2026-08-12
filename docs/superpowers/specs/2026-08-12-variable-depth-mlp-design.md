@@ -1,7 +1,12 @@
 # Variable-depth MLP
 
 **Date:** 2026-08-12
-**Status:** design approved, not yet implemented
+**Status:** phases 0 and 1 implemented; phase 2 not started.
+
+One decision the measurement overturned: the deep path's width cap is paid by
+the depth-1 path too, so `MAX_MLP_WIDTH` had to fall to 8 and a lone layer keeps
+a separate cap of 48. See the MLP layer stack caveats in CLAUDE.md, which are
+the one home for those numbers.
 
 ## Problem
 
@@ -531,5 +536,11 @@ Named, not implemented.
 
 ## Open items
 
-None blocking. `MAX_MLP_WIDTH` and `MAX_MLP_DEPTH` are provisional at 32 and 8
-until the measurement lands, and the UI limits follow from it.
+None blocking. `MAX_MLP_WIDTH` and `MAX_MLP_DEPTH` were provisional at 32 and 8
+until the measurement landed; it settled them at 8 and 8, with a separate
+depth-1 cap of 48, for the reason recorded in CLAUDE.md.
+
+Worth naming for later: a wider deep stack is only reachable by compiling the
+deep path as a shader VARIANT, so a depth-1 brain never carries its locals. That
+restructures how `sim.py` builds its program, which is user-owned, and there is
+no evidence yet that stacks wider than 8 are interesting.

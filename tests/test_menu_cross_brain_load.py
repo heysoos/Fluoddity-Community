@@ -300,6 +300,46 @@ def test_the_gallery_teardown_does_not_steal_the_menu_s_borrow():
     assert handed is not None and np.allclose(handed, cfg.rule)
 
 
+DEEP = layout_for("mlp", {"layers": [[8, 0], [6, 1], [4, 2]]})
+
+
+def test_a_deep_stack_hovers_and_loads():
+    """Everything above travels on the SIGNATURE, and a layer stack's is the
+    only one that is not four positional ints. A parser that mis-read it would
+    borrow nothing and the preset would silently not load - which is the exact
+    failure this file exists for, and the one a sin/gelu entry has had all
+    along."""
+    cfg = _Config(DEEP)
+    sim = _Sim(FOURIER)
+    h, ui_state = _handler(sim, {"p": cfg})
+
+    _hover(h, ui_state, "p")
+    h._handle_brain_layout(ui_state)
+    rule, live = sim.applied[-1]
+    assert live == DEEP, "the genome reached the GPU under the wrong brain"
+    assert rule.size == DEEP.length
+
+    _archive_frame(h, ui_state)
+    _click(h, ui_state, "p")
+    h._handle_brain_layout(ui_state)
+
+    assert len(h.switches) == 1
+    got_layout, handed = h.switches[0]
+    assert got_layout == DEEP
+    assert ui_state.brain.settings == {"layers": [[8, 0], [6, 1], [4, 2]]}
+    assert handed is not None and np.allclose(handed, cfg.rule)
+
+
+def test_sliding_from_a_deep_stack_back_to_fourier():
+    sim = _Sim(FOURIER)
+    h, ui_state = _handler(sim, {"m": _Config(DEEP)})
+
+    _hover(h, ui_state, "m")
+    assert sim.brain_layout == DEEP
+    _unhover(h, ui_state)
+    assert sim.brain_layout == FOURIER
+
+
 def test_a_frame_of_gallery_teardown_between_hover_and_click():
     """Several frames pass while the pointer sits on the menu item."""
     layout = layout_for("gabor", {})

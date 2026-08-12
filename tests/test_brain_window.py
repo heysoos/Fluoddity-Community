@@ -20,23 +20,35 @@ def test_every_modality_is_offered():
 
 
 def test_a_count_setting_needs_a_layout_change():
-    assert layout_change_needed({"centers": 10}, {"centers": 16}) is True
-    assert layout_change_needed({"filters": 12}, {"filters": 8}) is True
-    assert layout_change_needed({"bumps": 12}, {"bumps": 24}) is True
-    assert layout_change_needed({"hidden": 16}, {"hidden": 32}) is True
+    assert layout_change_needed("fourier", {"centers": 10}, {"centers": 16})
+    assert layout_change_needed("gabor", {"filters": 12}, {"filters": 8})
+    assert layout_change_needed("lenia", {"bumps": 12}, {"bumps": 24})
+    assert layout_change_needed("mlp", {"hidden": 16}, {"hidden": 32})
 
 
 def test_activation_needs_a_layout_change():
     """tanh and sin are different function families - a genome evolved under one
     means nothing under the other, so they must not share an archive."""
-    assert layout_change_needed({"activation": 0}, {"activation": 1}) is True
+    assert layout_change_needed("mlp", {"activation": 0}, {"activation": 1})
+    assert layout_change_needed("mlp", {"layers": [[16, 0]]},
+                                {"layers": [[16, 1]]})
+
+
+def test_a_layer_edit_needs_a_layout_change():
+    for a, b in (([[16, 0]], [[8, 0], [8, 0]]),          # depth
+                 ([[8, 0], [6, 0]], [[8, 0], [5, 0]]),   # width
+                 ([[8, 0], [6, 0]], [[8, 0], [6, 2]])):  # activation
+        assert layout_change_needed("mlp", {"layers": a}, {"layers": b}), (a, b)
 
 
 def test_a_scale_setting_is_free():
     """Freq Scale and friends only move the squash; the genome keeps its width,
     so there is nothing to reset and no archive to switch."""
-    assert layout_change_needed({"centers": 10}, {"freq_scale": 2.0}) is False
-    assert layout_change_needed({"centers": 10}, {"centers": 10}) is False
+    assert not layout_change_needed("fourier", {"centers": 10},
+                                    {"freq_scale": 2.0})
+    assert not layout_change_needed("fourier", {"centers": 10}, {"centers": 10})
+    assert not layout_change_needed("gabor", {"filters": 12},
+                                    {"filters": 12, "input_scale": 3.0})
 
 
 def test_saturation_counts_params_near_the_rails():
@@ -133,3 +145,10 @@ def test_the_layout_round_trips_through_the_state():
     layout = layout_for(s.modality, s.settings)
     assert layout == BrainLayout("mlp", (32, 2), 9 * 32 + 4)
     assert layout.signature() == "mlp-n32-a2"
+
+
+def test_a_layer_stack_round_trips_through_the_state():
+    s = BrainState(modality="mlp", settings={"layers": [[8, 0], [6, 1], [4, 2]]})
+    layout = layout_for(s.modality, s.settings)
+    assert layout.shape == (8, 0, 6, 1, 4, 2)
+    assert layout.signature() == "mlp-n8.6.4-a0.1.2"

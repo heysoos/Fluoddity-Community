@@ -257,6 +257,60 @@ def test_the_output_projection_is_not_one_of_the_channels(ctx, preview):
     buf.release()
 
 
+@pytest.mark.parametrize("name", MODALITIES)
+def test_the_rgb_projection_draws_structure(ctx, preview, name):
+    from services.brain_preview import CHANNEL_RANDOM_RGB
+    from services.brains import REGISTRY
+
+    layout = REGISTRY[name].layout_from_settings({})
+    buf, _ = upload(ctx, layout)
+    img = atlas(preview, preview.render(layout, buf,
+                                        channel=CHANNEL_RANDOM_RGB,
+                                        axes=None, seed=2))
+    assert float(img[..., :3].std()) > 1.0, f"{name}: RGB projection is flat"
+    buf.release()
+
+
+def test_the_rgb_projection_uses_all_three_channels(ctx, preview):
+    """Three ORTHONORMAL output directions, one per colour - so a unit acting
+    across the outputs reads as a hue. Three copies of one direction would draw
+    a grey picture that looks fine until you go looking for the other outputs."""
+    from services.brain_preview import CHANNEL_RANDOM_RGB, output_basis
+    from services.brains import default_layout
+
+    q = output_basis(3)
+    assert q.shape == (3, 4)
+    assert np.allclose(q @ q.T, np.eye(3), atol=1e-5)
+
+    layout = default_layout()
+    buf, _ = upload(ctx, layout)
+    img = atlas(preview, preview.render(layout, buf,
+                                        channel=CHANNEL_RANDOM_RGB,
+                                        axes=None, seed=3)).astype(np.float64)
+    r, g, b = img[..., 0], img[..., 1], img[..., 2]
+    assert not np.allclose(r, g) and not np.allclose(g, b), "the picture is grey"
+    buf.release()
+
+
+@pytest.mark.parametrize("layers", [[[16, 0]], [[8, 0], [7, 1]],
+                                    [[8, 0], [6, 1], [4, 2]]],
+                         ids=lambda ls: f"depth{len(ls)}")
+def test_a_deep_stack_draws_its_final_layers_units(ctx, preview, layers):
+    """The atlas is sized from unit_count, which for a stack is the LAST hidden
+    layer's width - not shape[0], which would size the grid off layer 1 and
+    index past the units that exist."""
+    from services.brains import REGISTRY
+
+    layout = REGISTRY["mlp"].layout_from_settings({"layers": layers})
+    buf, _ = upload(ctx, layout)
+    n = preview.unit_count(layout)
+    assert n == layers[-1][0]
+    img = atlas(preview, preview.render(layout, buf, axes=None, seed=1))
+    assert preview.grid ** 2 >= n + 1
+    assert float(img[..., :3].std()) > 1.0, "a deep stack drew nothing"
+    buf.release()
+
+
 def test_the_tile_uv_is_flipped_for_imgui(preview, ctx):
     """The framebuffer's origin is bottom-left and ImGui's is top-left; handing
     it the raw range draws every tile upside down."""

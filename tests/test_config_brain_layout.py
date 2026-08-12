@@ -160,6 +160,91 @@ def test_loading_a_legacy_file_leaves_the_brain_window_alone():
     assert ui_state.brain.settings == {"filters": 20}
 
 
+DEEP_LAYERS = [[8, 0], [6, 1], [4, 2]]
+
+
+def test_a_deep_mlp_config_round_trips():
+    """The signature is the only one with a variable-length body, and it is what
+    the archive directory, the checkpoint guard and every hover path travel on."""
+    from ui.brain_window import layout_for
+
+    lay = REGISTRY["mlp"].layout_from_settings({"layers": DEEP_LAYERS})
+    genome = np.asarray(random_genome_for(np.random.default_rng(2), lay),
+                        dtype=np.float32).reshape(-1)
+    back = PhysicsConfig.from_dict(json.loads(
+        ConfigSaver().create_config(SimState(), genome, layout=lay).to_json()))
+
+    assert back.brain_layout == "mlp-n8.6.4-a0.1.2"
+    assert back.brain_settings == {"layers": DEEP_LAYERS}
+    assert np.allclose(np.asarray(back.rule).reshape(-1), genome, atol=1e-6)
+    assert layout_for("mlp", back.brain_settings) == lay
+
+
+def test_a_config_written_before_the_stack_still_loads():
+    """8 user configs are stamped mlp-n16-a0 with hidden/activation settings.
+    They must open as a one-layer stack with no migration step."""
+    from command_handler import CommandHandler
+    from state.ui_state import UIState
+    from ui.brain_window import layout_for
+
+    d = PhysicsConfig().to_dict()
+    d["rule"] = [0.05] * 148
+    d["brain_layout"] = "mlp-n16-a0"
+    d["brain_settings"] = {"hidden": 16, "activation": 0}
+    cfg = PhysicsConfig.from_dict(d)
+
+    ui_state = UIState()
+    CommandHandler._restore_brain_settings(
+        CommandHandler.__new__(CommandHandler), cfg, ui_state)
+
+    assert ui_state.brain.modality == "mlp"
+    got = layout_for("mlp", ui_state.brain.settings)
+    assert got.signature() == "mlp-n16-a0" and got.length == 148
+
+
+@pytest.mark.parametrize("sig", ["mlp-n8.6.4-a0.1.2", "gabor-n7",
+                                 "lenia-n20", "fourier-n21"])
+def test_the_signature_wins_when_the_settings_disagree(sig):
+    """A file whose settings do not rebuild its signature used to load the
+    SETTINGS, so a non-default layout with missing settings came back as the
+    modality's defaults - the wrong brain, silently, and then apply_rule
+    refuses the genome on width. The signature is what the rule was decoded
+    under, so it is what wins; the settings only carry the scales it omits."""
+    from command_handler import CommandHandler
+    from state.ui_state import UIState
+    from ui.brain_window import layout_for
+
+    d = PhysicsConfig().to_dict()
+    d["brain_layout"] = sig
+    d["brain_settings"] = {}
+    cfg = PhysicsConfig.from_dict(d)
+
+    ui_state = UIState()
+    CommandHandler._restore_brain_settings(
+        CommandHandler.__new__(CommandHandler), cfg, ui_state)
+
+    assert layout_for(ui_state.brain.modality,
+                      ui_state.brain.settings).signature() == sig
+
+
+def test_a_signature_this_build_cannot_rebuild_says_so(capsys):
+    """And leaves the settings alone rather than inventing a layout."""
+    from command_handler import CommandHandler
+    from state.ui_state import UIState
+
+    d = PhysicsConfig().to_dict()
+    d["brain_layout"] = "mlp-n16-a9"
+    d["brain_settings"] = {"layers": [[16, 0]]}
+    cfg = PhysicsConfig.from_dict(d)
+
+    ui_state = UIState()
+    CommandHandler._restore_brain_settings(
+        CommandHandler.__new__(CommandHandler), cfg, ui_state)
+
+    assert ui_state.brain.settings == {"layers": [[16, 0]]}
+    assert "cannot rebuild" in capsys.readouterr().out
+
+
 def test_a_legacy_file_with_no_signature_still_loads():
     """Every config written before brains were swappable is an 80-float
     Fourier, and those must keep opening."""

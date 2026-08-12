@@ -481,19 +481,27 @@ class CommandHandler:
         bst = getattr(ui_state, "brain", None)
         if not sig or bst is None:
             return                  # pre-modality file: Fourier, nothing to say
+        from services.brains import layout_from_signature, settings_of
+        from ui.brain_window import layout_for
+
         settings = dict(getattr(config, "brain_settings", None) or {})
         bst.modality = sig.split("-")[0]
         bst.settings = settings
-        if settings:
-            from ui.brain_window import layout_for
-
-            got = layout_for(bst.modality, settings).signature()
-            if got != sig:
-                # The file disagrees with itself. Reachable if a modality's
-                # defaults move between builds, and worth saying out loud: the
-                # rule will still play, but it is not the brain named on the tin.
+        got = layout_for(bst.modality, settings).signature()
+        if got != sig:
+            # The file disagrees with itself - reachable when a modality's
+            # defaults move between builds, or when the settings are missing
+            # altogether. The SIGNATURE wins, because it is what the rule was
+            # decoded under and what apply_rule measures its width against;
+            # the settings only supply the decode scales it leaves out.
+            named = layout_from_signature(sig, settings)
+            if named is None:
+                print(f"[brain] {sig} was saved, but this build cannot rebuild "
+                      f"it; loading the settings, which give {got}")
+            else:
+                bst.settings = settings_of(named)
                 print(f"[brain] {sig} was saved, but its settings rebuild "
-                      f"{got}; loading the settings")
+                      f"{got}; loading the signature")
 
         # Hand the creature to the switch this config just asked for. The rule
         # was already pushed, under the OLD layout, where apply_rule refused it

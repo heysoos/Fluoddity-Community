@@ -9,16 +9,12 @@ from __future__ import annotations
 import numpy as np
 from imgui_bundle import imgui
 
-from services.brains import REGISTRY, get
+from services.brains import MAX_BRAIN_FLOATS, REGISTRY, get, settings_of
+from ui import layout as layout_helpers
 
 # tanh(2.65) ~ 0.99, so |z| beyond this decodes to within 1% of its rail: the
 # parameter has stopped responding to the optimizer.
 SATURATION_Z = 2.65
-
-# Settings that change the PARAMETER COUNT, and so the genome's meaning. These
-# reset the optimizer and switch archive; everything else only moves a squash
-# and is free to change mid-run.
-_COUNT_KEYS = ("centers", "filters", "bumps", "hidden", "activation")
 
 
 def saturation_fraction(z) -> float:
@@ -35,9 +31,17 @@ def saturation_fraction(z) -> float:
     return float(np.mean(a >= SATURATION_Z)) if a.size else 0.0
 
 
-def layout_change_needed(old: dict, new: dict) -> bool:
-    """True when a setting that changes the parameter count was edited."""
-    return any(k in new and old.get(k) != new[k] for k in _COUNT_KEYS)
+def layout_or_none(modality_name: str, settings: dict):
+    """The layout these settings name, or None when they do not build one.
+
+    Over budget is the reachable case: BrainLayout refuses anything wider than
+    MAX_BRAIN_FLOATS, and the layer editor derives its limits from that refusal
+    rather than repeating the packing formula a third time.
+    """
+    try:
+        return get(modality_name).layout_from_settings(dict(settings or {}))
+    except (TypeError, ValueError, KeyError):
+        return None
 
 
 def layout_for(modality_name: str, settings: dict):
@@ -47,11 +51,21 @@ def layout_for(modality_name: str, settings: dict):
     different build, and the app has to keep running - get() already falls back
     to Fourier, and a modality ignores settings it does not have.
     """
-    modality = get(modality_name)
-    try:
-        return modality.layout_from_settings(dict(settings or {}))
-    except (TypeError, ValueError, KeyError):
-        return modality.layout_from_settings({})
+    return (layout_or_none(modality_name, settings)
+            or get(modality_name).layout_from_settings({}))
+
+
+def layout_change_needed(modality_name: str, old: dict, new: dict) -> bool:
+    """True when an edit changes the parameter count, and so the genome's
+    meaning - it resets the optimizer and switches archive.
+
+    Asked of the LAYOUTS rather than of a list of setting keys. BrainLayout
+    leaves the decode scales out of its equality, so a scale move reads as no
+    change without anything here knowing which keys are scales, and a modality
+    that renames or replaces a setting cannot leave this stale - which is
+    exactly what the hand-written list it replaces did.
+    """
+    return layout_for(modality_name, old) != layout_for(modality_name, new)
 
 
 class BrainWindowMixin:
@@ -85,6 +99,9 @@ class BrainWindowMixin:
         modality = get(state.modality)
         settings = dict(state.settings)
         for s in modality.settings_schema():
+            if s.kind == "layers":
+                self._render_layer_rows(state, settings, s)
+                continue
             # An int slider is the only widget here that can fire an expensive
             # change on every frame of a drag: it changes the parameter COUNT,
             # which rebuilds the archive and resets the search. So its value is
@@ -108,7 +125,8 @@ class BrainWindowMixin:
                 # consequence is stated at the moment it is being chosen and
                 # never nags. Not a prompt: nothing here waits on an answer.
                 committed = settings.get(s.key, s.default)
-                if layout_change_needed({s.key: committed}, {s.key: shown}):
+                if layout_change_needed(state.modality,
+                                        {s.key: committed}, {s.key: shown}):
                     imgui.text_disabled("   on release: resets the search, "
                                         "switches archive")
                 continue
@@ -140,6 +158,176 @@ class BrainWindowMixin:
 
         self._render_brain_inspector(state, layout)
         imgui.end()
+
+    # ---- the layer stack ---------------------------------------------------
+
+    def _render_layer_rows(self, state, settings, s) -> None:
+        """One row per hidden layer: width, activation, remove.
+
+        Two kinds of edit live on the same row and only one of them is free.
+        A layer's COUNT, WIDTH or ACTIVATION is a layout edit - it resets the
+        search and switches archive - so the row carries that warning. Its
+        weights are a genome edit and carry none.
+        """
+        # Read back off the LAYOUT, so a config that names the pre-stack
+        # `hidden`/`activation` arrives here already as one row.
+        layers = [[int(w), int(a)] for w, a
+                  in settings_of(layout_for(state.modality, settings)
+                                 ).get(s.key, [])]
+        committed = [list(p) for p in layers]    # what is on the GPU right now
+        acts = list(s.choices)
+        drafts: dict[int, int] = {}              # widths a slider is still held on
+        removed = None
+
+        imgui.text("Layers")
+        style = imgui.get_style()
+        combo_w = imgui.calc_text_size(max(acts, key=len) if acts
+                                       else "tanh").x + 40.0
+        room = combo_w + layout_helpers.button_width("x") + style.item_spacing.x * 2.0
+        for i, (w, a) in enumerate(layers):
+            imgui.text(f"L{i + 1}")
+            imgui.same_line()
+            # A width drag fires once per frame and a count change rebuilds the
+            # archive, so it is held in a draft and committed on release - the
+            # same deferral the other count sliders use.
+            key = (state.modality, s.key, i)
+            held = self._brain_draft.get(key, w)
+            imgui.push_item_width(-room)
+            ch, v = imgui.slider_int(f"##w{i}", int(held),
+                                     int(s.lo), self._max_width(
+                                         state, settings, s, layers, i))
+            imgui.pop_item_width()
+            if ch:
+                self._brain_draft[key] = v
+            drafts[i] = int(self._brain_draft.get(key, w))
+            if key in self._brain_draft and not imgui.is_item_active():
+                layers[i][0] = self._brain_draft.pop(key)
+            imgui.same_line()
+            imgui.push_item_width(combo_w)
+            # One click, one layout change - the same immediate commit the
+            # activation combo has always had.
+            ch, v = imgui.combo(f"##a{i}", int(a), acts)
+            imgui.pop_item_width()
+            if ch:
+                layers[i][1] = int(v)
+            imgui.same_line()
+            # The last layer cannot go: a stack of none is not a brain.
+            imgui.begin_disabled(len(layers) <= 1)
+            if imgui.small_button(f"x##rm{i}"):
+                removed = i
+            imgui.end_disabled()
+            if imgui.is_item_hovered():
+                imgui.set_tooltip("remove this layer")
+
+        if removed is not None:
+            layers.pop(removed)
+            self._brain_draft.clear()   # the drafts below it now name other rows
+
+        added = self._add_layer_width(state, settings, s, layers)
+        imgui.begin_disabled(added is None)
+        if imgui.button("+ Add layer") and added is not None:
+            layers.append([added, 0])
+        imgui.end_disabled()
+        if added is None and imgui.is_item_hovered():
+            imgui.set_tooltip("no room for another layer")
+        # Stated because it is not guessable from the sliders: a second layer
+        # narrows every layer, this one included.
+        deep = self._max_width(state, settings, s, [[1, 0], [1, 0]], 0)
+        if len(layers) == 1 and layers[0][0] > deep:
+            imgui.text_disabled(f"   a second layer narrows every layer "
+                                f"to {deep}")
+
+        if layers != committed:
+            # The BUILT stack, not the asked-for one: adding a second layer
+            # narrows every layer to what the deep path can carry, and settings
+            # that disagreed with the layout would put the old width back the
+            # next time a row was removed.
+            settings[s.key] = self._built(state, settings, s, layers) or layers
+            # hidden/activation named a one-layer stack before this existed.
+            # Dropped once the stack is edited, so the file cannot carry two
+            # answers - layout_from_settings still ACCEPTS them, forever.
+            settings.pop("hidden", None)
+            settings.pop("activation", None)
+
+        shown = [list(p) for p in layers]
+        for i, w in drafts.items():
+            if i < len(shown):
+                shown[i][0] = w
+        self._render_budget(state, settings, s, layers, shown)
+
+    def _render_budget(self, state, settings, s, layers, shown) -> None:
+        length = layout_for(state.modality, settings).length
+        imgui.text(f"{length} / {MAX_BRAIN_FLOATS} floats")
+        imgui.progress_bar(min(length / float(MAX_BRAIN_FLOATS), 1.0),
+                           imgui.ImVec2(-1.0, 0.0))
+        # Only while a held slider actually differs from what is committed, so
+        # the consequence is stated as it is being chosen and never nags.
+        if layout_change_needed(state.modality, {**settings, s.key: layers},
+                                {**settings, s.key: shown}):
+            imgui.text_disabled("   on release: resets the search, "
+                                "switches archive")
+
+    @staticmethod
+    def _widest(fits, lo: int, hi: int):
+        """The largest value in [lo, hi] that `fits`, or None if none does.
+
+        Bisected on whether the layout BUILDS, because an over-budget layout has
+        to be unconstructable rather than merely refused after the fact:
+        layout_for() falls back to the defaults when it cannot build one, so an
+        unclamped control would make the window snap back. Asking the layout
+        also keeps the packing formula out of the UI - it has two homes already.
+        """
+        if fits(hi):
+            return hi
+        if not fits(lo):
+            return None
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if fits(mid):
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    @staticmethod
+    def _built(state, settings, s, layers):
+        """The stack these layers actually BUILD, or None if they build nothing.
+
+        Not the same list back: a modality clamps a width or a depth it will not
+        carry, and the clamped value is what the GPU runs. Asked through the
+        modality's own settings_of, so the UI never learns how a stack is
+        encoded.
+        """
+        got = layout_or_none(state.modality, {**settings, s.key: layers})
+        return None if got is None else settings_of(got).get(s.key)
+
+    def _max_width(self, state, settings, s, layers, i) -> int:
+        """The widest layer i can be with its neighbours where they are.
+
+        Clamping counts as not fitting. A slider whose range runs past what the
+        modality will build looks stuck, which reads as a broken control rather
+        than as a limit.
+        """
+        def fits(w):
+            trial = [list(p) for p in layers]
+            trial[i][0] = int(w)
+            built = self._built(state, settings, s, trial)
+            return built is not None and int(built[i][0]) == int(w)
+
+        return self._widest(fits, int(s.lo), int(s.hi)) or int(s.lo)
+
+    def _add_layer_width(self, state, settings, s, layers):
+        """The width a new layer would get, or None when one will not fit.
+
+        None covers every limit without naming any of them: over budget, and at
+        the depth cap, where the extra layer is clamped away.
+        """
+        def fits(w):
+            grown = self._built(state, settings, s, layers + [[int(w), 0]])
+            return (grown is not None and len(grown) == len(layers) + 1
+                    and int(grown[-1][0]) == int(w))
+
+        return self._widest(fits, int(s.lo), int(s.default))
 
     def _render_brain_inspector(self, state, layout) -> None:
         """The response field of each unit, and of the whole brain.

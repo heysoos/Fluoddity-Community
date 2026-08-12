@@ -62,6 +62,23 @@ def readback_rule(rule_buffer, layout=None):
     return data.copy()
 
 
+def set_brain_layout_uniforms(program, layout) -> None:
+    """Push a layout's STRUCTURE: BRAIN_SHAPE plus whatever the modality adds.
+
+    Shared by sim.py and services/brain_preview.py, so the Inspector runs the
+    identical brain the particles do. BRAIN_LEN and BRAIN_PER_COHORT stay with
+    sim.py on purpose: the preview never writes back and never reads a cohort
+    slot, so GLSL drops those uniforms and setting them only prints a warning.
+    """
+    from services.brains import get
+
+    shape = tuple(int(v) for v in layout.shape)
+    tryset(program, 'BRAIN_SHAPE', (shape + (0, 0, 0, 0))[:4])
+    extra = getattr(get(layout.modality), "layout_uniforms", None)
+    for name, value in (extra(layout) if extra is not None else {}).items():
+        tryset(program, name, value)
+
+
 def pack_brains(params_list, layout) -> bytes:
     """Pack brains into the flat SSBO, each zero-padded to MAX_BRAIN_FLOATS.
 

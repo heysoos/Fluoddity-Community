@@ -203,10 +203,92 @@ def test_a_widest_layout_renders(gui, modality):
     modality allows, which is where a grid or slot index would go wrong."""
     m = REGISTRY[modality]
     counts = {s.key: s.hi for s in m.settings_schema() if s.kind == "int"}
+    if modality == "mlp":
+        counts["layers"] = [[48, 0]]
     ui = _StubUI(modality, counts)
     ui.brain_preview._grid = 8
     gui.set_next_item_open(True)
     ui.render_brain_window()
+
+
+# ---- the layer stack -------------------------------------------------------
+
+STACKS = [[[16, 0]], [[8, 0], [6, 1]], [[8, 0], [7, 1], [6, 2]],
+          [[6, 0], [6, 0], [6, 0], [6, 0], [6, 0], [6, 0], [6, 0], [6, 0]]]
+
+
+@pytest.mark.parametrize("layers", STACKS, ids=lambda ls: f"depth{len(ls)}")
+def test_every_depth_renders(gui, layers):
+    ui = _StubUI("mlp", {"layers": layers})
+    gui.set_next_item_open(True)
+    ui.render_brain_window()
+    assert ui.state.brain.settings["layers"] == layers, "the rows edited nothing"
+
+
+def test_a_legacy_mlp_config_shows_as_one_row(gui):
+    """8 user configs are stamped mlp-n16-a0 and carry hidden/activation. They
+    must arrive as a one-layer stack with no migration step."""
+    ui = _StubUI("mlp", {"hidden": 24, "activation": 2})
+    ui.render_brain_window()
+    # Untouched, so nothing is rewritten: the file still reads under old builds.
+    assert ui.state.brain.settings == {"hidden": 24, "activation": 2}
+    from ui.brain_window import layout_for
+
+    assert layout_for("mlp", ui.state.brain.settings).signature() == "mlp-n24-a2"
+
+
+def test_a_held_layer_width_commits_on_release(gui):
+    """Nothing is held in a headless frame, so the draft is due. A width that
+    never commits is the failure this whole deferral must not have."""
+    ui = _StubUI("mlp", {"layers": [[8, 0], [8, 0]]})
+    ui._brain_draft[("mlp", "layers", 1)] = 5
+    ui.render_brain_window()
+    assert ui.state.brain.settings["layers"] == [[8, 0], [5, 0]]
+    assert ui._brain_draft == {}, "the draft outlived its commit"
+
+
+def test_a_deep_row_is_clamped_to_what_the_deep_path_carries(gui):
+    """The slider's range must stop where the modality stops building, not at
+    the schema's 48: a control that moves and changes nothing reads as broken,
+    and layout_for() would fall back to the defaults behind it."""
+    from services.brains.mlp import MAX_DEEP_WIDTH
+
+    s = REGISTRY["mlp"].settings_schema()[0]
+    ui = _StubUI("mlp", {"layers": [[8, 0], [8, 0]]})
+    st = ui.state.brain
+    assert ui._max_width(st, dict(st.settings), s, [[8, 0], [8, 0]], 1) == \
+        MAX_DEEP_WIDTH
+    # ...and a lone layer keeps the full historical range.
+    assert ui._max_width(st, {}, s, [[16, 0]], 0) == int(s.hi)
+
+
+def test_a_second_layer_narrows_the_first_and_the_state_follows(gui):
+    """Adding a layer re-clamps every row, so what the window stores has to be
+    what the modality BUILT - otherwise removing the row again would put a width
+    back that the layout never had."""
+    from services.brains.mlp import MAX_DEEP_WIDTH
+
+    s = REGISTRY["mlp"].settings_schema()[0]
+    ui = _StubUI("mlp", {"layers": [[48, 0]]})
+    st = ui.state.brain
+    w = ui._add_layer_width(st, dict(st.settings), s, [[48, 0]])
+    built = ui._built(st, dict(st.settings), s, [[48, 0], [w, 0]])
+    assert built == [[MAX_DEEP_WIDTH, 0], [w, 0]]
+
+
+def test_add_layer_is_refused_at_the_depth_cap(gui):
+    """DEPTH is what stops `+`. A width-1 layer makes the brain SMALLER - it
+    narrows the output layer's fan-in from w_k to 1 - so the float budget never
+    runs out of room for one."""
+    from services.brains.mlp import MAX_DEPTH
+
+    s = REGISTRY["mlp"].settings_schema()[0]
+    ui = _StubUI("mlp")
+    st = ui.state.brain
+
+    assert ui._add_layer_width(st, {}, s, [[16, 0]]) is not None
+    assert ui._add_layer_width(st, {}, s, [[48, 0], [8, 0]]) is not None
+    assert ui._add_layer_width(st, {}, s, [[6, 0]] * MAX_DEPTH) is None
 
 
 def test_a_closed_window_draws_nothing(gui):

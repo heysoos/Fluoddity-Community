@@ -25,7 +25,8 @@ void main(){
     if(i >= xs.length()) return;
     g_brain_mut = MUT;
     g_brain_cohort = 3.0;
-    ys[i] = eval_brain(0u, xs[i]);
+    ys[i] = (UNIT < 0) ? eval_brain(0u, xs[i])
+                       : eval_brain_unit(0u, UNIT, xs[i]);
 }
 """
 
@@ -48,14 +49,16 @@ def gl():
            + "".join((sh / "brains" / f"{m}.glsl").read_text()
                      for m in ("fourier", "gabor", "lenia", "mlp"))
            + (sh / "brains" / "_dispatch.glsl").read_text()
-           + "uniform float MUT;\n" + MAIN)
+           + "uniform float MUT;\nuniform int UNIT;\n" + MAIN)
     prog = ctx.compute_shader(src)
     scratch = ctx.buffer(reserve=4096)
     scratch.bind_to_storage_buffer(2)
     yield ctx, prog
 
 
-def evaluate(gl, params, layout, xs, mut=0.0):
+def evaluate(gl, params, layout, xs, mut=0.0, unit=-1):
+    from utilities.gl_helpers import set_brain_layout_uniforms
+
     ctx, prog = gl
     flat = np.asarray(params, dtype=np.float32).reshape(-1)
     b_in = ctx.buffer(xs.astype(np.float32).tobytes())
@@ -64,13 +67,15 @@ def evaluate(gl, params, layout, xs, mut=0.0):
     b_in.bind_to_storage_buffer(0)
     b_out.bind_to_storage_buffer(1)
     b_par.bind_to_storage_buffer(4)
-    shape = tuple(layout.shape) + (0, 0, 0, 0)
     for k, v in (("MUT", mut),
+                 ("UNIT", int(unit)),
                  ("BRAIN_MODALITY", _MOD_ID[layout.modality]),
-                 ("BRAIN_LEN", layout.length),
-                 ("BRAIN_SHAPE", shape[:4])):
+                 ("BRAIN_LEN", layout.length)):
         if k in prog:
             prog[k].value = v
+    # Through the shared helper, so the structure the particles run under is
+    # the structure this compares.
+    set_brain_layout_uniforms(prog, layout)
     prog.run(group_x=(len(xs) + 63) // 64)
     ctx.finish()
     out = np.frombuffer(b_out.read(), dtype=np.float32).reshape(-1, 4).copy()
@@ -143,6 +148,38 @@ def ref_mlp(p, x, h, act):
     return a @ W2.T + b2
 
 
+def _activate(pre, act):
+    if act == 0:
+        return np.tanh(pre)
+    if act == 1:
+        return np.sin(pre)
+    return 0.5 * pre * (1 + np.tanh(0.7978845608 *
+                                    (pre + 0.044715 * pre ** 3)))
+
+
+def ref_mlp_stack(p, x, shape, unit=-1):
+    """The layer stack, read straight off layer_spans.
+
+    This is the real guard on the packing formula living in two files: the
+    offsets here come from Python's definition and the GPU recomputes its own.
+    """
+    from services.brains.mlp import layer_spans
+
+    hidden, out_w, out_b, n = layer_spans(shape)
+    assert len(p) == n
+    h = np.asarray(x, np.float64)
+    for li, (w_off, b_off, fan_in, w) in enumerate(hidden):
+        W = p[w_off:b_off].reshape(w, fan_in)
+        b = p[b_off:b_off + w]
+        h = _activate(h @ W.T + b, int(shape[2 * li + 1]))
+    wk = hidden[-1][3]
+    W_out = p[out_w:out_b].reshape(4, wk)
+    if unit >= 0:
+        # One unit's additive contribution: its activation times its column.
+        return h[:, unit:unit + 1] * W_out[:, unit]
+    return h @ W_out.T + p[out_b:]
+
+
 def check(got, want, tag):
     got, want = np.asarray(got, np.float64), np.asarray(want, np.float64)
     scale = max(np.abs(want).mean(), 1e-6)
@@ -185,6 +222,59 @@ def test_every_mlp_activation_matches(gl, name, act):
         0, 0.6, layout.length).astype(np.float32), layout).reshape(-1)
     x = inputs(1)
     check(evaluate(gl, p, layout, x), ref_mlp(p, x, 8, act), f"mlp act={act}")
+
+
+# Depth 1 twice (the path that must not regress), then ragged widths and mixed
+# activations at every depth the deep path takes.
+STACKS = [
+    [[16, 0]],
+    [[8, 2]],
+    [[8, 0], [6, 1]],
+    [[8, 1], [5, 2], [3, 0]],
+    [[4, 0], [5, 1], [6, 2], [7, 0]],
+]
+
+
+@pytest.mark.parametrize("layers", STACKS, ids=lambda ls: "x".join(
+    f"{w}a{a}" for w, a in ls))
+def test_the_layer_stack_matches_the_python_packing(gl, layers):
+    from services.brains import REGISTRY
+
+    m = REGISTRY["mlp"]
+    layout = m.layout_from_settings({"layers": layers})
+    p = m.decode(np.random.default_rng(12).normal(
+        0, 0.6, layout.length).astype(np.float32), layout).reshape(-1)
+    x = inputs(4)
+    check(evaluate(gl, p, layout, x),
+          ref_mlp_stack(p, x, layout.shape), layout.signature())
+
+
+@pytest.mark.parametrize("layers", STACKS, ids=lambda ls: "x".join(
+    f"{w}a{a}" for w, a in ls))
+def test_the_units_the_inspector_draws_sum_to_the_brain(gl, layers):
+    """A unit tile is the FINAL layer's additive contribution, so the tiles plus
+    the output bias must be the whole brain. Earlier layers reach the output
+    through further nonlinearities and have nothing additive to show."""
+    from services.brains import REGISTRY, unit_count
+    from services.brains.mlp import layer_spans
+
+    m = REGISTRY["mlp"]
+    layout = m.layout_from_settings({"layers": layers})
+    p = m.decode(np.random.default_rng(13).normal(
+        0, 0.6, layout.length).astype(np.float32), layout).reshape(-1)
+    x = inputs(5)
+    n = unit_count(layout)
+    assert n == layers[-1][0]
+
+    total = np.zeros((len(x), 4), np.float64)
+    for j in range(n):
+        got = evaluate(gl, p, layout, x, unit=j)
+        check(got, ref_mlp_stack(p, x, layout.shape, unit=j),
+              f"{layout.signature()} unit {j}")
+        total += got
+    _h, _ow, out_b, _n = layer_spans(layout.shape)
+    check(total + p[out_b:], evaluate(gl, p, layout, x),
+          f"{layout.signature()} units do not sum to the brain")
 
 
 @pytest.mark.parametrize("name", ["fourier", "gabor", "lenia", "mlp"])

@@ -28,6 +28,29 @@ def test_the_header_mirrors_the_python_slot_constants():
         )
 
 
+def test_mlp_glsl_mirrors_its_python_limits():
+    """MAX_MLP_WIDTH sizes the deep path's locals and MAX_MLP_DEPTH sizes the
+    BRAIN_LAYERS uniform, and both bound what layout_from_settings will build.
+    A shader narrower than Python indexes past the end of an array."""
+    from services.brains.mlp import MAX_DEEP_WIDTH, MAX_DEPTH
+
+    src = read("shaders/brains/mlp.glsl")
+    assert f"#define MAX_MLP_WIDTH {MAX_DEEP_WIDTH}\n" in src
+    assert f"#define MAX_MLP_DEPTH {MAX_DEPTH}\n" in src
+
+
+def test_the_depth_one_path_is_still_there():
+    """Every genome, archive and config on disk was written by it. It is kept
+    verbatim behind a uniform branch, so depth 1 cannot regress in what it
+    COMPUTES - and MAX_MLP_WIDTH is what keeps it from regressing in what it
+    costs."""
+    src = read("shaders/brains/mlp.glsl")
+    assert src.count("if (BRAIN_DEPTH <= 1)") == 2, (
+        "brain_mlp and mlp_unit must each keep the old path"
+    )
+    assert "5 * h + j" in src and "9 * h" in src, "the old offsets are gone"
+
+
 def test_header_declares_the_flat_brain_buffer():
     src = read("shaders/brains/_header.glsl")
     assert "buffer BrainBuffer" in src

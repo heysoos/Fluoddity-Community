@@ -55,22 +55,47 @@ class BrainLayout:
 
     def signature(self) -> str:
         """Archive directory name and checkpoint guard. Must be stable across
-        runs - a change here silently merges two archives."""
-        parts = "-".join(f"{c}{v}" for c, v in zip("nabc", self.shape))
-        return f"{self.modality}-{parts}"
+        runs - a change here silently merges two archives.
+
+        A modality may own its own format by declaring `signature_of`, which
+        `layout_from_signature` then parses back through its
+        `settings_from_signature`. MLP does, because a variable-length layer
+        stack does not fit four positional ints - and a modality that formats
+        also parses, so the two cannot disagree.
+        """
+        m = REGISTRY.get(self.modality)
+        fn = getattr(m, "signature_of", None)
+        return fn(self) if fn is not None else default_signature(self)
+
+
+def default_signature(layout: BrainLayout) -> str:
+    """`modality-n<shape0>-a<shape1>-...`, up to four positional ints."""
+    parts = "-".join(f"{c}{v}" for c, v in zip("nabc", layout.shape))
+    return f"{layout.modality}-{parts}"
 
 
 @dataclass(frozen=True)
 class Setting:
     """One UI knob a modality declares. Lives here, not in a modality module,
-    so every modality imports it from the same place."""
+    so every modality imports it from the same place.
+
+    "layers" is a REPEATED structural group rather than one value: `lo`/`hi`
+    bound each entry's width, `default` is a new entry's width, and `choices`
+    names the activations. Its value is a list of [width, activation] pairs.
+    """
     key: str
     label: str
-    kind: str            # "int" | "float" | "choice"
+    kind: str            # "int" | "float" | "choice" | "layers"
     lo: float
     hi: float
     default: float
     choices: tuple = ()
+
+
+# The kinds that change the PARAMETER COUNT, and so the genome's meaning. A
+# change to one of these resets the optimizer and switches archive; everything
+# else is a decode SCALE and is free to change mid-run.
+STRUCTURAL_KINDS = ("int", "choice", "layers")
 
 
 REGISTRY: dict = {}
@@ -120,20 +145,37 @@ def layout_from_signature(sig: str, settings: dict | None = None):
     m = REGISTRY.get(modality)
     if m is None:
         return None
-    nums = []
-    for part in str(sig).split("-")[1:]:
-        body = part[1:]
-        if not body.lstrip("-").isdigit():
-            return None
-        nums.append(int(body))
-    keys = [s.key for s in m.settings_schema() if s.kind == "int"]
+    parse = getattr(m, "settings_from_signature", None)
+    structural = (parse(str(sig)) if parse is not None
+                  else default_settings_from_signature(m, str(sig)))
+    if structural is None:
+        return None
     merged = dict(settings or {})
-    merged.update(dict(zip(keys, nums)))
+    merged.update(structural)
     try:
         layout = m.layout_from_settings(merged)
     except (TypeError, ValueError, KeyError):
         return None
     return layout if layout.signature() == sig else None
+
+
+def default_settings_from_signature(m, sig: str):
+    """The structural settings `sig` names, in schema order, or None.
+
+    The inverse of default_signature(), and it must consume the same kinds
+    settings_of() emits. It used to take only `kind == "int"`, which silently
+    dropped a `choice`: an mlp-n16-a1 signature rebuilt as activation 0 and the
+    round-trip check refused it, so no sin or gelu entry could be adopted or
+    previewed at all.
+    """
+    nums = []
+    for part in sig.split("-")[1:]:
+        body = part[1:]
+        if not body.lstrip("-").isdigit():
+            return None
+        nums.append(int(body))
+    keys = [s.key for s in m.settings_schema() if s.kind in STRUCTURAL_KINDS]
+    return dict(zip(keys, nums))
 
 
 def settings_of(layout: BrainLayout) -> dict:
@@ -152,15 +194,31 @@ def settings_of(layout: BrainLayout) -> dict:
 
     Derived from the modality's own settings_schema rather than a hand-written
     map, because the hand-written map is what let two declared-but-never-read
-    settings through before.
+    settings through before. A modality whose structure is not four positional
+    ints declares `settings_of` and takes over that half.
     """
     m = get(layout.modality)
     out: dict = {k: float(v) for k, v in layout.scales}
-    structural = [s for s in m.settings_schema() if s.kind in ("int", "choice")]
+    fn = getattr(m, "settings_of", None)
+    if fn is not None:
+        out.update(fn(layout))
+        return out
+    structural = [s for s in m.settings_schema() if s.kind in STRUCTURAL_KINDS]
     for i, s in enumerate(structural):
         if i < len(layout.shape):
             out[s.key] = int(layout.shape[i])
     return out
+
+
+def unit_count(layout: BrainLayout) -> int:
+    """Units this brain decomposes into - centres, filters, bumps, or the
+    hidden units the Inspector can draw. shape[0] unless the modality says
+    otherwise; MLP does, because a deep stack's drawable units are its LAST
+    hidden layer's."""
+    fn = getattr(get(layout.modality), "unit_count", None)
+    if fn is not None:
+        return int(fn(layout))
+    return int(layout.shape[0]) if layout.shape else 0
 
 
 def brain_rng(seed: float) -> np.random.Generator:

@@ -53,11 +53,15 @@ Auto and Explore need the optional packages in `requirements.txt` (`onnxruntime-
 | **Fourier** | sum of sine waves — the original, smooth periodic noise |
 | **Gabor** | the same oscillation under a Gaussian envelope, so a unit answers near its own centre and is silent elsewhere |
 | **Lenia** | a growth band: positive inside a narrow window of sensor values, negative outside it |
-| **MLP** | a small neural net — `tanh`, `sin` or `gelu` |
+| **MLP** | a small neural net of one or more layers — `tanh`, `sin` or `gelu` per layer |
 
-Each has a size setting (Centers, Filters, Bumps, Hidden Width) that sets the search dimension printed under the combo. Creatures are **not** portable between layouts, so changing anything that alters the parameter count resets the search and switches to that layout's archive. Presets record the brain they were saved under and switch to it on load.
+Fourier, Gabor and Lenia each have one size setting (Centers, Filters, Bumps). MLP instead has a **layer stack**: one row per hidden layer, with its own width slider and activation, an `x` to remove it and **+ Add layer** at the bottom. A readout underneath shows how much of the parameter budget the stack uses.
 
-The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space, blue negative and orange positive. `Slice` chooses the plane, and **Reseed plane** redraws the random one.
+A single layer can be up to 48 units wide. A stack of two or more is capped at 8 units per layer, so adding a second layer narrows the first — the window says so before you do it. `+ Add layer` greys out at 8 layers.
+
+Whatever the modality, the size settings fix the search dimension printed under the stack. Creatures are **not** portable between layouts, so changing anything that alters the parameter count resets the search and switches to that layout's archive — a width drag applies once you release it, everything else immediately. Presets record the brain they were saved under, including the whole stack, and switch to it on load.
+
+The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space. For a deep MLP the tiles are the **last** hidden layer's units, the only ones that add up to the output. `Slice` chooses the plane and **Reseed plane** redraws the random one; `Output` chooses what is drawn, defaulting to a random projection of all four outputs into red, green and blue. The single-value views are blue for negative and orange for positive.
 
 ## Design
 Particles in Fluoddity have no direct interactions with each-other. Instead, they leave trails as they move. These trails decay and diffuse over time. Particles respond to the density and direction of trails around them.

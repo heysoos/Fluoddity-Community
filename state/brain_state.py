@@ -29,12 +29,12 @@ class BrainState:
     # Inspector view settings. Display only - none of these touch the brain,
     # they choose which 2D slice of the 4D sensor space is drawn and how it is
     # scaled on screen.
-    # Both DEFAULT to the random projection - the last entry of AXES and of
-    # CHANNELS. An axis-aligned view is a special case with no claim to being
-    # the neutral one: it shows the brain along one arbitrary frame, and a unit
-    # acting diagonally is invisible in every one of them.
+    # Both DEFAULT to a random projection - the RGB one for the output, which
+    # shows all four at once. An axis-aligned view is a special case with no
+    # claim to being the neutral one: it shows the brain along one arbitrary
+    # frame, and a unit acting diagonally is invisible in every one of them.
     preview_axes: int = 4        # index into services.brain_preview.AXES
-    preview_channel: int = 6     # index into services.brain_preview.CHANNELS
+    preview_channel: int = 7     # CHANNEL_RANDOM_RGB in services.brain_preview
     preview_range: float = 2.0   # half-extent of the swept plane
     preview_gain: float = 1.0    # contrast only
     # Which random plane, when preview_axes selects the random projection. Held

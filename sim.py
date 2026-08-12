@@ -258,9 +258,10 @@ class Sim:
                -1 if self._pending_entity_id is None
                else int(self._pending_entity_id))
 
-        # Brain dispatch. BRAIN_SHAPE carries each modality's structural ints
-        # (Fourier: centre count; MLP: hidden width and activation).
+        # Brain dispatch. The layout's STRUCTURE goes through the shared helper,
+        # so the Brain Inspector pushes the identical uniforms.
         from services.brains import get as get_brain_modality
+        from utilities.gl_helpers import set_brain_layout_uniforms
 
         _bl = self._brain_layout
         tryset(self.entity_update_program, 'BRAIN_MODALITY',
@@ -268,9 +269,7 @@ class Sim:
         tryset(self.entity_update_program, 'BRAIN_LEN', int(_bl.length))
         tryset(self.entity_update_program, 'BRAIN_PER_COHORT',
                1 if self.brain_per_cohort else 0)
-        tryset(self.entity_update_program, 'BRAIN_SHAPE',
-               (int(_bl.shape[0]),
-                int(_bl.shape[1]) if len(_bl.shape) > 1 else 0, 0, 0))
+        set_brain_layout_uniforms(self.entity_update_program, _bl)
 
         # Multi-load mode: set uniform arrays for all loaded configs
         if multi_load_service and multi_load_service.is_active() and not is_preview_active:
