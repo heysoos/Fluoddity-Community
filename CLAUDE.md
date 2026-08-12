@@ -258,18 +258,43 @@ mechanics these caveats assume.
   only one thread may call `session.run`. Never pin `device_id` — DirectML
   device 0 is the discrete GPU (0.90 ms/image); device 1 is the iGPU at 63.
 
-- **Colour is genetic but, at the default hue gain, NOT HERITABLE — so no text
-  goal naming a colour can work.** `e.color.x = HUE_SENSITIVITY * col_params.x`
-  is an HSV hue read modulo 1, while `col_params.x` is an unbounded Fourier
-  output, so at `hue_sensitivity = 0.5` a mutation far too small to change the
-  pattern slides the colour through whole revolutions: `|dhue|` is 74.3° at
-  `expedition_sigma`, against a 90° random baseline, while the pattern survives
-  (CLIP cosine 0.936 vs a 0.895 random-pair baseline). Lowering the gain fixes
-  it and *raises* variety — at 0.15, `|dhue|` is 23.4° and the spread across
-  genomes rises from 68.6° to 107°. `hue_sensitivity` is NOT in
-  `PHYSICS_PARAMS`, so the search cannot fix this itself. Note `color_by_cohort`
+- **Hue IS the axial force term — colour is not an independent gene — and the
+  gain that maps it to a hue is a PRESET parameter, not a constant.**
+  `entity_update.glsl` forms `force = baseterm.xy + y_reflect(mirrorterm.xy)`
+  and `color = baseterm.xy + mirrorterm.xy`, and `y_reflect` flips only the
+  lateral component, so `color.x` and the axial force are the SAME expression,
+  read before `AXIAL_FORCE` scaling. This holds for every modality — it is the
+  black box's output, not a Fourier one. `e.color.x = HUE_SENSITIVITY *
+  col_params.x` then reads it as an HSV hue modulo 1, so the gain scales
+  `|dhue|` linearly and a large one slides the colour through whole revolutions
+  on a mutation far too small to change the pattern.
+
+  The cost is measured against the admission bar. At gain **0.5**, `|dhue|` is
+  74° at `expedition_sigma` and a hue-only rotation moves the CLIP embedding
+  **1.26x** as far as a genuinely different creature does, clearing
+  `min_separation` **95%** of the time. At **0.09** it is 14°, 0.22x, and
+  **10%**. **A better encoder does not fix this** — CLIP B/16, SigLIP 2 and
+  L/14 all score 1.26–1.38 at 74°, and SigLIP 2 is the most colour-sensitive of
+  the four. Re-measure with `python -m tools.hue_nuisance`.
+
+  Both defaults are already in the good range (`SimState` and `_Default.json`
+  are 0.09), but roughly half the preset library ships **0.5** — so without a
+  cap, how much of the archive is hue-duplicates depends on which preset seeded
+  the run. `AUTO_HUE_MAX` (0.12, `main.py`) holds the gain down for as long as
+  an automatic mode is scoring, re-applied every frame because a preset loaded
+  mid-run brings its own. Do not lower it much further: at 0.15 the spread
+  across genomes is 107° against 68.6° at 0.5, and it collapses again as the
+  gain approaches zero.
+
+  Clamping is safe because colour is DISPLAY-ONLY: the canvas is RG32F velocity
+  and the brain senses `ltap.xy`, so `e.color` reaches only `brush.vert` and
+  `cam_brush.frag`. It changes what CLIP sees, never how a particle moves. At
+  0.09 colour IS heritable, so a text goal naming one is no longer hopeless —
+  it was the 0.5 gain that made it so. `hue_sensitivity` is NOT in
+  `PHYSICS_PARAMS`, so the search cannot tune it itself. Note `color_by_cohort`
   REPLACES the brain's hue with `hash(cohort)`; tournament mode forces it off,
-  so any colour experiment run outside tournament mode measures the wrong thing.
+  so any colour experiment run outside tournament mode measures the wrong
+  thing. Guarded by `tests/test_auto_hue_clamp.py`.
 
 ### The archive and admission
 

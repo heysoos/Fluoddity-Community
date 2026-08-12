@@ -17,9 +17,13 @@ from controller_input import ControllerCam, process_controller_input, find_joyst
 from utilities.advanced_drawing import AdvancedDrawingProcessor
 
 
+# The ceiling an automatic mode holds the hue gain to while it is scoring.
+AUTO_HUE_MAX = 0.12
+
+
 def put_back_auto_overrides(ui_state, prev_aspect, prev_speedmult,
-                            prev_motion_blur):
-    """Restore the three preferences an automatic mode commandeers.
+                            prev_motion_blur, prev_hue=None):
+    """Restore the preferences an automatic mode commandeers.
 
     Module-level so both the mode-off edge and the quit path can share it.
     """
@@ -31,6 +35,20 @@ def put_back_auto_overrides(ui_state, prev_aspect, prev_speedmult,
         prefs.speedmult = prev_speedmult
     if prev_motion_blur is not None:
         prefs.motion_blur = prev_motion_blur
+    if prev_hue is not None:
+        ui_state.sim.hue_sensitivity = prev_hue
+
+
+def clamp_auto_hue(ui_state):
+    """Hold the hue gain at or below AUTO_HUE_MAX while a mode is scoring.
+
+    Called every frame rather than on the mode-enable edge: loading a preset
+    mid-run writes that preset's own gain into SimState. See CLAUDE.md.
+    """
+    if not (ui_state.auto_tournament.enabled or ui_state.archive.enabled):
+        return
+    ui_state.sim.hue_sensitivity = min(
+        ui_state.sim.hue_sensitivity, AUTO_HUE_MAX)
 
 
 class App:
@@ -96,6 +114,7 @@ class App:
         self._auto_prev_aspect = None
         self._auto_prev_speedmult = None
         self._auto_prev_motion_blur = None
+        self._auto_prev_hue = None
         self._auto_was_enabled = False
         self._last_crops = None
         # Explore (IMGEP) mode, also lazy - it needs the same CLIP scorer.
@@ -850,6 +869,9 @@ class App:
         if ui_state.request_camera_reset:
             ui_state.camera.position[:] = [0.0, 0.0]
             ui_state.camera.zoom = 1.0
+        # After process_commands, so a preset loaded this frame is capped in
+        # the same frame it arrives.
+        clamp_auto_hue(ui_state)
         self.sim.apply_state(ui_state.sim)
         self.sim.apply_camera_state(ui_state.camera)
         self.camera.apply_state(ui_state.camera)
@@ -1101,6 +1123,7 @@ class App:
         self._auto_prev_aspect = prefs.canvas_aspect_ratio
         self._auto_prev_speedmult = prefs.speedmult
         self._auto_prev_motion_blur = prefs.motion_blur
+        self._auto_prev_hue = ui_state.sim.hue_sensitivity
 
         # Tiles inherit the canvas aspect ratio, and a 16:9 tile cannot be
         # squared for CLIP without distortion, padding or lost content.
@@ -1115,7 +1138,8 @@ class App:
     def _undo_auto_overrides(self, ui_state):
         put_back_auto_overrides(
             ui_state, self._auto_prev_aspect, self._auto_prev_speedmult,
-            self._auto_prev_motion_blur)
+            self._auto_prev_motion_blur,
+            prev_hue=getattr(self, "_auto_prev_hue", None))
 
     def _restore_auto_overrides(self, ui_state):
         """Undo the transient auto/explore overrides before anything is
@@ -1128,7 +1152,8 @@ class App:
             return
         put_back_auto_overrides(
             ui_state, self._auto_prev_aspect, self._auto_prev_speedmult,
-            self._auto_prev_motion_blur)
+            self._auto_prev_motion_blur,
+            prev_hue=getattr(self, "_auto_prev_hue", None))
 
     @staticmethod
     def _step(label, fn, *args, **kwargs):
