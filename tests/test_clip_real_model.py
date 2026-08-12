@@ -11,9 +11,9 @@ pytestmark = pytest.mark.gpu
 def scorer():
     if not is_present(MODEL_DIR):
         pytest.skip("CLIP model not downloaded")
-    from services.clip_scorer import CLIPScorer
+    from services.vision_scorer import VisionScorer
 
-    return CLIPScorer(MODEL_DIR)
+    return VisionScorer()
 
 
 def _square(color):
@@ -41,9 +41,9 @@ def test_blank_image_scores_lower_than_content(scorer):
 def test_cpu_provider_loads(scorer):
     """Spec 11.1 requires a working CPU fallback when DirectML is absent.
     The default ORT_ENABLE_ALL crashes here, which is why sessions pin BASIC."""
-    from services.clip_scorer import CLIPScorer
+    from services.vision_scorer import VisionScorer
 
-    cpu = CLIPScorer(MODEL_DIR, providers=["CPUExecutionProvider"])
+    cpu = VisionScorer(providers=["CPUExecutionProvider"])
     cpu.set_prompt("a red square")
     assert np.isfinite(cpu.score(_square((220, 30, 30))[None])[0])
 

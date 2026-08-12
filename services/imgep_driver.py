@@ -68,7 +68,7 @@ class ImgepDriver:
         self.k = 10
         self.seed_n = 256
         self.liveness_min = 0.002    # see CLAUDE.md
-        self.n_views = 3             # see CLIPScorer.embed_mean
+        self.n_views = 3             # see VisionScorer.embed_mean
         self.refresh_sweep_gens = 10
         self.flush_every = 200
 
@@ -761,7 +761,7 @@ class ImgepDriver:
         which the Auto tab owns, and the two modes must not clobber each other.
         """
         if self._distractors is None and self.scorer is not None:
-            from services.clip_scorer import DEFAULT_DISTRACTORS
+            from services.vision_scorer import DEFAULT_DISTRACTORS
 
             self._distractors = np.asarray(
                 self.scorer.embed_text(list(DEFAULT_DISTRACTORS)),

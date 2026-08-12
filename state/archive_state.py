@@ -29,7 +29,7 @@ class ArchiveState:
     sim_steps_per_frame: int = 10
     snapshots_per_gen: int = 6
     # Sub-crops averaged into each tile's embedding; 1 is the raw frame and is
-    # fully position-dependent. See CLIPScorer.embed_mean.
+    # fully position-dependent. See VisionScorer.embed_mean.
     n_views: int = 3
     physics_enabled: bool = False
     tile_mutation_enabled: bool = False

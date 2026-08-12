@@ -110,7 +110,7 @@ class App:
         self.tile_capture = None
         self.capture_blit = None
         self.capture_view = None
-        self.clip_scorer = None
+        self.vision_scorer = None
         self._auto_prev_aspect = None
         self._auto_prev_speedmult = None
         self._auto_prev_motion_blur = None
@@ -213,7 +213,7 @@ class App:
             from services.auto_tournament_service import AutoTournamentService
             from services.capture_blit import CaptureBlit
             from services.capture_view import CaptureView
-            from services.clip_scorer import CLIPScorer
+            from services.vision_scorer import VisionScorer
             from services.run_logger import RunLogger
             from services.tile_capture import TileCapture
             from tools.fetch_clip_onnx import MODEL_DIR, is_present
@@ -226,7 +226,7 @@ class App:
             return False
 
         try:
-            self.clip_scorer = CLIPScorer(MODEL_DIR)
+            self.vision_scorer = VisionScorer()
         except Exception as exc:
             self.ui.auto_unavailable = f"could not load CLIP: {exc}"
             return False
@@ -236,7 +236,7 @@ class App:
         self.capture_view = CaptureView(self.ctx, self.sim, self.camera)
         self.auto_service = AutoTournamentService(
             self.tournament_service,
-            scorer=self.clip_scorer,
+            scorer=self.vision_scorer,
             logger=RunLogger(config={"grid": self.tournament_service.grid}),
         )
         self.command_handler.auto_service = self.auto_service
@@ -616,7 +616,7 @@ class App:
 
         # The archive, its name and the settings are _open_archive's job.
         self.imgep_driver = ImgepDriver(
-            self.tournament_service, self.clip_scorer,
+            self.tournament_service, self.vision_scorer,
             self.archive, self.goal_list)
         self.prompt_driver = self.auto_service.driver
 

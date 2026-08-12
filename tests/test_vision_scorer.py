@@ -1,20 +1,25 @@
 import numpy as np
 import pytest
 
-from services.clip_scorer import (
-    CLIP_MEAN,
-    CLIP_STD,
+from services.vision_models import get
+from services.vision_scorer import (
     DEFAULT_DISTRACTORS,
-    LOGIT_SCALE,
-    CLIPScorer,
+    VisionScorer,
     augment,
     preprocess,
 )
 
+# These used to be module constants on the scorer. They belong to a MODEL now,
+# and this file's subject is the encoder the app shipped with.
+B32 = get("clip-b32")
+CLIP_MEAN = np.asarray(B32.mean, dtype=np.float32)
+CLIP_STD = np.asarray(B32.std, dtype=np.float32)
+LOGIT_SCALE = B32.text_logit_scale
+
 
 def test_preprocess_shape_dtype_and_contiguity():
     crops = np.full((2, 224, 224, 3), 255, dtype=np.uint8)
-    x = preprocess(crops)
+    x = preprocess(crops, B32)
     assert x.shape == (2, 3, 224, 224)
     # The fp16 exports declare tensor(float) I/O despite fp16 weights, so
     # float32 is the default; the dtype is driven by the session descriptor.
@@ -24,12 +29,12 @@ def test_preprocess_shape_dtype_and_contiguity():
 
 def test_preprocess_honours_an_explicit_dtype():
     crops = np.zeros((1, 224, 224, 3), dtype=np.uint8)
-    assert preprocess(crops, dtype=np.float16).dtype == np.float16
+    assert preprocess(crops, B32, dtype=np.float16).dtype == np.float16
 
 
 def test_preprocess_applies_clip_normalisation():
     crops = np.full((1, 224, 224, 3), 255, dtype=np.uint8)
-    x = preprocess(crops)
+    x = preprocess(crops, B32)
     expected = (1.0 - CLIP_MEAN) / CLIP_STD
     for c in range(3):
         assert np.allclose(x[0, c], expected[c], atol=1e-3)
@@ -77,7 +82,7 @@ class _StubSession:
 
 
 def _scorer_with_stubs():
-    s = CLIPScorer.__new__(CLIPScorer)
+    s = VisionScorer.__new__(VisionScorer)
     s._vision = _StubSession("vision")
     s._text = _StubSession("text")
     s._vision_in = "pixel_values"
@@ -90,6 +95,7 @@ def _scorer_with_stubs():
     s._prompt = ""
     s._n_views = 3
     s._rng = np.random.default_rng(0)
+    s._model = B32
     s._available = True
     return s
 
@@ -120,7 +126,7 @@ def test_score_chunks_large_batches():
     s._text_emb = np.tile(np.array([[1.0, 0, 0, 0]], dtype=np.float32), (7, 1))
     # 64 tiles x 3 views = 192 images -> must not be one 192-image call
     s.score(np.zeros((64, 224, 224, 3), dtype=np.uint8))
-    assert max(s._vision.batch_sizes) <= CLIPScorer.MAX_CHUNK
+    assert max(s._vision.batch_sizes) <= VisionScorer.MAX_CHUNK
     assert sum(s._vision.batch_sizes) == 192
 
 
@@ -133,6 +139,45 @@ def test_score_before_set_prompt_raises():
 def test_default_distractors_include_abstract_texture():
     """Without this one, every trail pattern scores highly on every prompt."""
     assert "an abstract texture" in DEFAULT_DISTRACTORS
+
+
+# ---- the model, not the module -----------------------------------------
+
+def test_the_scorer_exposes_its_model():
+    s = VisionScorer.__new__(VisionScorer)
+    s._model = get("siglip2-b16")
+    assert s.model.dim == 768
+    assert s.model.context == 64
+
+
+def test_preprocess_uses_the_models_normalisation_not_clips():
+    """SigLIP centres on 0.5/0.5, so mid-grey maps to zero for it and does not
+    for CLIP. A scorer that normalised every model CLIP's way would feed the
+    wrong distribution and never raise."""
+    grey = np.full((1, 224, 224, 3), 128, dtype=np.uint8)
+    assert abs(float(preprocess(grey, get("siglip2-b16")).mean())) < 0.01
+    assert abs(float(preprocess(grey, B32).mean())) > 0.05
+
+
+def test_output_preference_picks_the_pooled_embedding():
+    """SigLIP's export puts last_hidden_state first, so output 0 by position is
+    a (N, tokens, dim) tensor rather than an embedding."""
+    def out(name, shape):
+        return type("O", (), {"name": name, "shape": shape})()
+
+    s = VisionScorer.__new__(VisionScorer)
+    s._outputs = [out("last_hidden_state", [1, 197, 768]),
+                  out("pooler_output", [1, 768])]
+    assert s._pick_output() == "pooler_output"
+    s._outputs = [out("image_embeds", [1, 512])]
+    assert s._pick_output() == "image_embeds"
+    s._outputs = [out("last_hidden_state", [1, 197, 768]), out("odd", [1, 768])]
+    assert s._pick_output() == "odd", "fall back to the first rank-2 output"
+
+
+def test_an_unknown_model_key_is_refused_before_any_session_loads():
+    with pytest.raises(KeyError, match="not-a-model"):
+        VisionScorer("not-a-model")
 
 
 def test_logit_scale_matches_clip():
@@ -165,7 +210,7 @@ def test_embed_defaults_to_the_instance_view_count():
 def test_embed_chunks_large_batches():
     s = _scorer_with_stubs()
     s.embed(np.zeros((200, 224, 224, 3), dtype=np.uint8), n_views=1)
-    assert max(s._vision.batch_sizes) <= CLIPScorer.MAX_CHUNK
+    assert max(s._vision.batch_sizes) <= VisionScorer.MAX_CHUNK
     assert sum(s._vision.batch_sizes) == 200
 
 
@@ -257,8 +302,6 @@ def test_preprocess_is_exact_in_the_dtype_the_model_takes():
     differs on most values, but by a single ulp, because
     `x*(1/std) + (-mean/std)` associates differently to `(x - mean)/std`.
     """
-    from services.clip_scorer import CLIP_MEAN, CLIP_STD, preprocess
-
     rng = np.random.default_rng(3)
     crops = rng.integers(0, 256, size=(5, 224, 224, 3), dtype=np.uint8)
 
@@ -266,12 +309,12 @@ def test_preprocess_is_exact_in_the_dtype_the_model_takes():
     ref = (ref - CLIP_MEAN) / CLIP_STD
     ref = np.ascontiguousarray(ref.transpose(0, 3, 1, 2))
 
-    got16 = preprocess(crops, np.float16)
+    got16 = preprocess(crops, B32, np.float16)
     assert got16.shape == ref.shape
     assert got16.flags["C_CONTIGUOUS"], "ONNX Runtime needs a contiguous buffer"
     assert np.array_equal(got16, ref.astype(np.float16))
 
-    got32 = preprocess(crops, np.float32)
+    got32 = preprocess(crops, B32, np.float32)
     assert np.abs(got32 - ref).max() < 1e-6
 
 

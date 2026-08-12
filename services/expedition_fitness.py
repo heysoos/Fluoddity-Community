@@ -26,16 +26,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.clip_scorer import LOGIT_SCALE
+from services.vision_models import get
 
-# CLIP's own learned logit_scale.exp(), and the right value for TEXT goals: the
-# modality gap compresses text-image similarity into a narrow band, and 100 is
-# the temperature trained to spread that band out.
-TEXT_LOGIT_SCALE = LOGIT_SCALE  # 100.0
-
-# Image-image similarity sits above 0.9, a different regime - 100 is far too
-# sharp there and floors most of the population to zero. See CLAUDE.md.
-IMAGE_LOGIT_SCALE = 30.0
+# clip-b32's pair, kept as module constants because the calibration tests reason
+# about this encoder specifically. Runtime callers read the scales off the
+# scorer's own model - every encoder has its own. See CLAUDE.md.
+TEXT_LOGIT_SCALE = get("clip-b32").text_logit_scale
+IMAGE_LOGIT_SCALE = get("clip-b32").image_logit_scale
 
 
 def contrastive(snaps, goal, references, logit_scale: float):

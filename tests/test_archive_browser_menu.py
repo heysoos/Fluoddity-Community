@@ -19,7 +19,7 @@ class _Bag:
 class _FakeApp:
     """Only what _open_archive reaches for.
 
-    Deliberately has NO _ensure_auto_service and NO clip_scorer: touching CLIP
+    Deliberately has NO _ensure_auto_service and NO vision_scorer: touching CLIP
     from this path would raise here, which is the point.
     """
 
@@ -187,7 +187,7 @@ class _ExploreApp(_FakeApp):
 
     def __init__(self):
         super().__init__()
-        self.clip_scorer = object()
+        self.vision_scorer = object()
         self.tournament_service = object()
         self.auto_service = _Bag()
         self.auto_service.driver = object()
