@@ -97,6 +97,44 @@ def default_layout() -> BrainLayout:
     return REGISTRY["fourier"].layout_from_settings({})
 
 
+def layout_from_signature(sig: str, settings: dict | None = None):
+    """The layout a signature names, or None if it cannot be rebuilt.
+
+    The inverse of BrainLayout.signature(), and VERIFIED rather than assumed:
+    the shape numbers are handed to the modality's own integer settings in
+    schema order, the layout is rebuilt, and its signature is compared. A
+    mismatch returns None instead of a plausible-looking layout of the wrong
+    width, which is the one outcome worse than refusing.
+
+    Needed because a modality's DEFAULTS are not its only shape: an archive
+    entry saved under gabor-n7 cannot be reached by asking gabor for a layout,
+    which answers gabor-n12.
+
+    `settings` supplies the decode SCALES, which a signature deliberately
+    leaves out. Without them the modality's defaults apply - the stored genome
+    still plays back, since the archive holds it decoded, but re-encoding it
+    would use different scales.
+    """
+    modality = str(sig).split("-")[0]
+    m = REGISTRY.get(modality)
+    if m is None:
+        return None
+    nums = []
+    for part in str(sig).split("-")[1:]:
+        body = part[1:]
+        if not body.lstrip("-").isdigit():
+            return None
+        nums.append(int(body))
+    keys = [s.key for s in m.settings_schema() if s.kind == "int"]
+    merged = dict(settings or {})
+    merged.update(dict(zip(keys, nums)))
+    try:
+        layout = m.layout_from_settings(merged)
+    except (TypeError, ValueError, KeyError):
+        return None
+    return layout if layout.signature() == sig else None
+
+
 def settings_of(layout: BrainLayout) -> dict:
     """The settings dict that reproduces `layout`.
 

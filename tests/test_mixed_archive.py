@@ -293,3 +293,78 @@ def test_ids_continue_per_layout_after_a_reload(tmp_path):
     arc.load_from_store()
     e = arc.consider(_cand(_axis(7)), novelty=1.0)
     assert e.id == 2, "Fourier's counter, not Gabor's"
+
+
+# ---- reaching a brain the archive holds but the modality does not default to
+
+def test_every_shape_a_modality_can_take_round_trips_through_its_signature():
+    """The archive addresses a brain by signature, so anything that has to act
+    on a foreign entry has to get the layout back OUT of one. gabor-n7 is real
+    - it is in a shipped archive - and asking gabor for a layout answers
+    gabor-n12."""
+    import itertools
+
+    from services.brains import REGISTRY, layout_from_signature
+
+    for m in REGISTRY.values():
+        ints = [s for s in m.settings_schema() if s.kind == "int"]
+        for combo in itertools.product(
+                *[range(int(s.lo), int(s.hi) + 1) for s in ints]):
+            want = m.layout_from_settings(
+                dict(zip([s.key for s in ints], combo)))
+            got = layout_from_signature(want.signature())
+            assert got is not None, want.signature()
+            assert got.signature() == want.signature()
+            assert got.length == want.length
+
+
+def test_a_signature_that_cannot_be_rebuilt_is_refused_not_guessed():
+    """Returning a plausible layout of the wrong width is the one outcome
+    worse than refusing: the genome decodes, and to something else."""
+    from services.brains import layout_from_signature
+
+    assert layout_from_signature("gabor-nX") is None
+    assert layout_from_signature("quantum-n4") is None
+    assert layout_from_signature("gabor-n9999") is None
+
+
+def test_adopting_a_foreign_entry_hands_over_its_own_shape(tmp_path):
+    """The click that crosses the boundary. gabor-n7, not gabor's default."""
+    from command_handler import CommandHandler
+    from services.brains import layout_from_signature
+
+    gabor7 = layout_from_signature("gabor-n7")
+    root = tmp_path / "mixed"
+    _fill(root, FOURIER, 1, start_axis=0)
+    _fill(root, gabor7, 1, start_axis=4)
+    arc = Archive(store=ArchiveStore(root, FOURIER), layout=FOURIER, dim=DIM)
+    arc.load_from_store()
+    row = next(i for i in range(len(arc.entries)) if not arc.is_native(i))
+
+    class _Brain:
+        modality = "fourier"
+        settings: dict = {}
+
+    class _Arch:
+        warning = ""
+        notice = ""
+
+    class _UI:
+        brain = _Brain()
+        archive = _Arch()
+
+    h = object.__new__(CommandHandler)
+    h.archive = arc
+    h._pending_brain_rule = None
+    h.apply_brain_layout = lambda *a: None
+    ui_state = _UI()
+
+    assert h._adopt_foreign_entry(ui_state, row) is True
+    assert ui_state.archive.warning == "", ui_state.archive.warning
+    assert ui_state.brain.modality == "gabor"
+    # The stash is matched on signature, so this is what proves it switched to
+    # the entry's OWN shape rather than the modality's default.
+    rule, sig = h._pending_brain_rule
+    assert sig == "gabor-n7"
+    assert rule.size == gabor7.length
+    assert np.array_equal(rule, arc.brain_at(row))

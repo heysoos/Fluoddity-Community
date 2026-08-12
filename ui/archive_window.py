@@ -626,26 +626,46 @@ class ArchiveWindowMixin:
         imgui.begin_child("gallery", imgui.ImVec2(0, 360))
         # Rows fit the window rather than a fixed six, so a narrow panel wraps
         # instead of clipping the right-hand thumbnails.
-        step = self._THUMB + imgui.get_style().item_spacing.x
+        style = imgui.get_style()
+        step = self._THUMB + style.item_spacing.x
         per_row = max(1, int(imgui.get_content_region_avail().x / step))
-        for n, (i, e) in enumerate(self._sorted_entries(ast, arc)[:240]):
-            tex = cache.get(arc.thumb_key(i)) if cache is not None else None
-            if tex is not None:
-                imgui.image(imgui.ImTextureRef(tex.glo),
-                            imgui.ImVec2(self._THUMB, self._THUMB))
-            else:
-                imgui.button(f"#{e.id}", imgui.ImVec2(self._THUMB, self._THUMB))
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(
-                    f"#{e.id}  {e.source}\nnovelty {e.novelty:.3f}\n"
-                    f"liveness {e.liveness:.3f}\ngoal: {e.goal or '-'}")
-                ast.preview_entry_id = i
-            if imgui.is_item_clicked():
-                ast.selected_entry_id = i
-                if ast.live_preview:
-                    ast.load_entry_id = i
-            if n % per_row != per_row - 1:
-                imgui.same_line()
+        items = self._sorted_entries(ast, arc)
+        # CLIPPED to the rows on screen, rather than capped. This used to draw
+        # the first 240 and stop: an archive of 1121 scrolled to a fifth of
+        # itself and simply ended, with nothing on screen saying so. Drawing
+        # them all instead is not the fix either - ThumbCache holds 256
+        # textures, so a frame that touches more evicts every one of them and
+        # reloads the lot on the next frame.
+        n_rows = (len(items) + per_row - 1) // per_row
+        clipper = imgui.ListClipper()
+        clipper.begin(n_rows, self._THUMB + style.item_spacing.y)
+        while clipper.step():
+            for r in range(clipper.display_start, clipper.display_end):
+                for c in range(per_row):
+                    n = r * per_row + c
+                    if n >= len(items):
+                        break
+                    if c:
+                        imgui.same_line()
+                    i, e = items[n]
+                    tex = (cache.get(arc.thumb_key(i))
+                           if cache is not None else None)
+                    if tex is not None:
+                        imgui.image(imgui.ImTextureRef(tex.glo),
+                                    imgui.ImVec2(self._THUMB, self._THUMB))
+                    else:
+                        imgui.button(f"#{e.id}##g{i}",
+                                     imgui.ImVec2(self._THUMB, self._THUMB))
+                    if imgui.is_item_hovered():
+                        imgui.set_tooltip(
+                            f"#{e.id}  {e.source}\nnovelty {e.novelty:.3f}\n"
+                            f"liveness {e.liveness:.3f}\ngoal: {e.goal or '-'}")
+                        ast.preview_entry_id = i
+                    if imgui.is_item_clicked():
+                        ast.selected_entry_id = i
+                        if ast.live_preview:
+                            ast.load_entry_id = i
+        clipper.end()
         imgui.end_child()
 
         if 0 <= ast.selected_entry_id < len(arc.entries):

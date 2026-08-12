@@ -817,28 +817,28 @@ class CommandHandler:
         _handle_brain_layout - which runs later in this very frame - performs
         the switch and applies it.
 
-        Without the modality's own settings the layout is rebuilt from its
-        defaults, so an entry authored under non-default decode scales lands
-        under the defaults. The signature is checked either way, so it either
-        matches and runs or it does not switch at all.
+        The layout is rebuilt FROM THE SIGNATURE, not from the modality's
+        defaults: an entry saved under gabor-n7 is not reachable by asking
+        gabor, which answers gabor-n12. The archive does not store an entry's
+        decode scales, so those come from the defaults - the genome is stored
+        decoded, so it plays back as authored either way.
         """
         bst = getattr(ui_state, "brain", None)
         if bst is None or self.apply_brain_layout is None:
             return False
-        sig = self.archive.layout_at(row)
-        from ui.brain_window import layout_for
+        from services.brains import layout_from_signature, settings_of
 
-        modality = sig.split("-")[0]
-        if layout_for(modality, {}).signature() != sig:
+        sig = self.archive.layout_at(row)
+        layout = layout_from_signature(sig)
+        if layout is None:
             ui_state.archive.warning = (
-                f"#{self.archive.entries[row].id} is a {sig} brain, which is "
-                f"not {modality}'s current shape; switch by hand in the Brain "
-                f"window.")
+                f"#{self.archive.entries[row].id} is a {sig} brain, which this "
+                f"build cannot rebuild; switch by hand in the Brain window.")
             return True
         self._pending_brain_rule = (
             np.asarray(self.archive.brain_at(row), dtype=np.float32).copy(), sig)
-        bst.modality = modality
-        bst.settings = {}
+        bst.modality = layout.modality
+        bst.settings = settings_of(layout)
         ui_state.archive.notice = (
             f"Switched to {sig} and loaded #{self.archive.entries[row].id}.")
         return True

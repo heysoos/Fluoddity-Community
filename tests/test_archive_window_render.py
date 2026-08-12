@@ -387,8 +387,10 @@ def test_selecting_an_entry_reveals_the_actions(gui):
 def test_every_entry_gets_a_placeholder_when_there_are_no_thumbnails(gui):
     h = Harness(archive=_populated(n=8))
     h.state.archive.show_browser = True
-    # a set: _button_labels runs several frames, so every label repeats
-    labels = {x for x in _button_labels(h) if x.startswith("#")}
+    # a set: _button_labels runs several frames, so every label repeats.
+    # Split on "##": everything after it is ImGui id, not visible text - the
+    # gallery needs one because two brains each hold an entry #0.
+    labels = {x.split("##")[0] for x in _button_labels(h) if x.startswith("#")}
     assert labels == {f"#{i}" for i in range(8)}
 
 
