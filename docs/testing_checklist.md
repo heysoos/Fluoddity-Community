@@ -284,3 +284,30 @@ only the running app can answer.
 - [ ] Multi-load two presets with different V Max values: each config's particles obey their own limit
 - [ ] Run a tournament: every tile obeys the global V Max, and lowering it mid-run affects all tiles together
 - [ ] Run Explore with physics search on: V Max stays where you left it and is not varied between tiles
+
+## Audio Reactive
+
+Needs sound playing on the machine, or a microphone. `PyAudioWPatch` must be
+installed; without it the panel says so and everything else runs unchanged.
+
+- [ ] Extras > Audio Reactive opens the panel; it is closed on a fresh launch.
+- [ ] The device list contains both `input:` and `loopback:` entries.
+- [ ] Picking a loopback device and pressing Start makes the spectrum move to
+      music playing in another application.
+- [ ] Stop halts the traces; the status reads `idle`.
+- [ ] Binding bass to Sensor Gain visibly changes the simulation on a beat.
+- [ ] The Sensor Gain slider shows hatching, a pale base tick, and a handle that
+      rides with the music. Its printed value is the live one.
+- [ ] Dragging that slider moves the base tick; the hatching follows it.
+- [ ] File > Save writes the slider value, not the momentary modulated one.
+- [ ] Right-click on a bound slider > Audio... opens the panel.
+- [ ] Setting an X sweep on a bound parameter badges the row `swept`, and the
+      parameter stops responding to audio.
+- [ ] Switching brain modality changes the Brain rows; switching back restores
+      the mappings that were there.
+- [ ] Enabling Auto (CLIP) stops audio modulating anything; disabling restores it.
+- [ ] Quitting and relaunching restores the mappings, with capture stopped.
+- [ ] With the panel closed, the frame rate matches a run with the feature never
+      enabled.
+- [ ] The Sonification window (Extras) still opens and works alongside this one;
+      the two panels are separate and neither replaces the other.
