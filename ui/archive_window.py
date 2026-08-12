@@ -675,10 +675,13 @@ class ArchiveWindowMixin:
             # the id is what the archive calls it.
             imgui.text(f"Selected #{sel.id}")
             if not arc.is_native(ast.selected_entry_id):
+                sig = arc.layout_at(ast.selected_entry_id)
+                # Hovering borrows this brain; only a click keeps it, and with
+                # the toggle off nothing runs at all.
                 imgui.text_colored(
                     imgui.ImVec4(*_DIM),
-                    f"{arc.layout_at(ast.selected_entry_id)} brain - click to "
-                    f"switch to it")
+                    f"{sig} brain - click to switch to it" if ast.live_preview
+                    else f"{sig} brain - turn on Live preview to run it")
             right = layout.row_right_edge()
             if imgui.button("Save as config..."):
                 self.open_save_popup(save_targets.ARCHIVE_ENTRY,

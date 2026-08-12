@@ -137,6 +137,7 @@ def _handler(archive=None, store=None):
     h._archive_preview_pushed = False
     h._archive_preview_physics = None
     h._archive_preview_arc = None
+    h._archive_preview_layout = None
     return h
 
 
@@ -160,7 +161,7 @@ def test_hovering_runs_the_entry_when_the_toggle_is_on():
     ui.archive.live_preview = True
     hover(h, ui, 2)
     assert h.rule_manager.depth == 1
-    assert np.allclose(h.sim.applied[-1], h.archive.brains[2])
+    assert np.allclose(h.sim.applied[-1], h.archive.brain_at(2))
 
 
 def test_turning_the_toggle_off_puts_back_what_was_running():
@@ -181,7 +182,7 @@ def test_moving_between_entries_swaps_rather_than_stacks():
     for entry_id in (0, 1, 2, 3, 0, 3):
         hover(h, ui, entry_id)
         assert h.rule_manager.depth == 1, "each preview must replace the last"
-    assert np.allclose(h.sim.applied[-1], h.archive.brains[3])
+    assert np.allclose(h.sim.applied[-1], h.archive.brain_at(3))
 
 
 def test_leaving_the_browser_restores_the_original_rule():
@@ -275,7 +276,7 @@ def test_clicking_keeps_the_entry_after_the_pointer_leaves():
     ui.archive.load_entry_id = 2
     h._handle_archive_preview(ui)
     hover(h, ui, -1)
-    assert np.allclose(h.sim.applied[-1], h.archive.brains[2])
+    assert np.allclose(h.sim.applied[-1], h.archive.brain_at(2))
     assert ui.archive.load_entry_id == -1
 
 
@@ -298,7 +299,7 @@ def test_clicking_without_hovering_first_still_loads():
     ui.archive.live_preview = True
     ui.archive.load_entry_id = 3
     h._handle_archive_preview(ui)
-    assert np.allclose(h.sim.applied[-1], h.archive.brains[3])
+    assert np.allclose(h.sim.applied[-1], h.archive.brain_at(3))
 
 
 def test_a_commit_reports_itself():
@@ -412,7 +413,7 @@ def test_after_a_switch_hovering_previews_the_new_archive():
     h.archive = fresh
     hover(h, ui, 2)
     assert h.rule_manager.depth == 1
-    assert np.allclose(h.sim.applied[-1], fresh.brains[2])
+    assert np.allclose(h.sim.applied[-1], fresh.brain_at(2))
 
 
 def test_a_switch_restores_the_physics_of_the_archive_that_set_them():
@@ -439,8 +440,8 @@ def test_a_switch_while_still_hovering_shows_the_new_archives_entry():
     h.archive = fresh
     h._handle_archive_preview(ui)          # preview_entry_id is still 2
     assert h.rule_manager.depth == 1, "still exactly one push"
-    assert np.allclose(h.sim.applied[-1], fresh.brains[2])
-    assert not np.allclose(fresh.brains[2], old.brains[2])
+    assert np.allclose(h.sim.applied[-1], fresh.brain_at(2))
+    assert not np.allclose(fresh.brain_at(2), old.brain_at(2))
 
 
 # ---- the run's own physics -------------------------------------------------

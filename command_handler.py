@@ -57,6 +57,9 @@ class CommandHandler:
         self._archive_preview_pushed = False
         self._archive_preview_physics = None
         self._archive_preview_arc = None
+        # The layout the sim had before a preview BORROWED another brain's.
+        # Not None means a borrow is live; see _borrow_layout.
+        self._archive_preview_layout = None
         self.clipboard_preview_active = False  # Config clipboard preview
         self._clipboard_rule_was_pushed = False  # Whether clipboard preview actually pushed a rule
         self._clipboard_cached_config = None  # Full config saved before clipboard preview
@@ -242,6 +245,11 @@ class CommandHandler:
 
         bst.request_layout_change = False
         if self.apply_brain_layout is None:
+            return
+        if self._archive_preview_layout is not None:
+            # A preview is borrowing another brain's layout. The window still
+            # reads the user's own, so applying it here would switch archive
+            # and reset the optimizer to undo the hover - every frame.
             return
         # Called every frame, not only on the flag: a count slider commits on
         # release and a scale slider immediately, and both have to reach the
@@ -813,9 +821,11 @@ class CommandHandler:
         """Switch to the brain this entry belongs to and run it. -> did it.
 
         The same handoff a cross-brain config load uses: stash the genome
-        against its signature, point the Brain window at that modality, and
-        _handle_brain_layout - which runs later in this very frame - performs
-        the switch and applies it.
+        against its signature and point the Brain window at that modality. The
+        switch itself is performed HERE rather than left to next frame's
+        _handle_brain_layout, because a hover has the borrowed layout live and
+        the frame between the two would render the previewed brain under the
+        user's - a flash of a creature that never existed.
 
         The layout is rebuilt FROM THE SIGNATURE, not from the modality's
         defaults: an entry saved under gabor-n7 is not reachable by asking
@@ -839,9 +849,45 @@ class CommandHandler:
             np.asarray(self.archive.brain_at(row), dtype=np.float32).copy(), sig)
         bst.modality = layout.modality
         bst.settings = settings_of(layout)
-        ui_state.archive.notice = (
-            f"Switched to {sig} and loaded #{self.archive.entries[row].id}.")
+        entry_id = self.archive.entries[row].id
+        self.apply_brain_layout(layout, ui_state)
+        ui_state.archive.notice = f"Switched to {sig} and loaded #{entry_id}."
         return True
+
+    # ---- borrowing another brain's layout for a preview ----------------
+
+    def _borrow_layout(self, layout) -> bool:
+        """Point the sim at `layout` for the duration of a preview. -> did it.
+
+        Only the GPU side moves: the buffer is resized and the modality uniform
+        follows the sim's own layout. The archive, the optimizer and the Brain
+        window keep the user's brain, so nothing here pays for the teardown a
+        real switch does - which is what makes this cheap enough to hover.
+        """
+        if self._archive_preview_layout is not None:
+            return True
+        current = getattr(self.sim, "brain_layout", None)
+        if current is None or not hasattr(self.sim, "realloc_brain_buffers"):
+            return False
+        self._archive_preview_layout = current
+        self.sim.realloc_brain_buffers(layout)
+        return True
+
+    def _return_layout(self) -> None:
+        """Give the user's own brain back. Must run before the rule under it."""
+        layout, self._archive_preview_layout = self._archive_preview_layout, None
+        if layout is not None:
+            self.sim.realloc_brain_buffers(layout)
+
+    def _preview_layout(self, i):
+        """The layout entry `i` must be run under, or None if it cannot be.
+
+        Native entries answer None: there is nothing to borrow, and the caller
+        distinguishes that from a refusal by asking is_native itself.
+        """
+        from services.brains import layout_from_signature
+
+        return layout_from_signature(self.archive.layout_at(i))
 
     def _foreign_notice(self, i) -> str:
         """Why an entry of another brain cannot be decoded here, or ""."""
@@ -888,7 +934,15 @@ class CommandHandler:
             # config load does, and let _handle_brain_layout apply both.
             row = self._archive_index(entry_id)
             if row is not None and not self.archive.is_native(row):
+                # The borrow ends here and the real switch takes over, so the
+                # sim must be holding the user's own layout for it to switch
+                # FROM. The physics stay: this is a commit, not a restore.
+                self._return_layout()
                 if self._adopt_foreign_entry(ui_state, row):
+                    self._archive_preview_id = -1
+                    self._archive_preview_physics = None
+                    self._archive_preview_pushed = False
+                    self._archive_preview_arc = None
                     return
             if self._archive_preview_id != entry_id:
                 self._show_archive_preview(ui_state, entry_id)
@@ -938,12 +992,15 @@ class CommandHandler:
         i = self._archive_index(entry_id)
         if i is None:
             return
-        # Another brain's genome cannot be run here, and this fires every frame
-        # from the pointer position - a layout switch on hover would tear down
-        # and rebuild the archive under the cursor. Silent: the browser greys
-        # the row, and a notice per hovered pixel is not feedback.
+        # Another brain's entry runs under a BORROWED layout - the archive and
+        # the search keep the user's own, so a hover costs a buffer resize and
+        # nothing else. Silent when the layout cannot be rebuilt: the click says
+        # so out loud, and a notice per hovered pixel is not feedback.
+        borrowed = None
         if not self.archive.is_native(i):
-            return
+            borrowed = self._preview_layout(i)
+            if borrowed is None:
+                return
         sim_state = ui_state.sim
         entry = self.archive.entries[i]
         run_config = self._run_config_for(entry)
@@ -961,9 +1018,14 @@ class CommandHandler:
                 for j, (name, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
                     setattr(sim_state, name, float(self.archive.physics[i][j]))
 
-        rule = np.asarray(self.archive.brains[i], dtype=np.float32)
+        # brain_at, not brains: the pooled column is padded to the WIDEST layout
+        # the archive holds, and apply_rule refuses a rule of the wrong width.
+        rule = np.asarray(self.archive.brain_at(i), dtype=np.float32)
         pls = self.param_lock_service
-        if not (pls and pls.should_block_rule_push()):
+        blocked = bool(pls and pls.should_block_rule_push())
+        if borrowed is not None and not blocked:
+            blocked = not self._borrow_layout(borrowed)
+        if not blocked:
             self.rule_manager.push_rule(rule, sim_state.rule_seed)
             self.sim.apply_rule(rule)
             self._archive_preview_pushed = True
@@ -973,7 +1035,11 @@ class CommandHandler:
     def _end_archive_preview(self, ui_state):
         """Put back whatever was running before the preview."""
         if self._archive_preview_id < 0:
+            self._return_layout()
             return
+        # Before the rule: what comes off the stack is the user's own brain,
+        # and apply_rule measures it against whatever layout is live.
+        self._return_layout()
         if self._archive_preview_pushed:
             prev_rule, prev_seed = self.rule_manager.pop_rule()
             if prev_seed is not None:

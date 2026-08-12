@@ -404,10 +404,12 @@ class App:
             return
 
         from services.brain_preview import AXES
-        from ui.brain_window import layout_for
 
         axes = AXES[min(bst.preview_axes, len(AXES) - 1)][1]
-        layout = layout_for(bst.modality, bst.settings)
+        # The sim's layout, not the window's: they agree except while a preview
+        # borrows another brain's, and drawing slot 0 through the wrong field
+        # map is a picture of a creature that is not running.
+        layout = self.sim.brain_layout
         # Slot 0 is always a real brain now - the loaded rule, or cohort 0's
         # generated one - so the Inspector just draws it. It used to have to
         # re-derive the shader's "is this buffer blank" verdict, and when it did

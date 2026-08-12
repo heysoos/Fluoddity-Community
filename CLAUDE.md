@@ -738,6 +738,28 @@ mechanics these caveats assume.
   own `.glsl` and exposes `<modality>_param_at()` so the click-to-adopt
   writeback returns the rule the particle was actually running.
 
+- **A hover BORROWS another brain; only a click switches to one.** A switch
+  releases and rebuilds the archive — `load_from_store` rescores every entry —
+  and resets the optimizer, so it can never run off the pointer position. A
+  borrow moves the GPU side alone: `realloc_brain_buffers` is 0.03–0.05 ms at
+  every layout, because the driver does not touch the pages, and the modality
+  uniform already follows `sim.brain_layout`. Four things are load-bearing.
+  `_handle_brain_layout` is suppressed for the borrow's duration, or the Brain
+  window's own layout undoes the hover — with a full teardown — once a frame.
+  The layout goes back BEFORE the rule popped off the stack under it, since
+  `apply_rule` measures a rule against whatever layout is live and silently
+  refuses a mismatch. A commit returns it before `_adopt_foreign_entry`, which
+  then switches in the SAME frame, so no frame renders the previewed brain
+  under the user's. And the Inspector draws slot 0 with `sim.brain_layout`
+  rather than the Brain window's, which are the same except during a borrow.
+  Guarded by `tests/test_foreign_preview.py`.
+
+- **`Archive.brains` is padded to the WIDEST layout the archive holds; anything
+  that decodes must use `brain_at(i)`.** One wider foreign entry re-widths the
+  pooled column, so the padded row reaches `apply_rule` at the wrong size and
+  is refused — which breaks the ordinary same-brain preview, not just the
+  cross-brain one.
+
 ## Key Documentation
 
 - `docs/imgep.md` — **how Explore mode works**: the regime loop, every fitness
