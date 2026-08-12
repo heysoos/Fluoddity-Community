@@ -34,23 +34,12 @@ targets and the injection seam is new, because Fluoddity is not a browser.
 | Auto-gain | On by default, per band |
 | Trace drawing | `imgui.plot_lines` over numpy; ImPlot only where series overlay |
 
-## Why NumPy and not a C++ library
+## Why NumPy
 
-The obvious move is to import an optimised realtime MIR library — GIST, aubio,
-essentia. Candidates were checked on this machine (Python 3.12, Windows) rather
-than by reputation. NumPy wins, and the reason is that the analysis stage is far
-too small for a faster library to matter.
+At 60 fps a frame has **16.7 ms** for everything — physics, rendering and UI.
+Percentages below are shares of that budget, not durations this feature adds.
 
-### There is no headroom in the analysis stage
-
-Performance was the stated priority, so the first question is how much a faster
-library could win.
-
-> **The yardstick.** At 60 fps a frame has **16.7 ms** to do everything in —
-> physics, rendering and UI together. Every percentage below is a share of that
-> budget, not a duration this feature adds. The whole feature costs ~0.18 ms.
-
-Per 2048-sample block at 48 kHz:
+Analysis, per 2048-sample block at 48 kHz:
 
 | Step | µs |
 |---|---|
@@ -60,72 +49,33 @@ Per 2048-sample block at 48 kHz:
 | `abs` → float32 | 2.3 |
 | mel filterbank matmul | 2.9 |
 | spectral flux | 2.8 |
-| **total** | **~56 µs = 0.34% of the budget** |
+| **total** | **~56 µs, 0.34% of the budget** |
 
-**The FFT is the only line a faster library touches, and a 2× faster FFT saves
-9 µs — 0.055% of the budget.** An *infinitely* fast analysis library saves 0.34%.
-That is the whole prize, and it is why no library choice here can be a
-performance decision.
+**The FFT is the only line a faster library touches, and halving it saves 9 µs.**
+An infinitely fast analysis library saves 0.34%. No library choice here can be a
+performance decision, so NumPy wins on being already present.
 
-Two consequences worth acting on:
+Measured against the one C library installable on this interpreter, NumPy is also
+simply faster — 0.056 ms against audioFlux's 0.203 ms for equivalent work. One
+small block is too little work for a C call to pay for itself; the time goes to
+call overhead and marshalling, not the FFT. Optimised C wins on batch throughput,
+which this is not. GIST, aubio, essentia and madmom were not benchmarked because
+none provides a usable binary here, and the 9 µs ceiling makes the result moot.
 
-- **The four band means cost nearly as much as the FFT**, because they are four
-  separate slice-and-mean calls rather than maths. Folding them into the mel
-  filterbank as extra rows makes the whole thing one matmul and saves ~14 µs —
-  more than a 2× FFT would, at no cost. The implementation must do this.
-- The performance decisions that actually matter in this feature are elsewhere:
-  drawing traces with `plot_lines` rather than `add_line` saves **2.3 ms**, which
-  is 25× the entire analysis budget, and running analysis off the frame loop
-  removes frame stalls as a category. Both are measured below.
+Two consequences the implementation must act on:
 
-### The measurement that was available
+- **The four band means cost nearly as much as the FFT** — they are four
+  slice-and-mean calls, not maths. Folding them into the mel filterbank as extra
+  rows makes it one matmul and saves ~14 µs, more than a 2× FFT would.
+- **The decisions that matter are elsewhere.** Drawing traces with `plot_lines`
+  rather than `add_line` saves **2.3 ms**, 25× the entire analysis budget, and
+  running analysis off the frame loop removes frame stalls as a category.
 
-The one C library installable here is also **slower** at this workload:
-
-| Per 2048-sample block at 48 kHz | mean | p99 |
-|---|---|---|
-| NumPy: `rfft` + 40 mel bins + 4 band energies + RMS + spectral flux | **0.056 ms** | 0.159 ms |
-| audioFlux: mel spectrogram + five spectral descriptors | 0.203 ms | — |
-
-One small block is too little work for a C call to pay for itself: the time goes
-to call overhead and array marshalling, not to the FFT. Optimised C wins on batch
-throughput — a whole song at once — and cannot win on one small block delivered
-tens of times a second. `np.fft` is pocketfft, the same lineage as the libraries
-below.
-
-**GIST was not benchmarked**, because it ships no Python binding for this
-interpreter and would need a C++ build plus a wrapper before a number existed.
-Its expected result is audioFlux's: a genuinely faster core reached through a
-crossing that costs more than the core saves. Given the 9 µs ceiling above, no
-plausible outcome changes the decision.
-
-### Licensing, as a constraint rather than a reason
-
-Not why NumPy was chosen — it would have been chosen on the table above alone —
-but it does rule several candidates out independently, and that is worth
-recording so the question is not reopened later.
-
-| Library | Licence | Py 3.12 / Windows |
-|---|---|---|
-| GIST | GPL-3.0 | source only |
-| aubio | GPL-3.0 | no wheel |
-| essentia | AGPL-3.0 | no distribution |
-| madmom | BSD-ish | build fails — needs Cython per install |
-| vamphost | BSD host | wheel exists; useful QM plugins are GPL and ship separately |
-| audioFlux | MIT code | wheel + DLL, but links `libfftw3f-3.dll` — **FFTW is GPL-2+** |
-| numpy | BSD | already a dependency |
-
-**Fluoddity is MIT** (`LICENSE`), and GPL is viral through linking, so GIST,
-aubio or essentia inside a distributed build would force the whole application —
-shaders included — to GPL-3.0. If Fluoddity is never distributed, none of this
-binds; the performance argument above still stands on its own.
-
-What NumPy genuinely cannot provide is **tempo/downbeat tracking** (a research
-problem; nothing permissive delivers it) and **stem separation** (Demucs-class,
-seconds per chunk, on the GPU the particles already saturate). Both are out of
-scope. The signal layer is shaped so an ONNX beat model could later publish a
-signal without the mapping layer changing, since `onnxruntime-directml` is
-already a dependency.
+Out of NumPy's reach: **tempo/downbeat tracking** and **stem separation**
+(Demucs-class, seconds per chunk, on the GPU the particles already saturate).
+Both are out of scope. The signal layer is shaped so an ONNX beat model could
+later publish a signal without the mapping layer changing, since
+`onnxruntime-directml` is already a dependency.
 
 ## Architecture
 
