@@ -88,6 +88,12 @@ Taken with the user during design, recorded so the reasoning survives.
 7. **A Source selector** names which brain the Inspector draws and the layer
    operations edit.
 8. **The Scale operation is unclamped and warns at the rail.**
+9. **`decode` and `encode` stay flat; fan-in normalisation is initialisation
+   only.** A gain folded into `decode` would be a cap on hidden→hidden weights,
+   not a normalisation, and would put a whole region out of reach of live
+   editing.
+10. **Two phases.** The layer stack ships first; the per-layer operations menu
+    and the Source selector follow. See "Phasing".
 
 ## Scope
 
@@ -104,10 +110,33 @@ caps.
 - Making `W_SCALE` adjustable. See "Follow-ups".
 - Fixing evaluation noise in the objective. Separate work.
 
+## Phasing
+
+Two phases, each shippable and verifiable alone. The split is along a real
+seam: phase 1 changes what a brain *is*, phase 2 changes what you can *do* to
+one. Phase 2 touches no layout, no signature, no archive and no optimizer.
+
+**Phase 0 — the float budget.** Section 0. Its own commit, verified alone.
+
+**Phase 1 — the layer stack.** Sections 1, 2, 3, 4 and 7, plus the RGB
+projection from section 6 and the measurement tool. At the end of it the stack
+is editable, every existing preset and archive still loads, sin and gelu
+entries can be rebuilt for the first time, and the Inspector shows the whole
+4-D response of a deep net. Tests 1–7, 9 and 10.
+
+**Phase 2 — editing a layer in place.** Section 5 in full, the Source selector
+from section 4, and `PREVIEW_BASE` from section 6. Test 8.
+
+Phase 2 depends on phase 1 only for the layer rows it hangs a context menu off.
+Nothing in phase 1 depends on phase 2 — the Inspector keeps drawing slot 0 with
+its existing labels until the Source selector arrives, exactly as it does
+today.
+
 ## Compatibility invariant
 
 **A depth-1 net is bit-identical to today's in every respect**: same parameter
-order, same length `9h + 4`, same decode gains, same signature string, same
+order, same length `9h + 4`, same decode, same initial draw for a given seed,
+same signature string, same
 shader path. Every existing genome, archive directory, config and checkpoint
 therefore keeps working by construction, and there is nothing to migrate.
 
@@ -206,7 +235,7 @@ accepted as input forever.
 schema. A hand-written list is what let two declared-but-never-read settings
 through before.
 
-### 2. Packing and decode gains
+### 2. Packing and initialisation
 
 Packing generalises today's order without changing it:
 
@@ -227,21 +256,34 @@ This offset formula now lives in both `mlp.py` and `mlp.glsl` — the
 `tile_lo_texel()` situation. The guard is a GPU-versus-NumPy parity test, not a
 second reading of the same comment.
 
-**Decode gains.** A hidden→hidden layer sums `w_{l-1}` terms rather than 4, so
-at the existing flat `W_SCALE = 2.0` its pre-activations grow like
-`sqrt(w_{l-1})` — several times the width of `tanh`'s useful range by width 16.
-A fresh deep brain would then be born as a sign function, and the optimizer
-would see a flat landscape. Fan-in normalisation fixes it, but applying it
-uniformly changes the depth-1 decode and breaks the compatibility invariant.
-So:
+**`decode` and `encode` stay flat.** Every weight is `W_SCALE · tanh(z)` and
+every bias `B_SCALE · tanh(z)`, in every layer, exactly as today. The full
+±`W_SCALE` range is therefore reachable in every layer, by the search and by
+hand alike, and the rail means one thing everywhere rather than a different
+thing per layer.
 
-- `W_1` and `W_out`: `W_SCALE · tanh(z)` — unchanged.
-- `W_l`, `l ≥ 2`: `W_SCALE · sqrt(4 / w_{l-1}) · tanh(z)`.
-- every bias: `B_SCALE · tanh(z)` — unchanged.
+The obvious alternative — folding a fan-in gain into `decode` — was rejected.
+It is not a normalisation but a *cap*: it would put hidden→hidden weights out
+of reach at `W_SCALE · sqrt(4 / 16) = 1.0` and make the parameterisation
+layer-dependent, which is the fence this design elsewhere refuses to build.
 
-Deliberately inconsistent: the layers that get normalisation are exactly the
-ones that do not exist at depth 1. `encode` divides by the same per-layer gain,
-so the round trip stays exact.
+**Fan-in normalisation belongs to initialisation.** A hidden→hidden layer sums
+`w_{l-1}` terms rather than 4, so a fresh deep brain drawn at today's sigma has
+pre-activations growing like `sqrt(w_{l-1})` — past the width of `tanh`'s
+useful range by width 16 — and would be born as a sign function with a flat
+landscape around it. `random()` therefore draws `z` in one call as it does now
+and then multiplies **only the hidden→hidden slices** by `sqrt(4 / fan_in)`.
+
+Two consequences worth stating. Depth 1 has no hidden→hidden slice, so its draw
+is untouched and bit-identical — the compatibility invariant needs no carve-out
+in the parameterisation. And this is a starting point, not a limit: the search,
+a reroll at any distribution, and the Scale operation can all take a layer
+anywhere inside the rails afterwards.
+
+The cost is conditioning. With a flat decode, a step in `z` moves a wide
+layer's contribution more than a narrow one's. CMA-ES adapts its covariance,
+which is precisely what that adaptation is for, so this is accepted rather than
+designed around.
 
 ### 3. Shader
 
@@ -311,10 +353,12 @@ carry the warning; the right-click menu carries none.
 - Rows use hidden `##` labels with a text prefix, and `layout.wrap_row()` for
   the `×`, per the label-clipping and duplicate-ID rules.
 
-**Source selector.** It names which brain the Inspector draws and which the
-layer operations edit, which is what dissolves the ambiguity of editing "the"
-brain when 64 cohorts each have their own. Which entries it offers is decided
-by the sim's state, not by the user, because only one of them exists at a time:
+**Source selector — phase 2.** It names which brain the Inspector draws and
+which the layer operations edit, which is what dissolves the ambiguity of
+editing "the" brain when 64 cohorts each have their own. Until it lands, the
+Inspector keeps drawing slot 0 and labelling what that means, as it does today.
+Which entries it offers is decided by the sim's state, not by the user, because
+only one of them exists at a time:
 
 | sim state | Source offers | editable |
 |---|---|---|
@@ -334,7 +378,7 @@ New `BrainState` fields: `source_kind`, `source_index`, `adopt_requested`
 `borrow_active` (pushed in by the orchestrator each frame, like
 `preview_tile0`).
 
-### 5. Layer operations
+### 5. Layer operations — phase 2
 
 Right-clicking a row opens a `begin_popup_context_item` menu in the physics
 panel's idiom, including its distance-based auto-close from
@@ -399,8 +443,8 @@ The warning is an instrument, not a fence. See "Follow-ups".
   slices stay scalar, where RGB has no meaning.
   Trap: `CHANNEL_RANDOM = len(CHANNELS) - 1` today. Both indices must be named
   explicitly rather than derived from the length.
-- **New `PREVIEW_BASE` uniform**, replacing the hardcoded `eval_brain(0u, x)`,
-  so the Inspector can draw whichever slot `Source` names.
+- **New `PREVIEW_BASE` uniform — phase 2**, replacing the hardcoded
+  `eval_brain(0u, x)`, so the Inspector can draw whichever slot `Source` names.
 
 Per-unit tiles re-run the forward pass, so the Inspector's redraw cost grows
 with depth. The measurement tool reports it.
@@ -459,8 +503,10 @@ In priority order.
    `test_label_widths` and `test_brain_window_render`'s id-clash check.
 8. **Layer ops** push to `RuleManager`, are refused during a borrow, and are
    greyed in tournament mode.
-9. **encode/decode round trip** for multi-layer stacks, including the per-layer
-   gain.
+9. **encode/decode round trip** for multi-layer stacks — flat and symmetric, so
+   every layer round-trips over the same range — plus that `random()`'s fan-in
+   normalisation touches only the hidden→hidden slices and leaves a depth-1
+   draw bit-identical.
 10. `rule_buffer` step-0 tests, updated to the new contract.
 
 ## Follow-ups
