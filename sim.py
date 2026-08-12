@@ -248,15 +248,12 @@ class Sim:
         tryset(self.entity_update_program, 'force_field_strength', force_field_strength)
         tryset(self.entity_update_program, 'strafe_field_strength', strafe_field_strength)
 
-        # Only write rules to buffer when explicitly requested (avoids 192MB/frame cost)
+        # Only write the brain when click-to-adopt asks for it.
         tryset(self.entity_update_program, 'WRITE_RULES', self._pending_rule_buffer_update)
-        # ...and only for the ONE particle that is about to be read back.
-        # readback_rule() takes a single entity's slice and nothing else ever
-        # reads this buffer, so writing all 600k was work thrown away. It is
-        # also no longer free: a brain now carries its mutation on read, so the
-        # write has to re-derive it per particle rather than store a struct that
-        # was already live in registers. Measured click cost 13.0 ms; 0.1 ms
-        # once only the adopted particle writes. -1 writes every particle.
+        # ...and only for the ONE particle that is about to be read back, which
+        # is the whole of that buffer. A brain carries its mutation on read, so
+        # writing all 600k would re-derive it per particle to produce bytes
+        # nobody looks at. Negative means no particle.
         tryset(self.entity_update_program, 'WRITE_RULES_INDEX',
                -1 if self._pending_entity_id is None
                else int(self._pending_entity_id))
