@@ -339,6 +339,15 @@ class MenuBarMixin:
                     self.state.archive.open_browser_requested = want
                 self._delayed_tooltip("Browse saved creatures and preview them live.")
 
+                # Live audio driving physics and brain parameters.
+                changed, want = imgui.checkbox(
+                    "Audio Reactive",
+                    self.state.audio.show_window
+                )
+                if changed:
+                    self.state.audio.show_window = want
+                self._delayed_tooltip("Bind live audio bands to physics and brain parameters.")
+
                 # Which function the particles' brains actually compute
                 _, self.state.brain.enabled = imgui.checkbox(
                     "Brain Modality",

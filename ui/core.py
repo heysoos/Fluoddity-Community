@@ -30,6 +30,7 @@ from .tournament_window import TournamentWindowMixin
 from .auto_tournament_window import AutoTournamentWindowMixin
 from .archive_window import ArchiveWindowMixin
 from .brain_window import BrainWindowMixin
+from .audio_reactive_window import AudioReactiveWindowMixin
 
 
 @dataclass
@@ -54,6 +55,7 @@ class UI(
     AutoTournamentWindowMixin,
     ArchiveWindowMixin,
     BrainWindowMixin,
+    AudioReactiveWindowMixin,
 ):
     """Passive UI - renders widgets, exposes state, handles no logic."""
 
@@ -703,6 +705,7 @@ class UI(
             self.render_tournament_window()
             self.render_archive_window()
             self.render_brain_window()
+            self.render_audio_reactive_window()
 
         if self.show_demo_window:
             imgui.show_demo_window()
