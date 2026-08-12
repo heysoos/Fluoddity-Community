@@ -1,8 +1,8 @@
 """One-time download of a vision encoder's ONNX assets.
 
-Stdlib only apart from the registry - this runs before onnxruntime is
+Downloads with the standard library - this runs before onnxruntime is
 necessarily importable, and three static URLs do not justify a huggingface_hub
-dependency.
+dependency. The registry is the one non-stdlib import, for the file map.
 
     python -m tools.fetch_models siglip2-b16
 """
@@ -12,7 +12,16 @@ import os
 import urllib.request
 from pathlib import Path
 
-from services.vision_models import get
+# The app has a pre-existing import cycle: services/__init__ -> config_saver ->
+# ui -> services.config_saver, which resolves only when `ui` is imported first.
+# Primed here because this module is also run standalone, before anything else
+# has imported ui. Optional: in-app, services is already initialised.
+try:
+    import ui  # noqa: F401
+except ImportError:                                     # pragma: no cover
+    pass
+
+from services.vision_models import get  # noqa: E402
 
 MODELS_ROOT = "models"
 
