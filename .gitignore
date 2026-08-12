@@ -51,3 +51,4 @@ runs/
 # Claude Code local state (worktrees, per-machine settings)
 .claude/settings.local.json
 .claude/worktrees/
+.superpowers/
