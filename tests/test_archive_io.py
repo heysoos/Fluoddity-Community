@@ -187,9 +187,9 @@ def test_a_run_id_cannot_write_outside_the_archive(tmp_path):
     s = ArchiveStore(tmp_path)
     s.save_run_config("../../escaped", '"x"')
     assert not (tmp_path.parent.parent / "escaped.json").exists()
-    # s.root, not tmp_path: the store lives in a subdirectory named for its
-    # brain layout signature.
-    assert list((s.root / "runs").glob("*.json"))
+    # s.base, not s.root: a run's physics belongs to the ARCHIVE, not to one
+    # of its brains, so it sits above the signature directory.
+    assert list((s.base / "runs").glob("*.json"))
 
 
 def test_run_configs_do_not_disturb_the_index_or_vectors(tmp_path):

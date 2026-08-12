@@ -1,19 +1,19 @@
-"""An archive belongs to ONE brain layout.
+"""A GENOME belongs to one brain layout; an archive holds every brain.
 
-A stored genome is a bare float vector; what those floats mean is decided
-entirely by the layout that produced them. Mixing two layouts in one archive
+A stored genome is a bare float vector, and what those floats mean is decided
+entirely by the layout that produced them. Mixing two layouts in one DIRECTORY
 does not error - it silently decodes a Gabor brain through the Fourier squash
 and scores the result, which is worse than a crash because the numbers look
-plausible all the way through.
+plausible all the way through. So the signature is part of the path.
 
-So the layout signature is part of the path, and every archive is opened
-alongside the layout it was written with.
+The archive above those directories is one archive: novelty, separation and
+admission all run on the CLIP embedding, and none of them reads a brain.
 """
 import numpy as np
 import pytest
 
 from services.archive import Archive
-from services.archive_io import ArchiveStore, migrate_to_signature_dir
+from services.archive_io import ArchiveStore, migrate_archive
 from services.archive_library import list_archives
 from services.brains import BrainLayout, default_layout
 
@@ -63,7 +63,7 @@ def test_a_legacy_archive_moves_into_the_fourier_signature(tmp_path):
     legacy = tmp_path / "default"
     _write_legacy(legacy)
 
-    moved = migrate_to_signature_dir(legacy)
+    moved = migrate_archive(legacy)
 
     assert moved == legacy / "fourier-n10"
     assert (moved / "index.jsonl").read_text() == '{"id": 0}\n'
@@ -77,15 +77,15 @@ def test_a_legacy_archive_moves_into_the_fourier_signature(tmp_path):
 def test_migration_is_idempotent(tmp_path):
     legacy = tmp_path / "default"
     _write_legacy(legacy)
-    first = migrate_to_signature_dir(legacy)
-    assert migrate_to_signature_dir(legacy) is None
+    first = migrate_archive(legacy)
+    assert migrate_archive(legacy) is None
     assert (first / "index.jsonl").is_file()
 
 
 def test_migration_of_an_empty_or_new_archive_does_nothing(tmp_path):
     empty = tmp_path / "fresh"
     empty.mkdir()
-    assert migrate_to_signature_dir(empty) is None
+    assert migrate_archive(empty) is None
 
 
 def test_migration_refuses_to_clobber_an_existing_signature_dir(tmp_path):
@@ -96,7 +96,7 @@ def test_migration_refuses_to_clobber_an_existing_signature_dir(tmp_path):
     (legacy / "fourier-n10").mkdir()
     (legacy / "fourier-n10" / "index.jsonl").write_text("keep\n", encoding="utf-8")
 
-    assert migrate_to_signature_dir(legacy) is None
+    assert migrate_archive(legacy) is None
     assert (legacy / "fourier-n10" / "index.jsonl").read_text() == "keep\n"
     assert (legacy / "index.jsonl").is_file()      # left where it was
 
@@ -107,7 +107,7 @@ def test_the_listing_counts_entries_inside_signature_dirs(tmp_path):
     """list_archives walks <root>/<name>/; the entries now live one level
     deeper, and counting only the top level reports every archive as empty."""
     _write_legacy(tmp_path / "default")
-    migrate_to_signature_dir(tmp_path / "default")
+    migrate_archive(tmp_path / "default")
 
     rows = {r["name"]: r for r in list_archives(tmp_path)}
     assert rows["default"]["entries"] == 1
@@ -157,3 +157,82 @@ def test_a_brain_survives_a_store_round_trip(tmp_path, layout):
                         want, np.zeros((1, 8), np.float32))
     got = store.load()[1]["brains"].reshape(1, -1)
     assert np.array_equal(got, want)
+
+
+# ---- what belongs to the archive rather than to one of its brains ---------
+
+def _sig_dir(root, sig="fourier-n10"):
+    d = root / sig
+    (d / "thumbs").mkdir(parents=True, exist_ok=True)
+    (d / "index.jsonl").write_text('{"id": 0}\n', encoding="utf-8")
+    return d
+
+
+def test_goals_settings_and_runs_move_up_out_of_a_layout(tmp_path):
+    """They belong to the ARCHIVE. One archive holds every brain, so a copy
+    filed beside each one is several answers to a question that has one."""
+    root = tmp_path / "arc"
+    d = _sig_dir(root)
+    (d / "goals.json").write_text("[]", encoding="utf-8")
+    (d / "settings.json").write_text('{"grid": 8}', encoding="utf-8")
+    (d / "runs").mkdir()
+    (d / "runs" / "r1.json").write_text('"x"', encoding="utf-8")
+
+    migrate_archive(root)
+
+    assert (root / "goals.json").is_file()
+    assert (root / "settings.json").read_text(encoding="utf-8") == '{"grid": 8}'
+    assert (root / "runs" / "r1.json").is_file()
+    for name in ("goals.json", "settings.json", "runs"):
+        assert not (d / name).exists(), f"{name} was copied, not moved"
+
+
+def test_the_store_reads_them_from_the_archive_not_the_layout(tmp_path):
+    """The paths and the migration have to agree, or it moves them somewhere
+    nothing looks."""
+    s = ArchiveStore(tmp_path / "arc", default_layout())
+    assert s.goals_path.parent == s.base
+    assert s.settings_path.parent == s.base
+    assert s.run_config_path("r1").parent.parent == s.base
+    assert s.index_path.parent == s.root
+    assert s.vectors_path.parent == s.root
+    assert s.thumb_path("000000.jpg").parent.parent == s.root
+
+
+def test_the_busiest_layout_s_settings_are_the_ones_the_archive_keeps(tmp_path,
+                                                                      capsys):
+    """NOT the newest. Switching brain creates an empty sibling and writes its
+    settings, so the directories with nothing in them are reliably the most
+    recently touched - mtime alone hands the archive the settings of a layout
+    that was never worked in."""
+    import os
+    import time
+
+    root = tmp_path / "arc"
+    worked_in = _sig_dir(root, "fourier-n10")
+    worked_in.joinpath("index.jsonl").write_text(
+        "".join('{"id": %d}\n' % i for i in range(50)), encoding="utf-8")
+    passed_through = _sig_dir(root, "gabor-n12")     # one row, created later
+    (worked_in / "settings.json").write_text('{"grid": 4}', encoding="utf-8")
+    (passed_through / "settings.json").write_text('{"grid": 8}', encoding="utf-8")
+    past = time.time() - 600
+    os.utime(worked_in, (past, past))
+
+    migrate_archive(root)
+
+    assert (root / "settings.json").read_text(encoding="utf-8") == '{"grid": 4}'
+    assert (passed_through / "settings.json").is_file(), "the loser stays put"
+    assert "stay where they are" in capsys.readouterr().out
+
+
+def test_a_legacy_archive_lands_with_its_goals_at_the_top(tmp_path):
+    """Both directions in one pass: entries down, goals up."""
+    legacy = tmp_path / "default"
+    _write_legacy(legacy)
+    (legacy / "goals.json").write_text("[]", encoding="utf-8")
+
+    migrate_archive(legacy)
+
+    assert (legacy / "fourier-n10" / "index.jsonl").is_file()
+    assert (legacy / "goals.json").is_file()
+    assert not (legacy / "fourier-n10" / "goals.json").exists()

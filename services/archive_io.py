@@ -35,9 +35,9 @@ _OPTIONAL_ARRAY_KEYS = ("novelty",)
 
 
 class ArchiveStore:
-    def __init__(self, root, layout=None):
-        """`root` is the named archive's directory; the store lives in a
-        subdirectory named for the BRAIN LAYOUT signature.
+    def __init__(self, root, layout=None, signature: str | None = None):
+        """`root` is the named archive; ENTRIES live one level down, in a
+        directory named for the BRAIN LAYOUT signature.
 
         A stored genome is a bare float vector and the layout is the only thing
         that says what those floats mean. Two layouts sharing a directory does
@@ -45,11 +45,25 @@ class ArchiveStore:
         scores the result, which is worse than a crash because every number
         along the way looks reasonable. The signature in the path makes the
         mistake unrepresentable rather than merely unlikely.
+
+        Everything that belongs to the ARCHIVE rather than to one of its brains
+        - the goals, the Explore settings, each run's physics - stays at
+        `root`. One archive holds entries of every brain, so a per-brain copy
+        of those would be several answers to a question with one.
+
+        `signature` names the layout directory when there is no BrainLayout to
+        hand, which is how the archive reaches a sibling brain's entries.
         """
         from services.brains import default_layout
 
-        self.layout = layout or default_layout()
-        self.root = Path(root) / self.layout.signature()
+        self.base = Path(root)
+        if signature is None:
+            self.layout = layout or default_layout()
+            self.signature = self.layout.signature()
+        else:
+            self.layout = layout
+            self.signature = str(signature)
+        self.root = self.base / self.signature
         self.enabled = True
         self._fh = None
         try:
@@ -61,6 +75,7 @@ class ArchiveStore:
             print(f"[Archive] persistence disabled ({exc}); the run continues")
 
     # ---- paths ---------------------------------------------------------
+    # Per LAYOUT: the entries and their pictures.
 
     @property
     def index_path(self) -> Path:
@@ -70,19 +85,21 @@ class ArchiveStore:
     def vectors_path(self) -> Path:
         return self.root / "vectors.npz"
 
-    @property
-    def goals_path(self) -> Path:
-        return self.root / "goals.json"
-
-    @property
-    def settings_path(self) -> Path:
-        return self.root / "settings.json"
-
     def thumb_path(self, name: str) -> Path:
         return self.root / "thumbs" / name
 
+    # Per ARCHIVE: everything that is not a genome.
+
+    @property
+    def goals_path(self) -> Path:
+        return self.base / "goals.json"
+
+    @property
+    def settings_path(self) -> Path:
+        return self.base / "settings.json"
+
     def run_config_path(self, run_id: str) -> Path:
-        return self.root / "runs" / f"{safe_stem(run_id)}.json"
+        return self.base / "runs" / f"{safe_stem(run_id)}.json"
 
     # ---- writing -------------------------------------------------------
 
@@ -311,47 +328,102 @@ class ArchiveStore:
             self._fh = None
 
 
-# Every member of a store, because every one of them now resolves inside the
-# signature directory. A member missing from this list is left at the top level
-# where nothing will ever read it again: the Explore settings would silently
-# revert to defaults, and `runs` would take each entry's physics with it.
-_LEGACY_MEMBERS = ("index.jsonl", "vectors.npz", "goals.json", "settings.json",
-                   "thumbs", "runs")
+# What belongs to a LAYOUT: the entries and their pictures. These move DOWN.
+_LAYOUT_MEMBERS = ("index.jsonl", "vectors.npz", "thumbs")
+# What belongs to the ARCHIVE: everything that is not a genome. These move UP.
+_ARCHIVE_MEMBERS = ("goals.json", "settings.json", "runs")
 
 
-def migrate_to_signature_dir(archive_dir) -> Path | None:
-    """Move a pre-modality archive down into `<archive_dir>/fourier-n10/`.
+def signature_dirs(archive_dir) -> list[Path]:
+    """Every layout directory under one named archive, oldest name first.
 
-    `archive_dir` is one NAMED archive - the directory that used to hold
-    index.jsonl directly. Everything written before brain modalities was Fourier
-    at 10 centres, so that is the signature it lands under.
+    A directory is a layout's if it holds an index; that is the one member a
+    store always creates, and it keeps `thumbs` from an unmigrated archive out
+    of the list.
+    """
+    try:
+        return sorted((p for p in Path(archive_dir).iterdir()
+                       if p.is_dir() and (p / "index.jsonl").is_file()),
+                      key=lambda p: p.name)
+    except OSError:
+        return []
 
-    A move, not a copy: an archive runs to hundreds of megabytes of thumbnails.
 
-    -> the new directory, or None if there was nothing to do. Distinct from
-    utilities.paths.migrate_legacy_archive, which moves the whole pre-2026-08-08
-    archive under archives/default; this one is the level below.
+def _count_rows(sig_dir) -> int:
+    """Index rows in one layout directory. Cheap, and only used to decide which
+    layout's shared files the archive keeps."""
+    try:
+        with open(sig_dir / "index.jsonl", "r", encoding="utf-8") as fh:
+            return sum(1 for line in fh if line.strip())
+    except OSError:
+        return 0
+
+
+def migrate_archive(archive_dir) -> Path | None:
+    """Put one named archive into the layout it is read in. -> what moved, or None.
+
+    Two directions, because the split has two halves:
+
+    DOWN - a pre-modality archive held index.jsonl at the top level. Everything
+    written before brains were swappable is Fourier at 10 centres, so that is
+    the signature it lands under.
+
+    UP - goals, settings and each run's physics belong to the ARCHIVE, and an
+    earlier build filed them beside the entries. One archive holds every brain,
+    so a per-brain copy of those is several answers to a question that has one.
+
+    Moves, never copies: an archive runs to hundreds of megabytes of thumbnails.
+
+    Distinct from utilities.paths.migrate_legacy_archive, which moves the whole
+    pre-2026-08-08 archive under archives/default; this one is the level below.
     """
     from services.brains import default_layout
 
     base = Path(archive_dir)
-    target = base / default_layout().signature()
+    moved = None
     try:
-        present = [m for m in _LEGACY_MEMBERS if (base / m).exists()]
-        if not present:
-            return None                 # already migrated, or a fresh archive
-        if target.exists():
-            # A restored backup sitting beside an already-migrated archive.
-            # Swallowing it into a directory that has contents would merge two
-            # unrelated runs, so leave both exactly where they are.
-            print(f"[Archive] {base.name}: legacy files found beside an "
-                  f"existing {target.name}; left in place")
-            return None
-        target.mkdir(parents=True)
-        for name in present:
-            os.replace(base / name, target / name)
+        present = [m for m in _LAYOUT_MEMBERS if (base / m).exists()]
+        if present:
+            target = base / default_layout().signature()
+            if target.exists():
+                # A restored backup sitting beside an already-migrated archive.
+                # Swallowing it into a directory that has contents would merge
+                # two unrelated runs, so leave both exactly where they are.
+                print(f"[Archive] {base.name}: legacy files found beside an "
+                      f"existing {target.name}; left in place")
+            else:
+                target.mkdir(parents=True)
+                for name in present:
+                    os.replace(base / name, target / name)
+                print(f"[Archive] {base.name}: entries moved into {target.name}")
+                moved = target
+
+        # BUSIEST layout first, then newest. Not mtime alone: switching brain
+        # creates an empty sibling and writes its settings, so the directories
+        # with nothing in them are reliably the most recently touched, and
+        # mtime hands the archive the settings of a layout never worked in.
+        # The losers stay put and say so - merging two settings files silently
+        # is worse than picking one loudly.
+        skipped = []
+        for sub in sorted(signature_dirs(base),
+                          key=lambda p: (_count_rows(p), p.stat().st_mtime),
+                          reverse=True):
+            for name in _ARCHIVE_MEMBERS:
+                src = sub / name
+                if not src.exists():
+                    continue
+                if (base / name).exists():
+                    skipped.append(f"{sub.name}/{name}")
+                    continue
+                os.replace(src, base / name)
+                print(f"[Archive] {base.name}: {name} moved up from {sub.name}")
+                moved = moved or base
+        if skipped:
+            print(f"[Archive] {base.name}: the archive already had one, so "
+                  f"{len(skipped)} spare copies stay where they are "
+                  f"({', '.join(skipped[:4])}"
+                  f"{', ...' if len(skipped) > 4 else ''})")
     except OSError as exc:
         print(f"[Archive] could not migrate {base.name} ({exc}); left in place")
         return None
-    print(f"[Archive] {base.name}: moved into {target.name}")
-    return target
+    return moved

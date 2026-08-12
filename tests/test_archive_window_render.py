@@ -73,6 +73,17 @@ class _FakeArchive:
         # fake without one would silently exercise the getattr fallback instead
         # of the path that actually ships.
         self.revision = 0
+        self.signature = "fourier-n10"
+
+    def layout_at(self, i):
+        return getattr(self.entries[i], "layout", "") or self.signature
+
+    def is_native(self, i):
+        return self.layout_at(i) == self.signature
+
+    def thumb_key(self, i):
+        t = getattr(self.entries[i], "thumb", "")
+        return f"{self.layout_at(i)}/{t}" if t else ""
 
     def __len__(self):
         return len(self.entries)
@@ -735,8 +746,7 @@ def test_the_hover_card_renders_with_a_thumbnail(gui):
             return _FakeTex()
 
     h.thumb_cache = _Cache()
-    entry = h.archive_obj.entries[0]
-    assert frame(lambda: h._map_hover_card(entry)) > host_only()
+    assert frame(lambda: h._map_hover_card(h.archive_obj, 0)) > host_only()
 
 
 def test_the_hover_card_renders_without_a_thumbnail(gui):
@@ -744,8 +754,7 @@ def test_the_hover_card_renders_without_a_thumbnail(gui):
     unbalanced tooltip stack takes the whole frame down, not just the card."""
     h = Harness(archive=_populated())
     h.thumb_cache = None
-    entry = h.archive_obj.entries[0]
-    assert frame(lambda: h._map_hover_card(entry)) > host_only()
+    assert frame(lambda: h._map_hover_card(h.archive_obj, 0)) > host_only()
 
 
 # ---- the browser must not redo O(n) work every frame --------------------

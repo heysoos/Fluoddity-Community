@@ -799,11 +799,57 @@ class CommandHandler:
         if self.archive_store.save_run_config(run_id, cfg.to_json()):
             self._run_physics_written = run_id
 
-    def _archive_index(self, entry_id):
-        for i, e in enumerate(self.archive.entries):
-            if e.id == int(entry_id):
-                return i
-        return None
+    def _archive_index(self, row):
+        """The browser's one-shots address entries by ROW, not by id.
+
+        An id is unique inside one layout's directory and nowhere else - one
+        archive now holds every brain, and two of them each hold an entry 0 -
+        so a bare id cannot name an entry here.
+        """
+        r = int(row)
+        return r if 0 <= r < len(self.archive.entries) else None
+
+    def _adopt_foreign_entry(self, ui_state, row) -> bool:
+        """Switch to the brain this entry belongs to and run it. -> did it.
+
+        The same handoff a cross-brain config load uses: stash the genome
+        against its signature, point the Brain window at that modality, and
+        _handle_brain_layout - which runs later in this very frame - performs
+        the switch and applies it.
+
+        Without the modality's own settings the layout is rebuilt from its
+        defaults, so an entry authored under non-default decode scales lands
+        under the defaults. The signature is checked either way, so it either
+        matches and runs or it does not switch at all.
+        """
+        bst = getattr(ui_state, "brain", None)
+        if bst is None or self.apply_brain_layout is None:
+            return False
+        sig = self.archive.layout_at(row)
+        from ui.brain_window import layout_for
+
+        modality = sig.split("-")[0]
+        if layout_for(modality, {}).signature() != sig:
+            ui_state.archive.warning = (
+                f"#{self.archive.entries[row].id} is a {sig} brain, which is "
+                f"not {modality}'s current shape; switch by hand in the Brain "
+                f"window.")
+            return True
+        self._pending_brain_rule = (
+            np.asarray(self.archive.brain_at(row), dtype=np.float32).copy(), sig)
+        bst.modality = modality
+        bst.settings = {}
+        ui_state.archive.notice = (
+            f"Switched to {sig} and loaded #{self.archive.entries[row].id}.")
+        return True
+
+    def _foreign_notice(self, i) -> str:
+        """Why an entry of another brain cannot be decoded here, or ""."""
+        if self.archive.is_native(i):
+            return ""
+        return (f"#{self.archive.entries[i].id} is a "
+                f"{self.archive.layout_at(i)} brain; switch to it in the Brain "
+                f"window to run or export this one.")
 
     # ---- live preview of an archive entry -----------------------------
 
@@ -837,6 +883,13 @@ class CommandHandler:
             # committing is dropping the restore point, not applying anything.
             entry_id = ast.load_entry_id
             ast.load_entry_id = -1
+            # The one action that crosses to another brain, because it is
+            # explicit. Hand the genome to the switch the way a cross-brain
+            # config load does, and let _handle_brain_layout apply both.
+            row = self._archive_index(entry_id)
+            if row is not None and not self.archive.is_native(row):
+                if self._adopt_foreign_entry(ui_state, row):
+                    return
             if self._archive_preview_id != entry_id:
                 self._show_archive_preview(ui_state, entry_id)
             self._archive_preview_id = -1
@@ -884,6 +937,12 @@ class CommandHandler:
 
         i = self._archive_index(entry_id)
         if i is None:
+            return
+        # Another brain's genome cannot be run here, and this fires every frame
+        # from the pointer position - a layout switch on hover would tear down
+        # and rebuild the archive under the cursor. Silent: the browser greys
+        # the row, and a notice per hovered pixel is not feedback.
+        if not self.archive.is_native(i):
             return
         sim_state = ui_state.sim
         entry = self.archive.entries[i]
@@ -946,12 +1005,14 @@ class CommandHandler:
                 f"Entry #{entry_id} is no longer in the archive.")
             return
         e = self.archive.entries[i]
-        # The ARCHIVE's layout, not the sim's: its brains are stored decoded
-        # under it, and an archive is keyed by signature so the two can differ.
-        # Both of these defaulted to Fourier, so exporting a Gabor entry
-        # re-encoded it through Fourier's squash and wrote the result out.
+        warn = self._foreign_notice(i)
+        if warn:
+            # Exporting re-encodes, and re-encoding under the wrong squash
+            # writes out a different creature than the one on screen.
+            ui_state.archive.warning = warn
+            return
         layout = self.archive.layout
-        z, _clamped = encode(self.archive.brains[i], layout)
+        z, _clamped = encode(self.archive.brain_at(i), layout)
         sim_state = ui_state.sim
         if "physics" in e.spec:
             # Archive physics is stored ABSOLUTE, so no origin is needed here.
@@ -978,9 +1039,13 @@ class CommandHandler:
             ast.warning = ("'Seed a run from here' applies to the Auto (CLIP) "
                            "tab; Explore picks its own parents from the archive.")
             return
-        # The ARCHIVE's layout, as in _save_archive_entry: its brains are
-        # stored decoded under it, and the fallback is Fourier.
-        z, _ = encode(self.archive.brains[i], self.archive.layout)
+        warn = self._foreign_notice(i)
+        if warn:
+            # An x0 is the optimizer's mean, so it has to be a genome this
+            # search can decode and mutate.
+            ast.warning = warn
+            return
+        z, _ = encode(self.archive.brain_at(i), self.archive.layout)
         self.auto_service.set_x0(z)
         ast.notice = (f"Auto mode's search will start from #{ast.seed_entry_id} "
                       "on its next generation.")

@@ -71,6 +71,12 @@ class ArchiveEntry:
     tile: int
     ts: float
     thumb: str = ""
+    # The BRAIN this entry's genome belongs to, as a layout signature. Set at
+    # load time from the directory it was read out of, and deliberately not
+    # written to index.jsonl: the directory already says it, and adding a
+    # column to an append-only file that older builds also write is a
+    # migration for nothing.
+    layout: str = ""
 
 
 # Minimum cosine distance between two stored entries; 0 disables the rule.
@@ -113,11 +119,33 @@ class Archive:
         # other modality has - Gabor is 14 floats a filter, MLP is not a grid at
         # all. Every consumer already flattens before use (genome_spec.encode
         # reshapes internally), so the 2D form bought nothing.
-        self._brain = np.zeros((0, self.layout.length), dtype=np.float32)
+        #
+        # ONE array, as wide as the widest layout present, rather than an array
+        # per layout with a row map: a brain is at most MAX_BRAIN_FLOATS wide,
+        # so the padding a mixed archive carries is bounded and small, and the
+        # swap-with-last in _remove stays a single assignment. The width grows
+        # when a wider layout arrives; an archive of one layout is exactly as
+        # wide as it has always been. brain_at() trims to the entry's own
+        # length, so nothing downstream ever sees the padding.
+        self._bw = int(self.layout.length)
+        self._brain = np.zeros((0, self._bw), dtype=np.float32)
         self._phys = np.zeros((0, 8), dtype=np.float32)
         self._n = 0
 
-        self._next_id = 0
+        # Per SIGNATURE, because an id is unique within the directory that
+        # holds it and nowhere else. Two layouts each hold an entry 0.
+        self._next_ids: dict[str, int] = {}
+        # Signature -> the store that owns those entries' index, vectors and
+        # thumbnails. self.store is the running layout's, and is in here too.
+        self._stores: dict[str, object] = {}
+        # Signature -> genome width, learned from the layout or from the array
+        # that was loaded. Parsing it back out of a signature string would be
+        # guessing at a format that belongs to the modality.
+        self._widths: dict[str, int] = {}
+        if store is not None:
+            sig = self.signature
+            self._stores[sig] = store
+            self._widths[sig] = int(self.layout.length)
         self._refresh_cursor = 0
         self._since_flush = 0
         # Bumped by anything that changes what a viewer would draw (entries or
@@ -143,7 +171,54 @@ class Archive:
         return self._emb[: self._n]
 
     @property
+    def signature(self) -> str:
+        """The RUNNING layout. Entries of any other are read-only here."""
+        return self.layout.signature()
+
+    def layout_at(self, i: int) -> str:
+        """The signature of entry `i`'s brain."""
+        return self.entries[i].layout or self.signature
+
+    def is_native(self, i: int) -> bool:
+        """Can the running brain decode entry `i`? Everything that turns a
+        stored genome back into a creature has to ask."""
+        return self.layout_at(i) == self.signature
+
+    def native_rows(self) -> np.ndarray:
+        """Row indices the running brain can decode, in archive order.
+
+        Parent sampling and seed selection filter through this: novelty ranks
+        across every brain, because it is about pictures, but a parent has to
+        be decodable by the optimizer that will mutate it.
+        """
+        sig = self.signature
+        return np.array([i for i, e in enumerate(self.entries)
+                         if (e.layout or sig) == sig], dtype=np.int64)
+
+    @property
+    def stores(self) -> dict:
+        """Signature -> the store owning those entries. The thumbnail loader
+        resolves through this, because a filename alone names one per brain."""
+        return self._stores
+
+    def thumb_key(self, i: int) -> str:
+        """ThumbCache key for entry `i`. Every brain has a 000000.jpg."""
+        t = self.entries[i].thumb
+        return f"{self.layout_at(i)}/{t}" if t else ""
+
+    def brain_at(self, i: int) -> np.ndarray:
+        """Entry `i`'s genome, trimmed to its own layout's width."""
+        w = self._widths.get(self.layout_at(i), self._bw)
+        return self._brain[i, :w]
+
+    @property
     def brains(self) -> np.ndarray:
+        """Every genome, padded to the widest layout present.
+
+        Only persistence wants this. Anything that decodes must use brain_at(),
+        which trims to the entry's own width - a padded Gabor vector run
+        through Fourier's squash is a different creature, silently.
+        """
         return self._brain[: self._n]
 
     @property
@@ -309,17 +384,22 @@ class Archive:
     def _add(self, cand, novelty, source, pinned, thumb_crop) -> ArchiveEntry | None:
         # No eviction here - pruning is a once-per-generation bulk pass
         # (prune_to_capacity), so len() may exceed capacity briefly.
+        # Admission always writes the RUNNING brain: a candidate came off this
+        # generation's tiles.
+        sig = self.signature
         self._grow(1)
         i = self._n
         self._emb[i] = cand.embedding
         # Flattened on the way in: Fourier candidates arrive as (10, 8) because
         # genome_spec.decode preserves that shape for its legacy callers.
-        self._brain[i] = np.asarray(cand.brain, dtype=np.float32).reshape(-1)
+        flat = np.asarray(cand.brain, dtype=np.float32).reshape(-1)
+        self._brain[i] = 0.0
+        self._brain[i, :len(flat)] = flat
         self._phys[i] = cand.physics
         self._n += 1
 
-        eid = self._next_id
-        self._next_id += 1
+        eid = self._next_ids.get(sig, 0)
+        self._next_ids[sig] = eid + 1
         thumb = ""
         if thumb_crop is not None and self.store is not None:
             thumb = self.store.write_thumb(eid, thumb_crop)
@@ -328,11 +408,15 @@ class Archive:
             id=eid, novelty=float(novelty), liveness=float(cand.liveness),
             pinned=bool(pinned), source=source, spec=cand.spec, goal=cand.goal,
             run_id=cand.run_id, gen=int(cand.gen), tile=int(cand.tile),
-            ts=time.time(), thumb=thumb,
+            ts=time.time(), thumb=thumb, layout=sig,
         )
         self.entries.append(entry)
         if self.store is not None:
-            self.store.append_index(asdict(entry))
+            # WITHOUT `layout`: the directory the row lands in already says it,
+            # and older builds append to the same file.
+            row = asdict(entry)
+            row.pop("layout", None)
+            self.store.append_index(row)
         self._since_flush += 1
         self.revision += 1
         return entry
@@ -369,8 +453,13 @@ class Archive:
 
     def _remove(self, i: int) -> None:
         # Thumbnail goes with the entry - nothing could reach it afterwards.
-        if self.store is not None:
-            self.store.delete_thumb(self.entries[i].thumb)
+        # From the entry's OWN store: pruning ranks across brains, so the row
+        # being evicted need not belong to the one that is running, and
+        # deleting through self.store would unlink some other brain's picture
+        # that happens to share the filename.
+        owner = self._stores.get(self.layout_at(i))
+        if owner is not None:
+            owner.delete_thumb(self.entries[i].thumb)
         last = self._n - 1
         if i != last:
             self._emb[i] = self._emb[last]
@@ -382,6 +471,20 @@ class Archive:
         self.revision += 1
         if self._refresh_cursor > self._n:
             self._refresh_cursor = 0
+
+    def _widen(self, width: int) -> None:
+        """Make room for a layout wider than any seen so far.
+
+        Padding, never reinterpretation: existing rows keep their values at
+        their own width and brain_at() trims each back to it.
+        """
+        width = int(width)
+        if width <= self._bw:
+            return
+        b = np.zeros((len(self._brain), width), dtype=self._brain.dtype)
+        b[:, : self._bw] = self._brain
+        self._brain = b
+        self._bw = width
 
     def _grow(self, extra: int) -> None:
         need = self._n + int(extra)
@@ -396,32 +499,88 @@ class Archive:
             return b
 
         self._emb = _re(self._emb, (self._dim,))
-        self._brain = _re(self._brain, (self.layout.length,))
+        self._brain = _re(self._brain, (self._bw,))
         self._phys = _re(self._phys, (8,))
 
     # ---- persistence ---------------------------------------------------
 
     def maybe_flush(self, every: int = 200, force: bool = False) -> bool:
+        """Rewrite the vector arrays, ONE FILE PER LAYOUT.
+
+        A signature directory holds only its own brain's entries, at its own
+        genome width, so a single-layout archive's vectors.npz is byte-for-byte
+        what it has always been. Every layout is rewritten, not just the
+        running one: pruning evicts across brains, so a generation can remove
+        rows from a layout nothing has admitted to.
+        """
         if self.store is None:
             return False
         if not force and self._since_flush < int(every):
             return False
-        ids = np.array([e.id for e in self.entries], dtype=np.int64)
-        nov = np.array([e.novelty for e in self.entries], dtype=np.float32)
-        self.store.flush_vectors(ids, self.embeddings, self.brains,
-                                 self.physics, nov)
+        rows: dict[str, list[int]] = {}
+        for i in range(self._n):
+            rows.setdefault(self.layout_at(i), []).append(i)
+        for sig, store in self._stores.items():
+            idx = np.array(rows.get(sig, []), dtype=np.int64)
+            w = self._widths.get(sig, self._bw)
+            store.flush_vectors(
+                np.array([self.entries[i].id for i in idx], dtype=np.int64),
+                self._emb[idx],
+                self._brain[idx][:, :w],
+                self._phys[idx],
+                np.array([self.entries[i].novelty for i in idx],
+                         dtype=np.float32),
+            )
         self._since_flush = 0
         return True
 
     def load_from_store(self) -> tuple[int, int]:
-        """-> (loaded, dropped). index.jsonl is the authority for WHICH entries
-        exist; vectors.npz supplies their arrays. Keeping only the intersection
-        means a crash between the last flush and quit costs the trailing
-        entries, never the archive."""
+        """Load EVERY brain's entries under this archive. -> (loaded, dropped).
+
+        An archive is a library of pictures with a genome attached, and only
+        the genome is per-brain: novelty, separation, admission and the map all
+        run on the embedding. So one archive holds every layout, and only the
+        four things that decode ask which.
+
+        The running layout is loaded first, so a single-layout archive keeps
+        exactly the row order it has always had.
+        """
         if self.store is None:
             return 0, 0
-        rows, arrays = self.store.load()
+        from services.archive_io import ArchiveStore, signature_dirs
+
+        self._n = 0
+        self.entries = []
+        loaded = dropped = 0
+        sigs = [self.signature] + [
+            p.name for p in signature_dirs(self.store.base)
+            if p.name != self.signature]
+        for sig in sigs:
+            store = self._stores.get(sig)
+            if store is None:
+                store = ArchiveStore(self.store.base, signature=sig)
+                self._stores[sig] = store
+            got, lost = self._load_one(sig, store)
+            loaded += got
+            dropped += lost
+
+        # Unconditional, and now ACROSS brains: an entry's stored novelty was
+        # scored against however much archive existed at admission, under one
+        # layout. See CLAUDE.md.
+        self.rescore_all()
+        if dropped:
+            print(f"[Archive] dropped {dropped} entries with no matching "
+                  "index/vector row")
+        return loaded, dropped
+
+    def _load_one(self, sig: str, store) -> tuple[int, int]:
+        """Append one layout directory's entries. -> (loaded, dropped)."""
+        rows, arrays = store.load()
         by_id = {int(r["id"]): r for r in rows if isinstance(r, dict) and "id" in r}
+        # From the INDEX (every id ever issued under this layout), not from the
+        # surviving entries - else the counter restarts at the first lost id
+        # and the next run re-issues ids that already exist. See CLAUDE.md.
+        self._next_ids[sig] = max(by_id, default=-1) + 1
         if not arrays or not by_id:
             return 0, len(by_id)
 
@@ -433,10 +592,17 @@ class Archive:
         # though the signature in the path should make that unreachable.
         brains = np.asarray(arrays["brains"], dtype=np.float32)
         brains = brains.reshape(len(brains), -1) if len(brains) else brains
-        if brains.shape[1:] != (self.layout.length,):
-            print(f"[Archive] brains are {brains.shape[1:]}, this layout wants "
-                  f"({self.layout.length},); ignoring the stored brains")
-            brains = np.zeros((len(ids), self.layout.length), dtype=np.float32)
+        want = self._widths.get(sig)
+        if want is not None and brains.shape[1:] != (want,):
+            print(f"[Archive] {sig} brains are {brains.shape[1:]}, that layout "
+                  f"wants ({want},); ignoring the stored brains")
+            brains = np.zeros((len(ids), want), dtype=np.float32)
+        # A sibling layout's width is whatever it stored: nothing here can
+        # rebuild its BrainLayout from a directory name, and nothing needs to -
+        # brain_at() trims to this and only the modality decodes it.
+        width = int(brains.shape[1]) if brains.size else int(want or 0)
+        self._widths.setdefault(sig, width)
+        self._widen(width)
         phys = np.asarray(arrays["physics"], dtype=np.float32)
         # vectors.npz is the authority for novelty when it carries it - the
         # index row only ever holds the at-admission value. Older archives
@@ -448,13 +614,12 @@ class Archive:
         keep = [j for j, i in enumerate(ids) if int(i) in by_id]
         dropped = (len(ids) - len(keep)) + (len(by_id) - len(keep))
 
-        self._n = 0
-        self.entries = []
         self._grow(len(keep))
         for j in keep:
             i = self._n
             self._emb[i] = emb[j]
-            self._brain[i] = brains[j]
+            self._brain[i] = 0.0
+            self._brain[i, :brains.shape[1]] = brains[j]
             self._phys[i] = phys[j]
             self._n += 1
             r = by_id[int(ids[j])]
@@ -472,17 +637,6 @@ class Archive:
                 tile=int(r.get("tile", 0)),
                 ts=float(r.get("ts", 0.0)),
                 thumb=str(r.get("thumb", "")),
+                layout=sig,
             ))
-        # From the INDEX (every id ever issued), not from the surviving
-        # entries (only those still backed by vectors.npz) - else the counter
-        # restarts at the first lost id and the next run re-issues ids that
-        # already exist, overwriting those entries' thumbnails. See CLAUDE.md.
-        self._next_id = max(by_id, default=-1) + 1
-        # Unconditional even when the file carried a novelty array: only a
-        # whole-archive pass is guaranteed fresh, and load is the one moment
-        # it is affordable. See CLAUDE.md.
-        self.rescore_all()
-        if dropped:
-            print(f"[Archive] dropped {dropped} entries with no matching "
-                  "index/vector row")
         return len(keep), dropped

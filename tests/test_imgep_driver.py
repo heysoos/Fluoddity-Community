@@ -672,14 +672,37 @@ def test_a_noise_magnet_loses_the_seed_to_the_distractor_set():
 
 
 def test_the_seed_falls_back_to_nearest_when_there_is_nothing_to_contrast():
+    """With no references the objective collapses to raw alignment - but still
+    over NATIVE rows only, and it must return an archive row rather than a
+    position within the filtered subset."""
+    import numpy as _np
+
     d, arc, _ = seeded_wide(expansion_between=0)
     goal = arc.embeddings[2].copy()
+    rows = _np.arange(len(arc.embeddings), dtype=_np.int64)
     d.archive = type("A", (), {
         "embeddings": arc.embeddings,
         "centroid": staticmethod(lambda: None),
-        "nearest": staticmethod(lambda g: 2),
+        "native_rows": staticmethod(lambda: rows),
     })()
     assert d._seed_index(goal, "latent") == 2
+
+
+def test_the_seed_is_an_archive_row_even_when_the_running_brain_is_a_minority():
+    """The filtered index is not the archive index. Returning the position
+    within native_rows() seeds the optimizer on whatever entry happens to sit
+    at that row - silently, and only in a mixed archive."""
+    import numpy as _np
+
+    d, arc, _ = seeded_wide(expansion_between=0)
+    goal = arc.embeddings[3].copy()
+    rows = _np.array([3], dtype=_np.int64)          # one native row, high up
+    d.archive = type("A", (), {
+        "embeddings": arc.embeddings,
+        "centroid": staticmethod(lambda: None),
+        "native_rows": staticmethod(lambda: rows),
+    })()
+    assert d._seed_index(goal, "latent") == 3
 
 
 def test_an_empty_archive_has_no_seed():

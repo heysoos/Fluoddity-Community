@@ -629,7 +629,7 @@ class ArchiveWindowMixin:
         step = self._THUMB + imgui.get_style().item_spacing.x
         per_row = max(1, int(imgui.get_content_region_avail().x / step))
         for n, (i, e) in enumerate(self._sorted_entries(ast, arc)[:240]):
-            tex = cache.get(e.thumb) if cache is not None else None
+            tex = cache.get(arc.thumb_key(i)) if cache is not None else None
             if tex is not None:
                 imgui.image(imgui.ImTextureRef(tex.glo),
                             imgui.ImVec2(self._THUMB, self._THUMB))
@@ -639,18 +639,26 @@ class ArchiveWindowMixin:
                 imgui.set_tooltip(
                     f"#{e.id}  {e.source}\nnovelty {e.novelty:.3f}\n"
                     f"liveness {e.liveness:.3f}\ngoal: {e.goal or '-'}")
-                ast.preview_entry_id = e.id
+                ast.preview_entry_id = i
             if imgui.is_item_clicked():
-                ast.selected_entry_id = e.id
+                ast.selected_entry_id = i
                 if ast.live_preview:
-                    ast.load_entry_id = e.id
+                    ast.load_entry_id = i
             if n % per_row != per_row - 1:
                 imgui.same_line()
         imgui.end_child()
 
-        if ast.selected_entry_id >= 0:
+        if 0 <= ast.selected_entry_id < len(arc.entries):
+            sel = arc.entries[ast.selected_entry_id]
             imgui.separator()
-            imgui.text(f"Selected #{ast.selected_entry_id}")
+            # The ENTRY's id, not the row: the row is how the app addresses it,
+            # the id is what the archive calls it.
+            imgui.text(f"Selected #{sel.id}")
+            if not arc.is_native(ast.selected_entry_id):
+                imgui.text_colored(
+                    imgui.ImVec4(*_DIM),
+                    f"{arc.layout_at(ast.selected_entry_id)} brain - click to "
+                    f"switch to it")
             right = layout.row_right_edge()
             if imgui.button("Save as config..."):
                 self.open_save_popup(save_targets.ARCHIVE_ENTRY,
@@ -717,16 +725,16 @@ class ArchiveWindowMixin:
                           imgui.WindowFlags_.no_scrollbar
                           | imgui.WindowFlags_.no_scroll_with_mouse)
         imgui.pop_style_var()
-        entry, clicked = self._draw_map(ast, arc, proj, pts, size)
+        row, clicked = self._draw_map(ast, arc, proj, pts, size)
         imgui.end_child()
 
-        if entry is not None:
-            self._map_hover_card(entry)
-            ast.preview_entry_id = entry.id
+        if row >= 0:
+            self._map_hover_card(arc, row)
+            ast.preview_entry_id = row
             if clicked:
-                ast.selected_entry_id = entry.id
+                ast.selected_entry_id = row
                 if ast.live_preview:
-                    ast.load_entry_id = entry.id
+                    ast.load_entry_id = row
 
         self._render_map_legend(ast, len(pts.idx), len(arc))
         self._render_map_selection(ast, arc)
@@ -781,7 +789,12 @@ class ArchiveWindowMixin:
         return hovered
 
     def _draw_map(self, ast, arc, proj, pts, size):
-        """Draw the canvas. -> (entry under the cursor or None, was it clicked)."""
+        """Draw the canvas. -> (row under the cursor or -1, was it clicked).
+
+        A ROW, not an entry: one archive holds every brain and an id is only
+        unique within one of them, so every one-shot the browser sets has to
+        name a position.
+        """
         origin = imgui.get_cursor_screen_pos()
         # Lets the Home button, drawn last, sit on top and take the click.
         imgui.set_next_item_allow_overlap()
@@ -836,8 +849,8 @@ class ArchiveWindowMixin:
         # Through pts.idx: with a filter on, row i is not entry i, and hovering
         # the wrong entry is worse than not hovering at all.
         if hovering and best_i >= 0 and best_d < 12.0:
-            return arc.entries[int(pts.idx[best_i])], clicked
-        return None, False
+            return int(pts.idx[best_i]), clicked
+        return -1, False
 
     def _map_points(self, arc, proj, ast):
         """-> a map_view.MapPoints, or None if the filter matched nothing.
@@ -1070,10 +1083,11 @@ class ArchiveWindowMixin:
             self._map_drag_px = 0.0
         return bool(released and not was_drag)
 
-    def _map_hover_card(self, entry) -> None:
+    def _map_hover_card(self, arc, row) -> None:
         """The picture, on hover. A dot's position is not what it IS."""
+        entry = arc.entries[row]
         cache = getattr(self, "thumb_cache", None)
-        tex = cache.get(entry.thumb) if cache is not None else None
+        tex = cache.get(arc.thumb_key(row)) if cache is not None else None
         imgui.begin_tooltip()
         if tex is not None:
             imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(160, 160))
@@ -1086,8 +1100,8 @@ class ArchiveWindowMixin:
 
     def _render_map_selection(self, ast, arc):
         """The picked dot's actual image - a position is not what it IS."""
-        entry = next((e for e in arc.entries if e.id == ast.selected_entry_id),
-                     None)
+        row = ast.selected_entry_id
+        entry = arc.entries[row] if 0 <= row < len(arc.entries) else None
         if entry is None:
             imgui.text_colored(imgui.ImVec4(*_DIM),
                                "Click a point to see what it is.")
@@ -1095,7 +1109,7 @@ class ArchiveWindowMixin:
 
         imgui.separator()
         cache = getattr(self, "thumb_cache", None)
-        tex = cache.get(entry.thumb) if cache is not None else None
+        tex = cache.get(arc.thumb_key(row)) if cache is not None else None
         if tex is not None:
             imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(128, 128))
         else:
@@ -1108,8 +1122,8 @@ class ArchiveWindowMixin:
         imgui.text(f"goal: {entry.goal or '-'}")
         imgui.text_disabled(f"gen {entry.gen}   tile {entry.tile}   {entry.spec}")
         if imgui.button("Save as config...##map"):
-            self.open_save_popup(save_targets.ARCHIVE_ENTRY, arg=entry.id)
+            self.open_save_popup(save_targets.ARCHIVE_ENTRY, arg=row)
         imgui.same_line()
         if imgui.button("Delete##map"):
-            ast.delete_entry_id = entry.id
+            ast.delete_entry_id = row
         imgui.end_group()

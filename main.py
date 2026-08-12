@@ -236,14 +236,14 @@ class App:
         from services.goal_source import GoalList
         from services.thumb_cache import ThumbCache, gl_loader
 
-        from services.archive_io import migrate_to_signature_dir
+        from services.archive_io import migrate_archive
 
         # An archive belongs to ONE brain layout: the floats it stores mean
         # nothing without it. Entries live in <archive>/<signature>/, so
         # switching modality moves to a sibling directory and both survive.
         from services.brains import default_layout
 
-        migrate_to_signature_dir(path)
+        migrate_archive(path)
         # From the sim when there is one. Falling back rather than requiring it
         # keeps this callable before the sim exists, and from the switch path.
         layout = (getattr(getattr(self, "sim", None), "brain_layout", None)
@@ -263,7 +263,10 @@ class App:
         self.archive_projection = Projection()
         self.archive_projection.fit(archive.embeddings)
         self._last_projection_size = len(archive)
-        self.thumb_cache = ThumbCache(gl_loader(self.ctx, store), capacity=256)
+        # Keyed by signature, because one archive holds every brain and each
+        # of them has a 000000.jpg.
+        self.thumb_cache = ThumbCache(gl_loader(self.ctx, archive.stores),
+                                      capacity=256)
 
         if self.imgep_driver is not None:
             self.imgep_driver.archive = archive

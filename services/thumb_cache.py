@@ -12,13 +12,24 @@ from __future__ import annotations
 from collections import OrderedDict
 
 
-def gl_loader(ctx, store):
-    """The real loader: read a thumbnail JPEG into an RGB texture."""
+def gl_loader(ctx, stores):
+    """The real loader: read a thumbnail JPEG into an RGB texture.
 
-    def load(name: str):
+    `stores` maps a brain layout signature to the store that owns those
+    entries' thumbnails, and a key is `"<signature>/<filename>"`. A bare
+    filename cannot identify a thumbnail: an id is unique inside one layout's
+    directory and nowhere else, so every brain in an archive has a 000000.jpg
+    and one cache keyed on the name alone would hand out the wrong picture.
+    """
+
+    def load(key: str):
         try:
             from PIL import Image
 
+            sig, _, name = str(key).rpartition("/")
+            store = stores.get(sig) if hasattr(stores, "get") else None
+            if store is None:
+                return None
             path = store.thumb_path(name)
             with Image.open(path) as img:
                 rgb = img.convert("RGB")

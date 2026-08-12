@@ -260,11 +260,19 @@ class ImgepDriver:
                 ).astype(np.float32)
 
     def _ask_expansion(self, n: int) -> np.ndarray:
-        nov = np.array([e.novelty for e in self.archive.entries], dtype=np.float32)
+        # NATIVE rows only. Novelty ranks across every brain in the archive,
+        # because novelty is about pictures - but a parent has to be decodable
+        # by the optimizer that is about to mutate it, and another brain's
+        # floats are a different creature under this one's squash.
+        rows = self.archive.native_rows()
+        if not len(rows):
+            return self._ask_bootstrap(n)
+        nov = np.array([self.archive.entries[i].novelty for i in rows],
+                       dtype=np.float32)
         idx = sample_by_novelty(nov, n, self.rng, self.alpha)
         out = np.empty((n, self.spec.dim), dtype=np.float32)
         for j, i in enumerate(idx):
-            out[j] = self._parent_z(int(i))
+            out[j] = self._parent_z(int(rows[int(i)]))
         out += (self.sigma_expand * self.rng.normal(size=out.shape)).astype(np.float32)
         return out
 
@@ -274,11 +282,10 @@ class ImgepDriver:
         The archive stores decoded values precisely so this works: a z archived
         under one preset would mean a different creature under another.
 
-        Encoded under the ARCHIVE's layout, which is what its stored brains
-        were decoded under. Omitting it falls back to Fourier, so every parent
-        drawn from a Gabor, Lenia or MLP archive came back through the wrong
-        squash."""
-        zb, _clamped = encode(self.archive.brains[i], self.archive.layout)
+        Encoded under the SPEC's layout - the brain that is running - and only
+        ever called on a native row, because that is the only kind of genome
+        this z is going to be mutated as."""
+        zb, _clamped = encode(self.archive.brain_at(i), self.spec.layout)
         if self.spec.dim <= len(zb):
             return zb[: self.spec.dim].astype(np.float32)
         entry = self.archive.entries[i]
@@ -715,20 +722,24 @@ class ImgepDriver:
         SAMPLED with p proportional to fit^alpha, not argmaxed, so repeating a
         goal explores a different trajectory each time. alpha is then BANDED,
         not fixed - see novelty.banded_alpha.
+
+        NATIVE rows only, for _ask_expansion's reason: a seed becomes the
+        optimizer's mean, so it has to be a genome this brain can decode.
         """
-        e = self.archive.embeddings
-        if len(e) == 0:
+        rows = self.archive.native_rows()
+        if not len(rows):
             return None
+        e = self.archive.embeddings[rows]
         refs, scale = self._references(kind)
         if refs is None or len(refs) == 0:
-            return self.archive.nearest(goal_emb)
+            return int(rows[int(np.argmax(e @ np.asarray(goal_emb, np.float32)))])
         fit = contrastive(e[None, :, :], goal_emb, refs, logit_scale=scale)
         a = banded_alpha(fit, self.alpha, self.seed_ess_min, self.seed_ess_max)
         self._last_seed_ess = effective_sample_size(fit, a)
         self._last_seed_alpha = a
         # A goal every tile floors on leaves fit all-zero; sample_by_novelty
         # falls back to uniform there rather than dividing by zero.
-        return int(sample_by_novelty(fit, 1, self.rng, a)[0])
+        return int(rows[int(sample_by_novelty(fit, 1, self.rng, a)[0])])
 
     def _references(self, kind: str | None = None):
         """-> (references, logit_scale) for a goal of this kind.

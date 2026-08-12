@@ -8,16 +8,19 @@ way to reach it.
 import numpy as np
 import pytest
 
+from services.brains import default_layout
 from state.archive_state import ArchiveState
 from state.auto_tournament_state import AutoTournamentState
 from state.sim_state import SimState
 
 
 class _Entry:
-    def __init__(self, i, spec="brain:80", run_id="run-a"):
+    def __init__(self, i, spec="brain:80", run_id="run-a", layout=""):
         self.id = i
         self.spec = spec
         self.run_id = run_id
+        self.layout = layout
+        self.thumb = f"{i:06d}.jpg"
 
 
 class _FakeArchive:
@@ -30,6 +33,24 @@ class _FakeArchive:
         self.brains = rng.normal(0, 0.5, (n, 10, 8)).astype(np.float32)
         # PHYSICS_PARAMS is 8 long; values are absolute, not offsets.
         self.physics = np.full((n, 8), 0.25, dtype=np.float32)
+        # One archive holds every brain, so the preview asks each row which one
+        # it belongs to before deciding it can run it. All native here; the
+        # foreign case is tests/test_mixed_archive.py.
+        self.layout = default_layout()
+        self.signature = self.layout.signature()
+
+    def layout_at(self, i):
+        return self.entries[i].layout or self.signature
+
+    def is_native(self, i):
+        return self.layout_at(i) == self.signature
+
+    def brain_at(self, i):
+        return np.asarray(self.brains[i], dtype=np.float32).reshape(-1)
+
+    def thumb_key(self, i):
+        t = self.entries[i].thumb
+        return f"{self.layout_at(i)}/{t}" if t else ""
 
 
 class _RuleManager:
