@@ -43,5 +43,7 @@ void main() {
     float kernel_func = gaussian(uv - .5, .163);
     if (length(uv - .5) > .5 || view_col.w == 0) { discard; }
     vec2 vel = pos_vel.zw;
-    brush_out = vec4(vel, .01, 1) * kernel_func;
+    // The target is RG32F, so only xy are stored. w still matters: the blend
+    // is SRC_ALPHA, ONE, so it is this deposit's weight.
+    brush_out = vec4(vel, 0, 1) * kernel_func;
 }

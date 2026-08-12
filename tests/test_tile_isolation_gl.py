@@ -82,7 +82,10 @@ class Diffuser:
                             ("K_TEST", 1.0)):
             if name in self.prog:
                 self.prog[name].value = value
-        self.tex = [ctx.texture((res, res), 4, dtype="f4") for _ in range(2)]
+        # RG32F, as sim.py allocates the canvas. The diffusion is per-channel,
+        # so the trail under test rides in R either way - but a harness in a
+        # format the app does not use stops being evidence about the app.
+        self.tex = [ctx.texture((res, res), 2, dtype="f4") for _ in range(2)]
         for t in self.tex:
             t.repeat_x = True                  # as sim.py sets them
             t.repeat_y = True
@@ -90,10 +93,9 @@ class Diffuser:
         self.vao = ctx.vertex_array(self.prog, [])
 
     def run(self, field: np.ndarray, steps: int) -> np.ndarray:
-        rgba = np.zeros((self.res, self.res, 4), dtype=np.float32)
-        rgba[..., 0] = field
-        rgba[..., 3] = 1.0
-        self.tex[0].write(rgba.tobytes())
+        rg = np.zeros((self.res, self.res, 2), dtype=np.float32)
+        rg[..., 0] = field
+        self.tex[0].write(rg.tobytes())
         read, write = 0, 1
         for _ in range(steps):
             self.tex[read].use(location=1)
@@ -102,8 +104,8 @@ class Diffuser:
             self.fbo[write].use()
             self.vao.render(moderngl.TRIANGLES, vertices=3)
             read, write = write, read
-        out = np.frombuffer(self.fbo[read].read(components=4, dtype="f4"),
-                            dtype=np.float32).reshape(self.res, self.res, 4)
+        out = np.frombuffer(self.fbo[read].read(components=2, dtype="f4"),
+                            dtype=np.float32).reshape(self.res, self.res, 2)
         return out[..., 0].copy()
 
     def release(self):

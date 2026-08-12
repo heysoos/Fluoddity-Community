@@ -162,7 +162,7 @@ def test_existing_canvas_damage_heals_itself():
     # Poison a patch of the canvas the way an escaped particle would have.
     tex = sim.can_textures[sim.can_read_index]
     w, h = tex.size
-    poisoned = np.full((16, 16, 4), np.nan, dtype=np.float32)
+    poisoned = np.full((16, 16, tex.components), np.nan, dtype=np.float32)
     tex.write(poisoned.tobytes(), viewport=(w // 3, h // 3, 16, 16))
     ctx.finish()
 

@@ -127,11 +127,12 @@ class Sim:
         self.multi_load_buffer.bind_to_storage_buffer(3)  # Binding 3 matches shader layout
         self.multi_load_rule_buffer.bind_to_storage_buffer(4)  # Binding 4 for multi-load rules
 
-        # Create double-buffered canvas textures (4-channel float32)
-        # We ping-pong between these to avoid reading and writing the same texture
+        # Double-buffered canvas, RG32F: the trail is a VELOCITY FIELD and
+        # nothing reads a third channel. Ping-ponged so a pass never reads and
+        # writes the same texture.
         self.can_textures = [
-            self.ctx.texture(canvas_shape, 4, dtype='f4'),
-            self.ctx.texture(canvas_shape, 4, dtype='f4')
+            self.ctx.texture(canvas_shape, 2, dtype='f4'),
+            self.ctx.texture(canvas_shape, 2, dtype='f4')
         ]
         for tex in self.can_textures:
             tex.repeat_x = True
@@ -146,8 +147,8 @@ class Sim:
         self.can = self.can_textures[0]
         self.canvas = self.can_framebuffers[1]  # Write to buffer 1, read from buffer 0 initially
 
-        # Create brush texture and framebuffer
-        self.brush_tex = self.ctx.texture(canvas_shape, 4, dtype='f4')
+        # Create brush texture and framebuffer. RG32F, as the canvas.
+        self.brush_tex = self.ctx.texture(canvas_shape, 2, dtype='f4')
         self.brush_tex.repeat_x = True
         self.brush_tex.repeat_y = True
         self.brush = self.ctx.framebuffer([self.brush_tex])

@@ -88,10 +88,28 @@ vec2 canvas_uv_to_screen(vec2 canvas_uv) {
     return ndc * 0.5 + 0.5;
 }
 
-// Estimate gradient of scalar field using central differences (takes .z component as scalar)
+// Central-difference gradient of the emboss height field.
+//
+// The height is FLOW MAGNITUDE - the same quantity the canvas view draws as
+// brightness. It used to be the canvas .z, a particle-coverage channel that no
+// longer exists: the canvas is RG32F and carries velocity only.
+//
+// The 100 is not cosmetic and is not free to change. The old channel was
+// 0.01*coverage and this one is |velocity|*coverage, so they agree at
+// |velocity| = 0.01 - the middle of the preset library's range. Without it the
+// field is too small for the Emboss Intensity slider to reach: the shading
+// compares the gradient against 0.5/I^5, so a smaller field needs a LARGER I,
+// and the two shipped emboss presets would need 1.09 and 2.27 against a slider
+// that stops at 1. See CLAUDE.md.
+#define EMBOSS_HEIGHT_GAIN 100.0
+float emboss_height(sampler2D tex, vec2 tex_uv) {
+    return EMBOSS_HEIGHT_GAIN * length(texture(tex, tex_uv).xy);
+}
 vec2 gradient(sampler2D tex, vec2 tex_uv, float epsilon) {
-    float dx = (texture(tex, tex_uv + vec2(epsilon, 0.0)).z - texture(tex, tex_uv - vec2(epsilon, 0.0)).z) / (2.0 * epsilon);
-    float dy = (texture(tex, tex_uv + vec2(0.0, epsilon)).z - texture(tex, tex_uv - vec2(0.0, epsilon)).z) / (2.0 * epsilon);
+    float dx = (emboss_height(tex, tex_uv + vec2(epsilon, 0.0))
+              - emboss_height(tex, tex_uv - vec2(epsilon, 0.0))) / (2.0 * epsilon);
+    float dy = (emboss_height(tex, tex_uv + vec2(0.0, epsilon))
+              - emboss_height(tex, tex_uv - vec2(0.0, epsilon))) / (2.0 * epsilon);
     return vec2(dx, dy);
 }
 
