@@ -1,4 +1,8 @@
 """What a rig remembers, and what it must refuse to remember."""
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from services.audio_mapping import Mapping
@@ -10,6 +14,19 @@ from state.audio_in_state import (PERSISTED_FIELDS, AudioInState, apply_dict,
 def test_it_hangs_off_ui_state():
     from state import UIState
     assert isinstance(UIState().audio, AudioInState)
+
+
+def test_importing_state_first_does_not_deadlock_on_services():
+    """A fresh interpreter, importing `state` before anything else.
+
+    Every other test in the suite imports `services` first, which hides a
+    module-scope `services` import here: services/__init__ reaches ui, which
+    imports back from state while state/__init__ is still part-built.
+    """
+    root = Path(__file__).resolve().parent.parent
+    r = subprocess.run([sys.executable, "-c", "import state; print(state.UIState().audio)"],
+                       cwd=str(root), capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
 
 
 def test_a_fresh_rig_is_empty_and_off():

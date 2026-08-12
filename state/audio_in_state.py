@@ -7,9 +7,15 @@ commands and view buffers, and persisting one would replay a command on load.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
-from services.audio_mapping import MODES, Mapping
-from services.audio_shapers import SHAPER_KINDS, ShaperParams
+if TYPE_CHECKING:                       # annotations only - see below
+    from services.audio_mapping import Mapping
+
+# `services` is NOT imported at module scope. Importing it runs
+# services/__init__, which reaches ui, which imports back from state - and this
+# module is reached while state/__init__ is still part-built. The two functions
+# that need Mapping and ShaperParams import them when called.
 
 # `enabled` is deliberately absent: opening the app must never start capturing.
 PERSISTED_FIELDS: tuple[str, ...] = (
@@ -63,6 +69,9 @@ def _mapping_to_dict(m: Mapping) -> dict:
 
 def _mapping_from_dict(d) -> Mapping | None:
     """None for anything malformed, so one bad row cannot lose the rig."""
+    from services.audio_mapping import MODES, Mapping
+    from services.audio_shapers import SHAPER_KINDS, ShaperParams
+
     if not isinstance(d, dict):
         return None
     signal, target = d.get("signal"), d.get("target")
