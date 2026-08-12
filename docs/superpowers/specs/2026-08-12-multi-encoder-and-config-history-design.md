@@ -67,8 +67,11 @@ Out of scope, deliberately:
   thumbnails is feasible but mixes fidelities against natively-captured
   entries. Deferred; the encoder is immutable in this design.
 - **Changing SigLIP's scoring formulation.** See Non-goals.
-- **Re-deriving `IMAGE_LOGIT_SCALE` by experiment.** Estimates ship; the
-  calibration procedure is named.
+
+Explicitly **in** scope, and a prerequisite rather than a follow-up: measuring
+`image_logit_scale`, `text_logit_scale` and `default_min_separation` for each
+new encoder by the same procedure that produced B/32's. No estimate ships. See
+Phase 0.
 
 ## 1. Model registry — `services/vision_models.py`
 
@@ -93,29 +96,61 @@ class VisionModel:
     default_min_separation: float
 ```
 
-| key | repo | dim | ctx | mean/std | text scale | image scale | min_sep |
-|---|---|---|---|---|---|---|---|
-| `clip-b32` | `Xenova/clip-vit-base-patch32` | 512 | 77 | CLIP | 100 | 30 | 0.020 |
-| `clip-b16` | `Xenova/clip-vit-base-patch16` | 512 | 77 | CLIP | 100 | 32 | 0.018 |
-| `siglip2-b16` | `onnx-community/siglip2-base-patch16-224-ONNX` | 768 | 64 | 0.5/0.5 | 100 | 25 | 0.024 |
-| `clip-l14` | `Xenova/clip-vit-large-patch14` | 768 | 77 | CLIP | 100 | 14 | 0.044 |
+Fixed facts, read off each export and its preprocessor config:
 
-`default_min_separation` is `0.02` scaled by the model's median NN distance
-relative to B/32's. `image_logit_scale` is `30` scaled inversely by the same
-ratio — B/32's 30 was chosen because image-image similarity sits above 0.9, and
-a model whose distances spread wider needs a softer scale to avoid saturating.
-**These three are estimates derived from NN spread, not direct measurements.**
-Confirm each with the existing saturation check in
-`tests/test_expedition_fitness.py` — the one asserting that no tile of a
-16-tile generation is lost to saturation — before trusting a search run on
-them.
+| key | repo | dim | ctx | mean/std |
+|---|---|---|---|---|
+| `clip-b32` | `Xenova/clip-vit-base-patch32` | 512 | 77 | CLIP |
+| `clip-b16` | `Xenova/clip-vit-base-patch16` | 512 | 77 | CLIP |
+| `siglip2-b16` | `onnx-community/siglip2-base-patch16-224-ONNX` | 768 | 64 | 0.5/0.5 |
+| `clip-l14` | `Xenova/clip-vit-large-patch14` | 768 | 77 | CLIP |
 
-`siglip2-b16`'s text scale starts at CLIP's 100 because the softmax-over-
-distractors formulation is retained (see Non-goals); SigLIP's own learned scale
-belongs to a sigmoid objective this code does not use.
+The other three fields are **calibrated, not chosen**, and the registry is not
+complete until Phase 0 has produced them. Only `clip-b32`'s are known today
+(`text_logit_scale` 100, `image_logit_scale` 30, `default_min_separation`
+0.02). See "Phase 0" below.
 
 This module is the single home for constants currently duplicated across
 `services/clip_scorer.py` module globals and `tools/hue_nuisance.py`.
+
+## 1a. Phase 0 — calibrating each encoder
+
+Both live constants were derived by a stated procedure, and each model gets the
+same procedure rather than a scaled guess. The rule is **equate on behaviour,
+not on a summary statistic**: pick each model's value so it reproduces what
+B/32's value does on the same population.
+
+**`image_logit_scale` — floored fraction.** The construction is recorded in
+`tests/test_expedition_fitness.py`: take real archive descriptors, form a +3sd
+latent goal against the archive centroid (`goal = unit(c + 3*(e[0] - c))`),
+score with `contrastive(..., logit_scale=s)`, and measure what fraction of
+tiles saturate to zero. A floored tile carries no information to a rank-based
+optimizer. At B/32 this gives 59.6% floored at scale 100 and 1.4% at 30.
+**Criterion: the scale whose floored fraction matches B/32's 1.4%**, with the
+existing "16 of 16 distinct" assertion as the pass/fail gate.
+
+**`default_min_separation` — retention.** CLAUDE.md records the shape of the
+original measurement (the useful span is 0–0.05; at 0.05 every archive keeps
+under 6%) but no tool survives for it. **Criterion: the threshold that admits
+the same fraction of a real archive population as 0.02 does under B/32**, which
+uses the whole distance distribution rather than its median. Reported per
+archive, since three archives is the sample.
+
+**`text_logit_scale`.** 100 is CLIP's own learned `logit_scale.exp()` and
+carries over to B/16 and L/14 unchanged. SigLIP 2's learned scale belongs to a
+sigmoid objective this code does not use, so it gets the **same floored-
+fraction procedure as the image scale**, run against text goals with
+`DEFAULT_DISTRACTORS` as the reference set.
+
+**New tool: `tools/calibrate_encoder.py`**, taking `--model` and sweeping each
+quantity against one or more real archives. It shares thumbnail sampling and
+embedding with `tools/hue_nuisance.py`; that machinery moves into a small
+shared helper rather than being copied a third time.
+
+Phase 0 runs on the three most recently worked archives, the same population
+the hue measurement used, so the two sets of numbers are comparable. Its output
+is the table that fills the registry, and it is committed as a docs block
+alongside the numbers so a re-measure can be checked against it.
 
 ## 2. `VisionScorer` — renamed and model-driven
 
@@ -219,15 +254,36 @@ entry count, and what changed.
 Nothing here replays or restores a past config. The log is a record, not a
 mechanism — restoring an old setting is the user moving the slider back.
 
-## 7. One existing rule this breaks
+## 7. `min_separation` is a per-encoder quantity
 
-CLAUDE.md records that a brand new archive inherits the settings currently on
-screen, so that making one to try a variation keeps your working setup.
+A separation threshold is a cosine distance in one encoder's space, so 0.02
+does not mean the same thing twice. Three consequences, and the third is a bug
+that exists today the moment a second encoder lands.
 
-**Exception:** when the new archive's encoder differs from the resident one,
-`min_separation` is seeded from the new model's `default_min_separation`
-instead of inherited. Carrying 0.02 into an L/14 archive would be roughly half
-the intended strictness. Every other field still inherits.
+**The default is the encoder's.** `default_min_separation` comes from Phase 0,
+per model. Because the encoder is immutable per archive, a persisted value can
+never end up in the wrong space — the archive that stored it is the archive
+that reads it.
+
+**The inheritance rule gains one exception.** CLAUDE.md records that a brand
+new archive inherits the settings currently on screen, so making one to try a
+variation keeps your working setup. When the new archive's encoder **differs**
+from the resident one, `min_separation` is seeded from the new encoder's
+calibrated default instead. Every other field still inherits.
+
+**The slider range is per-encoder too.** `ui/archive_window.py` hardcodes
+`slider_float("Min Separation", ..., 0.0, 0.05)`. That range was chosen for
+B/32, whose useful span CLAUDE.md records as 0–0.05 against a 0.02 default. An
+encoder whose distances run wider puts its own *default* near the top of that
+track and makes the upper half of its useful range unreachable — a control that
+silently cannot express the values it needs. The maximum therefore comes from
+the model, as `2.5x default_min_separation`, which reproduces B/32's existing
+0–0.05 exactly and generalises. The `Liveness Floor` slider beside it is
+unaffected: liveness is computed on rendered frames and has no encoder in it.
+
+The tooltip names the encoder's calibrated default, because 0.02 and 0.044
+looking wildly different while meaning the same thing is exactly the kind of
+readout that reads as a bug.
 
 ## Non-goals
 
@@ -255,6 +311,12 @@ the intended strictness. Every other field still inherits.
   loads as version 0.
 - New-archive seeding: `min_separation` inherits within one encoder and is
   reseeded across encoders (section 7).
+- The Min Separation slider's maximum is `2.5x` the model's default, and for
+  `clip-b32` that reproduces the current `0.0, 0.05` exactly — so the existing
+  behaviour is pinned before it is generalised.
+- Every registry entry has a calibrated `image_logit_scale`,
+  `text_logit_scale` and `default_min_separation`; a model carrying a
+  placeholder fails the registry test rather than shipping.
 - UI: encoder combo disabled when entries exist; no duplicate ImGui ids in the
   Archive tab (extends `test_archive_window_render.py::id_clashes`).
 - Rename: no `CLIPScorer` or `clip_scorer` reference survives outside the spec
