@@ -29,10 +29,39 @@ Any advice or criticism is welcome. This is a toy I made for myself and I am mor
  - ffmpeg based video recording
  - Emboss visual effect (currently the only use for traditional density trails)
  - Experimental system for mixing different saved configs.
- - Tournament mode: run a grid of creatures side by side and breed from the ones you like. Two automatic variants use CLIP to score the grid — **Auto**, which climbs toward a text prompt, and **Explore**, which builds a searchable archive of diverse patterns on its own (see [docs/imgep.md](docs/imgep.md)).
+ - Tournament mode: run a grid of creatures side by side and breed from the ones you like, by hand or by CLIP.
+ - Swappable particle brains: Fourier, Gabor, Lenia or MLP.
+
+## Tournament Mode
+
+`Extras > Tournament Mode` splits the canvas into a grid of independent tiles, each running its own creature. Three tabs:
+
+**Manual** — click the tiles you like, on the canvas or on the numbered buttons, then **Next Generation** to breed from them. `Mutation strength` sets how far the children stray, `Inject randoms` adds fresh creatures each round, `Crossover` mixes selected parents. **Undo** steps back a generation, **Save Selected...** writes the tiles you picked to your configs folder.
+
+**Auto (CLIP)** — type a prompt, press **Set**, then **Start**. CMA-ES climbs the grid toward whatever CLIP scores as the closest match. `Grid` is tiles per side (2–8), `Steps per Gen` is how long each generation runs before it is scored. Tick `Search Physics Too` to let it move the physics sliders as well as the brain.
+
+**Explore (IMGEP)** — no prompt. It hunts for patterns *unlike* the ones it already has and files each keeper in an archive you can browse, sort and load from. Pick or create an archive, press **Start**; text goals are optional and steer it without confining it. Full description in [docs/imgep.md](docs/imgep.md).
+
+Auto and Explore need the optional packages in `requirements.txt` (`onnxruntime-directml`, `tokenizers`, `cmaes`), and offer a **Download CLIP model (~330 MB)** button the first time. Manual mode needs none of that. The archive browser — `Extras > Archive Browser` — opens without CLIP too.
+
+## Brain Modality
+
+`Extras > Brain Modality` picks the function each particle's brain computes:
+
+| Modality | Response |
+| --- | --- |
+| **Fourier** | sum of sine waves — the original, smooth periodic noise |
+| **Gabor** | the same oscillation under a Gaussian envelope, so a unit answers near its own centre and is silent elsewhere |
+| **Lenia** | a growth band: positive inside a narrow window of sensor values, negative outside it |
+| **MLP** | a small neural net — `tanh`, `sin` or `gelu` |
+
+Each has a size setting (Centers, Filters, Bumps, Hidden Width) that sets the search dimension printed under the combo. Creatures are **not** portable between layouts, so changing anything that alters the parameter count resets the search and switches to that layout's archive. Presets record the brain they were saved under and switch to it on load.
+
+The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space, blue negative and orange positive. `Slice` chooses the plane, and **Reseed plane** redraws the random one.
+
 ## Design
 Particles in Fluoddity have no direct interactions with each-other. Instead, they leave trails as they move. These trails decay and diffuse over time. Particles respond to the density and direction of trails around them.
-There is no fixed rule that determines how particles respond to their senses. Instead, each particle has a simple neural-net like brain with just 80 parameters. These parameters are randomized on startup, and then mutated as the user selects which lineages to explore.
+There is no fixed rule that determines how particles respond to their senses. Instead, each particle has a simple neural-net like brain with only a few dozen parameters — 80 for the default Fourier brain, and see [Brain Modality](#brain-modality) for the others. These parameters are randomized on startup, and then mutated as the user selects which lineages to explore.
 
 ## Screenshots
 <img width="797" height="595" alt="image" src="https://github.com/user-attachments/assets/343b2f6a-c09b-41c1-a370-247c223c33a7" />

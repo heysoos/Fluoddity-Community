@@ -766,25 +766,6 @@ mechanics these caveats assume.
   own `.glsl` and exposes `<modality>_param_at()` so the click-to-adopt
   writeback returns the rule the particle was actually running.
 
-- **A hover BORROWS another brain; only a click switches to one. Every hover
-  path has to use it, including File > Load.** The Load menu previews on hover
-  and its click then takes a `preview_rule_active` branch that only FINALISES -
-  so a preset naming another brain, whose preview had applied nothing, did not
-  load at all while the console printed that it had. The direct paths (Ctrl+V,
-  a click with no hover) go through `_apply_config_with_locks` and were never
-  affected, which is why fixing those looked like fixing the feature.
-  `_config_borrow_layout` takes the decode scales from the file's own
-  `brain_settings`, which an archive entry does not have.
-
-  **A borrow therefore has an OWNER, and only its owner may return it.** Two
-  previews borrow - `"menu"` and `"gallery"` - and both run every frame, the
-  gallery second. Its teardown fires whenever no entry is hovered, so an
-  unowned return undid the menu's borrow in the same frame it was taken, and
-  the click then found nothing to make permanent: the exact symptom the borrow
-  was added to fix, one layer down. Guarded by
-  `tests/test_menu_cross_brain_load.py`, which runs `_handle_archive_preview`
-  between the hover and the click because testing the menu alone missed it.
-
 - **A hover BORROWS another brain; only a click switches to one.** A switch
   releases and rebuilds the archive — `load_from_store` rescores every entry —
   and resets the optimizer, so it can never run off the pointer position. A
@@ -803,6 +784,25 @@ mechanics these caveats assume.
   two brains borrows twice with no return in between. Guarded by
   `tests/test_foreign_preview.py`.
 
+  **EVERY hover path has to use it, including File > Load.** That menu previews
+  on hover and its click then takes a `preview_rule_active` branch that only
+  FINALISES - so a preset naming another brain, whose preview had applied
+  nothing, did not load at all while the console printed that it had. The
+  direct paths (Ctrl+V, a click with no hover) go through
+  `_apply_config_with_locks` and were never affected, which is why fixing those
+  looked like fixing the feature. `_config_borrow_layout` takes the decode
+  scales from the file's own `brain_settings`, which an archive entry does not
+  have.
+
+  **A borrow therefore has an OWNER, and only its owner may return it.** Two
+  previews borrow - `"menu"` and `"gallery"` - and both run every frame, the
+  gallery second. Its teardown fires whenever no entry is hovered, so an
+  unowned return undid the menu's borrow in the same frame it was taken, and
+  the click then found nothing to make permanent: the exact symptom the borrow
+  was added to fix, one layer down. Guarded by
+  `tests/test_menu_cross_brain_load.py`, which runs `_handle_archive_preview`
+  between the hover and the click because testing the menu alone missed it.
+
 - **`Archive.brains` is padded to the WIDEST layout the archive holds; anything
   that decodes must use `brain_at(i)`.** One wider foreign entry re-widths the
   pooled column, so the padded row reaches `apply_rule` at the wrong size and
@@ -814,6 +814,9 @@ mechanics these caveats assume.
 - `docs/imgep.md` — **how Explore mode works**: the regime loop, every fitness
   and admission equation in pseudocode, and what each setting does. Read this
   before the search and archive caveats above, which assume it.
+- `README.md` — the USER-facing walkthrough of tournament mode and the brain
+  modalities: which menu, which button, what each control does. Keep the
+  how-to-drive-it there and the why-it-is-built-this-way here.
 - `ARCHITECTURE.md` — comprehensive architecture, file map, data flows, subsystem docs
 - `ui/README.md` — mixin architecture, how to add windows/sliders
 - `docs/adding_ui_shader_params.md` — step-by-step guide for new parameters
