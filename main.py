@@ -213,22 +213,23 @@ class App:
             from services.auto_tournament_service import AutoTournamentService
             from services.capture_blit import CaptureBlit
             from services.capture_view import CaptureView
-            from services.vision_scorer import VisionScorer
             from services.run_logger import RunLogger
             from services.tile_capture import TileCapture
-            from tools.fetch_clip_onnx import MODEL_DIR, is_present
+            from services.vision_models import DEFAULT_KEY
+            from services.vision_scorer import VisionScorer
+            from tools.fetch_models import is_present
         except ImportError as exc:
             self.ui.auto_unavailable = f"missing package: {exc.name}"
             return False
 
-        if not is_present(MODEL_DIR):
+        if not is_present(DEFAULT_KEY):
             self.ui.auto_unavailable = "model_missing"
             return False
 
         try:
-            self.vision_scorer = VisionScorer()
+            self.vision_scorer = VisionScorer(DEFAULT_KEY)
         except Exception as exc:
-            self.ui.auto_unavailable = f"could not load CLIP: {exc}"
+            self.ui.auto_unavailable = f"could not load encoder: {exc}"
             return False
 
         self.tile_capture = TileCapture(self.ctx, self.tournament_service.grid)

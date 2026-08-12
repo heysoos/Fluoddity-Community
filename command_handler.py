@@ -1312,13 +1312,15 @@ class CommandHandler:
         if ast.selected_entry_id == ast.delete_entry_id:
             ast.selected_entry_id = -1
 
-    def _start_model_download(self):
+    def _start_model_download(self, model_key: str | None = None):
         import threading
 
-        from tools.fetch_clip_onnx import fetch
+        from services.vision_models import DEFAULT_KEY
+        from tools.fetch_models import fetch
 
-        threading.Thread(target=fetch, daemon=True).start()
-        print("[auto] downloading CLIP model in the background")
+        key = model_key or DEFAULT_KEY
+        threading.Thread(target=fetch, args=(key,), daemon=True).start()
+        print(f"[auto] downloading {key} in the background")
 
     def report_capture_health(self, crops, ui_state):
         """Reported once per run rather than once per frame."""

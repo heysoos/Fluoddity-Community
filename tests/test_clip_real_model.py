@@ -1,16 +1,17 @@
-"""Requires the downloaded CLIP model. Run with: pytest -m gpu"""
+"""Requires a downloaded encoder. Run with: pytest -m gpu"""
 import numpy as np
 import pytest
 
-from tools.fetch_clip_onnx import MODEL_DIR, is_present
+from services.vision_models import DEFAULT_KEY
+from tools.fetch_models import is_present
 
 pytestmark = pytest.mark.gpu
 
 
 @pytest.fixture(scope="module")
 def scorer():
-    if not is_present(MODEL_DIR):
-        pytest.skip("CLIP model not downloaded")
+    if not is_present(DEFAULT_KEY):
+        pytest.skip("encoder not downloaded")
     from services.vision_scorer import VisionScorer
 
     return VisionScorer()
