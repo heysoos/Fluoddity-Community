@@ -57,7 +57,7 @@ uniform int RESET_MODE; //0-1-2 == GRID-RANDOM-RING
 uniform int COHORTS; //each cohort gets its own rule and starting location
 uniform float RULE_SEED;
 uniform bool WRITE_RULES; // Set true for one frame when rule buffer readback is needed
-uniform int WRITE_RULES_INDEX; // Which particle to write; -1 writes all of them
+uniform int WRITE_RULES_INDEX; // Which particle to write; the buffer holds one
 
 // Tournament mode: partition the canvas into a TOURNAMENT_GRID x TOURNAMENT_GRID grid
 uniform int TOURNAMENT_MODE;   // 0 = off, 1 = on
@@ -640,11 +640,12 @@ void main() {
     g_brain_cohort = get_particle_rule_seed()+floor(cohort);
 
     // Only write brains when explicitly requested, and only for the particle
-    // being adopted - readback_rule() takes one entity's slice and nothing else
-    // reads this buffer. brain_write() applies the modality's mutation, so the
-    // adopted rule is the one the particle was running.
-    if(WRITE_RULES && (WRITE_RULES_INDEX < 0 || uint(WRITE_RULES_INDEX) == index)) {
-        brain_write(brain_base, index * uint(BRAIN_LEN));
+    // being adopted. The buffer is ONE brain wide and the write lands at 0:
+    // readback_rule() reads that one brain and nothing else reads this buffer.
+    // brain_write() applies the modality's mutation, so the adopted rule is the
+    // one the particle was running.
+    if(WRITE_RULES && WRITE_RULES_INDEX >= 0 && uint(WRITE_RULES_INDEX) == index) {
+        brain_write(brain_base, 0u);
     }
 
 

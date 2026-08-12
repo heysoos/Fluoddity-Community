@@ -13,6 +13,21 @@ def read(p):
     return (ROOT / p).read_text()
 
 
+def test_the_header_mirrors_the_python_slot_constants():
+    """Three constants live in both services/brains/__init__.py and
+    _header.glsl, and they index the same buffer from opposite sides. A drift
+    is silent: the host writes one slot and the GPU reads another."""
+    from services.brains import COHORT_BRAIN_SLOT0, MAX_COHORT_BRAINS
+
+    src = read("shaders/brains/_header.glsl")
+    for name, value in (("MAX_BRAIN_FLOATS", MAX_BRAIN_FLOATS),
+                        ("COHORT_BRAIN_SLOT0", COHORT_BRAIN_SLOT0),
+                        ("MAX_COHORT_BRAINS", MAX_COHORT_BRAINS)):
+        assert f"#define {name} {value}\n" in src, (
+            f"{name} is {value} in Python and something else in the shader"
+        )
+
+
 def test_header_declares_the_flat_brain_buffer():
     src = read("shaders/brains/_header.glsl")
     assert "buffer BrainBuffer" in src
@@ -72,22 +87,24 @@ def test_fourier_glsl_is_pure():
         assert forbidden not in src, f"brain function is not pure: {forbidden}"
 
 
-def test_per_particle_buffer_is_sized_by_brain_len_not_max():
-    """MAX_BRAIN_FLOATS per particle would be ~600 MB at 600k particles. The
-    per-particle buffer must use the ACTIVE length.
+def test_the_adopted_brain_buffer_is_one_brain():
+    """It holds the ONE particle that was read back, so it must scale with
+    neither the particle count nor MAX_BRAIN_FLOATS.
 
     Asserts on the reserve= expression rather than the whole function, because
-    the comment above it legitimately names MAX_BRAIN_FLOATS to explain why it
-    is not used.
+    the comment above it legitimately names both to explain why neither is used.
     """
     src = read("sim.py")
     i = src.index("def realloc_brain_buffers")
     body = src[i:i + 1200]
     j = body.index("reserve=")
     alloc = body[j:body.index(")", j)]
-    assert "layout.length" in alloc, f"per-particle stride is wrong: {alloc!r}"
+    assert "layout.length" in alloc, f"the stride is wrong: {alloc!r}"
     assert "MAX_BRAIN_FLOATS" not in alloc, (
-        f"per-particle buffer must not use the max stride: {alloc!r}"
+        f"the adopted brain must not use the max stride: {alloc!r}"
+    )
+    assert "entity_count" not in alloc, (
+        f"the adopted brain must not be a row per particle: {alloc!r}"
     )
 
 
@@ -95,18 +112,23 @@ def test_the_writeback_is_gated_and_scoped_to_one_particle():
     """Two independent guards, and the second is not an optimisation.
 
     WRITE_RULES keeps the writeback off except on the frame click-to-adopt asks
-    for it. WRITE_RULES_INDEX narrows it to the ONE particle that is read back -
-    readback_rule() takes a single entity's slice and nothing else reads the
-    buffer. Without it, all 600k particles re-derive their mutation to produce
-    bytes nobody looks at: measured 13 ms a click, a hitch you can feel.
+    for it. WRITE_RULES_INDEX narrows it to the ONE particle that is read back,
+    which is the whole of that buffer. Without it, all 600k particles re-derive
+    their mutation to produce bytes nobody looks at - and there is nowhere to
+    put them.
 
     Asserted on presence, not on surrounding syntax - anchoring these on exact
     shader text has broken on four separate edits that changed nothing real.
     """
     src = read("shaders/entity_update.glsl")
     assert "uniform int WRITE_RULES_INDEX" in src
-    assert "WRITE_RULES_INDEX < 0" in src, "the writeback is not scoped"
-    assert "brain_write(" in src
+    assert "uint(WRITE_RULES_INDEX) == index" in src, (
+        "the writeback is not scoped to one particle"
+    )
+    assert "WRITE_RULES_INDEX < 0" not in src, (
+        "the write-all branch is back, and there is one brain to write into"
+    )
+    assert "brain_write(brain_base, 0u)" in src, "the write is not at offset 0"
 
     host = read("sim.py")
     assert "'WRITE_RULES_INDEX'" in host, "the host never sets the scope"

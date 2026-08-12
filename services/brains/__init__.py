@@ -13,8 +13,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 # The flat parameter buffer's stride. Sized so every UI-reachable layout fits:
-# Fourier 48*8=384, Gabor 36*14=504, Lenia 48*10=480, MLP H=48 -> 9*48+4=436.
-MAX_BRAIN_FLOATS = 512
+# Fourier 48*8=384, Gabor 36*14=504, Lenia 48*10=480, and an MLP layer stack,
+# which is what needs the room - see the variable-depth MLP caveat in CLAUDE.md.
+MAX_BRAIN_FLOATS = 1024
 
 # The cohort brains live in the slots after the multi-load configs, one per
 # cohort, and are what "no rule loaded" means. MAX_COHORT_BRAINS must cover

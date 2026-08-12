@@ -18,11 +18,11 @@ def test_signature_distinguishes_layouts():
 
 def test_layout_rejects_over_budget():
     with pytest.raises(ValueError, match="exceeds MAX_BRAIN_FLOATS"):
-        BrainLayout("fourier", (100,), 800)
+        BrainLayout("fourier", (200,), 1600)
 
 
-def test_max_brain_floats_is_512():
-    assert MAX_BRAIN_FLOATS == 512
+def test_max_brain_floats_is_1024():
+    assert MAX_BRAIN_FLOATS == 1024
 
 
 def test_spec_for_layout_sizes_the_brain_block():

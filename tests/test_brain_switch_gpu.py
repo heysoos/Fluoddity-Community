@@ -134,15 +134,15 @@ def test_a_rule_of_the_wrong_width_does_not_crash(sim, ctx, name):
 
 
 def test_the_readback_buffer_is_resized_by_the_switch(sim, ctx):
-    """It is BRAIN_LEN floats per particle. Left at the old width, a wider
-    layout reads past the end of its own row on adopt."""
+    """It is ONE brain of BRAIN_LEN floats, and must not scale with the
+    particle count. Left at the old width, a wider layout reads past the end of
+    it on adopt."""
     from services.brains import REGISTRY
 
     for name in MODALITIES:
         layout = REGISTRY[name].layout_from_settings({})
         sim.realloc_brain_buffers(layout)
-        want = sim.entity_count * layout.length * 4
-        assert sim.get_rule_buffer().size == want, name
+        assert sim.get_rule_buffer().size == layout.length * 4, name
 
 
 def test_adoption_returns_the_right_width_after_a_switch(sim, ctx):
@@ -162,7 +162,7 @@ def test_adoption_returns_the_right_width_after_a_switch(sim, ctx):
         sim.request_rule_buffer_update(0)
         sim.apply_state(st)
         sim.entity_update(ctx)
-        got = readback_rule(sim.get_rule_buffer(), 0, layout).reshape(-1)
+        got = readback_rule(sim.get_rule_buffer(), layout).reshape(-1)
         assert got.shape == want.shape, name
         assert np.allclose(got, want, atol=1e-5), (
             f"{name}: adopted brain differs from the one that was loaded"

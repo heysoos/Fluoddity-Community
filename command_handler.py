@@ -127,10 +127,9 @@ class CommandHandler:
         self._pending_entity_selection = None
 
         # Read back the rule (buffer was just written by entity_update).
-        # The buffer's stride is the active brain length, so the layout must
-        # come from the sim rather than defaulting to Fourier.
-        rule = readback_rule(self.sim.get_rule_buffer(), entity_id,
-                             self.sim.brain_layout)
+        # The buffer holds the active brain's floats, so the layout must come
+        # from the sim rather than defaulting to Fourier.
+        rule = readback_rule(self.sim.get_rule_buffer(), self.sim.brain_layout)
         self.rule_manager.push_rule(rule, ui_state.sim.rule_seed)
         self.sim.apply_rule(rule)
         self.sim.update_sliders_from_particle(entity_pos, entity_cohort)

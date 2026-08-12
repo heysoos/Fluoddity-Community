@@ -4,7 +4,7 @@
 // stride with no padding, so packing is a straight memcpy and there is no
 // struct alignment to get wrong. Manual mode uses slot 0; tournament mode uses
 // the tile index; multi-load uses the config index.
-#define MAX_BRAIN_FLOATS 512
+#define MAX_BRAIN_FLOATS 1024
 
 // Where the per-cohort generated brains start in the flat buffer, in SLOTS.
 // The slots below this belong to multi-load configs and tournament tiles.
@@ -15,9 +15,10 @@ layout(std430, binding = 4) buffer BrainBuffer {
     float brain_params[];
 };
 
-// Per-particle brains, written only when WRITE_RULES is set (click-to-adopt).
-// Sized to BRAIN_LEN floats per particle by the host, NOT MAX_BRAIN_FLOATS: at
-// the max stride this would be ~1 KB per particle, about 600 MB.
+// The adopted brain, written only when WRITE_RULES is set (click-to-adopt).
+// ONE brain of BRAIN_LEN floats, at offset 0: the writeback is scoped to the
+// single particle being read back, so a row per particle would be bytes nobody
+// looks at.
 //
 // Declared here rather than in entity_update.glsl so brain_write() can live
 // beside the modalities - it is prepended ahead of the dispatch, whereas
@@ -35,8 +36,8 @@ uniform ivec4 BRAIN_SHAPE;      // structural ints (n_centers, hidden width, ...
 // Brain Inspector can call it unchanged (both stay 0 there).
 //
 // Applied on READ. The obvious alternative - copy the brain into a local
-// float[MAX_BRAIN_FLOATS], mutate, then evaluate - is 2 KB per invocation and
-// spills to local memory for every particle every frame.
+// float[MAX_BRAIN_FLOATS], mutate, then evaluate - is kilobytes per invocation
+// and spills to local memory for every particle every frame.
 // Set by the host when no rule is loaded: every cohort then reads its OWN
 // generated brain out of the cohort slots instead of sharing slot 0.
 uniform int BRAIN_PER_COHORT;

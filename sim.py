@@ -96,11 +96,12 @@ class Sim:
 
         # Allocate state buffers
         self.entities = self.ctx.buffer(reserve=self.entity_count * SIZE_OF_ENTITY_STRUCT)
-        # Per-particle brains, for click-to-adopt. Sized to the ACTIVE brain
-        # length, never MAX_BRAIN_FLOATS: at the max stride this would be ~1 KB
-        # per particle, about 600 MB. realloc_brain_buffers resizes it.
+        # The adopted brain, for click-to-adopt. ONE brain of the ACTIVE length:
+        # the writeback is scoped to the single particle being read back, so a
+        # row per particle would be ~600 MB of bytes nobody looks at.
+        # realloc_brain_buffers resizes it.
         self.rule_buffer = self.ctx.buffer(
-            reserve=self.entity_count * self._brain_layout.length * 4)
+            reserve=self._brain_layout.length * 4)
 
         # Multi-load config buffer (see MULTI_LOAD_CONFIG_SIZE above).
         MAX_MULTI_LOAD_CONFIGS = 64
@@ -1091,11 +1092,10 @@ class Sim:
         self.multi_load_rule_buffer.write(pack_brains([decoded], layout))
 
     def realloc_brain_buffers(self, layout) -> None:
-        """Resize the per-particle brain buffer for a new layout.
+        """Resize the adopted-brain buffer for a new layout.
 
-        It is BRAIN_LEN floats per particle, NOT MAX_BRAIN_FLOATS: at the max
-        stride this would be ~1 KB per particle, about 600 MB at the default
-        count. The flat brain buffer needs no resize - its slots are a fixed
+        It is BRAIN_LEN floats, NOT MAX_BRAIN_FLOATS and NOT one row per
+        particle. The flat brain buffer needs no resize - its slots are a fixed
         stride wide whatever the layout.
 
         Called on every layout change, which already resets the optimizer and
@@ -1103,8 +1103,7 @@ class Sim:
         """
         self._brain_layout = layout
         self.rule_buffer.release()
-        self.rule_buffer = self.ctx.buffer(
-            reserve=self.entity_count * layout.length * 4)
+        self.rule_buffer = self.ctx.buffer(reserve=layout.length * 4)
         self.rule_buffer.bind_to_storage_buffer(2)
 
     def get_entity_buffer(self) -> moderngl.Buffer:
@@ -1118,8 +1117,8 @@ class Sim:
     def request_rule_buffer_update(self, entity_id: int) -> None:
         """Request a one-time rule buffer write for the next frame.
 
-        This triggers the expensive rule buffer write (192MB) for exactly one frame,
-        allowing subsequent readback of the mutated rule for the specified entity.
+        One particle writes its brain to the front of the buffer, and
+        readback_rule() reads it there.
 
         Args:
             entity_id: The entity index to read back after the buffer is written

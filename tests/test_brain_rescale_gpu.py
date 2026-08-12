@@ -46,7 +46,7 @@ def sim(ctx):
 
 def _slot0(sim):
     """What is actually on the GPU, not what Python believes."""
-    return np.asarray(readback_rule(sim.multi_load_rule_buffer, 0,
+    return np.asarray(readback_rule(sim.multi_load_rule_buffer,
                                     sim.brain_layout),
                       dtype=np.float32).reshape(-1)
 

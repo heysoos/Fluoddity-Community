@@ -8,10 +8,14 @@ never leaves +/-0.1, which degenerates it into a scaled Fourier.
 
 Measured exactly, not inferred: a throwaway copy of entity_update.glsl writes
 vec4(ltap.xy, rtap.xy) - the literal argument to calculate_entity_behavior - into
-the per-particle rule buffer, and this reads it back. The shader is restored
-afterwards. Nothing here reimplements the tap maths on the CPU, because the
-sensor offsets depend on orientation, sensor angle, gain and world size and a
+the adopted-brain buffer at binding 2, and this reads it back. The shader is
+restored afterwards. Nothing here reimplements the tap maths on the CPU, because
+the sensor offsets depend on orientation, sensor angle, gain and world size and a
 CPU copy of that would drift.
+
+That buffer holds ONE brain in the app, so this widens it to a row per particle
+for the duration of the run. Nothing in the app may do that - see the caveat on
+the writeback's scope.
 
 usage: brain_input_scale.py <tree-root> [steps]
 """
@@ -51,6 +55,16 @@ PROBE = ANCHOR + """
 """
 
 
+def widen_probe_buffer(ctx, sim):
+    """Give binding 2 a row per particle, which the probe writes into."""
+    want = sim.entity_count * sim.brain_layout.length * 4
+    if sim.rule_buffer.size == want:
+        return
+    sim.rule_buffer.release()
+    sim.rule_buffer = ctx.buffer(reserve=want)
+    sim.rule_buffer.bind_to_storage_buffer(2)
+
+
 def measure(ctx, sim, saver, name):
     path = Path(TREE) / "physics_configs" / "Core" / f"{name}.json"
     cfg = saver.load_from_file(path)
@@ -60,6 +74,7 @@ def measure(ctx, sim, saver, name):
     rule = saver.apply_config(cfg, st)
     sim.apply_state(st)
     sim.apply_rule(rule)
+    widen_probe_buffer(ctx, sim)         # after any layout change apply_rule made
     sim.reset_seed = 0.0
     sim.reset()
     for _ in range(STEPS):

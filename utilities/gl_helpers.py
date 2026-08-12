@@ -40,22 +40,23 @@ def tryset(program:moderngl.Program,uniform,value):
         if MUTED_TRYSET_WARNINGS[uniform]<10:
             print('Warning: ',uniform,' not present in ',program)
 
-def readback_rule(rule_buffer, rule_index, layout=None):
+def readback_rule(rule_buffer, layout=None):
     """
-    Read back a single brain from the per-particle buffer.
+    Read the brain at the START of a buffer, as `layout`.
 
-    The buffer's stride is the ACTIVE brain length, not MAX_BRAIN_FLOATS - see
-    Sim.realloc_brain_buffers for why. Fourier brains keep their (N, 8) shape
-    so click-to-adopt hands the rest of the app what it has always expected.
+    Reads ONE brain of `layout.length` floats from offset 0. That is the whole
+    of the per-particle readback buffer - click-to-adopt writes the one particle
+    it was asked for and nothing else reads it - and slot 0 of the flat brain
+    buffer. Fourier brains keep their (N, 8) shape so click-to-adopt hands the
+    rest of the app what it has always expected.
     """
     from services.brains import default_layout
 
     layout = layout or default_layout()
     stride_bytes = layout.length * 4
-    offset = rule_index * stride_bytes
 
     data = np.frombuffer(
-        rule_buffer.read(size=stride_bytes, offset=offset), dtype=np.float32)
+        rule_buffer.read(size=stride_bytes, offset=0), dtype=np.float32)
     if layout.modality == "fourier":
         return data.reshape(layout.shape[0], 8)
     return data.copy()
