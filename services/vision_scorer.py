@@ -116,6 +116,23 @@ def _l2(a: np.ndarray) -> np.ndarray:
     return a / np.maximum(np.linalg.norm(a, axis=-1, keepdims=True), 1e-8)
 
 
+def pick_embedding_output(outputs, preferred) -> str:
+    """The POOLED embedding among an ONNX session's outputs.
+
+    Never output 0 by position: SigLIP's exports put last_hidden_state first on
+    both towers, which is a (N, tokens, dim) tensor, and the mismatch only
+    surfaces as a matmul error much further downstream.
+    """
+    names = {o.name for o in outputs}
+    for pref in preferred:
+        if pref in names:
+            return pref
+    for o in outputs:
+        if len(o.shape) == 2:
+            return o.name
+    return outputs[0].name
+
+
 class VisionScorer:
     """Turns a text prompt into a per-image fitness in [0, 1]."""
 
@@ -159,7 +176,8 @@ class VisionScorer:
         self._outputs = self._vision.get_outputs()
         self._vision_out = self._pick_output()
         self._text_in = self._text.get_inputs()[0].name
-        self._text_out = self._text.get_outputs()[0].name
+        self._text_out = pick_embedding_output(
+            self._text.get_outputs(), ("text_embeds", "pooler_output"))
 
         self._tokenizer = Tokenizer.from_file(str(d / "tokenizer.json"))
         self._tokenizer.enable_truncation(self._model.context)
@@ -180,17 +198,9 @@ class VisionScorer:
         return self._prompt
 
     def _pick_output(self) -> str:
-        """The pooled image embedding. CLIP exports name it image_embeds,
-        SigLIP's is pooler_output. Taking output 0 by position picks
-        last_hidden_state on the SigLIP export."""
-        names = {o.name for o in self._outputs}
-        for pref in ("image_embeds", "pooler_output"):
-            if pref in names:
-                return pref
-        for o in self._outputs:
-            if len(o.shape) == 2:
-                return o.name
-        return self._outputs[0].name
+        """The pooled IMAGE embedding."""
+        return pick_embedding_output(self._outputs,
+                                     ("image_embeds", "pooler_output"))
 
     def set_prompt(self, text: str, distractors: list[str] | None = None) -> None:
         """Embed the target prompt (index 0) plus distractors. Cached until the

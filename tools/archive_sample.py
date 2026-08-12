@@ -122,17 +122,12 @@ class Encoder:
         self.dim = None
 
     def _pick_output(self) -> str:
-        """CLIP exports name it image_embeds, SigLIP's is pooler_output.
-        Output 0 by position is last_hidden_state on the SigLIP export."""
-        outs = self.sess.get_outputs()
-        names = {o.name for o in outs}
-        for pref in ("image_embeds", "pooler_output"):
-            if pref in names:
-                return pref
-        for o in outs:
-            if len(o.shape) == 2:
-                return o.name
-        return outs[0].name
+        """Shared with the scorer rather than reimplemented - picking the wrong
+        output surfaces as a matmul error far from its cause."""
+        from services.vision_scorer import pick_embedding_output
+
+        return pick_embedding_output(self.sess.get_outputs(),
+                                     ("image_embeds", "pooler_output"))
 
     def embed(self, images: np.ndarray, chunk: int = 64) -> np.ndarray:
         """uint8 (N,px,px,3) -> float32 (N,D) L2-normalised."""

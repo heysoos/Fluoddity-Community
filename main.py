@@ -269,9 +269,11 @@ class App:
         layout = (getattr(getattr(self, "sim", None), "brain_layout", None)
                   or default_layout())
         store = ArchiveStore(path, layout)
-        archive = Archive(store=store, layout=layout)
+        # The archive's own encoder, not whatever happens to be resident: its
+        # stored vectors are only comparable to that one.
+        archive = Archive(store=store, layout=layout, encoder=store.encoder)
         loaded, dropped = archive.load_from_store()
-        print(f"[archive] {path.name}/{layout.signature()}: "
+        print(f"[archive] {path.name}/{layout.signature()} [{store.encoder}]: "
               f"loaded {loaded} entries ({dropped} dropped)")
 
         goals = GoalList(store=store)

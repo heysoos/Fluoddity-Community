@@ -90,13 +90,21 @@ DEFAULT_MIN_SEPARATION = 0.02
 
 class Archive:
     def __init__(self, store=None, capacity: int = 20000, k: int = 10,
-                 liveness_min: float = 0.002, dim: int = 512,
+                 liveness_min: float = 0.002, dim: int | None = None,
                  min_separation: float = DEFAULT_MIN_SEPARATION,
-                 layout=None):
+                 layout=None, encoder: str | None = None):
         # seed_n lives on the driver (it picks bootstrap vs expansion), not
         # here - admission has no novelty gate to hold off.
         from services.brains import default_layout
+        from services.vision_models import DEFAULT_KEY
+        from services.vision_models import get as get_model
 
+        # Which embedding space the stored vectors are in. An explicit dim
+        # still wins: many call sites build a narrow Archive for speed.
+        self.encoder = str(encoder or DEFAULT_KEY)
+        self.encoder_mismatch = ""
+        if dim is None:
+            dim = get_model(self.encoder).dim
 
         self.store = store
         self.capacity = int(capacity)
@@ -545,7 +553,17 @@ class Archive:
         The running layout is loaded first, so a single-layout archive keeps
         exactly the row order it has always had.
         """
+        self.encoder_mismatch = ""
         if self.store is None:
+            return 0, 0
+        # Nothing downstream compares encoders: at equal width a foreign vector
+        # is silently wrong rather than an error, so this is the only place the
+        # mistake is catchable.
+        if self.store.encoder != self.encoder:
+            self.encoder_mismatch = (
+                f"this archive was built with {self.store.encoder}; "
+                f"the search is running {self.encoder}")
+            print(f"[Archive] {self.encoder_mismatch}; nothing loaded")
             return 0, 0
         from services.archive_io import ArchiveStore, signature_dirs
 

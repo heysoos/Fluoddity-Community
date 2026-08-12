@@ -6,6 +6,7 @@ from services.vision_scorer import (
     DEFAULT_DISTRACTORS,
     VisionScorer,
     augment,
+    pick_embedding_output,
     preprocess,
 )
 
@@ -159,20 +160,34 @@ def test_preprocess_uses_the_models_normalisation_not_clips():
     assert abs(float(preprocess(grey, B32).mean())) > 0.05
 
 
-def test_output_preference_picks_the_pooled_embedding():
+def _out(name, shape):
+    return type("O", (), {"name": name, "shape": shape})()
+
+
+def test_output_preference_picks_the_pooled_image_embedding():
     """SigLIP's export puts last_hidden_state first, so output 0 by position is
     a (N, tokens, dim) tensor rather than an embedding."""
-    def out(name, shape):
-        return type("O", (), {"name": name, "shape": shape})()
-
     s = VisionScorer.__new__(VisionScorer)
-    s._outputs = [out("last_hidden_state", [1, 197, 768]),
-                  out("pooler_output", [1, 768])]
+    s._outputs = [_out("last_hidden_state", [1, 197, 768]),
+                  _out("pooler_output", [1, 768])]
     assert s._pick_output() == "pooler_output"
-    s._outputs = [out("image_embeds", [1, 512])]
+    s._outputs = [_out("image_embeds", [1, 512])]
     assert s._pick_output() == "image_embeds"
-    s._outputs = [out("last_hidden_state", [1, 197, 768]), out("odd", [1, 768])]
+    s._outputs = [_out("last_hidden_state", [1, 197, 768]), _out("odd", [1, 768])]
     assert s._pick_output() == "odd", "fall back to the first rank-2 output"
+
+
+def test_the_text_tower_picks_by_name_too():
+    """BOTH towers need this. Fixing only the vision side left SigLIP's text
+    encoder returning (N, 64, 768), which surfaces as a matmul error a long way
+    downstream rather than where the wrong tensor was chosen."""
+    outs = [_out("last_hidden_state", [1, 64, 768]),
+            _out("pooler_output", [1, 768])]
+    assert pick_embedding_output(outs, ("text_embeds", "pooler_output")) == \
+        "pooler_output"
+    clip = [_out("text_embeds", [1, 512]), _out("last_hidden_state", [1, 77, 512])]
+    assert pick_embedding_output(clip, ("text_embeds", "pooler_output")) == \
+        "text_embeds"
 
 
 def test_an_unknown_model_key_is_refused_before_any_session_loads():
