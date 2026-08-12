@@ -137,7 +137,7 @@ def _handler(archive=None, store=None):
     h._archive_preview_pushed = False
     h._archive_preview_physics = None
     h._archive_preview_arc = None
-    h._borrowed_from_layout = None
+    h._borrow = None
     return h
 
 

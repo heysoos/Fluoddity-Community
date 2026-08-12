@@ -107,7 +107,7 @@ def _handler(sim, configs):
     h.ui = _MenuUI(configs)
     h.config_saver = _Saver(h.ui)
     h._pending_brain_rule = None
-    h._borrowed_from_layout = None
+    h._borrow = None
     h.preview_rule_active = False
     h._preview_rule_was_pushed = False
     h.switches = []
@@ -197,7 +197,7 @@ def test_moving_off_the_menu_gives_the_user_s_brain_back():
     _unhover(h, ui_state)
 
     assert sim.brain_layout == FOURIER
-    assert h._borrowed_from_layout is None
+    assert h._borrow is None
     rule, live = sim.applied[-1]
     assert live == FOURIER and rule.size == FOURIER.length
 
@@ -224,7 +224,7 @@ def test_a_same_brain_config_borrows_nothing():
 
     _hover(h, ui_state, "p")
 
-    assert h._borrowed_from_layout is None
+    assert h._borrow is None
     assert sim.brain_layout == FOURIER
     _click(h, ui_state, "p")
     h._handle_brain_layout(ui_state)
@@ -241,7 +241,7 @@ def test_a_signature_this_build_cannot_rebuild_borrows_nothing():
 
     _hover(h, ui_state, "p")
 
-    assert h._borrowed_from_layout is None
+    assert h._borrow is None
     assert sim.brain_layout == FOURIER
     assert sim.applied == [], "a rule of the wrong width must not be applied"
 
@@ -258,3 +258,60 @@ def test_a_click_with_no_hover_still_loads():
 
     assert [lay for lay, _ in h.switches] == [layout]
     assert ui_state.brain.modality == "mlp"
+
+
+# ---- the borrow has an OWNER --------------------------------------------
+#
+# Two things borrow a layout now: the Load menu and the archive gallery. They
+# run in the same frame, the gallery second, and its teardown used to return
+# whatever was borrowed - so the menu's borrow was gone before the click could
+# turn it into a switch, and the preset silently did not load. Reproduced here
+# by running the frame in its real order.
+
+def _archive_frame(h, ui_state):
+    """_handle_archive_preview, which process_commands runs every frame after
+    the menu preview - whether or not an archive is open."""
+    h.archive = None
+    h._archive_preview_id = -1
+    h._archive_preview_pushed = False
+    h._archive_preview_physics = None
+    h._archive_preview_arc = None
+    h._handle_archive_preview(ui_state)
+
+
+def test_the_gallery_teardown_does_not_steal_the_menu_s_borrow():
+    layout = layout_for("mlp", {})
+    cfg = _Config(layout)
+    sim = _Sim(FOURIER)
+    h, ui_state = _handler(sim, {"p": cfg})
+
+    _hover(h, ui_state, "p")
+    _archive_frame(h, ui_state)              # the rest of the same frame
+    assert h._borrow is not None, (
+        "the archive teardown returned a layout it does not own")
+    assert sim.brain_layout == layout, "the hover preview was undone"
+
+    _click(h, ui_state, "p")
+    h._handle_brain_layout(ui_state)
+
+    assert len(h.switches) == 1, "the click did not switch"
+    got_layout, handed = h.switches[0]
+    assert got_layout == layout
+    assert handed is not None and np.allclose(handed, cfg.rule)
+
+
+def test_a_frame_of_gallery_teardown_between_hover_and_click():
+    """Several frames pass while the pointer sits on the menu item."""
+    layout = layout_for("gabor", {})
+    cfg = _Config(layout)
+    sim = _Sim(FOURIER)
+    h, ui_state = _handler(sim, {"p": cfg})
+
+    _hover(h, ui_state, "p")
+    for _ in range(5):
+        _archive_frame(h, ui_state)
+    assert sim.brain_layout == layout
+
+    _click(h, ui_state, "p")
+    h._handle_brain_layout(ui_state)
+    assert [lay for lay, _ in h.switches] == [layout]

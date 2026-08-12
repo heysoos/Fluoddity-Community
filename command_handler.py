@@ -57,9 +57,9 @@ class CommandHandler:
         self._archive_preview_pushed = False
         self._archive_preview_physics = None
         self._archive_preview_arc = None
-        # The layout the sim had before a preview BORROWED another brain's.
-        # Not None means a borrow is live; see _borrow_layout.
-        self._borrowed_from_layout = None
+        # (owner, layout) while a preview has BORROWED another brain, where
+        # layout is the one the sim had before it. See _borrow_layout.
+        self._borrow = None
         self.clipboard_preview_active = False  # Config clipboard preview
         self._clipboard_rule_was_pushed = False  # Whether clipboard preview actually pushed a rule
         self._clipboard_cached_config = None  # Full config saved before clipboard preview
@@ -246,7 +246,7 @@ class CommandHandler:
         bst.request_layout_change = False
         if self.apply_brain_layout is None:
             return
-        if self._borrowed_from_layout is not None:
+        if self._borrow is not None:
             # A preview is borrowing another brain's layout. The window still
             # reads the user's own, so applying it here would switch archive
             # and reset the optimizer to undo the hover - every frame.
@@ -856,13 +856,17 @@ class CommandHandler:
 
     # ---- borrowing another brain's layout for a preview ----------------
 
-    def _borrow_layout(self, layout) -> bool:
+    def _borrow_layout(self, layout, owner) -> bool:
         """Point the sim at `layout` for the duration of a preview. -> did it.
 
         Only the GPU side moves: the buffer is resized and the modality uniform
         follows the sim's own layout. The archive, the optimizer and the Brain
         window keep the user's brain, so nothing here pays for the teardown a
         real switch does - which is what makes this cheap enough to hover.
+
+        `owner` names the preview holding it, and only that owner may give it
+        back. Two of them borrow - the Load menu and the archive gallery - and
+        both run every frame, the gallery second.
 
         Re-borrowing keeps the FIRST base. Sliding down the Load menu across
         two brains borrows twice with no return in between, and remembering the
@@ -871,17 +875,28 @@ class CommandHandler:
         current = getattr(self.sim, "brain_layout", None)
         if current is None or not hasattr(self.sim, "realloc_brain_buffers"):
             return False
-        if self._borrowed_from_layout is None:
-            self._borrowed_from_layout = current
+        if self._borrow is None:
+            self._borrow = (owner, current)
         if layout != current:
             self.sim.realloc_brain_buffers(layout)
         return True
 
-    def _return_layout(self) -> None:
-        """Give the user's own brain back. Must run before the rule under it."""
-        layout, self._borrowed_from_layout = self._borrowed_from_layout, None
-        if layout is not None and layout != self.sim.brain_layout:
-            self.sim.realloc_brain_buffers(layout)
+    def _holds_borrow(self, owner) -> bool:
+        return self._borrow is not None and self._borrow[0] == owner
+
+    def _return_layout(self, owner) -> None:
+        """Give the user's own brain back. Must run before the rule under it.
+
+        A no-op unless `owner` is the preview that took it: the gallery's
+        teardown runs every frame, and returning a layout it does not own left
+        the Load menu's hover undone before the click could keep it.
+        """
+        if not self._holds_borrow(owner):
+            return
+        _who, base = self._borrow
+        self._borrow = None
+        if base != self.sim.brain_layout:
+            self.sim.realloc_brain_buffers(base)
 
     def _config_borrow_layout(self, config):
         """The layout a config must be previewed under, or None to stay put.
@@ -959,7 +974,7 @@ class CommandHandler:
                 # The borrow ends here and the real switch takes over, so the
                 # sim must be holding the user's own layout for it to switch
                 # FROM. The physics stay: this is a commit, not a restore.
-                self._return_layout()
+                self._return_layout("gallery")
                 if self._adopt_foreign_entry(ui_state, row):
                     self._archive_preview_id = -1
                     self._archive_preview_physics = None
@@ -1046,7 +1061,7 @@ class CommandHandler:
         pls = self.param_lock_service
         blocked = bool(pls and pls.should_block_rule_push())
         if borrowed is not None and not blocked:
-            blocked = not self._borrow_layout(borrowed)
+            blocked = not self._borrow_layout(borrowed, "gallery")
         if not blocked:
             self.rule_manager.push_rule(rule, sim_state.rule_seed)
             self.sim.apply_rule(rule)
@@ -1057,11 +1072,11 @@ class CommandHandler:
     def _end_archive_preview(self, ui_state):
         """Put back whatever was running before the preview."""
         if self._archive_preview_id < 0:
-            self._return_layout()
+            self._return_layout("gallery")
             return
         # Before the rule: what comes off the stack is the user's own brain,
         # and apply_rule measures it against whatever layout is live.
-        self._return_layout()
+        self._return_layout("gallery")
         if self._archive_preview_pushed:
             prev_rule, prev_seed = self.rule_manager.pop_rule()
             if prev_seed is not None:
@@ -1440,13 +1455,13 @@ class CommandHandler:
             # finalize. EXCEPT the brain: the hover only borrows a layout, so a
             # config naming another one still needs the real switch, and
             # finalizing alone left the preset unloaded while reporting success.
-            borrowed = self._borrowed_from_layout is not None
+            borrowed = self._holds_borrow("menu")
             self.preview_rule_active = False
             self._preview_rule_was_pushed = False
             if borrowed:
                 # Give the layout back first, or the switch has nothing to
                 # switch FROM and early-returns.
-                self._return_layout()
+                self._return_layout("menu")
                 config = self.config_saver.load_from_file(
                     self.ui._get_config_path(filename, category))
                 if config is not None:
@@ -1485,7 +1500,7 @@ class CommandHandler:
             if self.preview_rule_active:
                 # Before the rule: what comes off the stack is the user's own
                 # brain, and apply_rule measures a rule against the live layout.
-                self._return_layout()
+                self._return_layout("menu")
                 if self._preview_rule_was_pushed:
                     prev_rule, prev_seed = self.rule_manager.pop_rule()
                     if prev_seed is not None:
@@ -1515,7 +1530,7 @@ class CommandHandler:
                     # it rebuilds the archive and would fire per menu item.
                     borrow = self._config_borrow_layout(config)
                     if borrow is not None:
-                        self._borrow_layout(borrow)
+                        self._borrow_layout(borrow, "menu")
 
                     pls = self.param_lock_service
                     if not (pls and pls.should_block_rule_push()) and self._rule_fits(config):

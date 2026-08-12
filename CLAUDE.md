@@ -774,8 +774,16 @@ mechanics these caveats assume.
   a click with no hover) go through `_apply_config_with_locks` and were never
   affected, which is why fixing those looked like fixing the feature.
   `_config_borrow_layout` takes the decode scales from the file's own
-  `brain_settings`, which an archive entry does not have. Guarded by
-  `tests/test_menu_cross_brain_load.py`.
+  `brain_settings`, which an archive entry does not have.
+
+  **A borrow therefore has an OWNER, and only its owner may return it.** Two
+  previews borrow - `"menu"` and `"gallery"` - and both run every frame, the
+  gallery second. Its teardown fires whenever no entry is hovered, so an
+  unowned return undid the menu's borrow in the same frame it was taken, and
+  the click then found nothing to make permanent: the exact symptom the borrow
+  was added to fix, one layer down. Guarded by
+  `tests/test_menu_cross_brain_load.py`, which runs `_handle_archive_preview`
+  between the hover and the click because testing the menu alone missed it.
 
 - **A hover BORROWS another brain; only a click switches to one.** A switch
   releases and rebuilds the archive — `load_from_store` rescores every entry —
