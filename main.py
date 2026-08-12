@@ -901,6 +901,9 @@ class App:
         self.sim.apply_state(_audio_sim)
         if _audio_brain is not None:
             self.sim.apply_rule(_audio_brain)
+        # The panel draws the modulation inside each slider's own track.
+        self.ui.audio_overlays = self.audio_runtime.overlays(
+            ui_state, _audio_sim)
         self.sim.apply_camera_state(ui_state.camera)
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)

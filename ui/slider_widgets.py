@@ -3,6 +3,22 @@ from imgui_bundle import imgui
 from .physics_params import PARAM_BY_LABEL
 
 
+def swing_fraction(base: float, lo: float, hi: float,
+                   reach: float) -> tuple[float, float]:
+    """Where the modulation's reachable span sits on the track, as (start, width).
+
+    Both are fractions in [0,1], clipped to the track, so the hatching can never
+    be drawn outside the slider it belongs to.
+    """
+    span = hi - lo
+    if span <= 0.0:
+        return 0.0, 0.0
+    a = min(1.0, max(0.0, (base - lo) / span))
+    b = min(1.0, max(0.0, (reach - lo) / span))
+    start, end = (a, b) if a <= b else (b, a)
+    return start, end - start
+
+
 class SliderWidgetsMixin:
     """Mixin for slider widget utilities. Combined into UI via multiple inheritance."""
 
@@ -69,6 +85,9 @@ class SliderWidgetsMixin:
         slider_label = display_label if display_label else label
         changed, new_value = imgui.slider_float(slider_label, value, min_val, max_val, format=display_format)
 
+        # An unbound slider draws nothing extra, so it stays pixel-identical.
+        self._draw_audio_swing(param_name)
+
         # Check alt-click for lock toggle (intercept suppresses the value change)
         pls = self.param_lock_service
         if pls and pls.handle_alt_click(param_name):
@@ -94,6 +113,43 @@ class SliderWidgetsMixin:
             changed = True
 
         return changed, new_value
+
+    def _draw_audio_swing(self, param_name):
+        """Draw the modulation inside the slider's own track.
+
+        The hatched band is the span a full-scale signal could reach, the pale
+        tick is the value the user set, and the bright mark is the live one.
+        Draws nothing at all when the parameter has no mapping.
+        """
+        overlay = getattr(self, "audio_overlays", {}).get(param_name)
+        if not overlay:
+            return
+        p0 = imgui.get_item_rect_min()
+        p1 = imgui.get_item_rect_max()
+        dl = imgui.get_window_draw_list()
+        w = p1.x - p0.x
+        lo, hi = overlay["lo"], overlay["hi"]
+        colour = overlay["color"]
+
+        start, width = swing_fraction(overlay["base"], lo, hi, overlay["reach"])
+        if width > 0.0:
+            dl.add_rect_filled(
+                imgui.ImVec2(p0.x + w * start, p0.y),
+                imgui.ImVec2(p0.x + w * (start + width), p1.y),
+                imgui.get_color_u32(imgui.ImVec4(colour[0], colour[1],
+                                                 colour[2], 0.18)))
+
+        base_x = p0.x + w * swing_fraction(overlay["base"], lo, hi,
+                                           overlay["base"])[0]
+        dl.add_rect_filled(
+            imgui.ImVec2(base_x, p0.y + 1), imgui.ImVec2(base_x + 1.0, p1.y - 1),
+            imgui.get_color_u32(imgui.ImVec4(0.72, 0.72, 0.77, 0.9)))
+
+        live_x = p0.x + w * swing_fraction(overlay["live"], lo, hi,
+                                           overlay["live"])[0]
+        dl.add_rect_filled(
+            imgui.ImVec2(live_x - 1.0, p0.y), imgui.ImVec2(live_x + 2.0, p1.y),
+            imgui.get_color_u32(imgui.ImVec4(*colour)))
 
     def add_slider_context_menu(self, slider_name, default_min, default_max):
         """
@@ -177,6 +233,15 @@ class SliderWidgetsMixin:
 
             if imgui.button(button_label):
                 reset_requested = True
+
+            imgui.separator()
+
+            # Opens the panel on this row; binding still happens in one place.
+            if imgui.button(f"Audio...##{slider_name}"):
+                self.state.audio.show_window = True
+                self.state.audio.open_target = self._label_to_param_name(
+                    slider_name) or ""
+                imgui.close_current_popup()
 
             imgui.end_popup()
 

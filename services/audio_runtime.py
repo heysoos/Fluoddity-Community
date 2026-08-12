@@ -78,6 +78,42 @@ class AudioRuntime:
                                        brain_layout, current_rule)
         return sim_out, brain_out
 
+    def overlays(self, ui_state, modulated_sim) -> dict:
+        """Per-target drawing data for the physics sliders.
+
+        `reach` is where a full-scale signal would land, so the hatching shows
+        the modulation's size rather than its current value.
+        """
+        ast = ui_state.audio
+        if not ast.enabled or modulated_sim is ui_state.sim:
+            return {}
+        from ui.audio_reactive_window import SIGNAL_COLORS
+
+        deaf = deaf_targets(ui_state.sim)
+        targets = {t.key: t for t in physics_targets(ui_state.sim)}
+        signals = {n: 1.0 for n in SIGNAL_COLORS}
+        bases = {k: float(getattr(ui_state.sim, k, 0.0)) for k in targets}
+        # A throwaway shaper state, so probing full scale cannot disturb the
+        # envelopes the live path is carrying.
+        full = modulate(bases, list(targets.values()), ast.mappings, signals,
+                        dict(), ast.strengths, ast.global_strength, 1 / 60.0,
+                        deaf)
+
+        out = {}
+        for key, target in targets.items():
+            bound = [m for m in ast.mappings
+                     if m.target == key and m.enabled and key not in deaf]
+            if not bound:
+                continue
+            out[key] = {
+                "lo": target.lo, "hi": target.hi,
+                "base": bases[key],
+                "live": float(getattr(modulated_sim, key, bases[key])),
+                "reach": full.get(key, bases[key]),
+                "color": SIGNAL_COLORS[bound[0].signal],
+            }
+        return out
+
     def _update_brain(self, ui_state, ast, signals, dt, layout, current_rule):
         if layout is None or current_rule is None:
             return None

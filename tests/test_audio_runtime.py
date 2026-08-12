@@ -134,3 +134,56 @@ def test_close_is_safe_to_call_twice():
     rt = AudioRuntime()
     rt.close()
     rt.close()
+
+
+# --- the in-track overlay ----------------------------------------------------
+
+def test_an_unmodulated_run_offers_no_overlays():
+    """An unbound slider must stay pixel-identical, so it gets no entry."""
+    rt, st = AudioRuntime(), rig()
+    st.audio.enabled = False
+    sim_out, _ = rt.update(st, 1 / 60, None, None)
+    assert rt.overlays(st, sim_out) == {}
+
+
+def test_a_bound_slider_gets_base_live_reach_and_a_colour():
+    rt, st = runtime_with({"bass": 0.5}), rig()
+    sim_out, _ = rt.update(st, 1 / 60, None, None)
+    ov = rt.overlays(st, sim_out)["SENSOR_GAIN"]
+    assert set(ov) == {"lo", "hi", "base", "live", "reach", "color"}
+    assert ov["base"] == pytest.approx(1.0)
+    assert ov["live"] == pytest.approx(sim_out.SENSOR_GAIN)
+
+
+def test_reach_is_where_a_full_scale_signal_would_land_not_the_live_value():
+    rt, st = runtime_with({"bass": 0.25}), rig()
+    sim_out, _ = rt.update(st, 1 / 60, None, None)
+    ov = rt.overlays(st, sim_out)["SENSOR_GAIN"]
+    assert ov["reach"] > ov["live"]
+
+
+def test_only_bound_targets_appear():
+    rt, st = runtime_with({"bass": 1.0}), rig()
+    sim_out, _ = rt.update(st, 1 / 60, None, None)
+    assert set(rt.overlays(st, sim_out)) == {"SENSOR_GAIN"}
+
+
+def test_a_swept_target_draws_no_overlay():
+    rt, st = runtime_with({"bass": 1.0}), rig()
+    st.sim.x_sweeps["SENSOR_GAIN"] = 1.0
+    sim_out, _ = rt.update(st, 1 / 60, None, None)
+    assert "SENSOR_GAIN" not in rt.overlays(st, sim_out)
+
+
+def test_probing_full_scale_does_not_disturb_the_live_shaper_state():
+    """overlays() drives the mappings at signal 1.0; a shared shaper state
+    would make the next frame's envelope think a peak had just arrived."""
+    from services.audio_shapers import ShaperParams
+
+    rt, st = runtime_with({"bass": 0.0}), rig()
+    st.audio.mappings[0].shaper = ShaperParams(kind="smooth", attack=0.5,
+                                               release=0.5)
+    first, _ = rt.update(st, 1 / 60, None, None)
+    rt.overlays(st, first)
+    second, _ = rt.update(st, 1 / 60, None, None)
+    assert second.SENSOR_GAIN == pytest.approx(first.SENSOR_GAIN, abs=1e-6)
