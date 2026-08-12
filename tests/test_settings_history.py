@@ -92,3 +92,82 @@ def test_a_disabled_store_writes_nothing_and_does_not_raise(tmp_path):
     s.enabled = False
     s.append_history({"v": 0, "ts": 1.0, "gen": 0, "entries": 0, "full": {}})
     assert s.load_history() == []
+
+
+# ---- replay -------------------------------------------------------------
+
+def test_replay_folds_diffs_onto_the_base():
+    from services.settings_history import replay
+
+    rows = [{"v": 0, "full": {"a": 1, "b": 2}},
+            {"v": 1, "changed": {"a": [1, 5]}},
+            {"v": 2, "changed": {"b": [2, 7]}}]
+    assert replay(rows) == {"a": 5, "b": 7}
+
+
+def test_replay_of_nothing_is_empty():
+    from services.settings_history import replay
+
+    assert replay([]) == {}
+
+
+# ---- the version an entry was admitted under ----------------------------
+
+def _archive(tmp_path):
+    from services.archive import Archive
+
+    return Archive(store=_store(tmp_path))
+
+
+def test_the_first_record_writes_version_zero_with_the_full_block(tmp_path):
+    a = _archive(tmp_path)
+    assert a.record_settings({"min_separation": 0.02}, gen=0) == 0
+    rows = a.store.load_history()
+    assert rows[0]["full"]["min_separation"] == 0.02
+    assert rows[0]["full"]["encoder"] == a.encoder
+
+
+def test_an_unchanged_generation_writes_nothing(tmp_path):
+    a = _archive(tmp_path)
+    a.record_settings({"min_separation": 0.02}, gen=0)
+    assert a.record_settings({"min_separation": 0.02}, gen=1) == 0
+    assert len(a.store.load_history()) == 1
+
+
+def test_a_change_bumps_the_version_and_records_the_move(tmp_path):
+    a = _archive(tmp_path)
+    a.record_settings({"min_separation": 0.02}, gen=0)
+    assert a.record_settings({"min_separation": 0.03}, gen=7) == 1
+    row = a.store.load_history()[1]
+    assert row["changed"]["min_separation"] == [0.02, 0.03]
+    assert row["gen"] == 7
+
+
+def test_a_reopened_archive_diffs_against_its_own_history(tmp_path):
+    """The version in force is what the LOG says, not what this session
+    happens to have written - otherwise reopening rewrites version 0."""
+    a = _archive(tmp_path)
+    a.record_settings({"min_separation": 0.02}, gen=0)
+    a.record_settings({"min_separation": 0.03}, gen=5)
+
+    b = _archive(tmp_path)
+    assert b.cfg_version == 1
+    assert b.record_settings({"min_separation": 0.03}, gen=9) == 1
+    assert len(b.store.load_history()) == 2
+
+
+def test_a_storeless_archive_records_nothing(tmp_path):
+    from services.archive import Archive
+
+    a = Archive(store=None)
+    assert a.record_settings({"min_separation": 0.02}, gen=0) == 0
+
+
+def test_an_entry_row_without_a_version_reads_as_zero():
+    """Every entry admitted before this existed."""
+    from services.archive import ArchiveEntry
+
+    e = ArchiveEntry(id=1, novelty=0.5, liveness=0.1, pinned=False,
+                     source="expansion", spec="", goal="", run_id="",
+                     gen=0, tile=0, ts=0.0)
+    assert e.cfg == 0

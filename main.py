@@ -376,7 +376,13 @@ class App:
         """
         if self.archive_store is None:
             return
-        self.archive_store.save_settings(ui_state.archive.to_settings())
+        settings = ui_state.archive.to_settings()
+        self.archive_store.save_settings(settings)
+        # A change made after the last generation would otherwise never reach
+        # the log, since the per-generation hook has stopped firing.
+        if self.archive is not None:
+            gen = int(getattr(self.imgep_driver, "gen", 0) or 0)
+            self.archive.record_settings(settings, gen)
 
     def _load_archive_settings(self, ui_state):
         """Restore an archive's settings, and make a restored grid take effect.
@@ -721,10 +727,22 @@ class App:
             # None while the CLIP pass runs off-thread; retry next frame.
             if fit is not None:
                 self._after_generation(fit)
+                self._record_settings_version(ui_state)
             return 0
         if action is Action.STEP:
             return max(1, int(svc.sim_steps_per_frame))
         return 1
+
+    def _record_settings_version(self, ui_state):
+        """One settings version per generation, and only if something moved.
+
+        Per generation rather than per frame: the diff is cheap but a row per
+        frame would bury the timeline it exists to make readable.
+        """
+        if self.archive is None:
+            return
+        gen = int(getattr(self.imgep_driver, "gen", 0) or 0)
+        self.archive.record_settings(ui_state.archive.to_settings(), gen)
 
     def _after_generation(self, fit):
         """Periodic best-tile frame dump and checkpoint autosave."""

@@ -77,6 +77,9 @@ class ArchiveEntry:
     # column to an append-only file that older builds also write is a
     # migration for nothing.
     layout: str = ""
+    # Which settings version admitted this entry. 0 for everything written
+    # before the log existed, which is what a missing column reads as.
+    cfg: int = 0
 
 
 # Minimum cosine distance between two stored entries; 0 disables the rule.
@@ -103,6 +106,10 @@ class Archive:
         # still wins: many call sites build a narrow Archive for speed.
         self.encoder = str(encoder or DEFAULT_KEY)
         self.encoder_mismatch = ""
+        # The settings version in force. Read from the LOG, not from what this
+        # session wrote, or reopening an archive rewrites version 0.
+        self.cfg_version = max(0, store.latest_version()) if store else 0
+        self._last_settings: dict | None = None
         if dim is None:
             dim = get_model(self.encoder).dim
 
@@ -416,7 +423,7 @@ class Archive:
             id=eid, novelty=float(novelty), liveness=float(cand.liveness),
             pinned=bool(pinned), source=source, spec=cand.spec, goal=cand.goal,
             run_id=cand.run_id, gen=int(cand.gen), tile=int(cand.tile),
-            ts=time.time(), thumb=thumb, layout=sig,
+            ts=time.time(), thumb=thumb, layout=sig, cfg=int(self.cfg_version),
         )
         self.entries.append(entry)
         if self.store is not None:
@@ -428,6 +435,40 @@ class Archive:
         self._since_flush += 1
         self.revision += 1
         return entry
+
+    def record_settings(self, current: dict, gen: int) -> int:
+        """Append a settings version if anything moved. -> the version in force.
+
+        Called once per generation and once more when the archive closes, never
+        per frame. The encoder rides along so the log is self-contained.
+        """
+        from services.settings_history import diff, replay
+
+        if self.store is None:
+            return self.cfg_version
+        data = dict(current)
+        data["encoder"] = self.encoder
+
+        if self._last_settings is None:
+            rows = self.store.load_history()
+            if not rows:
+                self.store.append_history({
+                    "v": 0, "ts": time.time(), "gen": int(gen),
+                    "entries": len(self.entries), "full": data})
+                self._last_settings = data
+                self.cfg_version = 0
+                return 0
+            self._last_settings = replay(rows)
+
+        moved = diff(self._last_settings, data)
+        if not moved:
+            return self.cfg_version
+        self.cfg_version = self.store.latest_version() + 1
+        self.store.append_history({
+            "v": self.cfg_version, "ts": time.time(), "gen": int(gen),
+            "entries": len(self.entries), "changed": moved})
+        self._last_settings = data
+        return self.cfg_version
 
     # ---- capacity ------------------------------------------------------
 
@@ -656,5 +697,6 @@ class Archive:
                 ts=float(r.get("ts", 0.0)),
                 thumb=str(r.get("thumb", "")),
                 layout=sig,
+                cfg=int(r.get("cfg", 0)),
             ))
         return len(keep), dropped
