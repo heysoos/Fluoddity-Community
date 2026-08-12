@@ -36,8 +36,12 @@ class VisionModel:
     px: int
     dim: int
     context: int
-    # Calibrated per encoder against clip-b32's behaviour; see
-    # tools/calibrate_encoder.py and CLAUDE.md.
+    # Calibrated per encoder against clip-b32's BEHAVIOUR, never scaled off a
+    # summary statistic - the median predicted SigLIP's separation bar badly.
+    # clip-b32 keeps its own historical values, which the calibration
+    # reproduces; every other model's are measured. The text scale carries a
+    # margin below its flooring onset, the same margin clip-b32's trained 100
+    # has. See CLAUDE.md and tools/calibrate_encoder.py.
     text_logit_scale: float | None = None
     image_logit_scale: float | None = None
     default_min_separation: float | None = None
@@ -73,19 +77,25 @@ REGISTRY: dict[str, VisionModel] = {
         key="clip-b16", label="CLIP ViT-B/16", subdir="clip-vit-b16",
         repo="https://huggingface.co/Xenova/clip-vit-base-patch16/resolve/main",
         files=_clip_files(), mean=CLIP_MEAN, std=CLIP_STD, px=224, dim=512,
-        context=77, text_logit_scale=100.0,
+        context=77,
+        text_logit_scale=170.3, image_logit_scale=33.1,
+        default_min_separation=0.0195,
     ),
     "siglip2-b16": VisionModel(
         key="siglip2-b16", label="SigLIP 2 base/16", subdir="siglip2-b16-224",
         repo="https://huggingface.co/onnx-community/"
              "siglip2-base-patch16-224-ONNX/resolve/main",
         files=_clip_files(), mean=HALF, std=HALF, px=224, dim=768, context=64,
+        text_logit_scale=150.8, image_logit_scale=32.5,
+        default_min_separation=0.0195,
     ),
     "clip-l14": VisionModel(
         key="clip-l14", label="CLIP ViT-L/14", subdir="clip-vit-l14",
         repo="https://huggingface.co/Xenova/clip-vit-large-patch14/resolve/main",
         files=_clip_files(), mean=CLIP_MEAN, std=CLIP_STD, px=224, dim=768,
-        context=77, text_logit_scale=100.0,
+        context=77,
+        text_logit_scale=129.0, image_logit_scale=17.7,
+        default_min_separation=0.0519,
     ),
 }
 

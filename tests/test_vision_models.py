@@ -42,6 +42,42 @@ def test_clip_b32_is_already_calibrated():
     assert m.default_min_separation == 0.02
 
 
+@pytest.mark.parametrize("key", sorted(REGISTRY))
+def test_every_entry_is_calibrated(key):
+    """A model shipping an uncalibrated scale would silently saturate the
+    landscape - a wrong scale never raises. See CLAUDE.md."""
+    assert REGISTRY[key].calibrated, f"{key} was never calibrated"
+
+
+@pytest.mark.parametrize("key", sorted(REGISTRY))
+def test_the_separation_slider_has_room_above_the_default(key):
+    m = REGISTRY[key]
+    assert m.separation_slider_max > m.default_min_separation
+
+
+def test_clip_b32s_slider_range_is_unchanged():
+    """The existing 0..0.05 track is what the generalisation has to
+    reproduce."""
+    assert get("clip-b32").separation_slider_max == pytest.approx(0.05)
+
+
+@pytest.mark.parametrize("key", sorted(REGISTRY))
+def test_the_scales_are_in_the_range_the_measurement_produced(key):
+    """A typo in a calibrated value is invisible at runtime."""
+    m = REGISTRY[key]
+    assert 10.0 <= m.image_logit_scale <= 50.0
+    assert 90.0 <= m.text_logit_scale <= 250.0
+    assert 0.005 <= m.default_min_separation <= 0.10
+
+
+def test_the_text_scale_stays_well_above_the_image_scale():
+    """They differ by more than 3x for a reason - image-image similarity sits
+    in a different regime. If a calibration ever collapses them, the
+    per-modality split is dead weight."""
+    for m in REGISTRY.values():
+        assert m.text_logit_scale / m.image_logit_scale > 3.0
+
+
 def test_a_vision_model_is_frozen():
     """A key is written to disk; a mutable entry could drift from it."""
     with pytest.raises(Exception):

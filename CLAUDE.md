@@ -235,7 +235,52 @@ mechanics these caveats assume.
   tile's worth of neighbouring glow into every crop. `CaptureView.draw_grid`
   splits first and blooms each tile alone.
 
-### CLIP and the capture
+### The encoder and the capture
+
+- **The encoder is a REGISTRY entry, and its key is written to disk.**
+  `services/vision_models.py` is the one home for everything that differs
+  between encoders — paths, preprocessing, tokenizer context, both logit scales
+  and the separation bar. A key (`clip-b32`, `siglip2-b16`, …) names an
+  archive's embedding space in `encoder.json` and can never be renamed, the
+  same class of fact as `BrainLayout.signature()`.
+
+- **Each encoder's scales and separation bar are MEASURED against `clip-b32`'s
+  BEHAVIOUR, never scaled off a summary statistic.**
+  `python -m tools.calibrate_encoder --entries 700`, over the three most
+  recently worked archives:
+
+  | key | image scale | text scale | min sep | ms/image | dim |
+  |---|---|---|---|---|---|
+  | `clip-b32` | 30.0 | 100 | 0.0200 | 4.3 | 512 |
+  | `clip-b16` | 33.1 | 170.3 | 0.0195 | 8.0 | 512 |
+  | `siglip2-b16` | 32.5 | 150.8 | 0.0195 | 11.0 | 768 |
+  | `clip-l14` | 17.7 | 129.0 | 0.0519 | 33.0 | 768 |
+
+  `clip-b32` keeps its historical values, which the calibration reproduces to
+  4.7% and 0.5% — that agreement is the harness's own gate, and a run that
+  misses it means the harness is wrong, not the registry. Two criteria carry
+  the weight: the image scale is the one whose FLOORED FRACTION under a +3sd
+  latent goal matches `clip-b32`'s, and the bar is the threshold that ADMITS
+  the same fraction of a real archive. The text scale is the WEAKEST of the
+  three — nothing floors at `clip-b32`'s trained 100, so it reads the onset of
+  flooring and keeps the same margin below it.
+
+  **The median is a bad predictor, which is why this is measured.** SigLIP 2's
+  median nearest-neighbour distance is 19% above `clip-b32`'s, but its
+  separation bar came out **0.0195** against the 0.024 that scaling predicted:
+  admission sees the LOWER TAIL, not the middle. **And the bar must be read off
+  a real sample size** — at a few dozen entries every stored entry clears it,
+  retention saturates at 1.0 and the criterion returns the sample minimum.
+  These ms/image figures include preprocessing; `tools/hue_nuisance` times
+  `session.run` alone and reports lower ones.
+
+- **A pooled embedding is chosen BY NAME, on BOTH towers.** SigLIP's exports
+  put `last_hidden_state` first on the vision *and* text sessions, so
+  `get_outputs()[0]` is an `(N, tokens, dim)` tensor. Nothing checks it: the
+  mismatch surfaces as a matmul error deep inside `contrastive()`, far from the
+  session that chose the wrong output. `pick_embedding_output` is one function
+  used by both towers and by the measurement tools, because fixing the vision
+  side alone is exactly the bug that shipped once already.
 
 - **CLIP is strongly POSITION-dependent — use `embed_mean()`, never `embed()`.**
   Rolling a tile 16px on the torus moves its embedding 2.5–2.7x further than
