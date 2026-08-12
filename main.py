@@ -222,11 +222,13 @@ class App:
             self.ui.auto_unavailable = f"missing package: {exc.name}"
             return False
 
-        if not is_present(DEFAULT_KEY):
+        key = getattr(self.ui.get_state().auto_tournament, "model_key",
+                      DEFAULT_KEY)
+        if not is_present(key):
             self.ui.auto_unavailable = "model_missing"
             return False
 
-        if not self._ensure_scorer(DEFAULT_KEY):
+        if not self._ensure_scorer(key):
             return False
 
         self.tile_capture = TileCapture(self.ctx, self.tournament_service.grid)
@@ -651,6 +653,12 @@ class App:
         # _build_archive_set, which the browser also reaches - opening the
         # gallery must not pay for an ONNX session. See CLAUDE.md.
         if self.archive_store is not None:
+            # Pin only an EMPTY archive. One that holds entries and has no
+            # encoder.json predates the choice and is clip-b32 - writing the
+            # combo's value onto it would relabel every vector in it.
+            if self.archive is not None and len(self.archive) == 0:
+                self.archive_store.save_encoder(ui_state.archive.encoder_key)
+            ui_state.archive.encoder_key = self.archive_store.encoder
             if not self._ensure_scorer(self.archive_store.encoder):
                 self.ui.archive_unavailable = self.ui.auto_unavailable
                 return False
@@ -879,6 +887,20 @@ class App:
                 self.archive.maybe_flush(force=True)
             self._undo_auto_overrides(ui_state)
         self._explore_was_enabled = expl.enabled
+
+        # What the encoder combo needs to know: whether the choice is still
+        # open. Archive-level, so this counts every layout under it - which is
+        # what load_from_store already loaded.
+        if self.archive is not None:
+            expl.archive_entry_count = len(self.archive)
+            if expl.archive_entry_count:
+                expl.encoder_key = self.archive.encoder
+        # Read on the open edge only: the log grows with the run and this tab
+        # redraws every frame.
+        if expl.request_history_reload:
+            expl.request_history_reload = False
+            expl.history_rows = (self.archive_store.load_history()
+                                 if self.archive_store is not None else [])
 
         # 2. Process one-shot commands
         result = self.command_handler.process_commands(ui_state, tiling_mode)

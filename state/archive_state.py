@@ -23,6 +23,19 @@ class ArchiveState:
     # it stats every thumbnail, and ImGui re-renders this tab every frame.
     archive_list: list = field(default_factory=list)
 
+    # Which encoder this archive's vectors are in. Pinned when the archive is
+    # made and read back from encoder.json; the combo is disabled once anything
+    # has been admitted. See CLAUDE.md.
+    encoder_key: str = "clip-b32"
+    # View buffers, deliberately NOT persisted: the count decides whether the
+    # encoder combo is locked, and the rows are read off disk when the history
+    # section is opened.
+    archive_entry_count: int = 0
+    history_rows: list = field(default_factory=list)
+    show_history: bool = False
+    # One-shot: the orchestrator reads the log and fills history_rows.
+    request_history_reload: bool = False
+
     # rollout (shared with Auto mode's widgets, own defaults)
     grid: int = 4
     steps_per_gen: int = 2000
@@ -197,6 +210,8 @@ class ArchiveState:
 # lives in preferences and identifies which of these files to read in the first
 # place.
 PERSISTED_FIELDS = (
+    # the encoder this archive's vectors are in
+    "encoder_key", "show_history",
     # rollout
     "grid", "steps_per_gen", "sim_steps_per_frame", "snapshots_per_gen",
     "n_views", "physics_enabled", "tile_mutation_enabled",

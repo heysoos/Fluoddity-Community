@@ -13,6 +13,9 @@ class AutoTournamentState:
     # persistent settings
     enabled: bool = False
     running: bool = False
+    # Which encoder scores the prompt. Free, unlike Explore's: nothing is
+    # stored, so there are no vectors a change could invalidate.
+    model_key: str = "clip-b32"
     prompt: str = ""
     algorithm: str = "CMA-ES"
     grid: int = 4

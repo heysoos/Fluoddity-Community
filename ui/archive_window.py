@@ -25,7 +25,7 @@ ALPHA_TOOLTIP = "How strongly parent choice favours novel entries."
 
 EXPORT_TOOLTIP = "Saves this entry to your configs folder, under a name you pick."
 
-SEED_TOOLTIP = "Starts Auto (CLIP) mode's search from this genome."
+SEED_TOOLTIP = "Starts Auto (Prompt) mode's search from this genome."
 
 
 def archive_row_model(ast) -> dict:
@@ -97,7 +97,7 @@ class ArchiveWindowMixin:
         if self.archive_unavailable:
             imgui.text_colored(imgui.ImVec4(*_WARN), self.archive_unavailable)
             imgui.text_wrapped(
-                "Explore mode needs the same CLIP model and packages as Auto mode. "
+                "Explore mode needs the same encoder and packages as Auto mode. "
                 "Manual mode is unaffected.")
             return
 
@@ -125,6 +125,7 @@ class ArchiveWindowMixin:
             self._render_archive_settings(ast)
         if imgui.collapsing_header("Expeditions"):
             self._render_expedition_settings(ast)
+        self._render_config_history(ast)
         imgui.pop_item_width()
 
         imgui.separator()
@@ -437,7 +438,7 @@ class ArchiveWindowMixin:
             ast.goal_order = order[idx]
 
     def _render_view_setting(self, ast):
-        _, ast.n_views = imgui.slider_int("CLIP Views", ast.n_views, 1, 8)
+        _, ast.n_views = imgui.slider_int("Encoder Views", ast.n_views, 1, 8)
         if imgui.is_item_hovered():
             imgui.set_tooltip("Sub-crops averaged into each tile's embedding.")
         if ast.n_views <= 1:
@@ -457,15 +458,96 @@ class ArchiveWindowMixin:
         _, ast.seed_n = imgui.slider_int("Seed Entries", ast.seed_n, 64, 2048)
         _, ast.sigma0 = imgui.slider_float("Bootstrap Sigma", ast.sigma0, 0.05, 1.5)
 
+    def _render_encoder_combo(self, ast):
+        """Which encoder this archive's vectors are in.
+
+        Locked once ANY layout under the archive holds entries: the encoder is
+        archive-level, so a populated fourier-n10 fixes the choice for an empty
+        gabor-n7 sibling.
+        """
+        from services.vision_models import REGISTRY
+
+        keys = sorted(REGISTRY)
+        locked = int(getattr(ast, "archive_entry_count", 0)) > 0
+        if ast.encoder_key not in keys:
+            ast.encoder_key = keys[0]
+
+        layout.push_settings_width()
+        if locked:
+            imgui.begin_disabled()
+        changed, idx = imgui.combo("Encoder", keys.index(ast.encoder_key),
+                                   [REGISTRY[k].label for k in keys])
+        if changed and 0 <= idx < len(keys):
+            ast.encoder_key = keys[idx]
+            # A bar calibrated in one encoder's space means nothing in
+            # another's, so it is reseeded rather than inherited. See CLAUDE.md.
+            ast.min_separation = REGISTRY[ast.encoder_key].default_min_separation
+        if locked:
+            imgui.end_disabled()
+        imgui.pop_item_width()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Fixed once an archive holds entries - its vectors are in this "
+                "encoder's space." if locked else
+                "Which encoder scores this archive. Cannot change once it "
+                "holds entries.")
+
+    def _render_config_history(self, ast):
+        """When each setting changed, and what an entry was admitted under.
+
+        Read off disk when the section is opened, not per frame: the file grows
+        with the run and ImGui redraws this tab every frame.
+        """
+        opened = bool(imgui.collapsing_header("Config History"))
+        if opened and not ast.show_history:
+            ast.request_history_reload = True
+        ast.show_history = opened
+        if not opened:
+            return
+        if not ast.history_rows:
+            imgui.text_disabled("No settings change recorded yet.")
+            return
+        if imgui.begin_table("cfg_history", 4):
+            for name in ("Version", "Gen", "Entries", "Changed"):
+                imgui.table_setup_column(name)
+            imgui.table_headers_row()
+            for row in ast.history_rows:
+                imgui.table_next_row()
+                imgui.table_next_column()
+                imgui.text(str(row.get("v", 0)))
+                imgui.table_next_column()
+                imgui.text(str(row.get("gen", 0)))
+                imgui.table_next_column()
+                imgui.text(str(row.get("entries", 0)))
+                imgui.table_next_column()
+                imgui.text(", ".join(sorted(row.get("changed", {})))
+                           or "initial settings")
+            imgui.end_table()
+
     def _render_archive_settings(self, ast):
         """What the archive KEEPS: the admission gates and the retention cap."""
+        from services.vision_models import REGISTRY, get
+
+        # Beside Min Separation, which it reseeds: a bar is a distance in ONE
+        # encoder's space. Not up in the archive row, which the browser window
+        # draws too.
+        self._render_encoder_combo(ast)
         # The slider ranges are narrow on purpose; see CLAUDE.md.
         _, ast.liveness_min = imgui.slider_float(
             "Liveness Floor", ast.liveness_min, 0.0, 0.1, "%.4f")
+        # The track is PER ENCODER: one whose distances spread wider puts its
+        # own default at the top of a fixed track. See CLAUDE.md.
+        model = REGISTRY.get(ast.encoder_key) or get("clip-b32")
         _, ast.min_separation = imgui.slider_float(
-            "Min Separation", ast.min_separation, 0.0, 0.05, "%.4f")
+            "Min Separation", ast.min_separation, 0.0,
+            model.separation_slider_max, "%.4f")
         if imgui.is_item_hovered():
-            imgui.set_tooltip("Refuses anything this close to a stored entry.")
+            # Naming the calibrated value matters: 0.02 and 0.05 look wildly
+            # different and mean the same thing under different encoders.
+            imgui.set_tooltip(
+                f"Refuses anything this close to a stored entry. "
+                f"{model.label} calibrates at "
+                f"{model.default_min_separation:.4f}.")
         if ast.min_separation <= 0.0:
             layout.text_colored_wrapped(
                 _WARN,

@@ -1,4 +1,4 @@
-"""Auto (CLIP) tab of the tournament window.
+"""Auto (Prompt) tab of the tournament window.
 
 Passive: renders widgets and sets state, runs no logic.
 """
@@ -123,10 +123,30 @@ class AutoTournamentWindowMixin:
                 "These sweep across tiles, so fitness is confounded by "
                 "position until they are cleared.")
 
+    def _render_encoder_picker(self, ats):
+        """Which encoder scores this prompt.
+
+        Free here, unlike Explore's: nothing is stored, so there are no
+        vectors an encoder change could invalidate.
+        """
+        from services.vision_models import REGISTRY
+
+        keys = sorted(REGISTRY)
+        if ats.model_key not in keys:
+            ats.model_key = keys[0]
+        changed, idx = imgui.combo("Encoder", keys.index(ats.model_key),
+                                   [REGISTRY[k].label for k in keys])
+        if changed and 0 <= idx < len(keys):
+            ats.model_key = keys[idx]
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Larger encoders score more slowly; see "
+                              "CLAUDE.md for the measured cost.")
+
     def _render_auto_unavailable(self, ats):
         if self.auto_unavailable == "model_missing":
-            imgui.text_wrapped("CLIP model weights are not downloaded.")
-            if imgui.button("Download CLIP model (~330 MB)"):
+            self._render_encoder_picker(ats)
+            imgui.text_wrapped("Encoder weights are not downloaded.")
+            if imgui.button(f"Download {ats.model_key}"):
                 ats.download_model_requested = True
         else:
             imgui.text_wrapped(f"Auto mode unavailable: {self.auto_unavailable}")
@@ -198,7 +218,7 @@ class AutoTournamentWindowMixin:
             f"population {tiles}   source {src_px}px/tile")
         if src_px < 224:
             layout.text_disabled_wrapped(
-                "  upscaled to 224 for CLIP - consider a larger canvas")
+                "  upscaled to 224 for the encoder - consider a larger canvas")
         if ats.grid == 2:
             layout.text_disabled_wrapped("  popsize 4 is small for CMA-ES")
         layout.text_disabled_wrapped(

@@ -722,7 +722,7 @@ class CommandHandler:
         ats = ui_state.auto_tournament
 
         if ats.download_model_requested:
-            self._start_model_download()
+            self._start_model_download(getattr(ats, "model_key", None))
 
         svc = self.auto_service
         if svc is None:
