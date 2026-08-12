@@ -226,10 +226,7 @@ class App:
             self.ui.auto_unavailable = "model_missing"
             return False
 
-        try:
-            self.vision_scorer = VisionScorer(DEFAULT_KEY)
-        except Exception as exc:
-            self.ui.auto_unavailable = f"could not load encoder: {exc}"
+        if not self._ensure_scorer(DEFAULT_KEY):
             return False
 
         self.tile_capture = TileCapture(self.ctx, self.tournament_service.grid)
@@ -243,6 +240,36 @@ class App:
         self.command_handler.auto_service = self.auto_service
         self.ui.auto_service = self.auto_service
         self.ui.auto_unavailable = ""
+        return True
+
+    def _ensure_scorer(self, model_key: str) -> bool:
+        """Make `model_key` the resident encoder. -> is it loaded?
+
+        One at a time, replaced rather than stacked: keeping every encoder
+        loaded would cost about a gigabyte of weights for a switch that happens
+        once per archive. Auto and Explore are mutually exclusive, so the
+        resident one follows whichever is scoring.
+
+        Built before anything is reassigned, so a failure leaves the previous
+        encoder in place rather than the app scoring with nothing.
+        """
+        import services.vision_scorer as vs
+
+        current = getattr(self, "vision_scorer", None)
+        if current is not None and current.model.key == model_key:
+            return True
+        try:
+            built = vs.VisionScorer(model_key)
+        except Exception as exc:
+            self.ui.auto_unavailable = f"could not load encoder: {exc}"
+            return False
+        self.vision_scorer = built
+        # Both holders keep their own reference; a stale one keeps scoring with
+        # the encoder that was just replaced.
+        if getattr(self, "auto_service", None) is not None:
+            self.auto_service.scorer = built
+        if getattr(self, "imgep_driver", None) is not None:
+            self.imgep_driver.scorer = built
         return True
 
     def _build_archive_set(self, path):
@@ -612,6 +639,15 @@ class App:
         # Idempotent, and it may already have happened: the browser opens the
         # archive on its own, without ever building a driver.
         self._open_archive(ui_state)
+        # The archive's stored vectors are only comparable to the encoder that
+        # made them, so the search adopts it. Every call, not just the first:
+        # switching archive can switch encoder. Deliberately NOT in
+        # _build_archive_set, which the browser also reaches - opening the
+        # gallery must not pay for an ONNX session. See CLAUDE.md.
+        if self.archive_store is not None:
+            if not self._ensure_scorer(self.archive_store.encoder):
+                self.ui.archive_unavailable = self.ui.auto_unavailable
+                return False
         if self.imgep_driver is not None:
             return True
 
