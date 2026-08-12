@@ -1,0 +1,108 @@
+"""Holds the capture, the shaper states and the brain vector between frames.
+
+The orchestrator calls update() once per frame and hands what it returns to the
+sim. Nothing here writes the user's state.
+"""
+from __future__ import annotations
+
+from dataclasses import replace
+
+import numpy as np
+
+from services import audio_capture
+from services.audio_brain import BrainModulator
+from services.audio_capture import AudioCapture
+from services.audio_mapping import (brain_targets, deaf_targets, modulate,
+                                    physics_targets)
+
+
+class AudioRuntime:
+    def __init__(self) -> None:
+        self.capture = AudioCapture()
+        self._brain = BrainModulator()
+        self._states: dict[int, object] = {}
+        self._base_brain_id = None
+
+    def close(self) -> None:
+        self.capture.stop()
+        self._brain.clear()
+
+    def _sync_capture(self, ast) -> None:
+        if ast.request_start:
+            ast.request_start = False
+            index = None
+            for d in audio_capture.list_devices():
+                if d["name"] == ast.device_name:
+                    index = d["index"]
+                    break
+            ast.enabled = self.capture.start(index, ast.auto_gain)
+        if ast.request_stop:
+            ast.request_stop = False
+            self.capture.stop()
+            ast.enabled = False
+        ast.status = self.capture.status
+        ast.last_error = self.capture.last_error
+
+    def update(self, ui_state, dt: float, brain_layout, current_rule):
+        """Returns (sim_state_for_the_sim, modulated_brain_or_None).
+
+        The first is `ui_state.sim` itself when nothing is modulated, and a
+        copy otherwise - so the caller never has to know which.
+        """
+        ast = ui_state.audio
+        self._sync_capture(ast)
+
+        # Auto and Explore rank tiles against each other. Modulating physics
+        # mid-comparison would move what is being compared.
+        if ui_state.auto_tournament.enabled or ui_state.archive.enabled:
+            return ui_state.sim, None
+        if not ast.enabled:
+            return ui_state.sim, None
+
+        snap = self.capture.snapshot()
+        if snap is None:
+            return ui_state.sim, None
+        signals = snap.signals
+
+        sim_out = ui_state.sim
+        p_targets = physics_targets(ui_state.sim)
+        deaf = deaf_targets(ui_state.sim)
+        bases = {t.key: float(getattr(ui_state.sim, t.key, 0.0))
+                 for t in p_targets}
+        moved = modulate(bases, p_targets, ast.mappings, signals, self._states,
+                         ast.strengths, ast.global_strength, dt, deaf)
+        if moved:
+            sim_out = replace(ui_state.sim, **moved)
+
+        brain_out = self._update_brain(ui_state, ast, signals, dt,
+                                       brain_layout, current_rule)
+        return sim_out, brain_out
+
+    def _update_brain(self, ui_state, ast, signals, dt, layout, current_rule):
+        if layout is None or current_rule is None:
+            return None
+        mappings = ast.brain_mappings.get(ui_state.brain.modality, ())
+        if not mappings:
+            return None
+
+        from services import brains
+        modality = brains.get(ui_state.brain.modality)
+
+        # Re-encode only when the base brain actually changes; encode() clips
+        # at the rails, so a round trip per frame would drift.
+        arr = np.asarray(current_rule, dtype=np.float32).reshape(-1)
+        ident = (id(current_rule), arr.size,
+                 float(arr[:8].sum()) if arr.size else 0.0)
+        if ident != self._base_brain_id:
+            self._brain.set_base(arr, modality, layout)
+            self._base_brain_id = ident
+
+        targets = brain_targets(modality, layout)
+        if not targets:
+            return None
+        bases = self._brain.base_scales()
+        moved = modulate(bases, targets, mappings, signals, self._states,
+                         ast.strengths, ast.global_strength, dt, set())
+        if not moved:
+            return None
+        return self._brain.modulated({**bases, **moved})

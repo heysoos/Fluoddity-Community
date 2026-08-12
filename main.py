@@ -104,6 +104,8 @@ class App:
         self.arrow_debug_service = ArrowDebugService(self.ctx)
         self.multi_load_service = MultiLoadService()
         self.tournament_service = TournamentService(grid=4)
+        from services.audio_runtime import AudioRuntime
+        self.audio_runtime = AudioRuntime()
         # Built lazily on first use of Auto mode - onnxruntime and cmaes must
         # never be imported at startup.
         self.auto_service = None
@@ -890,7 +892,15 @@ class App:
         # After process_commands, so a preset loaded this frame is capped in
         # the same frame it arrives.
         clamp_auto_hue(ui_state)
-        self.sim.apply_state(ui_state.sim)
+        # Audio modulates a COPY. ui_state.sim keeps what the user set, so the
+        # sliders do not drift and Save writes slider values rather than
+        # whatever the music was doing at that instant.
+        _audio_sim, _audio_brain = self.audio_runtime.update(
+            ui_state, dt, self.sim.brain_layout,
+            self.rule_manager.get_current_rule())
+        self.sim.apply_state(_audio_sim)
+        if _audio_brain is not None:
+            self.sim.apply_rule(_audio_brain)
         self.sim.apply_camera_state(ui_state.camera)
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)
@@ -1210,6 +1220,10 @@ class App:
         if self.thumb_cache is not None:
             self._step("release thumbnails", self.thumb_cache.release)
 
+        # The lookup goes INSIDE the lambda: _step guards the call, not the
+        # expression that produces it, so a service that never got built would
+        # otherwise raise here and skip every step below.
+        self._step("audio", lambda: self.audio_runtime.close())
         self._step("advanced drawing", self.advanced_drawing_processor.cleanup)
         self._step("video", self.video_service.cleanup)
         self._step("ui", self.ui.cleanup)
