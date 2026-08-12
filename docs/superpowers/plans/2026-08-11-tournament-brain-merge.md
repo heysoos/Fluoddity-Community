@@ -1,9 +1,12 @@
 # Merging tournament-mode and brain-modalities
 
-> **Status.** Stages 1–3 are done, in merge commit `c6e76ef` on `integration`.
-> 1692 tests pass and `tools.shader_compile_check` reports COMPILE OK. Stage 4
-> — making the tile's edge agree with the world's edge — has not been started.
-> Stage 3's by-hand checks have not been run.
+> **Status.** Stages 1–3 are done, in merge commit `c6e76ef` on `integration`,
+> plus the post-merge fixes that followed it. The suite is green and
+> `tools.shader_compile_check` reports COMPILE OK. `integration` is now the
+> working branch, checked out in the repository root; the merge worktree is
+> gone. Two things are outstanding: Stage 4 — making the tile's edge agree with
+> the world's edge — has not been started, and Stage 3's by-hand checks from
+> `docs/testing_checklist.md` have not been run.
 
 Merge base `1cf194f` ("a tournament tile is a small world, not a walled box").
 Since then: 29 commits on `tournament-mode` (tip `1f157ed`), 45 on
