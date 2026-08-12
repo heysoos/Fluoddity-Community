@@ -268,3 +268,31 @@ def test_the_tile_uv_is_flipped_for_imgui(preview, ctx):
     assert v0 > v1, "v is not flipped, tiles will render upside down"
     assert u0 < u1
     buf.release()
+
+
+def test_the_inspector_needs_no_brain_len(preview, ctx):
+    """It is bounded by BRAIN_SHAPE, never by BRAIN_LEN.
+
+    BRAIN_LEN exists for the click-to-adopt writeback - brain_write and
+    fourier_write - which this shader does not call, so GLSL eliminates those
+    functions and the uniform with them. Setting it anyway printed a warning
+    per run and taught nothing.
+
+    If a modality's EVAL path starts using it, this fails: the uniform becomes
+    active, and the set has to come back or the shader reads zero.
+    """
+    assert "BRAIN_LEN" not in preview.program
+    assert "BRAIN_SHAPE" in preview.program, (
+        "the bound the Inspector does rely on has to be there"
+    )
+
+
+def test_the_writeback_shader_still_has_it(ctx):
+    """The other half of the same statement: BRAIN_LEN is load-bearing where
+    it IS used, so 'the Inspector does not need it' must not read as 'nothing
+    does'."""
+    from sim import Sim
+
+    sim = Sim(ctx, world_size=0.02, canvas_aspect_ratio="1:1",
+              particle_density=0.05)
+    assert "BRAIN_LEN" in sim.entity_update_program

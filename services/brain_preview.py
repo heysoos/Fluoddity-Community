@@ -147,7 +147,9 @@ class BrainPreview:
         p = self.program
         tryset(p, "PREVIEW_OUT", tuple(float(c) for c in output_direction(seed)))
         tryset(p, "BRAIN_MODALITY", get(layout.modality).modality_id)
-        tryset(p, "BRAIN_LEN", int(layout.length))
+        # No BRAIN_LEN: it bounds the click-to-adopt writeback, which this
+        # shader never calls, so GLSL drops the uniform and setting it only
+        # printed a warning. See tests/test_brain_preview_gpu.py.
         shape = (tuple(layout.shape) + (0, 0, 0, 0))[:4]
         tryset(p, "BRAIN_SHAPE", tuple(int(v) for v in shape))
         u, v = basis_for(axes, seed)
