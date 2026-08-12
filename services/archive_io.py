@@ -102,6 +102,10 @@ class ArchiveStore:
     def encoder_path(self) -> Path:
         return self.base / "encoder.json"
 
+    @property
+    def history_path(self) -> Path:
+        return self.base / "settings_history.jsonl"
+
     def run_config_path(self, run_id: str) -> Path:
         return self.base / "runs" / f"{safe_stem(run_id)}.json"
 
@@ -218,6 +222,40 @@ class ArchiveStore:
             os.replace(tmp, self.settings_path)
         except (OSError, TypeError) as exc:
             print(f"[Archive] settings not saved ({exc})")
+
+    def append_history(self, row: dict) -> None:
+        """One settings version. Append-only, like index.jsonl."""
+        if not self.enabled:
+            return
+        try:
+            self.history_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.history_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except (OSError, TypeError) as exc:
+            print(f"[Archive] settings history not written ({exc})")
+
+    def load_history(self) -> list[dict]:
+        """-> every version row, oldest first. Empty for an archive with none."""
+        rows: list[dict] = []
+        try:
+            text = self.history_path.read_text(encoding="utf-8")
+        except OSError:
+            return rows
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue        # a torn trailing line is one lost row
+        return rows
+
+    def latest_version(self) -> int:
+        """-> the highest version on disk, or -1 for an archive with none, so
+        the next row is always latest_version() + 1."""
+        return max((int(r.get("v", -1)) for r in self.load_history()),
+                   default=-1)
 
     def save_encoder(self, model_key: str) -> bool:
         """Pin this archive's encoder. -> whether a file is now on disk for it.
