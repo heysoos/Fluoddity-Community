@@ -106,6 +106,8 @@ class App:
         self.tournament_service = TournamentService(grid=4)
         from services.audio_runtime import AudioRuntime
         self.audio_runtime = AudioRuntime()
+        from services.audio_rig_io import load_rig
+        load_rig(self.ui.state.audio)
         # Built lazily on first use of Auto mode - onnxruntime and cmaes must
         # never be imported at startup.
         self.auto_service = None
@@ -1213,6 +1215,8 @@ class App:
             self._step("restore auto overrides",
                        self._restore_auto_overrides, ui_state)
             self._step("save preferences", save_preferences, ui_state.preferences)
+            from services.audio_rig_io import save_rig
+            self._step("save audio rig", save_rig, ui_state.audio)
 
         # The scoring thread only reads its own copy of the frame buffer, so
         # closing it after the flush cannot race the archive.
