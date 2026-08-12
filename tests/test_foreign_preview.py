@@ -106,7 +106,7 @@ def _handler(arc, sim):
     h._archive_preview_pushed = False
     h._archive_preview_physics = None
     h._archive_preview_arc = None
-    h._archive_preview_layout = None
+    h._borrowed_from_layout = None
     h.apply_brain_layout = None
     # _handle_brain_layout keeps the window's readouts live off these.
     h.auto_service = None
@@ -192,7 +192,7 @@ def test_moving_between_two_foreign_entries_does_not_strand_a_layout(tmp_path):
     h._handle_archive_preview(ui)
 
     assert sim.brain_layout == FOURIER
-    assert h._archive_preview_layout is None
+    assert h._borrowed_from_layout is None
 
 
 def test_a_borrow_suppresses_the_per_frame_layout_apply(tmp_path):
@@ -233,7 +233,7 @@ def test_committing_a_foreign_entry_switches_from_the_user_s_own_layout(tmp_path
     switched_to, switched_from = seen[0]
     assert switched_to == GABOR
     assert switched_from == FOURIER
-    assert h._archive_preview_layout is None, "the borrow ends at the commit"
+    assert h._borrowed_from_layout is None, "the borrow ends at the commit"
 
 
 def test_committing_without_hovering_first_still_switches(tmp_path):
@@ -297,4 +297,4 @@ def test_a_tournament_takes_the_borrowed_layout_back(tmp_path):
     h._handle_archive_preview(ui)
 
     assert sim.brain_layout == FOURIER
-    assert h._archive_preview_layout is None
+    assert h._borrowed_from_layout is None

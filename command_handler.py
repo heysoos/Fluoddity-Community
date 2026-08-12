@@ -59,7 +59,7 @@ class CommandHandler:
         self._archive_preview_arc = None
         # The layout the sim had before a preview BORROWED another brain's.
         # Not None means a borrow is live; see _borrow_layout.
-        self._archive_preview_layout = None
+        self._borrowed_from_layout = None
         self.clipboard_preview_active = False  # Config clipboard preview
         self._clipboard_rule_was_pushed = False  # Whether clipboard preview actually pushed a rule
         self._clipboard_cached_config = None  # Full config saved before clipboard preview
@@ -246,7 +246,7 @@ class CommandHandler:
         bst.request_layout_change = False
         if self.apply_brain_layout is None:
             return
-        if self._archive_preview_layout is not None:
+        if self._borrowed_from_layout is not None:
             # A preview is borrowing another brain's layout. The window still
             # reads the user's own, so applying it here would switch archive
             # and reset the optimizer to undo the hover - every frame.
@@ -863,21 +863,43 @@ class CommandHandler:
         follows the sim's own layout. The archive, the optimizer and the Brain
         window keep the user's brain, so nothing here pays for the teardown a
         real switch does - which is what makes this cheap enough to hover.
+
+        Re-borrowing keeps the FIRST base. Sliding down the Load menu across
+        two brains borrows twice with no return in between, and remembering the
+        second base would restore the user to a layout they never chose.
         """
-        if self._archive_preview_layout is not None:
-            return True
         current = getattr(self.sim, "brain_layout", None)
         if current is None or not hasattr(self.sim, "realloc_brain_buffers"):
             return False
-        self._archive_preview_layout = current
-        self.sim.realloc_brain_buffers(layout)
+        if self._borrowed_from_layout is None:
+            self._borrowed_from_layout = current
+        if layout != current:
+            self.sim.realloc_brain_buffers(layout)
         return True
 
     def _return_layout(self) -> None:
         """Give the user's own brain back. Must run before the rule under it."""
-        layout, self._archive_preview_layout = self._archive_preview_layout, None
-        if layout is not None:
+        layout, self._borrowed_from_layout = self._borrowed_from_layout, None
+        if layout is not None and layout != self.sim.brain_layout:
             self.sim.realloc_brain_buffers(layout)
+
+    def _config_borrow_layout(self, config):
+        """The layout a config must be previewed under, or None to stay put.
+
+        None covers three cases that all mean 'no borrow': a file naming no
+        brain (those are Fourier by history), one naming the brain already
+        running, and one this build cannot rebuild.
+
+        The config's own `brain_settings` supply the decode SCALES, which a
+        signature leaves out - a file has them and an archive entry does not.
+        """
+        from services.brains import layout_from_signature
+
+        sig = getattr(config, "brain_layout", "")
+        live = getattr(getattr(self, "sim", None), "brain_layout", None)
+        if not sig or live is None or sig == live.signature():
+            return None
+        return layout_from_signature(sig, getattr(config, "brain_settings", None))
 
     def _preview_layout(self, i):
         """The layout entry `i` must be run under, or None if it cannot be.
@@ -1414,9 +1436,23 @@ class CommandHandler:
 
         # Normal mode
         if self.preview_rule_active:
-            # Preview already applied config, rule, and field texture - just finalize
+            # Preview already applied config, rule, and field texture - just
+            # finalize. EXCEPT the brain: the hover only borrows a layout, so a
+            # config naming another one still needs the real switch, and
+            # finalizing alone left the preset unloaded while reporting success.
+            borrowed = self._borrowed_from_layout is not None
             self.preview_rule_active = False
             self._preview_rule_was_pushed = False
+            if borrowed:
+                # Give the layout back first, or the switch has nothing to
+                # switch FROM and early-returns.
+                self._return_layout()
+                config = self.config_saver.load_from_file(
+                    self.ui._get_config_path(filename, category))
+                if config is not None:
+                    # Sets the modality and stashes the creature;
+                    # _handle_brain_layout applies both later this frame.
+                    self._restore_brain_settings(config, ui_state)
             if fh:
                 fh.discard_preview_cache()
             if ui_state.load_watercolor_override is not None:
@@ -1447,6 +1483,9 @@ class CommandHandler:
         # Clear preview must happen before new preview
         if ui_state.request_clear_preview:
             if self.preview_rule_active:
+                # Before the rule: what comes off the stack is the user's own
+                # brain, and apply_rule measures a rule against the live layout.
+                self._return_layout()
                 if self._preview_rule_was_pushed:
                     prev_rule, prev_seed = self.rule_manager.pop_rule()
                     if prev_seed is not None:
@@ -1469,6 +1508,14 @@ class CommandHandler:
                     # Cache field texture on first preview entry
                     if not self.preview_rule_active and fh:
                         fh.cache_for_preview(ui_state)
+
+                    # A config naming another brain is previewed under a
+                    # BORROWED layout, so hovering the Load menu shows its
+                    # creature - the switch itself waits for the click, because
+                    # it rebuilds the archive and would fire per menu item.
+                    borrow = self._config_borrow_layout(config)
+                    if borrow is not None:
+                        self._borrow_layout(borrow)
 
                     pls = self.param_lock_service
                     if not (pls and pls.should_block_rule_push()) and self._rule_fits(config):

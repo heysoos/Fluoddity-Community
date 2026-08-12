@@ -766,6 +766,17 @@ mechanics these caveats assume.
   own `.glsl` and exposes `<modality>_param_at()` so the click-to-adopt
   writeback returns the rule the particle was actually running.
 
+- **A hover BORROWS another brain; only a click switches to one. Every hover
+  path has to use it, including File > Load.** The Load menu previews on hover
+  and its click then takes a `preview_rule_active` branch that only FINALISES -
+  so a preset naming another brain, whose preview had applied nothing, did not
+  load at all while the console printed that it had. The direct paths (Ctrl+V,
+  a click with no hover) go through `_apply_config_with_locks` and were never
+  affected, which is why fixing those looked like fixing the feature.
+  `_config_borrow_layout` takes the decode scales from the file's own
+  `brain_settings`, which an archive entry does not have. Guarded by
+  `tests/test_menu_cross_brain_load.py`.
+
 - **A hover BORROWS another brain; only a click switches to one.** A switch
   releases and rebuilds the archive — `load_from_store` rescores every entry —
   and resets the optimizer, so it can never run off the pointer position. A
@@ -780,7 +791,9 @@ mechanics these caveats assume.
   then switches in the SAME frame, so no frame renders the previewed brain
   under the user's. And the Inspector draws slot 0 with `sim.brain_layout`
   rather than the Brain window's, which are the same except during a borrow.
-  Guarded by `tests/test_foreign_preview.py`.
+  Re-borrowing keeps the FIRST base, because sliding down the Load menu across
+  two brains borrows twice with no return in between. Guarded by
+  `tests/test_foreign_preview.py`.
 
 - **`Archive.brains` is padded to the WIDEST layout the archive holds; anything
   that decodes must use `brain_at(i)`.** One wider foreign entry re-widths the
