@@ -8,6 +8,7 @@ from .tournament_state import TournamentState
 from .auto_tournament_state import AutoTournamentState
 from .archive_state import ArchiveState
 from .brain_state import BrainState
+from .audio_in_state import AudioInState
 
 
 @dataclass
@@ -22,6 +23,7 @@ class UIState:
     auto_tournament: AutoTournamentState = field(default_factory=AutoTournamentState)
     archive: ArchiveState = field(default_factory=ArchiveState)
     brain: BrainState = field(default_factory=BrainState)
+    audio: AudioInState = field(default_factory=AudioInState)
 
     # Input state (updated by callbacks)
     keys_pressed: set = field(default_factory=set)
