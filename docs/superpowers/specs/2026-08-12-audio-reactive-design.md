@@ -36,38 +36,89 @@ targets and the injection seam is new, because Fluoddity is not a browser.
 
 ## Why NumPy and not a C++ library
 
-The obvious move is to import an optimised realtime MIR library. Every candidate
-was checked on this machine (Python 3.12, Windows) rather than by reputation, and
-none survives:
+The obvious move is to import an optimised realtime MIR library — GIST, aubio,
+essentia. Candidates were checked on this machine (Python 3.12, Windows) rather
+than by reputation. NumPy wins, and the reason is that the analysis stage is far
+too small for a faster library to matter.
 
-| Library | Licence | Py 3.12 / Windows | Outcome |
-|---|---|---|---|
-| GIST | GPL-3.0 | source only | Right feature set, wrong licence |
-| aubio | GPL-3.0 | no wheel | Wrong licence *and* no binary |
-| essentia | AGPL-3.0 | no distribution | `No matching distribution found` |
-| madmom | BSD-ish | build fails | Needs Cython and a compiler per install |
-| vamphost | BSD host | wheel exists | Useful plugins (QM) are GPL and ship separately |
-| audioFlux | MIT code | wheel + DLL | Links `libfftw3f-3.dll`; **FFTW is GPL-2+** |
-| numpy | BSD | already a dependency | Chosen |
+### There is no headroom in the analysis stage
 
-**Fluoddity is MIT** (`LICENSE`). GPL is viral through linking, so any of the
-first four inside a distributed build forces the whole application — shaders
-included — to GPL-3.0. The realtime-MIR category is uniformly GPL because it grew
-out of academic music research; audioFlux looked like the exception until its
-import table turned up FFTW.
+Performance was the stated priority, so the first question is how much a faster
+library could win.
 
-The licence argument turned out not to be the deciding one. For this workload the
-C library is **slower**:
+> **The yardstick.** At 60 fps a frame has **16.7 ms** to do everything in —
+> physics, rendering and UI together. Every percentage below is a share of that
+> budget, not a duration this feature adds. The whole feature costs ~0.18 ms.
+
+Per 2048-sample block at 48 kHz:
+
+| Step | µs |
+|---|---|
+| `rfft` (pocketfft) | 18.7 |
+| four band means | 16.7 |
+| RMS | 6.2 |
+| `abs` → float32 | 2.3 |
+| mel filterbank matmul | 2.9 |
+| spectral flux | 2.8 |
+| **total** | **~56 µs = 0.34% of the budget** |
+
+**The FFT is the only line a faster library touches, and a 2× faster FFT saves
+9 µs — 0.055% of the budget.** An *infinitely* fast analysis library saves 0.34%.
+That is the whole prize, and it is why no library choice here can be a
+performance decision.
+
+Two consequences worth acting on:
+
+- **The four band means cost nearly as much as the FFT**, because they are four
+  separate slice-and-mean calls rather than maths. Folding them into the mel
+  filterbank as extra rows makes the whole thing one matmul and saves ~14 µs —
+  more than a 2× FFT would, at no cost. The implementation must do this.
+- The performance decisions that actually matter in this feature are elsewhere:
+  drawing traces with `plot_lines` rather than `add_line` saves **2.3 ms**, which
+  is 25× the entire analysis budget, and running analysis off the frame loop
+  removes frame stalls as a category. Both are measured below.
+
+### The measurement that was available
+
+The one C library installable here is also **slower** at this workload:
 
 | Per 2048-sample block at 48 kHz | mean | p99 |
 |---|---|---|
 | NumPy: `rfft` + 40 mel bins + 4 band energies + RMS + spectral flux | **0.056 ms** | 0.159 ms |
 | audioFlux: mel spectrogram + five spectral descriptors | 0.203 ms | — |
 
-One small block per frame is a trivial amount of work, so the time goes to call
-overhead and array marshalling rather than to the FFT, which is microseconds
-either way. Optimised C wins on batch throughput — a whole song at once — and
-cannot win here. `np.fft` is pocketfft, the same lineage as the libraries above.
+One small block is too little work for a C call to pay for itself: the time goes
+to call overhead and array marshalling, not to the FFT. Optimised C wins on batch
+throughput — a whole song at once — and cannot win on one small block delivered
+tens of times a second. `np.fft` is pocketfft, the same lineage as the libraries
+below.
+
+**GIST was not benchmarked**, because it ships no Python binding for this
+interpreter and would need a C++ build plus a wrapper before a number existed.
+Its expected result is audioFlux's: a genuinely faster core reached through a
+crossing that costs more than the core saves. Given the 9 µs ceiling above, no
+plausible outcome changes the decision.
+
+### Licensing, as a constraint rather than a reason
+
+Not why NumPy was chosen — it would have been chosen on the table above alone —
+but it does rule several candidates out independently, and that is worth
+recording so the question is not reopened later.
+
+| Library | Licence | Py 3.12 / Windows |
+|---|---|---|
+| GIST | GPL-3.0 | source only |
+| aubio | GPL-3.0 | no wheel |
+| essentia | AGPL-3.0 | no distribution |
+| madmom | BSD-ish | build fails — needs Cython per install |
+| vamphost | BSD host | wheel exists; useful QM plugins are GPL and ship separately |
+| audioFlux | MIT code | wheel + DLL, but links `libfftw3f-3.dll` — **FFTW is GPL-2+** |
+| numpy | BSD | already a dependency |
+
+**Fluoddity is MIT** (`LICENSE`), and GPL is viral through linking, so GIST,
+aubio or essentia inside a distributed build would force the whole application —
+shaders included — to GPL-3.0. If Fluoddity is never distributed, none of this
+binds; the performance argument above still stands on its own.
 
 What NumPy genuinely cannot provide is **tempo/downbeat tracking** (a research
 problem; nothing permissive delivers it) and **stem separation** (Demucs-class,
@@ -266,7 +317,7 @@ the seam that already forces `plain_colour`, leaving mappings untouched.
 The panel costs more than the analysis, and the drawing technique dominates both.
 Measured at 11 traces × 400 points, one frame:
 
-| | ms | % of 16.7 ms |
+| | ms | % of budget |
 |---|---|---|
 | `add_line` per segment | 2.5–3.4 | 15–20% |
 | `add_polyline`, cached `ImVec2` list | 0.866 | 5.2% |
