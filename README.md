@@ -38,7 +38,7 @@ Any advice or criticism is welcome. This is a toy I made for myself and I am mor
 
 **Manual** — click the tiles you like, on the canvas or on the numbered buttons, then **Next Generation** to breed from them. `Mutation strength` sets how far the children stray, `Inject randoms` adds fresh creatures each round, `Crossover` mixes selected parents. **Undo** steps back a generation, **Save Selected...** writes the tiles you picked to your configs folder.
 
-**Auto (CLIP)** — type a prompt, press **Set**, then **Start**. CMA-ES climbs the grid toward whatever CLIP scores as the closest match. `Grid` is tiles per side (2–8), `Steps per Gen` is how long each generation runs before it is scored. Tick `Search Physics Too` to let it move the physics sliders as well as the brain.
+**Auto (Prompt)** — type a prompt, press **Set**, then **Start**. CMA-ES climbs the grid toward whatever the encoder scores as the closest match. `Grid` is tiles per side (2–8), `Steps per Gen` is how long each generation runs before it is scored. Tick `Search Physics Too` to let it move the physics sliders as well as the brain. `Encoder` picks which vision model does the scoring — CLIP B/32 is the default and by far the fastest; the larger ones see finer detail and cost proportionally more per generation.
 
 **Explore (IMGEP)** — no prompt. It hunts for patterns *unlike* the ones it already has and files each keeper in an archive you can browse, sort and load from. Pick or create an archive, press **Start**; text goals are optional and steer it without confining it. Full description in [docs/imgep.md](docs/imgep.md).
 

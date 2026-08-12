@@ -1289,7 +1289,7 @@ class CommandHandler:
         if i is None or self.auto_service is None:
             return
         if not hasattr(self.auto_service.driver, "set_x0"):
-            ast.warning = ("'Seed a run from here' applies to the Auto (CLIP) "
+            ast.warning = ("'Seed a run from here' applies to the Auto (Prompt) "
                            "tab; Explore picks its own parents from the archive.")
             return
         warn = self._foreign_notice(i)

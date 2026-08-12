@@ -22,7 +22,7 @@ ImGui is immediate-mode: every frame, all widgets are re-rendered by calling fun
 | `advanced_drawing_window.py` | `AdvancedDrawingWindowMixin` | Brush and drawing controls |
 | `field_loader_window.py` | `FieldLoaderWindowMixin` | Loading an image or field as initial conditions |
 | `tournament_window.py` | `TournamentWindowMixin` | Manual tournament: grid size, tile selection, breeding |
-| `auto_tournament_window.py` | `AutoTournamentWindowMixin` | Auto (CLIP) mode: prompt, optimizer settings, status |
+| `auto_tournament_window.py` | `AutoTournamentWindowMixin` | Auto (Prompt) mode: prompt, encoder, optimizer settings, status |
 | `archive_window.py` | `ArchiveWindowMixin` | Explore (IMGEP) mode: archive picker, goals, gallery, map |
 
 Three plain modules, not mixins: `physics_params.py` (shared parameter table),

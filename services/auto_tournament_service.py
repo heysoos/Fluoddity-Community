@@ -1,7 +1,7 @@
 """The automatic tournament generation state machine.
 
 Owns the ROLLOUT ONLY. Which genomes to run, and what the resulting images
-mean, both belong to an injected SearchDriver - PromptDriver for Auto (CLIP),
+mean, both belong to an injected SearchDriver - PromptDriver for Auto (Prompt),
 ImgepDriver for Explore. The split exists because the rollout machine is
 identical for every search while the optimizer and scoring are not.
 

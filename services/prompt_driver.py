@@ -1,4 +1,4 @@
-"""Today's Auto (CLIP) behaviour, extracted behind SearchDriver.
+"""Today's Auto (Prompt) behaviour, extracted behind SearchDriver.
 
 This is a mechanical extraction of AutoTournamentService's optimizer half, not a
 rewrite. Its correctness gate is that the eight pre-existing auto-mode test

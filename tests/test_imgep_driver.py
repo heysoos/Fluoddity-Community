@@ -39,7 +39,7 @@ class FakeScorer:
 
     def set_prompt(self, text, distractors=None):
         """Explore must NEVER call this - it writes _text_emb, which the Auto
-        (CLIP) tab owns. Counted so a test can prove it stays untouched."""
+        (Prompt) tab owns. Counted so a test can prove it stays untouched."""
         self.prompt_set_calls += 1
 
     def embed_text(self, prompts):
@@ -474,7 +474,7 @@ def test_the_driver_reads_its_scales_off_the_scorers_model():
 
 
 def test_the_scorers_prompt_cache_is_never_touched():
-    """set_prompt() writes scorer._text_emb, which the Auto (CLIP) tab owns.
+    """set_prompt() writes scorer._text_emb, which the Auto (Prompt) tab owns.
     Explore must not clobber the other mode's prompt."""
     g = GoalList()
     g.add("coral")

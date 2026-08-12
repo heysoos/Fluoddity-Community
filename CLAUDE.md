@@ -343,6 +343,37 @@ mechanics these caveats assume.
 
 ### The archive and admission
 
+- **An archive is pinned to ONE encoder, permanently, and only an EMPTY one
+  can be pinned.** `<archive>/encoder.json` sits at the archive ROOT beside
+  `goals.json`, not under the layout signature — one archive holds every brain
+  and switching brain must not switch embedding space. `save_encoder` refuses
+  to overwrite, the same discipline as `save_run_config`. **A missing file
+  means `clip-b32`**, so every archive written before the choice existed opens
+  untouched and no migration runs — which is also why `_ensure_archive_service`
+  pins only when `len(archive) == 0`: writing the combo's value onto a
+  populated unpinned archive would relabel every vector in it.
+  `Archive.load_from_store` refuses a store whose encoder differs and sets
+  `encoder_mismatch`, because at equal width a foreign vector is silently
+  wrong rather than an error — `clip-b32` and `clip-b16` are both 512-d.
+  Migrating an archive between encoders is deliberately NOT implemented; the
+  thumbnails are 160px against a 224px capture, so re-embedding would mix
+  fidelities against entries admitted afterwards.
+
+- **The settings a run was carried out under are a LOG, not a field.**
+  `settings.json` is rewritten wholesale, so the `min_separation` that admitted
+  entry #4000 is gone the moment the slider moves.
+  `<archive>/settings_history.jsonl` is append-only: version 0 carries the
+  whole block, every later row is a diff, and each `index.jsonl` row carries
+  the `cfg` version in force when it was admitted. A row without one reads as
+  version 0, which is every entry admitted before this. Written once per
+  generation and once more when the archive is let go — a change made after the
+  last generation reaches the log nowhere else, which is why `record_settings`
+  rides with `save_settings` in the switch order rather than after it. The
+  version in force is read from the LOG rather than from what this session
+  wrote, or reopening an archive rewrites version 0. A field vanishing from
+  `PERSISTED_FIELDS` is NOT a change: recording it would put a phantom row in
+  every archive on the first run after a code change.
+
 - **An entry's physics is TWO layers, and the base is per RUN, not per entry.**
   `<archive>/runs/<run_id>.json` holds the whole `PhysicsConfig` the run was
   carried out under; the entry's `_phys` vector overrides it for the parameters
@@ -379,8 +410,10 @@ mechanics these caveats assume.
   or one CMA-ES population, so they clear or miss any bar together.
 
 - **Admission gates on SEPARATION, and that is not the threshold coming back.**
-  `min_separation` (0.02, measured) refuses anything within that cosine
-  distance of a stored entry — the unstructured-archive rule from
+  `min_separation` refuses anything within that cosine distance of a stored
+  entry. **The number is PER ENCODER** — 0.02 is `clip-b32`'s, and the
+  registry holds the rest; see the encoder section. The unstructured-archive
+  rule from
   quality-diversity, with no controller and no gain, and correlated tiles
   landing on top of each other is the case it is *meant* to reject. Without it
   a converging expedition stored its own endpoint 64 times a generation: one
@@ -526,7 +559,7 @@ mechanics these caveats assume.
   1857 → 68 ms, generation 1.86 → 1.99 s. Three things this deliberately does
   NOT do: it does not move the rest of `tell()` (which mutates the archive the
   UI reads every frame, so it would need a lock around every one of those reads
-  to buy ~5% more); it takes no locks in `CLIPScorer` (ORT `run` is
+  to buy ~5% more); it takes no locks in `VisionScorer` (ORT `run` is
   thread-safe, and a lock held for a 4 s vision pass would freeze `set_prompt`);
   and it passes a **copy** of the frame buffer, because `abort_generation()`
   clears the list.
@@ -740,7 +773,7 @@ mechanics these caveats assume.
   biggest was a directory walk: `list_archives` spent 3418 ms, essentially all
   of it `_size_mb` walking every thumbnail with `Path.rglob` to print one number
   — `os.scandir` is 69.6x faster and byte-identical. What remains is real and
-  must not be "fixed" by caching: `CLIPScorer()` 1207 ms is the ONNX sessions
+  must not be "fixed" by caching: `VisionScorer()` 1207 ms is the ONNX sessions
   the mode runs on, and archive open (0–2439 ms) is `load_from_store`'s
   load-bearing `rescore_all()`.
 

@@ -186,7 +186,7 @@ only the running app can answer.
       full `Expansion Between` interval away.
 - [ ] Chase a tile mid-expedition: the goal switches to that tile rather than
       the expedition simply ending.
-- [ ] Switch to the Auto (CLIP) tab and confirm its prompt still works. Explore
+- [ ] Switch to the Auto (Prompt) tab and confirm its prompt still works. Explore
       must never call `scorer.set_prompt()`, which owns that tab's cache.
 
 ## 16. Saving from tournament modes
