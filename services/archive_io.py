@@ -98,6 +98,10 @@ class ArchiveStore:
     def settings_path(self) -> Path:
         return self.base / "settings.json"
 
+    @property
+    def encoder_path(self) -> Path:
+        return self.base / "encoder.json"
+
     def run_config_path(self, run_id: str) -> Path:
         return self.base / "runs" / f"{safe_stem(run_id)}.json"
 
@@ -214,6 +218,48 @@ class ArchiveStore:
             os.replace(tmp, self.settings_path)
         except (OSError, TypeError) as exc:
             print(f"[Archive] settings not saved ({exc})")
+
+    def save_encoder(self, model_key: str) -> bool:
+        """Pin this archive's encoder. -> whether a file is now on disk for it.
+
+        Never overwrites, the same discipline as save_run_config: an archive
+        name identifies ONE embedding space, and a second write would
+        reinterpret every entry already filed under it.
+        """
+        from services.vision_models import REGISTRY
+
+        if not self.enabled or model_key not in REGISTRY:
+            return False
+        if self.encoder_path.exists():
+            return False
+        try:
+            self.encoder_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.encoder_path.with_suffix(".json.tmp")
+            tmp.write_text(
+                json.dumps({"encoder": str(model_key), "created": time.time()}),
+                encoding="utf-8")
+            os.replace(tmp, self.encoder_path)
+            return True
+        except OSError as exc:
+            print(f"[Archive] encoder not pinned ({exc})")
+            return False
+
+    @property
+    def encoder(self) -> str:
+        """-> the pinned encoder key.
+
+        A missing file means the encoder every archive written before the
+        choice existed used. An unreadable or unknown one means the same: a
+        disk problem must never stop the search.
+        """
+        from services.vision_models import DEFAULT_KEY, REGISTRY
+
+        try:
+            data = json.loads(self.encoder_path.read_text(encoding="utf-8"))
+            key = str(data["encoder"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return DEFAULT_KEY
+        return key if key in REGISTRY else DEFAULT_KEY
 
     def save_run_config(self, run_id: str, config_json: str) -> bool:
         """Record the physics a run is about to be carried out under.
