@@ -14,11 +14,7 @@ from services.archive import Candidate
 from services.archive_projection import Projection
 from services.capture_health import is_viable_tile, structure
 from services.descriptor import descriptor, liveness, stack_snapshots
-from services.expedition_fitness import (
-    IMAGE_LOGIT_SCALE,
-    TEXT_LOGIT_SCALE,
-    contrastive,
-)
+from services.expedition_fitness import contrastive
 from services.genome_spec import encode, layout_of, spec_for
 from services.goal_source import (
     LATENT_DIMS,
@@ -576,9 +572,9 @@ class ImgepDriver:
         out: dict[int, tuple[str, float]] = {}
         for g in live:
             held = float(contrastive(arc, g.embedding, refs,
-                                     logit_scale=TEXT_LOGIT_SCALE).max())
+                                     logit_scale=self._text_scale).max())
             cand = contrastive(tiles, g.embedding, refs,
-                               logit_scale=TEXT_LOGIT_SCALE).astype(np.float64)
+                               logit_scale=self._text_scale).astype(np.float64)
             cand = np.where(shows_something, cand, -np.inf)
             i = int(np.argmax(cand))
             margin = float(cand[i]) - held
@@ -750,9 +746,17 @@ class ImgepDriver:
         if kind is None:
             kind = self._goal.kind if self._goal is not None else ""
         if kind == "text":
-            return self._distractor_embeddings(), TEXT_LOGIT_SCALE
+            return self._distractor_embeddings(), self._text_scale
         c = self.archive.centroid()
-        return (None if c is None else c[None, :]), IMAGE_LOGIT_SCALE
+        return (None if c is None else c[None, :]), self._image_scale
+
+    @property
+    def _text_scale(self) -> float:
+        return self.scorer.model.text_logit_scale
+
+    @property
+    def _image_scale(self) -> float:
+        return self.scorer.model.image_logit_scale
 
     def _distractor_embeddings(self):
         """The Auto tab's distractor set, embedded once for the whole run.
