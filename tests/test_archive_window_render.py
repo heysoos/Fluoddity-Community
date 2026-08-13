@@ -884,15 +884,21 @@ def _open_all_sections():
 
 
 def _combo_labels(monkeypatch, draw):
-    """-> every label passed to imgui.combo while `draw` runs."""
+    """-> every label of a combo drawn while `draw` runs.
+
+    Both spellings: a picker that grows per-option tooltips has to move from
+    combo() to begin_combo(), and that is not a change in what is on screen.
+    """
     seen = []
-    real = imgui.combo
 
-    def wrapper(label, *a, **kw):
-        seen.append(label)
-        return real(label, *a, **kw)
+    for name in ("combo", "begin_combo"):
+        real = getattr(imgui, name)
 
-    monkeypatch.setattr(imgui, "combo", wrapper)
+        def wrapper(label, *a, _real=real, **kw):
+            seen.append(label)
+            return _real(label, *a, **kw)
+
+        monkeypatch.setattr(imgui, name, wrapper)
     frame(draw)
     return seen
 

@@ -51,3 +51,10 @@ def test_every_encoder_label_is_distinct():
     """The combo shows labels; two encoders sharing one would be unpickable."""
     labels = [m.label for m in REGISTRY.values()]
     assert len(set(labels)) == len(labels)
+
+
+@pytest.mark.parametrize("key", sorted(REGISTRY))
+def test_every_encoder_explains_itself(key):
+    """The hover on each option is the only place the difference between them
+    appears, and an archive's choice cannot be undone."""
+    assert get(key).blurb.strip()

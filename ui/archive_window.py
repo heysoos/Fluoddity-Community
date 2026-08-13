@@ -467,18 +467,11 @@ class ArchiveWindowMixin:
         is. Always disabled: the choice is made once, in the New Archive modal,
         and after that the stored vectors are in that space and no other.
         """
-        from services.vision_models import REGISTRY, get
+        from ui.encoder_widgets import encoder_readout
 
-        model = REGISTRY.get(ast.encoder_key) or get("clip-b32")
         layout.push_settings_width()
-        imgui.begin_disabled()
-        imgui.combo("Encoder", 0, [model.label])
-        imgui.end_disabled()
+        encoder_readout("Encoder", ast.encoder_key)
         imgui.pop_item_width()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "The embedding space this archive's vectors are in. Chosen "
-                "when the archive is made; make a new one to use another.")
 
     def _render_new_archive_encoder(self, ast):
         """The one place an encoder is CHOSEN.
@@ -488,20 +481,16 @@ class ArchiveWindowMixin:
         slider.
         """
         from services.vision_models import REGISTRY
+        from ui.encoder_widgets import encoder_combo
 
-        keys = sorted(REGISTRY)
-        if ast.new_archive_encoder not in keys:
-            ast.new_archive_encoder = keys[0]
         imgui.set_next_item_width(280)
-        changed, idx = imgui.combo("##new_archive_encoder",
-                                   keys.index(ast.new_archive_encoder),
-                                   [REGISTRY[k].label for k in keys])
-        if changed and 0 <= idx < len(keys):
-            ast.new_archive_encoder = keys[idx]
+        _, ast.new_archive_encoder = encoder_combo("##new_archive_encoder",
+                                                   ast.new_archive_encoder)
         model = REGISTRY[ast.new_archive_encoder]
         layout.text_disabled_wrapped(
-            f"Encoder, fixed for the life of this archive. "
-            f"{model.dim}-d, separation {model.default_min_separation:.4f}.")
+            "Encoder, fixed for the life of this archive. Hover an option for "
+            "what it sees differently.")
+        layout.text_disabled_wrapped(model.blurb)
 
     def _render_config_history(self, ast):
         """When each setting changed, and what an entry was admitted under.

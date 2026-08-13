@@ -45,6 +45,9 @@ class VisionModel:
     text_logit_scale: float | None = None
     image_logit_scale: float | None = None
     default_min_separation: float | None = None
+    # One sentence on what this encoder sees differently. The relative cost is
+    # measured; CLAUDE.md's table is the home for the figure itself.
+    blurb: str = ""
 
     @property
     def calibrated(self) -> bool:
@@ -72,6 +75,10 @@ REGISTRY: dict[str, VisionModel] = {
         context=77,
         text_logit_scale=100.0, image_logit_scale=30.0,
         default_min_separation=0.02,
+        blurb="The original, and by far the fastest: it reads the frame as 49 "
+              "coarse patches, so it judges overall shape and colour rather "
+              "than fine texture. Every archive made before the others "
+              "existed is in this space.",
     ),
     "clip-b16": VisionModel(
         key="clip-b16", label="CLIP ViT-B/16", subdir="clip-vit-b16",
@@ -80,6 +87,9 @@ REGISTRY: dict[str, VisionModel] = {
         context=77,
         text_logit_scale=170.3, image_logit_scale=33.1,
         default_min_separation=0.0195,
+        blurb="The same CLIP over 16-pixel patches - four times as many - so "
+              "lattices, filaments and fine structure survive that B/32 "
+              "averages away. Roughly twice the cost per generation.",
     ),
     "siglip2-b16": VisionModel(
         key="siglip2-b16", label="SigLIP 2 base/16", subdir="siglip2-b16-224",
@@ -88,6 +98,9 @@ REGISTRY: dict[str, VisionModel] = {
         files=_clip_files(), mean=HALF, std=HALF, px=224, dim=768, context=64,
         text_logit_scale=150.8, image_logit_scale=32.5,
         default_min_separation=0.0195,
+        blurb="Newer training on a sigmoid loss and far more data, and the "
+              "most colour-sensitive of the four. Strongest at what a picture "
+              "literally contains. Around two and a half times the cost.",
     ),
     "clip-l14": VisionModel(
         key="clip-l14", label="CLIP ViT-L/14", subdir="clip-vit-l14",
@@ -96,6 +109,10 @@ REGISTRY: dict[str, VisionModel] = {
         context=77,
         text_logit_scale=129.0, image_logit_scale=17.7,
         default_min_separation=0.0519,
+        blurb="A much larger model over the finest patches, and the best on "
+              "abstract or compositional prompts. It also spreads creatures "
+              "further apart, so its separation bar is wider. Around eight "
+              "times the cost.",
     ),
 }
 

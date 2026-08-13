@@ -128,19 +128,11 @@ class AutoTournamentWindowMixin:
                 "position until they are cleared.")
 
     def _render_encoder_picker(self, ats):
-        """Which encoder scores this prompt."""
-        from services.vision_models import REGISTRY
+        """Which encoder scores this prompt. Each option explains itself on
+        hover, which is why this is not a plain combo."""
+        from ui.encoder_widgets import encoder_combo
 
-        keys = sorted(REGISTRY)
-        if ats.model_key not in keys:
-            ats.model_key = keys[0]
-        changed, idx = imgui.combo("Encoder", keys.index(ats.model_key),
-                                   [REGISTRY[k].label for k in keys])
-        if changed and 0 <= idx < len(keys):
-            ats.model_key = keys[idx]
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Larger encoders score more slowly; see "
-                              "CLAUDE.md for the measured cost.")
+        _, ats.model_key = encoder_combo("Encoder", ats.model_key)
 
     def _render_auto_unavailable(self, ats):
         if self.auto_unavailable == "model_missing":

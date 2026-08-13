@@ -674,6 +674,19 @@ mechanics these caveats assume.
   grid-independent. Expeditions are the exception: CMA-ES takes
   `popsize = tournament.tiles`.
 
+- **`reset()` must ADVANCE `base_seed`, or Reset replays the last run exactly.**
+  `base_seed` feeds two things — the optimizer's seed and `gen_seed =
+  base_seed + generation`, which is the sim's particle seed — and `generation`
+  goes back to 0. Fixed at 1000 it made Reset then Start hand back a
+  bit-identical population, in identical tiles, over an identical particle
+  field: the optimizer WAS being cleared correctly and the run replayed
+  regardless, so a new prompt only reranked creatures already watched. The
+  stride is `generation + 1`, read before the counter is cleared, so the two
+  runs' `gen_seed` ranges cannot overlap either. The constructor argument still
+  fixes the first run — `tools/brain_search_bench.py` passes one — and
+  `load_checkpoint` restores it verbatim, because a resume must replay.
+  Guarded by `tests/test_auto_tournament_service.py`.
+
 - **Explore mode reuses Auto mode's `AutoTournamentService` instance**, swapping
   only `.driver`. Both `_handle_auto_tournament` and `_handle_explore` would
   otherwise call `configure()` on the same object every frame, so each bails out

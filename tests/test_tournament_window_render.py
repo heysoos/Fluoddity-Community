@@ -167,20 +167,24 @@ def test_auto_tab_renders_when_clip_is_missing(gui):
 
 
 def _combo_labels(monkeypatch, draw):
-    """-> every label passed to imgui.combo while `draw` runs.
+    """-> every label of a combo drawn while `draw` runs.
 
-    Renders for real rather than reading the source: the picker WAS reachable
-    on every source-level reading of the tab, just not on any path the running
-    app takes.
+    Both spellings, because a picker that grows per-option tooltips has to move
+    from combo() to begin_combo() and that is not a change in what is on
+    screen. Renders for real rather than reading the source: the picker WAS
+    reachable on every source-level reading of the tab, just not on any path
+    the running app takes.
     """
     seen = []
-    real = imgui.combo
 
-    def wrapper(label, *a, **kw):
-        seen.append(label)
-        return real(label, *a, **kw)
+    for name in ("combo", "begin_combo"):
+        real = getattr(imgui, name)
 
-    monkeypatch.setattr(imgui, "combo", wrapper)
+        def wrapper(label, *a, _real=real, **kw):
+            seen.append(label)
+            return _real(label, *a, **kw)
+
+        monkeypatch.setattr(imgui, name, wrapper)
     frame(draw)
     return seen
 
