@@ -687,6 +687,27 @@ mechanics these caveats assume.
   `load_checkpoint` restores it verbatim, because a resume must replay.
   Guarded by `tests/test_auto_tournament_service.py`.
 
+- **A RESET's rule write outranks the phase gate; a GENERATION's does not.**
+  Nothing rewrote the grid outside `_begin_generation`, which only runs from
+  `start()`, so after Reset the abandoned search's creatures stayed on screen
+  and on the GPU until Start — a button that appeared to do nothing. `reset()`
+  therefore re-randomises `tournament` and sets `_force_write`, which `update()`
+  answers whatever the phase. `_needs_write` stays BELOW the gate: the next
+  generation's rules are queued the moment one is scored, so honouring that one
+  while paused advances the picture to the next generation instead of freezing
+  it. Guarded by `tests/test_auto_tournament_service.py`.
+
+- **Z and G are SINGLE-BRAIN keys, and under a tournament they belong to the
+  grid's owner.** Both went through `sim.apply_rule`, which writes SLOT 0 —
+  tile 0, overwritten by the next generation — so under a grid they changed one
+  square in the bottom-left corner and nothing else. `_grid_owner()` routes them
+  by `tournament.enabled`, never by the sub-mode flags, because a closed
+  Tournament window clears those; under Auto or Explore the owner is the
+  optimizer, since re-randomising the tiles alone would be undone by the next
+  generation. G keeps setting `rule_seed` in every mode — that IS the fresh crop
+  of mutations — and only the slot-0 write is dropped. Guarded by
+  `tests/test_grid_reset_keys.py`.
+
 - **Explore mode reuses Auto mode's `AutoTournamentService` instance**, swapping
   only `.driver`. Both `_handle_auto_tournament` and `_handle_explore` would
   otherwise call `configure()` on the same object every frame, so each bails out

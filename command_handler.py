@@ -469,8 +469,29 @@ class CommandHandler:
                 self.video_pending = True
                 self.video_scheduled_start_frame = scheduled_start_frame
 
+    def _grid_owner(self, ui_state):
+        """Who owns the population right now, or None outside a tournament.
+
+        sim.apply_rule writes SLOT 0, which under a tournament is tile 0 and is
+        overwritten by the next generation - so the single-brain keys changed
+        one square in the corner and nothing else. Under Auto or Explore the
+        optimizer owns every tile, so the equivalent of a blank slate there is
+        its own reset.
+        """
+        if not getattr(ui_state.tournament, "enabled", False):
+            return None
+        auto_on = (getattr(ui_state.auto_tournament, "enabled", False)
+                   or getattr(ui_state.archive, "enabled", False))
+        if auto_on and self.auto_service is not None:
+            return self.auto_service
+        return self.tournament_service
+
     def _handle_full_reset(self, ui_state):
-        """Handle full reset (Z key): reset entities, apply zero rule, randomize, push new state."""
+        """Z: a blank slate. Under a tournament that is the whole grid."""
+        owner = self._grid_owner(ui_state)
+        if owner is not None:
+            owner.reset()
+            return
         self.sim.reset()
         zero_rule = np.zeros((10, 8), dtype=np.float32)
         self.sim.apply_rule(zero_rule)
@@ -478,10 +499,16 @@ class CommandHandler:
         self.rule_manager.push_rule(zero_rule, ui_state.sim.rule_seed)
 
     def _handle_randomize_mutations(self, ui_state):
-        """Handle randomize mutations (M key)."""
+        """G: a fresh crop of mutations.
+
+        Under a tournament the seed is the whole of it - the rule the slot-0
+        write would push belongs to the grid's owner, not to the user.
+        """
+        ui_state.sim.rule_seed = random.random()
+        if self._grid_owner(ui_state) is not None:
+            return
         current_rule = self.rule_manager.get_current_rule()
         if current_rule is not None:
-            ui_state.sim.rule_seed = random.random()
             self.rule_manager.push_rule(current_rule.copy(), ui_state.sim.rule_seed)
             self.sim.apply_rule(current_rule)
 
