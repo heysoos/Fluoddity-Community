@@ -104,11 +104,12 @@ class AudioRuntime:
         targets = {t.key: t for t in physics_targets(ui_state.sim)}
         signals = {n: 1.0 for n in SIGNAL_COLORS}
         bases = {k: float(getattr(ui_state.sim, k, 0.0)) for k in targets}
-        # A throwaway shaper state, so probing full scale cannot disturb the
-        # envelopes the live path is carrying.
+        # The shapers are skipped rather than run from a throwaway state: a
+        # fresh one is mid-attack or mid-phase, which reported roughly half the
+        # swing an LFO or a smoothed mapping actually has.
         full = modulate(bases, list(targets.values()), ast.mappings, signals,
                         dict(), ast.strengths, ast.global_strength, 1 / 60.0,
-                        deaf)
+                        deaf, apply_shapers=False)
 
         out = {}
         for key, target in targets.items():

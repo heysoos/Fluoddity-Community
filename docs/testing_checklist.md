@@ -297,8 +297,15 @@ installed; without it the panel says so and everything else runs unchanged.
       something plays, so this is the normal state, not a fault.
 - [ ] Starting music then flips it to `active` and the spectrum moves.
 - [ ] Stop halts the traces; the status reads `idle`.
-- [ ] The spectrum and the five band traces move while audio plays, and each
-      band prints its current value.
+- [ ] The spectrum is BARS, coloured red/orange/green/blue low to high, and it
+      does not rescale itself frame to frame - hold a steady note and the bars
+      hold still rather than heaving about.
+- [ ] The five band traces move while audio plays, and each band prints its
+      current value. On a steady note a trace is FLAT, not a fuzzy hash: the
+      bands are smoothed, and a trace never draws more samples than it has
+      pixels.
+- [ ] Nothing playing but room noise leaves the bands near the bottom of their
+      range rather than part way up.
 - [ ] Binding bass to Sensor Gain visibly changes the simulation on a beat.
 - [ ] A bound row shows a sparkline of what audio is doing to that parameter;
       an unbound row shows none and is dimmed.
@@ -311,10 +318,20 @@ installed; without it the panel says so and everything else runs unchanged.
 - [ ] A band tab offers Depth, Gain, mode, an On toggle and a Shaper; picking
       each shaper shows only the controls that shaper uses (smooth: attack and
       release; gate: threshold and hold; lfo: rates and wave).
+- [ ] A band tab's trace shows the SHAPER'S output bright over the raw band
+      faint: pick `lfo` and the bright line oscillates while the faint one
+      follows the music. Picking `none` makes the two identical.
 - [ ] The Total tab shows live value, base, delta, a range bar, and the
       contributing bands overlaid with the parameter's own trace.
 - [ ] The Sensor Gain slider shows hatching, a pale base tick, and a handle that
       rides with the music. Its printed value is the live one.
+- [ ] Every mark stays INSIDE the slider and none of it reaches the label. In
+      `add` mode the hatching starts under the grab and runs up to where a
+      full-scale signal would take it; the pale tick sits exactly under the
+      grab at any value, on a bipolar slider (Lateral Force) as well as a
+      0-based one.
+- [ ] Give a mapping an `lfo` or `smooth` shaper: the hatching still shows the
+      whole swing, not half of it.
 - [ ] Dragging that slider moves the base tick; the hatching follows it.
 - [ ] File > Save writes the slider value, not the momentary modulated one.
 - [ ] Right-click on a bound slider > Audio... opens the panel.

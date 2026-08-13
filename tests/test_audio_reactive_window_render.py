@@ -301,6 +301,23 @@ def test_modulate_reports_nothing_when_no_dict_is_offered():
              {"bass": 0.5}, {}, {}, 1.0, 1 / 60.0, set())
 
 
+def test_the_reach_probe_ignores_the_shaper_so_it_shows_the_whole_swing():
+    """A fresh shaper state is mid-attack or mid-phase, so running one to find
+    the reach reported roughly half the swing the mapping really has."""
+    from services.audio_mapping import Mapping, TargetDef, modulate
+    from services.audio_shapers import ShaperParams
+
+    t = TargetDef("K", "K", "physics", 0.0, 1.0, None, None)
+    m = Mapping(signal="bass", target="K", depth=1.0,
+                shaper=ShaperParams(kind="smooth", attack=0.5))
+    args = ({"K": 0.0}, [t], [m], {"bass": 1.0})
+    reach = modulate(*args, {}, {}, 1.0, 1 / 60.0, set(),
+                     apply_shapers=False)["K"]
+    mid_attack = modulate(*args, {}, {}, 1.0, 1 / 60.0, set())["K"]
+    assert reach == pytest.approx(1.0)
+    assert mid_attack < 0.5 * reach
+
+
 def test_a_disabled_mapping_reports_no_shaped_signal():
     from services.audio_mapping import Mapping, TargetDef, modulate
     t = TargetDef("K", "K", "physics", 0.0, 1.0, None, None)
