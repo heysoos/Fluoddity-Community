@@ -279,6 +279,42 @@ def test_two_resets_in_a_row_still_move_the_seed():
     assert len(set(seeds)) == len(seeds)
 
 
+def test_reset_is_visible_without_pressing_start():
+    """Nothing rewrote the grid until _begin_generation, which only runs from
+    start(), so the abandoned search's creatures stayed on the GPU and Reset
+    read as a button that does nothing."""
+    svc, ts = make()
+    svc.start("coral")
+    run_one_generation(svc)
+    evolved = _population(ts).copy()
+
+    svc.reset()
+    assert svc.update() is Action.WRITE_RULES
+    assert not np.array_equal(_population(ts), evolved)
+
+
+def test_pausing_between_generations_still_holds_the_picture():
+    """The next generation's rules are queued the moment one is scored, so a
+    write honoured while paused would advance the grid instead of freezing it."""
+    svc, _ = make()
+    svc.start("coral")
+    run_one_generation(svc)
+    svc.pause()
+    assert svc.update() is Action.NONE
+    assert svc.update() is Action.NONE
+
+
+def test_the_queued_generation_still_runs_on_resume():
+    """Holding the write must not drop it."""
+    svc, _ = make()
+    svc.start("coral")
+    run_one_generation(svc)
+    svc.pause()
+    svc.update()
+    svc.start()
+    assert svc.update() is Action.WRITE_RULES
+
+
 def test_the_constructed_seed_still_fixes_the_first_run():
     """tools/brain_search_bench.py passes base_seed for reproducibility, and a
     fresh service must not have moved off it."""

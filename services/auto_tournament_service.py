@@ -101,6 +101,8 @@ class AutoTournamentService:
         self._next_snap = 0
         self._buffer: list[np.ndarray] = []
         self._needs_write = False
+        # A reset's write, which is honoured whatever the phase. See update().
+        self._force_write = False
 
         # Scoring runs off the frame loop. See _precomputed().
         self.async_scoring = True
@@ -244,7 +246,15 @@ class AutoTournamentService:
         self.tile_physics = []
         self._buffer.clear()
         self._drop_score()
+        # Reset has to be VISIBLE. Nothing rewrote the grid until
+        # _begin_generation, which only runs from start(), so the abandoned
+        # search's creatures stayed on screen - and on the GPU - until Start:
+        # a button that appeared to do nothing. A fresh random grid is what
+        # "the search is abandoned" looks like, and Start then replaces it with
+        # the optimizer's first generation.
+        self.tournament.reset()
         self._needs_write = False
+        self._force_write = True
         self.phase = Phase.IDLE
 
     def abort_generation(self) -> None:
@@ -280,6 +290,15 @@ class AutoTournamentService:
     # ---- per-frame driver ----------------------------------------------
 
     def update(self) -> Action:
+        # A RESET's write outranks the phase gate: what the GPU is holding
+        # belongs to a search that has been abandoned, and the user must see
+        # that without pressing Start. A GENERATION's write does not - it is
+        # queued behind the pause, or pausing between generations would
+        # advance the picture to the next one instead of holding it.
+        if self._force_write:
+            self._force_write = False
+            return Action.WRITE_RULES
+
         if self.phase in (Phase.IDLE, Phase.PAUSED):
             return Action.NONE
 
