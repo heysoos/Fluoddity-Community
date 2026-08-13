@@ -20,7 +20,7 @@ if TYPE_CHECKING:                       # annotations only - see below
 # `enabled` is deliberately absent: opening the app must never start capturing.
 PERSISTED_FIELDS: tuple[str, ...] = (
     "mappings", "brain_mappings", "strengths", "global_strength",
-    "auto_gain", "device_name",
+    "auto_gain", "device_name", "modulate", "muted",
 )
 
 _STRENGTH_MAX = 2.0
@@ -41,6 +41,16 @@ class AudioInState:
 
     strengths: dict[str, float] = field(default_factory=dict)
     global_strength: float = 1.0
+
+    # The master bypass, and the per-target one. Both silence the modulation
+    # while leaving capture running, so the traces keep moving and you can see
+    # what you would be turning back on.
+    #
+    # Separate from each Mapping's own `enabled`, deliberately: muting a row by
+    # clearing its mappings' flags would resurrect the bands the user had
+    # switched off individually when the row came back.
+    modulate: bool = True
+    muted: dict[str, bool] = field(default_factory=dict)
 
     # One-shot commands, read and cleared by the orchestrator.
     request_start: bool = False
@@ -125,6 +135,9 @@ def to_dict(state: AudioInState) -> dict:
         "global_strength": float(state.global_strength),
         "auto_gain": bool(state.auto_gain),
         "device_name": str(state.device_name),
+        "modulate": bool(state.modulate),
+        # Only the muted ones, so a rig does not carry a row per parameter.
+        "muted": sorted(k for k, v in state.muted.items() if v),
     }
 
 
@@ -159,3 +172,7 @@ def apply_dict(state: AudioInState, data: dict) -> None:
         state.auto_gain = data["auto_gain"]
     if isinstance(data.get("device_name"), str):
         state.device_name = data["device_name"]
+    if isinstance(data.get("modulate"), bool):
+        state.modulate = data["modulate"]
+    if isinstance(data.get("muted"), list):
+        state.muted = {k: True for k in data["muted"] if isinstance(k, str)}

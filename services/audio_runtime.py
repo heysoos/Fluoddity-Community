@@ -16,6 +16,28 @@ from services.audio_mapping import (brain_targets, deaf_targets, modulate,
                                     physics_targets)
 
 
+def muted_targets(ast, prefix: str = "") -> set[str]:
+    """Targets the user has switched off, by key.
+
+    Fed to modulate() as deafness, which is what it already means: the target
+    keeps its value and no mapping may touch it.
+
+    Brain rows are stored under `<modality>:<key>`, because two modalities may
+    declare the same scale name - mlp and lenia both have `w_scale` - and their
+    mappings are already kept apart that way.
+    """
+    out = set()
+    for key, value in (getattr(ast, "muted", None) or {}).items():
+        if not value:
+            continue
+        if prefix:
+            if key.startswith(prefix):
+                out.add(key[len(prefix):])
+        elif ":" not in key:
+            out.add(key)
+    return out
+
+
 class AudioRuntime:
     def __init__(self) -> None:
         self.capture = AudioCapture()
@@ -60,6 +82,9 @@ class AudioRuntime:
         """
         ast = ui_state.audio
         self._sync_capture(ast)
+        # Cleared before any early return, so a bypassed or stopped rig empties
+        # the drawer traces rather than freezing them on their last value.
+        ast.shaped = {}
 
         # Auto and Explore rank tiles against each other. Modulating physics
         # mid-comparison would move what is being compared.
@@ -67,16 +92,19 @@ class AudioRuntime:
             return ui_state.sim, None
         if not ast.enabled:
             return ui_state.sim, None
+        # The master bypass stops the modulation, NOT the capture: the panel
+        # keeps drawing so you can see what turning it back on would do.
+        if not ast.modulate:
+            return ui_state.sim, None
 
         snap = ast.snapshot
         if snap is None:
             return ui_state.sim, None
         signals = snap.signals
 
-        ast.shaped = {}
         sim_out = ui_state.sim
         p_targets = physics_targets(ui_state.sim)
-        deaf = deaf_targets(ui_state.sim)
+        deaf = deaf_targets(ui_state.sim) | muted_targets(ast)
         bases = {t.key: float(getattr(ui_state.sim, t.key, 0.0))
                  for t in p_targets}
         moved = modulate(bases, p_targets, ast.mappings, signals, self._states,
@@ -100,7 +128,7 @@ class AudioRuntime:
             return {}
         from ui.audio_reactive_window import SIGNAL_COLORS
 
-        deaf = deaf_targets(ui_state.sim)
+        deaf = deaf_targets(ui_state.sim) | muted_targets(ast)
         targets = {t.key: t for t in physics_targets(ui_state.sim)}
         signals = {n: 1.0 for n in SIGNAL_COLORS}
         bases = {k: float(getattr(ui_state.sim, k, 0.0)) for k in targets}
@@ -150,7 +178,8 @@ class AudioRuntime:
             return None
         bases = self._brain.base_scales()
         moved = modulate(bases, targets, mappings, signals, self._states,
-                         ast.strengths, ast.global_strength, dt, set(),
+                         ast.strengths, ast.global_strength, dt,
+                         muted_targets(ast, f"{ui_state.brain.modality}:"),
                          ast.shaped)
         if not moved:
             return None

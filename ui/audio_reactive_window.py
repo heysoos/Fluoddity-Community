@@ -19,7 +19,7 @@ from services import audio_capture
 from services.audio_analysis import SIGNAL_NAMES
 from services.audio_mapping import (MODES, Mapping, brain_targets,
                                     deaf_targets, physics_targets)
-from services.audio_shapers import SHAPER_KINDS
+from services.audio_shapers import SHAPER_KINDS, ShaperParams
 from ui import layout
 
 SIGNAL_COLORS: dict[str, tuple] = {
@@ -212,13 +212,21 @@ class AudioReactiveWindowMixin:
         if ast.status == "waiting":
             imgui.text_disabled("Play something - a silent output sends no audio.")
 
+        changed, value = imgui.checkbox("Modulate", ast.modulate)
+        if changed:
+            ast.modulate = value
+        self._delayed_tooltip(
+            "Master switch for every mapping. Capture keeps running, so the "
+            "traces still move while it is off.")
+
+        imgui.same_line()
         changed, value = imgui.checkbox("Auto Gain", ast.auto_gain)
         if changed:
             ast.auto_gain = value
         self._delayed_tooltip("Normalises each band against its recent peak.")
 
-        changed, value = imgui.slider_float("Strength", ast.global_strength,
-                                            0.0, 2.0, "%.2f")
+        changed, value = self._audio_slider("Strength", ast.global_strength,
+                                            0.0, 2.0, "%.2f", 1.0)
         if changed:
             ast.global_strength = value
         self._delayed_tooltip("Scales every mapping at once.")
@@ -280,6 +288,20 @@ class AudioReactiveWindowMixin:
             imgui.plot_histogram("##audio_spectrum", mel, scale_min=0.0,
                                  scale_max=1.0, graph_size=size)
 
+    def _audio_slider(self, label, value, lo, hi, fmt, default):
+        """A slider whose right-click menu puts it back to its default.
+
+        Every number in this panel came from a dataclass field, so there is
+        always exactly one value to go back to.
+        """
+        changed, v = imgui.slider_float(label, float(value), lo, hi, fmt)
+        if imgui.begin_popup_context_item(f"{label}_reset"):
+            if imgui.selectable(f"Reset to {default:g}##do")[0]:
+                v, changed = float(default), True
+                imgui.close_current_popup()
+            imgui.end_popup()
+        return changed, v
+
     def _audio_trace(self, ident, values, colour, width, height,
                      lo=0.0, hi=1.0):
         """One plot_lines call with the band's colour pushed around it."""
@@ -336,14 +358,37 @@ class AudioReactiveWindowMixin:
         overlay = (getattr(self, "audio_overlays", {}) or {}).get(target.key)
         imgui.push_id(f"{group}:{target.key}")
 
+        # The row's own switch: every band on this parameter at once, without
+        # touching what each band's On box says. A brain row's key carries its
+        # modality, since two brains may declare the same scale name.
+        mute_key = (target.key if group == "physics"
+                    else f"{self.state.brain.modality}:{target.key}")
+        muted = bool(ast.muted.get(mute_key))
+        if bound:
+            changed, on = imgui.checkbox("##row_on", not muted)
+            if changed:
+                ast.muted[mute_key] = not on
+            self._delayed_tooltip(
+                "Silences every band mapped to this parameter at once.")
+        else:
+            imgui.dummy(imgui.ImVec2(imgui.get_frame_height(),
+                                     imgui.get_frame_height()))
+        imgui.same_line()
+
         # Clicking the name opens this row's drawer and closes any other.
         open_here = ast.open_target == target.key
         arrow = "v " if open_here else "> " if bound else "  "
         if bound:
+            if muted:
+                imgui.push_style_color(imgui.Col_.text,
+                                       imgui.get_style().color_(
+                                           imgui.Col_.text_disabled))
             if imgui.selectable(f"{arrow}{target.label}", open_here, 0,
                                 imgui.ImVec2(140, 0))[0]:
                 ast.open_target = "" if open_here else target.key
                 ast.open_band = ""
+            if muted:
+                imgui.pop_style_color()
         else:
             imgui.text_disabled(f"{arrow}{target.label}")
             imgui.same_line(0, 0)
@@ -414,11 +459,14 @@ class AudioReactiveWindowMixin:
         if changed:
             m.enabled = value
 
-        changed, value = imgui.slider_float("Depth", m.depth, 0.0, 1.0, "%.2f")
+        blank = Mapping(signal=m.signal, target=m.target)
+        changed, value = self._audio_slider("Depth", m.depth, 0.0, 1.0, "%.2f",
+                                            blank.depth)
         if changed:
             m.depth = value
         self._delayed_tooltip("How far this band can move the parameter.")
-        changed, value = imgui.slider_float("Gain", m.gain, 0.0, 4.0, "%.2f")
+        changed, value = self._audio_slider("Gain", m.gain, 0.0, 4.0, "%.2f",
+                                            blank.gain)
         if changed:
             m.gain = value
         self._delayed_tooltip("Amplifies the band before it is used.")
@@ -438,9 +486,10 @@ class AudioReactiveWindowMixin:
                     m.shaper.wave = WAVE_KINDS[widx]
                 continue
             lo, hi, fmt = _FIELD_RANGE[fname]
-            changed, value = imgui.slider_float(
+            changed, value = self._audio_slider(
                 fname.replace("_", " ").title(),
-                float(getattr(m.shaper, fname)), lo, hi, fmt)
+                float(getattr(m.shaper, fname)), lo, hi, fmt,
+                float(getattr(ShaperParams(), fname)))
             if changed:
                 setattr(m.shaper, fname, value)
 

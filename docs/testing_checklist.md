@@ -307,6 +307,16 @@ installed; without it the panel says so and everything else runs unchanged.
 - [ ] Nothing playing but room noise leaves the bands near the bottom of their
       range rather than part way up.
 - [ ] Binding bass to Sensor Gain visibly changes the simulation on a beat.
+- [ ] Unticking `Modulate` at the top freezes the simulation's response while
+      the spectrum and every trace KEEP moving; the sliders lose their hatching.
+      Ticking it back resumes without touching any mapping.
+- [ ] A bound row's own checkbox silences every band on that parameter at once
+      and dims its name. The band dots stay clickable, and a band whose `On`
+      box was already unticked in the drawer is still unticked after the row is
+      switched back on.
+- [ ] Muting a Brain row under one modality leaves the same-named row under
+      another alone (mlp and lenia both have Weight Scale).
+- [ ] Both switches survive a quit and relaunch.
 - [ ] A bound row shows a sparkline of what audio is doing to that parameter;
       an unbound row shows none and is dimmed.
 - [ ] Clicking a bound row's name opens its drawer; clicking another row's name
@@ -318,6 +328,8 @@ installed; without it the panel says so and everything else runs unchanged.
 - [ ] A band tab offers Depth, Gain, mode, an On toggle and a Shaper; picking
       each shaper shows only the controls that shaper uses (smooth: attack and
       release; gate: threshold and hold; lfo: rates and wave).
+- [ ] Right-clicking Depth, Gain, Strength or any shaper slider offers a reset
+      naming that control's default, and picking it puts the value back.
 - [ ] A band tab's trace shows the SHAPER'S output bright over the raw band
       faint: pick `lfo` and the bright line oscillates while the faint one
       follows the music. Picking `none` makes the two identical.
@@ -339,6 +351,9 @@ installed; without it the panel says so and everything else runs unchanged.
       parameter stops responding to audio.
 - [ ] Switching brain modality changes the Brain rows; switching back restores
       the mappings that were there.
+- [ ] EVERY modality offers at least one Brain row, MLP included (Weight Scale
+      and Bias Scale). Mapping a band to Weight Scale visibly changes how hard
+      the brain drives the particles.
 - [ ] Enabling Auto (CLIP) stops audio modulating anything; disabling restores it.
 - [ ] Quitting and relaunching restores the mappings, with capture stopped.
 - [ ] With the panel closed, the frame rate matches a run with the feature never

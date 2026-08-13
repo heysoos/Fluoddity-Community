@@ -347,6 +347,140 @@ def test_a_mapping_that_stops_being_applied_drops_its_ring():
     assert host._audio_shaped_rings() == {}
 
 
+# --- the two bypasses --------------------------------------------------------
+
+def _runtime_with(level=0.5):
+    """A runtime fed a constant signal, with one physics and one brain row."""
+    from services.audio_mapping import Mapping
+    from services.audio_runtime import AudioRuntime
+    from services.audio_analysis import SIGNAL_NAMES
+    from state import UIState
+
+    class _Fake:
+        signals = {n: level for n in SIGNAL_NAMES}
+
+    st = UIState()
+    st.audio.enabled = True
+    st.audio.mappings.append(Mapping(signal="bass", target="SENSOR_GAIN",
+                                     mode="add", depth=0.5))
+    st.sim.SENSOR_GAIN = 1.0
+    rt = AudioRuntime()
+    rt.capture.status = "active"
+    rt.capture.snapshot = lambda: _Fake()
+    return st, rt
+
+
+def test_the_master_switch_stops_modulation_but_not_capture():
+    st, rt = _runtime_with()
+    moved, _b = rt.update(st, 1 / 60, None, None)
+    assert moved is not st.sim, "nothing was modulated to begin with"
+
+    st.audio.modulate = False
+    same, _b = rt.update(st, 1 / 60, None, None)
+    assert same is st.sim
+    assert st.audio.snapshot is not None, "capture must keep running"
+    assert st.audio.status == "active"
+    rt.close()
+
+
+def test_muting_a_row_silences_every_band_on_it():
+    st, rt = _runtime_with()
+    from services.audio_mapping import Mapping
+    st.audio.mappings.append(Mapping(signal="hi", target="SENSOR_GAIN",
+                                     mode="add", depth=0.5))
+    moved, _b = rt.update(st, 1 / 60, None, None)
+    assert moved.SENSOR_GAIN != pytest.approx(1.0)
+
+    st.audio.muted["SENSOR_GAIN"] = True
+    same, _b = rt.update(st, 1 / 60, None, None)
+    assert same is st.sim
+    rt.close()
+
+
+def test_muting_a_row_leaves_each_band_own_enabled_flag_alone():
+    """Clearing the mappings' flags instead would resurrect the bands the user
+    had switched off individually when the row came back."""
+    st, rt = _runtime_with()
+    st.audio.mappings[0].enabled = False
+    st.audio.muted["SENSOR_GAIN"] = True
+    rt.update(st, 1 / 60, None, None)
+    st.audio.muted["SENSOR_GAIN"] = False
+    rt.update(st, 1 / 60, None, None)
+    assert st.audio.mappings[0].enabled is False
+    rt.close()
+
+
+def test_a_muted_row_draws_no_overlay_on_its_slider():
+    st, rt = _runtime_with()
+    st.audio.muted["SENSOR_GAIN"] = True
+    moved, _b = rt.update(st, 1 / 60, None, None)
+    assert rt.overlays(st, moved) == {}
+    rt.close()
+
+
+def test_a_bypassed_rig_empties_the_drawer_traces():
+    """Left alone, `shaped` would hold its last frame forever and the drawer
+    would show a frozen line rather than nothing."""
+    st, rt = _runtime_with()
+    rt.update(st, 1 / 60, None, None)
+    assert st.audio.shaped
+    st.audio.modulate = False
+    rt.update(st, 1 / 60, None, None)
+    assert st.audio.shaped == {}
+    rt.close()
+
+
+def test_a_brain_row_mute_does_not_leak_into_another_modality():
+    """mlp and lenia both declare `w_scale`, and their mappings are already
+    kept apart by modality."""
+    from services.audio_runtime import muted_targets
+    from state.audio_in_state import AudioInState
+
+    a = AudioInState()
+    a.muted = {"mlp:w_scale": True, "SENSOR_GAIN": True}
+    assert muted_targets(a, "mlp:") == {"w_scale"}
+    assert muted_targets(a, "lenia:") == set()
+    # A physics sweep must not pick up the brain's namespaced keys either.
+    assert muted_targets(a) == {"SENSOR_GAIN"}
+
+
+def test_both_switches_survive_a_save_and_load():
+    from state.audio_in_state import AudioInState, apply_dict, to_dict
+    a = AudioInState()
+    a.modulate = False
+    a.muted = {"DRAG": True, "SENSOR_GAIN": False}
+    b = AudioInState()
+    apply_dict(b, to_dict(a))
+    assert b.modulate is False
+    assert b.muted.get("DRAG") is True
+    assert not b.muted.get("SENSOR_GAIN")
+
+
+def test_the_panel_renders_with_a_muted_row():
+    imgui, host = _bound_host(open_band="bass")
+    host.state.audio.muted["SENSOR_GAIN"] = True
+    _draw(imgui, host)
+
+
+# --- right-click to reset ----------------------------------------------------
+
+def test_every_slider_in_the_panel_offers_a_reset():
+    """A bare imgui.slider_float has no context menu, so one left behind is a
+    control the user cannot put back."""
+    src = SRC.read_text(encoding="utf-8")
+    assert "imgui.slider_float(" not in src.replace(
+        "changed, v = imgui.slider_float(", "")
+    assert "begin_popup_context_item" in src
+
+
+def test_a_reset_returns_the_dataclass_default():
+    from services.audio_mapping import Mapping
+    from services.audio_shapers import ShaperParams
+    assert Mapping(signal="bass", target="K").depth == pytest.approx(0.5)
+    assert Mapping(signal="bass", target="K").gain == pytest.approx(1.0)
+    assert ShaperParams().rate_max == pytest.approx(12.0)
+
+
 def test_the_panel_reads_its_snapshot_from_state_not_from_a_service():
     """The UI is passive; reaching into the capture thread is what left the
     spectrum blank when nothing assigned the runtime to the UI."""
