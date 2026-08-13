@@ -84,11 +84,14 @@ def deaf_targets(sim_state) -> set[str]:
 def modulate(bases: dict[str, float], targets, mappings, signals,
              states: dict[int, ShaperState], strengths: dict[str, float],
              global_strength: float, dt: float,
-             deaf: set[str]) -> dict[str, float]:
+             deaf: set[str], shaped: dict | None = None) -> dict[str, float]:
     """Modulated values for the targets that have an enabled mapping.
 
     `bases` is read and never written. Targets with no mapping, and targets a
-    sweep has made deaf, are absent from the result.
+    sweep has made deaf, are absent from the result. When `shaped` is given,
+    each applied mapping's post-shaper signal is recorded in it under `id(m)` -
+    the panel draws that, since the shaper is the whole point of the drawer and
+    the raw band shows none of its effect.
     """
     by_target = {t.key: t for t in targets}
     adds: dict[str, list] = {}
@@ -112,6 +115,8 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
             state = states.setdefault(id(m), ShaperState())
             s = min(1.0, max(0.0, signals[m.signal] * m.gain))
             s = state.apply(s, dt, m.shaper)
+            if shaped is not None:
+                shaped[id(m)] = s
             sign = -1.0 if m.mode == "subtract" else 1.0
             v += sign * s * m.depth * span
 
@@ -119,6 +124,8 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
             state = states.setdefault(id(m), ShaperState())
             s = min(1.0, max(0.0, signals[m.signal] * m.gain))
             s = state.apply(s, dt, m.shaper)
+            if shaped is not None:
+                shaped[id(m)] = s
             v *= 1.0 + s * m.depth
 
         v = base + (v - base) * strengths.get(key, 1.0) * global_strength

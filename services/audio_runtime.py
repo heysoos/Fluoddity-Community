@@ -73,13 +73,15 @@ class AudioRuntime:
             return ui_state.sim, None
         signals = snap.signals
 
+        ast.shaped = {}
         sim_out = ui_state.sim
         p_targets = physics_targets(ui_state.sim)
         deaf = deaf_targets(ui_state.sim)
         bases = {t.key: float(getattr(ui_state.sim, t.key, 0.0))
                  for t in p_targets}
         moved = modulate(bases, p_targets, ast.mappings, signals, self._states,
-                         ast.strengths, ast.global_strength, dt, deaf)
+                         ast.strengths, ast.global_strength, dt, deaf,
+                         ast.shaped)
         if moved:
             sim_out = replace(ui_state.sim, **moved)
 
@@ -147,7 +149,8 @@ class AudioRuntime:
             return None
         bases = self._brain.base_scales()
         moved = modulate(bases, targets, mappings, signals, self._states,
-                         ast.strengths, ast.global_strength, dt, set())
+                         ast.strengths, ast.global_strength, dt, set(),
+                         ast.shaped)
         if not moved:
             return None
         return self._brain.modulated({**bases, **moved})

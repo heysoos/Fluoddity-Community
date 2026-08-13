@@ -110,10 +110,11 @@ class _Snap:
     """Stands in for a SignalSnapshot."""
 
     def __init__(self):
-        from services.audio_analysis import SIGNAL_NAMES
+        from services.audio_analysis import SIGNAL_NAMES, mel_bar_bands
         self.signals = {n: 0.5 for n in SIGNAL_NAMES}
         self.mel = np.linspace(0, 1, 40).astype(np.float32)
         self.seq = 1
+        self.mel_bands = mel_bar_bands(48000.0, 40)
 
 
 def _bound_host(open_target="SENSOR_GAIN", open_band="bass"):
@@ -227,6 +228,106 @@ def test_only_one_drawer_is_open_at_a_time():
 def test_a_row_with_no_mapping_draws_no_drawer():
     imgui, host = _bound_host(open_target="DRAG")
     _draw(imgui, host)
+
+
+# --- what stops the drawing looking like noise -------------------------------
+
+def test_a_trace_never_draws_more_samples_than_it_has_pixels():
+    """plot_lines spreads what it is given across the whole graph, so an
+    oversampled sparkline reads as noise however smooth the signal is."""
+    from ui.audio_reactive_window import TRACE_LEN, visible_samples
+    full = np.arange(TRACE_LEN, dtype=np.float32)
+    assert visible_samples(full, 56).size == 56
+    assert visible_samples(full, 1000).size == TRACE_LEN
+
+
+def test_a_trace_keeps_the_NEWEST_samples_when_it_has_to_drop_some():
+    from ui.audio_reactive_window import visible_samples
+    full = np.arange(100, dtype=np.float32)
+    assert visible_samples(full, 10)[-1] == pytest.approx(99.0)
+
+
+def test_a_trace_in_a_zero_width_widget_still_has_two_points():
+    from ui.audio_reactive_window import visible_samples
+    assert visible_samples(np.zeros(64, dtype=np.float32), 0).size == 2
+
+
+def test_the_spectrum_is_bars_on_a_fixed_scale():
+    """Left to itself plot_histogram rescales to the frame's own extremes
+    every frame, so the graph heaves about when nothing has changed."""
+    src = SRC.read_text(encoding="utf-8")
+    assert "plot_histogram" in src
+    call = src.split("plot_histogram(")[1]
+    assert "scale_min=0.0" in call and "scale_max=1.0" in call
+
+
+def test_the_spectrum_colours_every_bar_by_a_real_band():
+    """A bar's colour comes from the band its centre frequency falls in, which
+    only the analyser knows - it placed the mel axis for this device's rate."""
+    from services.audio_analysis import BAND_EDGES_HZ, mel_bar_bands
+    for rate in (44100.0, 48000.0, 96000.0):
+        idx = mel_bar_bands(rate, 40)
+        assert idx.size == 40
+        assert idx.min() >= 0 and idx.max() < len(BAND_EDGES_HZ)
+        assert np.all(np.diff(idx) >= 0), "bands must run low to high"
+
+
+# --- the drawer has to show what the shaper does -----------------------------
+
+def test_modulate_reports_each_mapping_post_shaper_signal():
+    """An LFO turns a steady band into an oscillation; a drawer drawing the
+    raw band would show none of that."""
+    from services.audio_mapping import Mapping, TargetDef, modulate
+    from services.audio_shapers import ShaperParams
+
+    t = TargetDef("K", "K", "physics", 0.0, 1.0, None, None)
+    m = Mapping(signal="bass", target="K",
+                shaper=ShaperParams(kind="lfo", rate_min=8.0, rate_max=8.0))
+    states, seen = {}, []
+    for _ in range(40):
+        shaped = {}
+        modulate({"K": 0.5}, [t], [m], {"bass": 0.5}, states, {}, 1.0,
+                 1 / 60.0, set(), shaped)
+        seen.append(shaped[id(m)])
+    assert max(seen) - min(seen) > 0.5, "the LFO's swing was not reported"
+
+
+def test_modulate_reports_nothing_when_no_dict_is_offered():
+    """The overlay probe runs modulate at full scale; it must not overwrite
+    what the live path recorded."""
+    from services.audio_mapping import Mapping, TargetDef, modulate
+    t = TargetDef("K", "K", "physics", 0.0, 1.0, None, None)
+    modulate({"K": 0.5}, [t], [Mapping(signal="bass", target="K")],
+             {"bass": 0.5}, {}, {}, 1.0, 1 / 60.0, set())
+
+
+def test_a_disabled_mapping_reports_no_shaped_signal():
+    from services.audio_mapping import Mapping, TargetDef, modulate
+    t = TargetDef("K", "K", "physics", 0.0, 1.0, None, None)
+    m = Mapping(signal="bass", target="K", enabled=False)
+    shaped = {}
+    modulate({"K": 0.5}, [t], [m], {"bass": 0.5}, {}, {}, 1.0, 1 / 60.0,
+             set(), shaped)
+    assert shaped == {}
+
+
+def test_the_drawer_draws_the_shaped_ring_it_was_given():
+    imgui, host = _bound_host(open_band="mid")
+    ast = host.state.audio
+    ast.shaped = {id(m): 0.5 for m in ast.mappings}
+    _draw(imgui, host)
+    rings = host._audio_shaped_rings()
+    assert set(rings) == set(ast.shaped)
+
+
+def test_a_mapping_that_stops_being_applied_drops_its_ring():
+    imgui, host = _bound_host(open_band="mid")
+    ast = host.state.audio
+    ast.shaped = {id(m): 0.5 for m in ast.mappings}
+    _draw(imgui, host)
+    ast.shaped = {}
+    _draw(imgui, host)
+    assert host._audio_shaped_rings() == {}
 
 
 def test_the_panel_reads_its_snapshot_from_state_not_from_a_service():

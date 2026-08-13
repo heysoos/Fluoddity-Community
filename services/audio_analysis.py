@@ -98,6 +98,28 @@ def analysis_matrix(sample_rate: float, fft_size: int = FFT_SIZE,
     return out
 
 
+def mel_bar_bands(sample_rate: float, n_mel: int = N_MEL) -> np.ndarray:
+    """Which of BAND_EDGES_HZ each mel bar's centre falls in, as an index.
+
+    The display colours a bar by the band it belongs to, and only the analyser
+    knows where the mel axis was placed for this device's rate.
+    """
+    nyquist = sample_rate / 2.0
+    edges = _mel_to_hz(np.linspace(_hz_to_mel(20.0),
+                                   _hz_to_mel(min(16000.0, nyquist)),
+                                   n_mel + 2))
+    centres = edges[1:n_mel + 1]
+    out = np.zeros(n_mel, dtype=np.int8)
+    for i, hz in enumerate(centres):
+        for j, (_name, lo, hi) in enumerate(BAND_EDGES_HZ):
+            if lo <= hz < hi:
+                out[i] = j
+                break
+        else:
+            out[i] = len(BAND_EDGES_HZ) - 1
+    return out
+
+
 @dataclass(frozen=True)
 class SignalSnapshot:
     """One analysis result. Immutable so the frame loop may read it without a
@@ -105,6 +127,7 @@ class SignalSnapshot:
     signals: dict[str, float]
     mel: np.ndarray
     seq: int
+    mel_bands: np.ndarray
 
 
 class Analyzer:
@@ -129,6 +152,7 @@ class Analyzer:
                               dtype=np.float32)
         self._spectrum = np.zeros(fft_size // 2 + 1, dtype=np.float32)
         self._level = 0.0
+        self._mel_bands = mel_bar_bands(sample_rate, n_mel)
         block_dt = max(1, int(hop)) / max(1.0, self.sample_rate)
         self._smooth_k = (1.0 if SMOOTHING_SECONDS <= 0.0 else
                           1.0 - np.exp(-block_dt / SMOOTHING_SECONDS))
@@ -177,4 +201,5 @@ class Analyzer:
             signals={n: float(v) for n, v in zip(SIGNAL_NAMES, norm)},
             mel=np.nan_to_num(mel, nan=0.0, posinf=0.0, neginf=0.0),
             seq=self._seq,
+            mel_bands=self._mel_bands,
         )

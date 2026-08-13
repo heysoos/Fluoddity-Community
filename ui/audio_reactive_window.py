@@ -59,6 +59,17 @@ _FIELD_RANGE: dict[str, tuple[float, float, str]] = {
 }
 
 
+def visible_samples(values: np.ndarray, width: float) -> np.ndarray:
+    """The newest samples that fit the widget, one per pixel.
+
+    plot_lines spreads whatever it is handed across the whole graph, so giving
+    a 56-pixel sparkline a 180-sample history draws three samples per pixel and
+    reads as noise however smooth the signal underneath is.
+    """
+    n = int(max(2.0, min(float(values.size), width)))
+    return values[-n:]
+
+
 class TraceRing:
     """A rolling window kept as float32 so it can go straight to plot_lines."""
 
@@ -91,6 +102,12 @@ class AudioReactiveWindowMixin:
         if not hasattr(self, "_audio_target_trace_rings"):
             self._audio_target_trace_rings = {}
         return self._audio_target_trace_rings
+
+    def _audio_shaped_rings(self) -> dict:
+        """One ring per mapping, holding what its shaper puts out."""
+        if not hasattr(self, "_audio_shaped_trace_rings"):
+            self._audio_shaped_trace_rings = {}
+        return self._audio_shaped_trace_rings
 
     def _audio_devices(self, refresh: bool = False) -> list:
         if refresh or not hasattr(self, "_audio_device_cache"):
@@ -145,6 +162,14 @@ class AudioReactiveWindowMixin:
             trings.setdefault(key, TraceRing()).push(min(1.0, max(0.0, frac)))
         for gone in [k for k in trings if k not in overlays]:
             del trings[gone]
+
+        shaped = getattr(ast, "shaped", None) or {}
+        srings = self._audio_shaped_rings()
+        for key, value in shaped.items():
+            srings.setdefault(key, TraceRing()).push(
+                min(1.0, max(0.0, float(value))))
+        for gone in [k for k in srings if k not in shaped]:
+            del srings[gone]
 
     # --- source ---------------------------------------------------------
 
@@ -204,9 +229,7 @@ class AudioReactiveWindowMixin:
         snap = getattr(ast, "snapshot", None)
         rings = self._audio_rings()
         if snap is not None:
-            imgui.plot_lines("##audio_spectrum",
-                             np.asarray(snap.mel, dtype=np.float32),
-                             graph_size=imgui.ImVec2(0, 46))
+            self._render_audio_spectrum(snap)
         else:
             imgui.text_disabled("No signal yet.")
 
@@ -223,11 +246,47 @@ class AudioReactiveWindowMixin:
                                f"{name[:4]} {value:.2f}")
             imgui.end_group()
 
+    def _render_audio_spectrum(self, snap):
+        """Mel bars on a FIXED scale, each coloured by the band it falls in.
+
+        A fixed scale is what makes the bars readable: left to itself
+        plot_histogram rescales to the frame's own extremes every frame, so the
+        whole graph heaves about even when nothing in the music changed.
+        """
+        mel = np.asarray(snap.mel, dtype=np.float32)
+        bands = np.asarray(getattr(snap, "mel_bands", np.zeros(mel.size)))
+        size = imgui.ImVec2(imgui.get_content_region_avail().x, 46)
+        origin = imgui.get_cursor_screen_pos()
+        drawn = 0
+        for index, name in enumerate(SIGNAL_NAMES[:-1]):
+            masked = np.where(bands == index, mel, 0.0).astype(np.float32)
+            if not masked.any():
+                continue
+            if drawn:
+                # Rewind onto the first graph and clear this one's backing, so
+                # the bars share one canvas rather than sitting side by side.
+                imgui.set_cursor_screen_pos(origin)
+                imgui.push_style_color(imgui.Col_.frame_bg,
+                                       imgui.ImVec4(0, 0, 0, 0))
+            imgui.push_style_color(imgui.Col_.plot_histogram,
+                                   imgui.ImVec4(*SIGNAL_COLORS[name]))
+            imgui.plot_histogram(f"##audio_spectrum_{name}", masked,
+                                 scale_min=0.0, scale_max=1.0, graph_size=size)
+            imgui.pop_style_color()
+            if drawn:
+                imgui.pop_style_color()
+            drawn += 1
+        if not drawn:
+            imgui.plot_histogram("##audio_spectrum", mel, scale_min=0.0,
+                                 scale_max=1.0, graph_size=size)
+
     def _audio_trace(self, ident, values, colour, width, height,
                      lo=0.0, hi=1.0):
         """One plot_lines call with the band's colour pushed around it."""
+        pixels = width if width > 0 else imgui.get_content_region_avail().x
         imgui.push_style_color(imgui.Col_.plot_lines, imgui.ImVec4(*colour))
-        imgui.plot_lines(ident, values, scale_min=lo, scale_max=hi,
+        imgui.plot_lines(ident, visible_samples(values, pixels),
+                         scale_min=lo, scale_max=hi,
                          graph_size=imgui.ImVec2(width, height))
         imgui.pop_style_color()
 
@@ -385,10 +444,27 @@ class AudioReactiveWindowMixin:
             if changed:
                 setattr(m.shaper, fname, value)
 
-        ring = self._audio_rings().get(m.signal)
-        if ring is not None:
-            self._audio_trace(f"##band_{m.signal}", ring.values,
-                              SIGNAL_COLORS[m.signal], -1, 42)
+        # The raw band faint, and what the shaper makes of it bright over the
+        # top - the difference between the two IS the shaper's effect, which is
+        # the only reason this drawer is open.
+        raw = self._audio_rings().get(m.signal)
+        out = self._audio_shaped_rings().get(id(m))
+        colour = SIGNAL_COLORS[m.signal]
+        width = imgui.get_content_region_avail().x
+        origin = imgui.get_cursor_screen_pos()
+        if raw is not None:
+            self._audio_trace(f"##band_{m.signal}", raw.values,
+                              (*colour[:3], 0.35), width, 42)
+        if out is not None:
+            if raw is not None:
+                imgui.set_cursor_screen_pos(origin)
+                imgui.push_style_color(imgui.Col_.frame_bg,
+                                       imgui.ImVec4(0, 0, 0, 0))
+            self._audio_trace("##shaped", out.values, colour, width, 42)
+            if raw is not None:
+                imgui.pop_style_color()
+        elif m.shaper.kind != "none":
+            imgui.text_disabled("Start audio to see the shaper's output.")
 
     def _render_audio_total_tab(self, target, bound, overlay):
         if overlay is None:
