@@ -343,21 +343,37 @@ mechanics these caveats assume.
 
 ### The archive and admission
 
-- **An archive is pinned to ONE encoder, permanently, and only an EMPTY one
-  can be pinned.** `<archive>/encoder.json` sits at the archive ROOT beside
-  `goals.json`, not under the layout signature — one archive holds every brain
-  and switching brain must not switch embedding space. `save_encoder` refuses
-  to overwrite, the same discipline as `save_run_config`. **A missing file
-  means `clip-b32`**, so every archive written before the choice existed opens
-  untouched and no migration runs — which is also why `_ensure_archive_service`
-  pins only when `len(archive) == 0`: writing the combo's value onto a
-  populated unpinned archive would relabel every vector in it.
-  `Archive.load_from_store` refuses a store whose encoder differs and sets
-  `encoder_mismatch`, because at equal width a foreign vector is silently
-  wrong rather than an error — `clip-b32` and `clip-b16` are both 512-d.
-  Migrating an archive between encoders is deliberately NOT implemented; the
-  thumbnails are 160px against a 224px capture, so re-embedding would mix
-  fidelities against entries admitted afterwards.
+- **An archive is pinned to ONE encoder AT CREATION, and every control over it
+  afterwards is a readout.** `archive_library.create()` writes
+  `<archive>/encoder.json`, which sits at the archive ROOT beside `goals.json`,
+  not under the layout signature — one archive holds every brain and switching
+  brain must not switch embedding space. Creation is the only moment the
+  archive holds nothing; pinning any later leaves a live-looking combo over an
+  archive whose vectors are already committed, and a control that cannot do
+  what it offers is worse than no control. So the CHOICE is in the New Archive
+  modal, and the Explore tab's Encoder combo is permanently disabled and
+  follows `archive.encoder`. `pin_encoder` refuses to overwrite, the same
+  discipline as `save_run_config`. **A missing file means `clip-b32`**, so
+  every archive written before the choice existed opens untouched and no
+  migration runs. `Archive.load_from_store` refuses a store whose encoder
+  differs and sets `encoder_mismatch`, because at equal width a foreign vector
+  is silently wrong rather than an error — `clip-b32` and `clip-b16` are both
+  512-d. Migrating an archive between encoders is deliberately NOT implemented;
+  the thumbnails are 160px against a 224px capture, so re-embedding would mix
+  fidelities against entries admitted afterwards. A new archive also reseeds
+  `min_separation` from its encoder, because `load_settings` returns `{}` for
+  one — "keep what is on screen" would otherwise inherit the outgoing
+  archive's bar, which is a distance in a different space.
+
+- **Auto's encoder picker is read EVERY FRAME; Explore's is read once.**
+  `_ensure_auto_service` returns early once the service exists, so the combo
+  beside the prompt reached the scorer exactly once and then changed nothing —
+  it sits in a tab that is already open by the time it can be touched.
+  `_follow_auto_encoder` runs per frame, stands down whenever Explore owns the
+  driver, re-embeds the goal (the old prompt embedding is in the outgoing
+  space, and 512 against 768 is not a shape error until the first tile
+  arrives) and aborts the generation in flight. Guarded by
+  `tests/test_scorer_lifecycle.py`.
 
 - **The settings a run was carried out under are a LOG, not a field.**
   `settings.json` is rewritten wholesale, so the `min_separation` that admitted
@@ -723,6 +739,18 @@ mechanics these caveats assume.
   a child window with **both** `no_scrollbar` and `no_scroll_with_mouse`: with
   only the latter, ImGui walks up to the parent and scrolls that instead.
   Guarded by `tests/test_archive_window_render.py::test_the_map_canvas_is_a_child`.
+
+- **A control the user has to FIND cannot live in a folded section, and a
+  render test cannot see one either.** ImGui clips a window's contents to the
+  WINDOW, not to the display, so `frame()`'s host in
+  `tests/test_archive_window_render.py` must be sized taller than the tab — at
+  the default size the whole settings column falls outside it and draws no
+  vertices, which turned "opening the sections drew more" into a coin flip on
+  two vertices of header arrow. The encoder combo shipped inside the
+  default-closed `Admission` header and Auto's inside the weights-missing
+  branch: both rendered, neither was reachable, and every source-level reading
+  of the tab said they were. Assert on the labels a real frame DRAWS
+  (`_combo_labels`), not on where the call sits.
 
 - **A widget's label is drawn to its RIGHT and is CLIPPED, not scrolled.**
   ImGui's default item width is 65% of the window, so at any narrow width the
