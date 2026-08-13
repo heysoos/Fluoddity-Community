@@ -78,6 +78,10 @@ class AutoTournamentWindowMixin:
         if ch:
             ats.algorithm = ALGORITHM_NAMES[idx]
 
+        # Beside the goal it scores. Free to move, unlike Explore's: a prompt
+        # run stores nothing, so there are no vectors a change invalidates.
+        self._render_encoder_picker(ats)
+
         self._render_rollout_controls(ats)
 
         imgui.separator()
@@ -124,11 +128,7 @@ class AutoTournamentWindowMixin:
                 "position until they are cleared.")
 
     def _render_encoder_picker(self, ats):
-        """Which encoder scores this prompt.
-
-        Free here, unlike Explore's: nothing is stored, so there are no
-        vectors an encoder change could invalidate.
-        """
+        """Which encoder scores this prompt."""
         from services.vision_models import REGISTRY
 
         keys = sorted(REGISTRY)

@@ -22,6 +22,11 @@ class FakeApp:
         self.imgep_driver = imgep_driver
         self.ui = type("U", (), {"auto_unavailable": ""})()
 
+    # _follow_auto_encoder delegates the swap itself, so the fake gets the
+    # real one bound to it rather than a second implementation.
+    def _ensure_scorer(self, key):
+        return App._ensure_scorer(self, key)
+
 
 def _ensure(app, key, monkeypatch, cls=FakeScorer):
     monkeypatch.setattr(vs, "VisionScorer", cls)
@@ -97,3 +102,93 @@ def test_a_successful_reuse_clears_no_previous_error(monkeypatch):
     app.ui.auto_unavailable = "stale message"
     _ensure(app, "clip-b32", monkeypatch)
     assert app.vision_scorer.model.key == "clip-b32"
+
+
+# -- Auto's picker, per frame ------------------------------------------------
+# The service is built once, on the tab's enable edge, and returns early ever
+# after - so the encoder was read exactly once and the combo changed nothing.
+
+class FakeService:
+    def __init__(self, driver=None):
+        self.scorer = None
+        self.driver = driver or object()
+        self.prompts = []
+        self.aborts = 0
+
+    def set_prompt(self, text):
+        self.prompts.append(text)
+
+    def abort_generation(self):
+        self.aborts += 1
+
+
+def _ui_state(key="clip-b32", prompt="", enabled=True):
+    auto = type("A", (), {"model_key": key, "prompt": prompt,
+                          "enabled": enabled})()
+    return type("S", (), {"auto_tournament": auto})()
+
+
+def _follow(app, state, monkeypatch, present=True, cls=FakeScorer):
+    import tools.fetch_models as fm
+
+    monkeypatch.setattr(vs, "VisionScorer", cls)
+    monkeypatch.setattr(fm, "is_present", lambda key: present)
+    return App._follow_auto_encoder(app, state)
+
+
+def test_moving_the_combo_swaps_the_resident_encoder(monkeypatch):
+    svc = FakeService()
+    app = FakeApp(FakeScorer("clip-b32"), auto_service=svc)
+    _follow(app, _ui_state("siglip2-b16"), monkeypatch)
+    assert app.vision_scorer.model.key == "siglip2-b16"
+    assert svc.scorer is app.vision_scorer
+
+
+def test_leaving_the_combo_alone_rebuilds_nothing(monkeypatch):
+    app = FakeApp(FakeScorer("clip-b32"), auto_service=FakeService())
+    FakeScorer.built = 0
+    _follow(app, _ui_state("clip-b32"), monkeypatch)
+    assert FakeScorer.built == 0
+
+
+def test_the_goal_is_re_embedded_in_the_new_space(monkeypatch):
+    """The prompt embedding belongs to the outgoing encoder, and at 512 against
+    768 it is not even a shape error until the first tile arrives."""
+    svc = FakeService()
+    app = FakeApp(FakeScorer("clip-b32"), auto_service=svc)
+    _follow(app, _ui_state("clip-l14", prompt="coral reef"), monkeypatch)
+    assert svc.prompts == ["coral reef"]
+    assert svc.aborts == 1, "a half-scored generation ranks nothing"
+
+
+def test_a_missing_encoder_says_so_and_keeps_the_resident_one(monkeypatch):
+    kept = FakeScorer("clip-b32")
+    app = FakeApp(kept, auto_service=FakeService())
+    _follow(app, _ui_state("clip-l14"), monkeypatch, present=False)
+    assert app.vision_scorer is kept
+    assert app.ui.auto_unavailable == "model_missing"
+
+
+def test_it_stands_down_while_explore_owns_the_driver(monkeypatch):
+    """Explore's encoder belongs to its archive; Auto's combo must not reach
+    across and swap it out from under a running search."""
+    driver = type("D", (), {"scorer": None})()
+    svc = FakeService(driver=driver)
+    app = FakeApp(FakeScorer("clip-b32"), auto_service=svc,
+                  imgep_driver=driver)
+    _follow(app, _ui_state("siglip2-b16"), monkeypatch)
+    assert app.vision_scorer.model.key == "clip-b32"
+
+
+def test_a_closed_auto_tab_swaps_nothing(monkeypatch):
+    app = FakeApp(FakeScorer("clip-b32"), auto_service=FakeService())
+    _follow(app, _ui_state("clip-l14", enabled=False), monkeypatch)
+    assert app.vision_scorer.model.key == "clip-b32"
+
+
+def test_it_does_nothing_before_the_service_exists(monkeypatch):
+    """The enable edge builds the service and reads the combo itself; there is
+    nothing to repoint until then."""
+    app = FakeApp()
+    _follow(app, _ui_state("clip-l14"), monkeypatch)
+    assert app.vision_scorer is None

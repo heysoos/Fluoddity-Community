@@ -244,6 +244,45 @@ class App:
         self.ui.auto_unavailable = ""
         return True
 
+    def _follow_auto_encoder(self, ui_state):
+        """Make Auto's Encoder combo take effect while its tab is open.
+
+        Per frame rather than on the enable edge, because the combo sits in a
+        tab that is already open by the time it can be touched - read once, it
+        is a control that does nothing. Costs one string compare until the key
+        actually moves.
+
+        Explore's encoder belongs to its archive and is a readout, so this
+        stands down whenever Explore owns the driver.
+        """
+        svc = self.auto_service
+        if svc is None or not ui_state.auto_tournament.enabled:
+            return
+        if self.imgep_driver is not None and svc.driver is self.imgep_driver:
+            return
+        want = ui_state.auto_tournament.model_key
+        current = getattr(self.vision_scorer, "model", None)
+        if current is not None and current.key == want:
+            return
+
+        from tools.fetch_models import is_present
+
+        if not is_present(want):
+            self.ui.auto_unavailable = "model_missing"
+            return
+        if not self._ensure_scorer(want):
+            return
+        self.ui.auto_unavailable = ""
+        # The goal was embedded by the outgoing encoder, and the two spaces are
+        # not comparable - at 512 against 768 the score is not even a shape
+        # error until the first tile arrives.
+        prompt = ui_state.auto_tournament.prompt.strip()
+        if prompt:
+            svc.set_prompt(prompt)
+        # A generation half-scored in one space and half in another ranks
+        # nothing, so the one in flight is thrown away rather than finished.
+        svc.abort_generation()
+
     def _ensure_scorer(self, model_key: str) -> bool:
         """Make `model_key` the resident encoder. -> is it loaded?
 
@@ -653,11 +692,6 @@ class App:
         # _build_archive_set, which the browser also reaches - opening the
         # gallery must not pay for an ONNX session. See CLAUDE.md.
         if self.archive_store is not None:
-            # Pin only an EMPTY archive. One that holds entries and has no
-            # encoder.json predates the choice and is clip-b32 - writing the
-            # combo's value onto it would relabel every vector in it.
-            if self.archive is not None and len(self.archive) == 0:
-                self.archive_store.save_encoder(ui_state.archive.encoder_key)
             ui_state.archive.encoder_key = self.archive_store.encoder
             if not self._ensure_scorer(self.archive_store.encoder):
                 self.ui.archive_unavailable = self.ui.auto_unavailable
@@ -863,6 +897,7 @@ class App:
             if self.auto_service is not None:
                 self.auto_service.pause()
         self._auto_was_enabled = auto.enabled
+        self._follow_auto_encoder(ui_state)
 
         # Extras > Archive Browser. Before process_commands, which is where the
         # browser's own flags are read, and cleared first so a failure to open
@@ -888,13 +923,12 @@ class App:
             self._undo_auto_overrides(ui_state)
         self._explore_was_enabled = expl.enabled
 
-        # What the encoder combo needs to know: whether the choice is still
-        # open. Archive-level, so this counts every layout under it - which is
-        # what load_from_store already loaded.
+        # The encoder readout follows the archive, never the other way round.
+        # Archive-level, so the count is every layout under it - which is what
+        # load_from_store already loaded.
         if self.archive is not None:
             expl.archive_entry_count = len(self.archive)
-            if expl.archive_entry_count:
-                expl.encoder_key = self.archive.encoder
+            expl.encoder_key = self.archive.encoder
         # Read on the open edge only: the log grows with the run and this tab
         # redraws every frame.
         if expl.request_history_reload:
