@@ -1,7 +1,7 @@
 """The encoder pickers, and what they are allowed to change.
 
-Explore's is locked once the archive holds anything - its vectors are in that
-encoder's space. Auto's is free, because a prompt run stores nothing.
+Explore has no picker: its archive was pinned when it was made, and the tab
+shows a readout. Auto's is free, because a prompt run stores nothing.
 """
 import pytest
 
@@ -16,10 +16,10 @@ def test_the_archive_carries_an_encoder_and_persists_it():
 
 
 def test_the_view_buffers_are_not_persisted():
-    """Two thirds of ArchiveState is one-shots and view state; persisting a
-    stale entry count would lock a fresh archive's encoder combo."""
+    """Two thirds of ArchiveState is one-shots and view state; persisting
+    request_history_reload would replay a command on load."""
     for name in ("archive_entry_count", "history_rows",
-                 "request_history_reload"):
+                 "request_history_reload", "new_archive_encoder"):
         assert name not in PERSISTED_FIELDS
 
 

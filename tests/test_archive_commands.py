@@ -61,6 +61,49 @@ def test_new_creates_the_archive_and_switches_to_it(root, tmp_path):
     assert h.switched == ["run-07"]
 
 
+def test_new_pins_the_encoder_the_modal_chose(root, tmp_path):
+    """The modal is the only place an encoder is picked, so the flag it sets
+    has to reach create() rather than stopping at the UI."""
+    from services.archive_io import ArchiveStore
+
+    h, ui = _Handler(), _UIState()
+    ui.archive.new_archive_name = "siglip-run"
+    ui.archive.new_archive_encoder = "siglip2-b16"
+    ui.archive.new_archive_requested = True
+
+    run(h, ui)
+
+    assert ArchiveStore(root / "siglip-run").encoder == "siglip2-b16"
+
+
+def test_new_reseeds_the_separation_bar_for_its_encoder(root, tmp_path):
+    """load_settings returns {} for a new archive, which means 'keep what is on
+    screen' - so without this it inherits a bar measured in another space."""
+    from services.vision_models import get
+
+    h, ui = _Handler(), _UIState()
+    ui.archive.min_separation = 0.02
+    ui.archive.new_archive_name = "l14-run"
+    ui.archive.new_archive_encoder = "clip-l14"
+    ui.archive.new_archive_requested = True
+
+    run(h, ui)
+
+    assert ui.archive.min_separation == get("clip-l14").default_min_separation
+
+
+def test_switching_to_an_existing_archive_leaves_the_bar_alone(root, tmp_path):
+    """Its own settings.json carries it; the reseed is for new archives only."""
+    (root / "other" / "thumbs").mkdir(parents=True)
+    h, ui = _Handler(), _UIState()
+    ui.archive.min_separation = 0.037
+    ui.archive.switch_archive_name = "other"
+
+    run(h, ui)
+
+    assert ui.archive.min_separation == 0.037
+
+
 def test_a_refused_name_warns_and_does_not_switch(root, tmp_path):
     h, ui = _Handler(), _UIState()
     ui.archive.new_archive_name = "default"

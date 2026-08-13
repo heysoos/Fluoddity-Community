@@ -83,3 +83,33 @@ def test_two_archives_pin_independently(tmp_path):
     _store(tmp_path, "two").save_encoder("siglip2-b16")
     assert _store(tmp_path, "one").encoder == "clip-b16"
     assert _store(tmp_path, "two").encoder == "siglip2-b16"
+
+
+# -- pinned at creation ------------------------------------------------------
+# The one moment an archive holds nothing. Pinning any later means the control
+# offering the choice is live over an archive whose vectors are already
+# committed, which is a control that lies.
+
+def test_making_an_archive_pins_the_encoder_it_was_made_with(tmp_path):
+    from services.archive_library import create
+
+    assert create(tmp_path, "siglip-run", "siglip2-b16").ok
+    assert _store(tmp_path, "siglip-run").encoder == "siglip2-b16"
+
+
+def test_making_an_archive_without_naming_one_is_the_original_encoder(tmp_path):
+    """The two-argument call is every existing caller, and every archive
+    already on disk."""
+    from services.archive_library import create
+
+    assert create(tmp_path, "plain").ok
+    assert _store(tmp_path, "plain").encoder == DEFAULT_KEY
+
+
+def test_an_unknown_encoder_leaves_the_new_archive_unpinned(tmp_path):
+    """Not a failure to create: the archive is fine, it just reads as the
+    default rather than recording a key nothing can load."""
+    from services.archive_library import create
+
+    assert create(tmp_path, "bogus", "no-such-encoder").ok
+    assert _store(tmp_path, "bogus").encoder == DEFAULT_KEY

@@ -23,13 +23,13 @@ class ArchiveState:
     # it stats every thumbnail, and ImGui re-renders this tab every frame.
     archive_list: list = field(default_factory=list)
 
-    # Which encoder this archive's vectors are in. Pinned when the archive is
-    # made and read back from encoder.json; the combo is disabled once anything
-    # has been admitted. See CLAUDE.md.
+    # Which encoder this archive's vectors are in. Read back from encoder.json,
+    # never chosen here: the choice is made once, in the New Archive modal.
+    # See CLAUDE.md.
     encoder_key: str = "clip-b32"
-    # View buffers, deliberately NOT persisted: the count decides whether the
-    # encoder combo is locked, and the rows are read off disk when the history
-    # section is opened.
+    # View buffers, deliberately NOT persisted: the count is what the browser
+    # prints, and the rows are read off disk when the history section is
+    # opened.
     archive_entry_count: int = 0
     history_rows: list = field(default_factory=list)
     show_history: bool = False
@@ -125,8 +125,10 @@ class ArchiveState:
     # editing buffer for the goal list
     new_goal_text: str = ""
 
-    # modal text buffers
+    # modal buffers. The encoder rides with the name because both are the new
+    # archive's identity, fixed at creation.
     new_archive_name: str = ""
+    new_archive_encoder: str = "clip-b32"
     confirm_delete_text: str = ""
 
     # one-shot request flags, cleared by CommandHandler

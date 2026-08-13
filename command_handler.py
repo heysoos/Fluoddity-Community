@@ -819,12 +819,17 @@ class CommandHandler:
 
         root = get_archives_root()
         target = ""
+        new_encoder = ""
 
         if ast.new_archive_requested:
-            res = create(root, ast.new_archive_name)
+            res = create(root, ast.new_archive_name, ast.new_archive_encoder)
             if res.ok:
                 ast.new_archive_name = ""
                 target = res.name
+                # A bar calibrated in one encoder's space means nothing in
+                # another's, and load_settings returns {} for a new archive -
+                # so without this it inherits the outgoing one. See CLAUDE.md.
+                new_encoder = ast.new_archive_encoder
             else:
                 ast.warning = res.message
         elif ast.clear_archive_requested:
@@ -848,7 +853,13 @@ class CommandHandler:
             target = ast.switch_archive_name
 
         if target:
-            self.switch_archive(target, ui_state)
+            switched = self.switch_archive(target, ui_state)
+            if switched and new_encoder:
+                from services.vision_models import REGISTRY
+
+                model = REGISTRY.get(new_encoder)
+                if model is not None:
+                    ast.min_separation = model.default_min_separation
         elif ast.refresh_archive_list_requested:
             # A switch refreshes the listing itself, so this is only for the
             # Refresh button on its own.

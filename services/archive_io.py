@@ -34,6 +34,13 @@ _ARRAY_KEYS = ("ids", "embeddings", "brains", "physics")
 _OPTIONAL_ARRAY_KEYS = ("novelty",)
 
 
+def encoder_file(archive_dir) -> Path:
+    """Where an archive records its embedding space. At the archive ROOT, not
+    under a layout: one archive holds every brain, and switching brain must not
+    switch encoder."""
+    return Path(archive_dir) / "encoder.json"
+
+
 class ArchiveStore:
     def __init__(self, root, layout=None, signature: str | None = None):
         """`root` is the named archive; ENTRIES live one level down, in a
@@ -100,7 +107,7 @@ class ArchiveStore:
 
     @property
     def encoder_path(self) -> Path:
-        return self.base / "encoder.json"
+        return encoder_file(self.base)
 
     @property
     def history_path(self) -> Path:
@@ -258,29 +265,8 @@ class ArchiveStore:
                    default=-1)
 
     def save_encoder(self, model_key: str) -> bool:
-        """Pin this archive's encoder. -> whether a file is now on disk for it.
-
-        Never overwrites, the same discipline as save_run_config: an archive
-        name identifies ONE embedding space, and a second write would
-        reinterpret every entry already filed under it.
-        """
-        from services.vision_models import REGISTRY
-
-        if not self.enabled or model_key not in REGISTRY:
-            return False
-        if self.encoder_path.exists():
-            return False
-        try:
-            self.encoder_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self.encoder_path.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps({"encoder": str(model_key), "created": time.time()}),
-                encoding="utf-8")
-            os.replace(tmp, self.encoder_path)
-            return True
-        except OSError as exc:
-            print(f"[Archive] encoder not pinned ({exc})")
-            return False
+        """Pin this archive's encoder. -> whether a file is now on disk for it."""
+        return self.enabled and pin_encoder(self.base, model_key)
 
     @property
     def encoder(self) -> str:
@@ -410,6 +396,34 @@ class ArchiveStore:
         if self._fh is not None:
             self._fh.close()
             self._fh = None
+
+
+def pin_encoder(archive_dir, model_key: str) -> bool:
+    """Write <archive>/encoder.json. -> whether a file is now there for it.
+
+    Never overwrites, the same discipline as save_run_config: an archive name
+    identifies ONE embedding space, and a second write would reinterpret every
+    entry already filed under it. Module-level because an archive is pinned
+    when it is CREATED, before any store or layout exists for it.
+    """
+    from services.vision_models import REGISTRY
+
+    if model_key not in REGISTRY:
+        return False
+    path = encoder_file(archive_dir)
+    if path.exists():
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps({"encoder": str(model_key), "created": time.time()}),
+            encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+    except OSError as exc:
+        print(f"[Archive] encoder not pinned ({exc})")
+        return False
 
 
 # What belongs to a LAYOUT: the entries and their pictures. These move DOWN.

@@ -36,9 +36,17 @@ def gui():
 
 
 def frame(fn, n=2):
-    """Run full ImGui frames around fn and return the last vertex count."""
+    """Run full ImGui frames around fn and return the last vertex count.
+
+    The host is sized taller than anything it can hold. ImGui clips a window's
+    contents to the WINDOW, not to the display, so at the default size the whole
+    settings column falls outside it and draws no vertices at all - which turns
+    "opening the sections drew more" into a coin flip on two vertices' worth of
+    header arrow. A window past the display edge still emits its geometry.
+    """
     for _ in range(n):
         imgui.new_frame()
+        imgui.set_next_window_size(imgui.ImVec2(1200, 4000))
         imgui.begin("host", True)
         fn()
         imgui.end()
@@ -649,6 +657,18 @@ def test_the_modals_render_when_open(gui):
     assert frame(run) > host_only()
 
 
+def test_the_new_archive_modal_offers_the_encoder(gui, monkeypatch):
+    """The one moment an archive holds nothing is the only one at which the
+    choice is real, so this modal is where it has to be."""
+    h = Harness(driver=_FakeDriver(), archive=_FakeArchive())
+
+    def run():
+        imgui.open_popup("New archive")
+        h._render_archive_modals(h.state.archive)
+
+    assert "##new_archive_encoder" in _combo_labels(monkeypatch, run)
+
+
 # ---- adding goals ------------------------------------------------------
 
 def test_the_goal_box_submits_on_enter(gui):
@@ -861,6 +881,45 @@ def _open_all_sections():
     store = imgui.get_state_storage()
     for name in SECTIONS:
         store.set_int(imgui.get_id(name), 1)
+
+
+def _combo_labels(monkeypatch, draw):
+    """-> every label passed to imgui.combo while `draw` runs."""
+    seen = []
+    real = imgui.combo
+
+    def wrapper(label, *a, **kw):
+        seen.append(label)
+        return real(label, *a, **kw)
+
+    monkeypatch.setattr(imgui, "combo", wrapper)
+    frame(draw)
+    return seen
+
+
+def test_the_encoder_is_visible_without_opening_a_section(gui, monkeypatch):
+    """It shipped inside the Admission header, which is folded away by default,
+    so there was no encoder anywhere on an opened tab."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    assert "Encoder" in _combo_labels(monkeypatch, h.render_explore_tab)
+
+
+def test_the_browser_shows_the_encoder_too(gui, monkeypatch):
+    """It sits with the archive row, which is the one control both windows
+    draw - and which archive this is includes which space it is in."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    ast = h.state.archive
+    labels = _combo_labels(monkeypatch, lambda: h._render_archive_row(ast))
+    assert "Encoder" in labels
+
+
+def test_the_encoder_readout_never_writes_back(gui, monkeypatch):
+    """A readout, not a picker: the archive decides, and a combo that could
+    move would be claiming otherwise."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    h.state.archive.encoder_key = "siglip2-b16"
+    frame(h.render_explore_tab)
+    assert h.state.archive.encoder_key == "siglip2-b16"
 
 
 def test_every_settings_section_renders_when_opened(gui):

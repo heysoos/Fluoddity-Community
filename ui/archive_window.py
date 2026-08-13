@@ -177,6 +177,7 @@ class ArchiveWindowMixin:
         if imgui.button("Refresh##archive"):
             ast.refresh_archive_list_requested = True
 
+        self._render_encoder_combo(ast)
         if show_summary:
             layout.text_colored_wrapped(_DIM, m["summary"])
         self._render_archive_modals(ast)
@@ -192,6 +193,7 @@ class ArchiveWindowMixin:
             if st["hint"]:
                 colour = _WARN if st["taken"] else _DIM
                 imgui.text_colored(imgui.ImVec4(*colour), st["hint"])
+            self._render_new_archive_encoder(ast)
             imgui.separator()
             imgui.begin_disabled(not st["can_create"])
             if imgui.button("Create", imgui.ImVec2(120, 0)):
@@ -459,38 +461,47 @@ class ArchiveWindowMixin:
         _, ast.sigma0 = imgui.slider_float("Bootstrap Sigma", ast.sigma0, 0.05, 1.5)
 
     def _render_encoder_combo(self, ast):
-        """Which encoder this archive's vectors are in.
+        """Which encoder this archive's vectors are in - a READOUT.
 
-        Locked once ANY layout under the archive holds entries: the encoder is
-        archive-level, so a populated fourier-n10 fixes the choice for an empty
-        gabor-n7 sibling.
+        Beside the archive it names, because it is part of which archive this
+        is. Always disabled: the choice is made once, in the New Archive modal,
+        and after that the stored vectors are in that space and no other.
+        """
+        from services.vision_models import REGISTRY, get
+
+        model = REGISTRY.get(ast.encoder_key) or get("clip-b32")
+        layout.push_settings_width()
+        imgui.begin_disabled()
+        imgui.combo("Encoder", 0, [model.label])
+        imgui.end_disabled()
+        imgui.pop_item_width()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "The embedding space this archive's vectors are in. Chosen "
+                "when the archive is made; make a new one to use another.")
+
+    def _render_new_archive_encoder(self, ast):
+        """The one place an encoder is CHOSEN.
+
+        Here rather than in the settings panel because it cannot be changed
+        afterwards - offering it beside things that can would read as another
+        slider.
         """
         from services.vision_models import REGISTRY
 
         keys = sorted(REGISTRY)
-        locked = int(getattr(ast, "archive_entry_count", 0)) > 0
-        if ast.encoder_key not in keys:
-            ast.encoder_key = keys[0]
-
-        layout.push_settings_width()
-        if locked:
-            imgui.begin_disabled()
-        changed, idx = imgui.combo("Encoder", keys.index(ast.encoder_key),
+        if ast.new_archive_encoder not in keys:
+            ast.new_archive_encoder = keys[0]
+        imgui.set_next_item_width(280)
+        changed, idx = imgui.combo("##new_archive_encoder",
+                                   keys.index(ast.new_archive_encoder),
                                    [REGISTRY[k].label for k in keys])
         if changed and 0 <= idx < len(keys):
-            ast.encoder_key = keys[idx]
-            # A bar calibrated in one encoder's space means nothing in
-            # another's, so it is reseeded rather than inherited. See CLAUDE.md.
-            ast.min_separation = REGISTRY[ast.encoder_key].default_min_separation
-        if locked:
-            imgui.end_disabled()
-        imgui.pop_item_width()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Fixed once an archive holds entries - its vectors are in this "
-                "encoder's space." if locked else
-                "Which encoder scores this archive. Cannot change once it "
-                "holds entries.")
+            ast.new_archive_encoder = keys[idx]
+        model = REGISTRY[ast.new_archive_encoder]
+        layout.text_disabled_wrapped(
+            f"Encoder, fixed for the life of this archive. "
+            f"{model.dim}-d, separation {model.default_min_separation:.4f}.")
 
     def _render_config_history(self, ast):
         """When each setting changed, and what an entry was admitted under.
@@ -528,10 +539,6 @@ class ArchiveWindowMixin:
         """What the archive KEEPS: the admission gates and the retention cap."""
         from services.vision_models import REGISTRY, get
 
-        # Beside Min Separation, which it reseeds: a bar is a distance in ONE
-        # encoder's space. Not up in the archive row, which the browser window
-        # draws too.
-        self._render_encoder_combo(ast)
         # The slider ranges are narrow on purpose; see CLAUDE.md.
         _, ast.liveness_min = imgui.slider_float(
             "Liveness Floor", ast.liveness_min, 0.0, 0.1, "%.4f")
