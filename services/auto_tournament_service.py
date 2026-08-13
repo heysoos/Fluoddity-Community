@@ -228,6 +228,14 @@ class AutoTournamentService:
         # search's curve in front of the new one.
         if self.logger is not None:
             self.logger.start_new_run()
+        # A run that replays the last one is not a reset. base_seed feeds BOTH
+        # the optimizer and gen_seed, and generation goes back to 0 below, so
+        # leaving it fixed handed back the identical population in the identical
+        # tiles over the identical particle field - a new prompt only reranked
+        # creatures the user had already watched. Advanced PAST the generations
+        # just spent, so the two runs' gen_seeds cannot overlap either, and read
+        # before the counter is cleared.
+        self.base_seed += self.generation + 1
         self.driver.reset()
         self.generation = 0
         self.step_in_gen = 0
