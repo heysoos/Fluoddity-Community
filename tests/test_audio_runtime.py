@@ -136,6 +136,33 @@ def test_close_is_safe_to_call_twice():
     rt.close()
 
 
+# --- status while a loopback endpoint is idle --------------------------------
+
+def test_an_active_capture_with_no_audio_yet_reads_waiting():
+    """WASAPI loopback delivers nothing while the endpoint is silent, so a
+    correctly-running capture can sit with no snapshot indefinitely. Reporting
+    plain 'active' there makes a working panel look broken."""
+    rt, st = AudioRuntime(), rig()
+    rt.capture.status = "active"
+    rt.update(st, 1 / 60, None, None)
+    assert st.audio.status == "waiting"
+
+
+def test_once_blocks_arrive_the_status_is_active():
+    rt, st = runtime_with({"bass": 0.5}), rig()
+    rt.capture.status = "active"
+    rt.update(st, 1 / 60, None, None)
+    assert st.audio.status == "active"
+
+
+def test_idle_and_error_are_reported_unchanged():
+    for status in ("idle", "error"):
+        rt, st = AudioRuntime(), rig()
+        rt.capture.status = status
+        rt.update(st, 1 / 60, None, None)
+        assert st.audio.status == status
+
+
 # --- the in-track overlay ----------------------------------------------------
 
 def test_an_unmodulated_run_offers_no_overlays():

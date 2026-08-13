@@ -292,8 +292,10 @@ installed; without it the panel says so and everything else runs unchanged.
 
 - [ ] Extras > Audio Reactive opens the panel; it is closed on a fresh launch.
 - [ ] The device list contains both `input:` and `loopback:` entries.
-- [ ] Picking a loopback device and pressing Start makes the spectrum move to
-      music playing in another application.
+- [ ] Picking a loopback device and pressing Start with the machine SILENT
+      reads `waiting`, not `active` - a loopback endpoint sends nothing until
+      something plays, so this is the normal state, not a fault.
+- [ ] Starting music then flips it to `active` and the spectrum moves.
 - [ ] Stop halts the traces; the status reads `idle`.
 - [ ] Binding bass to Sensor Gain visibly changes the simulation on a beat.
 - [ ] The Sensor Gain slider shows hatching, a pale base tick, and a handle that

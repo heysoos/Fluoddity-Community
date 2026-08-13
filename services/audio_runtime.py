@@ -41,6 +41,12 @@ class AudioRuntime:
             self.capture.stop()
             ast.enabled = False
         ast.status = self.capture.status
+        # A loopback endpoint renders nothing while the machine is silent, so a
+        # perfectly healthy capture can sit with no snapshot for as long as
+        # nothing is playing. Saying "active" there makes a working panel look
+        # broken; the panel names what it is waiting for instead.
+        if ast.status == "active" and self.capture.snapshot() is None:
+            ast.status = "waiting"
         ast.last_error = self.capture.last_error
 
     def update(self, ui_state, dt: float, brain_layout, current_rule):

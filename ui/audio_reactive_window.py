@@ -117,11 +117,14 @@ class AudioReactiveWindowMixin:
         imgui.text_colored(
             imgui.ImVec4(0.5, 0.8, 0.4, 1.0) if ast.status == "active"
             else imgui.ImVec4(0.8, 0.35, 0.35, 1.0) if ast.status == "error"
+            else imgui.ImVec4(0.85, 0.65, 0.25, 1.0) if ast.status == "waiting"
             else imgui.ImVec4(0.5, 0.5, 0.55, 1.0),
             ast.status)
 
         if ast.status == "error" and ast.last_error:
             imgui.text_wrapped(ast.last_error)
+        if ast.status == "waiting":
+            imgui.text_disabled("Play something - a silent output sends no audio.")
 
         changed, value = imgui.checkbox("Auto Gain", ast.auto_gain)
         if changed:
