@@ -3,6 +3,38 @@ from imgui_bundle import imgui
 from .physics_params import PARAM_BY_LABEL
 
 
+# ImGui insets a slider's grab by this at each end of the frame; the grab's own
+# width is style.GrabMinSize and its CENTRE travels only what is left over.
+_GRAB_PADDING = 2.0
+
+
+def track_span(item_min_x: float, item_max_x: float,
+               label: str) -> tuple[float, float]:
+    """The slider's own track, as (left, width).
+
+    get_item_rect_* covers the track AND the label drawn beside it, so a
+    fraction of that rect runs off the end of the slider it belongs to.
+    """
+    text = imgui.calc_text_size(label, hide_text_after_double_hash=True).x
+    width = item_max_x - item_min_x
+    if text > 0.0:
+        width -= text + imgui.get_style().item_inner_spacing.x
+    return item_min_x, max(1.0, width)
+
+
+def track_x(x0: float, width: float, fraction: float) -> float:
+    """Where ImGui draws the grab's centre for a value at `fraction`.
+
+    A plain x0 + width*fraction does not land under the grab: it misses by up
+    to half a grab, which reads as the marker disagreeing with the slider.
+    """
+    inner = max(0.0, width - _GRAB_PADDING * 2.0)
+    grab = min(imgui.get_style().grab_min_size, inner)
+    usable = max(0.0, inner - grab)
+    return (x0 + _GRAB_PADDING + grab * 0.5
+            + usable * min(1.0, max(0.0, fraction)))
+
+
 def swing_fraction(base: float, lo: float, hi: float,
                    reach: float) -> tuple[float, float]:
     """Where the modulation's reachable span sits on the track, as (start, width).
@@ -86,7 +118,7 @@ class SliderWidgetsMixin:
         changed, new_value = imgui.slider_float(slider_label, value, min_val, max_val, format=display_format)
 
         # An unbound slider draws nothing extra, so it stays pixel-identical.
-        self._draw_audio_swing(param_name)
+        self._draw_audio_swing(param_name, slider_label)
 
         # Check alt-click for lock toggle (intercept suppresses the value change)
         pls = self.param_lock_service
@@ -114,12 +146,12 @@ class SliderWidgetsMixin:
 
         return changed, new_value
 
-    def _draw_audio_swing(self, param_name):
+    def _draw_audio_swing(self, param_name, label):
         """Draw the modulation inside the slider's own track.
 
-        The hatched band is the span a full-scale signal could reach, the pale
-        tick is the value the user set, and the bright mark is the live one.
-        Draws nothing at all when the parameter has no mapping.
+        The hatched band runs from the value the user set to where a full-scale
+        signal would take it, the pale tick is that set value, and the bright
+        mark is the live one. Draws nothing when the parameter has no mapping.
         """
         overlay = getattr(self, "audio_overlays", {}).get(param_name)
         if not overlay:
@@ -127,26 +159,26 @@ class SliderWidgetsMixin:
         p0 = imgui.get_item_rect_min()
         p1 = imgui.get_item_rect_max()
         dl = imgui.get_window_draw_list()
-        w = p1.x - p0.x
+        x0, w = track_span(p0.x, p1.x, label)
         lo, hi = overlay["lo"], overlay["hi"]
         colour = overlay["color"]
 
         start, width = swing_fraction(overlay["base"], lo, hi, overlay["reach"])
         if width > 0.0:
             dl.add_rect_filled(
-                imgui.ImVec2(p0.x + w * start, p0.y),
-                imgui.ImVec2(p0.x + w * (start + width), p1.y),
+                imgui.ImVec2(track_x(x0, w, start), p0.y),
+                imgui.ImVec2(track_x(x0, w, start + width), p1.y),
                 imgui.get_color_u32(imgui.ImVec4(colour[0], colour[1],
                                                  colour[2], 0.18)))
 
-        base_x = p0.x + w * swing_fraction(overlay["base"], lo, hi,
-                                           overlay["base"])[0]
+        base_x = track_x(x0, w, swing_fraction(overlay["base"], lo, hi,
+                                               overlay["base"])[0])
         dl.add_rect_filled(
             imgui.ImVec2(base_x, p0.y + 1), imgui.ImVec2(base_x + 1.0, p1.y - 1),
             imgui.get_color_u32(imgui.ImVec4(0.72, 0.72, 0.77, 0.9)))
 
-        live_x = p0.x + w * swing_fraction(overlay["live"], lo, hi,
-                                           overlay["live"])[0]
+        live_x = track_x(x0, w, swing_fraction(overlay["live"], lo, hi,
+                                               overlay["live"])[0])
         dl.add_rect_filled(
             imgui.ImVec2(live_x - 1.0, p0.y), imgui.ImVec2(live_x + 2.0, p1.y),
             imgui.get_color_u32(imgui.ImVec4(*colour)))
