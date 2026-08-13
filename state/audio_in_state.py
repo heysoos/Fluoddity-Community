@@ -45,12 +45,21 @@ class AudioInState:
     # One-shot commands, read and cleared by the orchestrator.
     request_start: bool = False
     request_stop: bool = False
-    # Set by the physics slider's context menu; opens the panel on this row.
+
+    # Which row's drawer is open, by target key, and which band tab it shows
+    # ("" is the total). One drawer at a time, as in the boids panel, so only
+    # one row's traces are ever drawn. The physics slider's Audio... context
+    # item writes open_target to jump straight to a row.
     open_target: str = ""
+    open_band: str = ""
 
     # Live view state, written by the orchestrator for the panel to draw.
-    status: str = "idle"                # "idle" | "active" | "error"
+    status: str = "idle"                # "idle" | "active" | "error" | "waiting"
     last_error: str = ""
+    # The newest SignalSnapshot. The UI is passive and owns no service, so the
+    # orchestrator hands it the frame's analysis rather than the panel reaching
+    # into the capture thread.
+    snapshot: object = None
 
 
 def _mapping_to_dict(m: Mapping) -> dict:

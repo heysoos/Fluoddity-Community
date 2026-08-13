@@ -41,11 +41,14 @@ class AudioRuntime:
             self.capture.stop()
             ast.enabled = False
         ast.status = self.capture.status
+        # The panel is passive and owns no service, so the snapshot is handed
+        # to it here rather than reached for through the capture thread.
+        ast.snapshot = self.capture.snapshot()
         # A loopback endpoint renders nothing while the machine is silent, so a
         # perfectly healthy capture can sit with no snapshot for as long as
         # nothing is playing. Saying "active" there makes a working panel look
         # broken; the panel names what it is waiting for instead.
-        if ast.status == "active" and self.capture.snapshot() is None:
+        if ast.status == "active" and ast.snapshot is None:
             ast.status = "waiting"
         ast.last_error = self.capture.last_error
 
@@ -65,7 +68,7 @@ class AudioRuntime:
         if not ast.enabled:
             return ui_state.sim, None
 
-        snap = self.capture.snapshot()
+        snap = ast.snapshot
         if snap is None:
             return ui_state.sim, None
         signals = snap.signals

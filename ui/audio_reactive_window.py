@@ -4,8 +4,11 @@ Named audio_reactive_window, not audio_window, because the sonification feature
 owns that name for the MIDI-out side. Two mixins with one method name would
 shadow each other in the UI's MRO without raising.
 
-Traces go through imgui.plot_lines over a float32 array - one crossing into C++
-per trace rather than one per segment.
+The matrix follows the boids panel it was ported from: one row per target with
+a sparkline of what audio is doing to it, five band dots, and ONE drawer open
+at a time - a tab per bound band plus a total. Traces go through
+imgui.plot_lines over a float32 array, one crossing into C++ per trace rather
+than one per segment.
 """
 from __future__ import annotations
 
@@ -16,6 +19,7 @@ from services import audio_capture
 from services.audio_analysis import SIGNAL_NAMES
 from services.audio_mapping import (MODES, Mapping, brain_targets,
                                     deaf_targets, physics_targets)
+from services.audio_shapers import SHAPER_KINDS
 from ui import layout
 
 SIGNAL_COLORS: dict[str, tuple] = {
@@ -30,7 +34,29 @@ SIGNAL_ABBR: dict[str, str] = {
     "bass": "B", "mid": "M", "presence": "P", "hi": "H", "volume": "V",
 }
 
+WAVE_KINDS: tuple[str, ...] = ("sine", "triangle", "ramp")
+
 TRACE_LEN = 180          # capped near the trace's width in pixels
+
+# Which shaper fields each kind actually reads. A kind that ignores a field
+# must not offer it - an attack slider on a gate is a control that does nothing.
+SHAPER_FIELDS: dict[str, tuple[str, ...]] = {
+    "none": (),
+    "smooth": ("attack", "release"),
+    "gate": ("threshold", "hold"),
+    "envelope": ("threshold", "release"),
+    "lfo": ("rate_min", "rate_max", "wave"),
+    "sample_hold": ("threshold",),
+}
+
+_FIELD_RANGE: dict[str, tuple[float, float, str]] = {
+    "attack": (0.0, 1.0, "%.3f s"),
+    "release": (0.0, 2.0, "%.3f s"),
+    "threshold": (0.0, 1.0, "%.2f"),
+    "hold": (0.0, 1.0, "%.3f s"),
+    "rate_min": (0.0, 20.0, "%.2f Hz"),
+    "rate_max": (0.0, 30.0, "%.2f Hz"),
+}
 
 
 class TraceRing:
@@ -51,22 +77,34 @@ class TraceRing:
 class AudioReactiveWindowMixin:
     """Combined into UI via multiple inheritance."""
 
+    # --- ring buffers ---------------------------------------------------
+
     def _audio_rings(self) -> dict:
+        """One ring per band, for the source section and the drawers."""
         if not hasattr(self, "_audio_trace_rings"):
             self._audio_trace_rings = {n: TraceRing() for n in SIGNAL_NAMES}
         return self._audio_trace_rings
+
+    def _audio_target_rings(self) -> dict:
+        """One ring per bound target, holding its live value as a fraction of
+        its own track, so a row's sparkline reads the same at any range."""
+        if not hasattr(self, "_audio_target_trace_rings"):
+            self._audio_target_trace_rings = {}
+        return self._audio_target_trace_rings
 
     def _audio_devices(self, refresh: bool = False) -> list:
         if refresh or not hasattr(self, "_audio_device_cache"):
             self._audio_device_cache = audio_capture.list_devices()
         return self._audio_device_cache
 
+    # --- window ---------------------------------------------------------
+
     def render_audio_reactive_window(self):
         ast = self.state.audio
         if not ast.show_window:
             return
 
-        imgui.set_next_window_size(imgui.ImVec2(420, 640),
+        imgui.set_next_window_size(imgui.ImVec2(440, 660),
                                    imgui.Cond_.first_use_ever)
         layout.constrain_panel()
         _expanded, opened = imgui.begin("Audio Reactive", True)
@@ -74,6 +112,8 @@ class AudioReactiveWindowMixin:
             ast.show_window = False
             imgui.end()
             return
+
+        self._audio_pump_rings(ast)
 
         # push_settings_width pairs with imgui.pop_item_width, not a layout call.
         layout.push_settings_width()
@@ -84,6 +124,27 @@ class AudioReactiveWindowMixin:
         self._render_audio_matrix(ast)
         imgui.pop_item_width()
         imgui.end()
+
+    def _audio_pump_rings(self, ast):
+        """Advance every ring once per frame, before anything draws.
+
+        Done here rather than inside a draw call so a collapsed section or a
+        closed drawer does not freeze the history it will show when reopened.
+        """
+        snap = getattr(ast, "snapshot", None)
+        rings = self._audio_rings()
+        if snap is not None:
+            for name in SIGNAL_NAMES:
+                rings[name].push(snap.signals.get(name, 0.0))
+
+        overlays = getattr(self, "audio_overlays", {}) or {}
+        trings = self._audio_target_rings()
+        for key, ov in overlays.items():
+            span = ov["hi"] - ov["lo"]
+            frac = (ov["live"] - ov["lo"]) / span if span > 0 else 0.0
+            trings.setdefault(key, TraceRing()).push(min(1.0, max(0.0, frac)))
+        for gone in [k for k in trings if k not in overlays]:
+            del trings[gone]
 
     # --- source ---------------------------------------------------------
 
@@ -140,15 +201,14 @@ class AudioReactiveWindowMixin:
     # --- spectrum and band traces ---------------------------------------
 
     def _render_audio_signals(self, ast):
-        runtime = getattr(self, "audio_runtime", None)
-        snap = runtime.capture.snapshot() if runtime is not None else None
+        snap = getattr(ast, "snapshot", None)
         rings = self._audio_rings()
         if snap is not None:
-            for name in SIGNAL_NAMES:
-                rings[name].push(snap.signals.get(name, 0.0))
             imgui.plot_lines("##audio_spectrum",
                              np.asarray(snap.mel, dtype=np.float32),
                              graph_size=imgui.ImVec2(0, 46))
+        else:
+            imgui.text_disabled("No signal yet.")
 
         width = max(40.0,
                     imgui.get_content_region_avail().x / len(SIGNAL_NAMES) - 4)
@@ -156,14 +216,20 @@ class AudioReactiveWindowMixin:
             if i:
                 imgui.same_line()
             imgui.begin_group()
-            imgui.push_style_color(imgui.Col_.plot_lines,
-                                   imgui.ImVec4(*SIGNAL_COLORS[name]))
-            imgui.plot_lines(f"##audio_trace_{name}", rings[name].values,
-                             scale_min=0.0, scale_max=1.0,
-                             graph_size=imgui.ImVec2(width, 26))
-            imgui.pop_style_color()
-            imgui.text_colored(imgui.ImVec4(*SIGNAL_COLORS[name]), name[:4])
+            self._audio_trace(f"##audio_trace_{name}", rings[name].values,
+                              SIGNAL_COLORS[name], width, 26)
+            value = snap.signals.get(name, 0.0) if snap is not None else 0.0
+            imgui.text_colored(imgui.ImVec4(*SIGNAL_COLORS[name]),
+                               f"{name[:4]} {value:.2f}")
             imgui.end_group()
+
+    def _audio_trace(self, ident, values, colour, width, height,
+                     lo=0.0, hi=1.0):
+        """One plot_lines call with the band's colour pushed around it."""
+        imgui.push_style_color(imgui.Col_.plot_lines, imgui.ImVec4(*colour))
+        imgui.plot_lines(ident, values, scale_min=lo, scale_max=hi,
+                         graph_size=imgui.ImVec2(width, height))
+        imgui.pop_style_color()
 
     # --- the matrix -----------------------------------------------------
 
@@ -174,34 +240,67 @@ class AudioReactiveWindowMixin:
 
     def _render_audio_matrix(self, ast):
         deaf = deaf_targets(self.state.sim)
-        groups = [("physics", "Physics", physics_targets(self.state.sim))]
+
+        if imgui.collapsing_header("Physics##audio_group",
+                                   imgui.TreeNodeFlags_.default_open):
+            targets = physics_targets(self.state.sim)
+            mappings = self._mapping_list(ast, "physics")
+            for target in targets:
+                self._render_audio_row(ast, "physics", mappings, target,
+                                       target.key in deaf)
+
+        if not imgui.collapsing_header("Brain##audio_group"):
+            return
 
         from services import brains
-        modality = brains.get(self.state.brain.modality)
-        b_layout = getattr(getattr(self, "sim", None), "brain_layout", None)
-        if b_layout is None:
-            b_layout = modality.layout_from_settings(self.state.brain.settings)
-        groups.append(("brain", "Brain", brain_targets(modality, b_layout)))
-
-        for group, title, targets in groups:
-            if not imgui.collapsing_header(f"{title}##audio_group"):
-                continue
-            if not targets:
-                imgui.text_disabled("This brain has no scales to modulate.")
-                continue
-            mappings = self._mapping_list(ast, group)
-            for target in targets:
-                self._render_audio_row(ast, group, mappings, target,
-                                       target.key in deaf)
+        modality_name = self.state.brain.modality
+        modality = brains.get(modality_name)
+        b_layout = modality.layout_from_settings(self.state.brain.settings)
+        targets = brain_targets(modality, b_layout)
+        if not targets:
+            # Not a fault: a modality whose settings are all structural has no
+            # decode scale to move. Name it, or this reads as the panel failing
+            # after a preset load.
+            imgui.text_disabled(
+                f"The {modality_name} brain has no continuous scales, so there "
+                f"is nothing here to modulate.")
+            self._delayed_tooltip(
+                "Only settings that rescale an existing brain can be "
+                "modulated; ones that change how many numbers it has cannot.")
+            return
+        mappings = self._mapping_list(ast, "brain")
+        for target in targets:
+            self._render_audio_row(ast, "brain", mappings, target, False)
 
     def _render_audio_row(self, ast, group, mappings, target, is_deaf):
         bound = [m for m in mappings if m.target == target.key]
+        overlay = (getattr(self, "audio_overlays", {}) or {}).get(target.key)
         imgui.push_id(f"{group}:{target.key}")
 
+        # Clicking the name opens this row's drawer and closes any other.
+        open_here = ast.open_target == target.key
+        arrow = "v " if open_here else "> " if bound else "  "
         if bound:
-            imgui.text(target.label)
+            if imgui.selectable(f"{arrow}{target.label}", open_here, 0,
+                                imgui.ImVec2(140, 0))[0]:
+                ast.open_target = "" if open_here else target.key
+                ast.open_band = ""
         else:
-            imgui.text_disabled(target.label)
+            imgui.text_disabled(f"{arrow}{target.label}")
+            imgui.same_line(0, 0)
+            imgui.dummy(imgui.ImVec2(max(0.0, 140 - imgui.calc_text_size(
+                f"{arrow}{target.label}").x), 1))
+
+        # The row's own sparkline: what audio is doing to this parameter.
+        imgui.same_line()
+        if bound and overlay is not None:
+            ring = self._audio_target_rings().get(target.key)
+            self._audio_trace(f"##rowtrace", ring.values if ring else
+                              np.zeros(2, dtype=np.float32),
+                              SIGNAL_COLORS[bound[0].signal], 56, 16)
+        else:
+            imgui.dummy(imgui.ImVec2(56, 16))
+
         if is_deaf:
             imgui.same_line()
             imgui.text_colored(imgui.ImVec4(0.85, 0.65, 0.25, 1.0), "swept")
@@ -217,32 +316,133 @@ class AudioReactiveWindowMixin:
                 colour = imgui.ImVec4(colour.x, colour.y, colour.z, 0.30)
             imgui.push_style_color(imgui.Col_.button, colour)
             if imgui.button(f"{SIGNAL_ABBR[signal]}##{signal}"):
+                # A dot toggles its mapping and never opens or closes a drawer.
                 if existing is None:
                     mappings.append(Mapping(signal=signal, target=target.key))
                 else:
                     mappings.remove(existing)
             imgui.pop_style_color()
 
-        for m in bound:
-            self._render_audio_mapping(ast, mappings, m)
+        if open_here and bound:
+            self._render_audio_drawer(ast, mappings, target, bound, overlay)
         imgui.pop_id()
 
-    def _render_audio_mapping(self, ast, mappings, m):
-        imgui.push_id(m.signal)
-        imgui.indent()
-        imgui.text_colored(imgui.ImVec4(*SIGNAL_COLORS[m.signal]), m.signal)
+    # --- the drawer -----------------------------------------------------
 
+    def _render_audio_drawer(self, ast, mappings, target, bound, overlay):
+        imgui.indent()
+        if imgui.begin_tab_bar("##audio_drawer"):
+            for m in sorted(bound, key=lambda x: SIGNAL_NAMES.index(x.signal)):
+                if imgui.begin_tab_item(f"{SIGNAL_ABBR[m.signal]}##tab_{m.signal}")[0]:
+                    ast.open_band = m.signal
+                    self._render_audio_band_tab(m)
+                    imgui.end_tab_item()
+            if len(bound) > 1 and imgui.begin_tab_item("Total##tab_total")[0]:
+                ast.open_band = ""
+                self._render_audio_total_tab(target, bound, overlay)
+                imgui.end_tab_item()
+            imgui.end_tab_bar()
+        imgui.unindent()
+
+    def _render_audio_band_tab(self, m):
+        imgui.text_colored(imgui.ImVec4(*SIGNAL_COLORS[m.signal]), m.signal)
         imgui.same_line()
-        if imgui.button(m.mode):
+        if imgui.button(f"{m.mode}##mode"):
             m.mode = MODES[(MODES.index(m.mode) + 1) % len(MODES)]
         self._delayed_tooltip("Cycles add, subtract and multiply.")
+        imgui.same_line()
+        changed, value = imgui.checkbox("On##enabled", m.enabled)
+        if changed:
+            m.enabled = value
 
         changed, value = imgui.slider_float("Depth", m.depth, 0.0, 1.0, "%.2f")
         if changed:
             m.depth = value
+        self._delayed_tooltip("How far this band can move the parameter.")
         changed, value = imgui.slider_float("Gain", m.gain, 0.0, 4.0, "%.2f")
         if changed:
             m.gain = value
+        self._delayed_tooltip("Amplifies the band before it is used.")
 
-        imgui.unindent()
-        imgui.pop_id()
+        kind_idx = (SHAPER_KINDS.index(m.shaper.kind)
+                    if m.shaper.kind in SHAPER_KINDS else 0)
+        changed, idx = imgui.combo("Shaper", kind_idx, list(SHAPER_KINDS))
+        if changed:
+            m.shaper.kind = SHAPER_KINDS[idx]
+        self._delayed_tooltip("Reshapes the band before it drives anything.")
+
+        for fname in SHAPER_FIELDS.get(m.shaper.kind, ()):
+            if fname == "wave":
+                w = WAVE_KINDS.index(m.shaper.wave) if m.shaper.wave in WAVE_KINDS else 0
+                changed, widx = imgui.combo("Wave", w, list(WAVE_KINDS))
+                if changed:
+                    m.shaper.wave = WAVE_KINDS[widx]
+                continue
+            lo, hi, fmt = _FIELD_RANGE[fname]
+            changed, value = imgui.slider_float(
+                fname.replace("_", " ").title(),
+                float(getattr(m.shaper, fname)), lo, hi, fmt)
+            if changed:
+                setattr(m.shaper, fname, value)
+
+        ring = self._audio_rings().get(m.signal)
+        if ring is not None:
+            self._audio_trace(f"##band_{m.signal}", ring.values,
+                              SIGNAL_COLORS[m.signal], -1, 42)
+
+    def _render_audio_total_tab(self, target, bound, overlay):
+        if overlay is None:
+            imgui.text_disabled("Start audio to see this parameter move.")
+            return
+
+        base, live = overlay["base"], overlay["live"]
+        delta = live - base
+        imgui.text(f"{live:.4f}")
+        imgui.same_line()
+        imgui.text_disabled(f"base {base:.4f}")
+        imgui.same_line()
+        imgui.text_colored(
+            imgui.ImVec4(0.5, 0.8, 0.4, 1.0) if delta >= 0
+            else imgui.ImVec4(0.8, 0.45, 0.35, 1.0),
+            f"{delta:+.4f}")
+
+        # Range bar: where the live value sits between the slider's own rails.
+        lo, hi = overlay["lo"], overlay["hi"]
+        span = hi - lo
+        frac = (live - lo) / span if span > 0 else 0.0
+        imgui.progress_bar(min(1.0, max(0.0, frac)), imgui.ImVec2(-1, 6), "")
+        imgui.text_disabled(f"{lo:.3g}")
+        imgui.same_line()
+        imgui.text_disabled(f"{hi:.3g}")
+
+        # Stacked traces: each contributing band faint, the parameter bright.
+        # plot_lines draws one series per canvas, so the later ones are drawn
+        # over the first by rewinding the cursor and clearing their frame - one
+        # numpy buffer still crosses into C++ once per series, which is the
+        # property that matters, and it needs no second global context.
+        rings = self._audio_rings()
+        series = [(m.signal, rings[m.signal].values,
+                   (*SIGNAL_COLORS[m.signal][:3], 0.5))
+                  for m in bound if m.signal in rings]
+        tring = self._audio_target_rings().get(target.key)
+        if tring is not None:
+            series.append((target.key, tring.values, (0.95, 0.95, 1.0, 1.0)))
+        if not series:
+            return
+
+        origin = imgui.get_cursor_screen_pos()
+        size = imgui.ImVec2(imgui.get_content_region_avail().x, 80)
+        for i, (name, values, colour) in enumerate(series):
+            if i:
+                imgui.set_cursor_screen_pos(origin)
+                imgui.push_style_color(imgui.Col_.frame_bg,
+                                       imgui.ImVec4(0, 0, 0, 0))
+            self._audio_trace(f"##total_{name}", values, colour,
+                              size.x, size.y)
+            if i:
+                imgui.pop_style_color()
+
+        for name, _v, colour in series:
+            imgui.text_colored(imgui.ImVec4(*colour), name[:4])
+            imgui.same_line()
+        imgui.new_line()

@@ -297,7 +297,22 @@ installed; without it the panel says so and everything else runs unchanged.
       something plays, so this is the normal state, not a fault.
 - [ ] Starting music then flips it to `active` and the spectrum moves.
 - [ ] Stop halts the traces; the status reads `idle`.
+- [ ] The spectrum and the five band traces move while audio plays, and each
+      band prints its current value.
 - [ ] Binding bass to Sensor Gain visibly changes the simulation on a beat.
+- [ ] A bound row shows a sparkline of what audio is doing to that parameter;
+      an unbound row shows none and is dimmed.
+- [ ] Clicking a bound row's name opens its drawer; clicking another row's name
+      closes the first - only one is ever open.
+- [ ] Clicking a band dot toggles the mapping and does NOT open or close a
+      drawer.
+- [ ] The drawer has one tab per bound band, and a Total tab once two or more
+      bands are bound.
+- [ ] A band tab offers Depth, Gain, mode, an On toggle and a Shaper; picking
+      each shaper shows only the controls that shaper uses (smooth: attack and
+      release; gate: threshold and hold; lfo: rates and wave).
+- [ ] The Total tab shows live value, base, delta, a range bar, and the
+      contributing bands overlaid with the parameter's own trace.
 - [ ] The Sensor Gain slider shows hatching, a pale base tick, and a handle that
       rides with the music. Its printed value is the live one.
 - [ ] Dragging that slider moves the base tick; the hatching follows it.

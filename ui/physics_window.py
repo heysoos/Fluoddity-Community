@@ -1,5 +1,6 @@
 """Physics Settings window: sliders, additional settings, appearance, notes (normal + multi-load modes)."""
 from imgui_bundle import imgui
+from . import layout
 from .physics_params import PARAM_GROUPS
 
 
@@ -41,6 +42,11 @@ class PhysicsWindowMixin:
         if pls:
             pls.handle_alt_click('rule_seed')
         imgui.separator()
+
+        # A label is drawn to the widget's RIGHT and is clipped, not scrolled,
+        # so without this every label here vanishes off the edge at any narrow
+        # window width. Paired with pop_item_width before end().
+        layout.push_settings_width(layout.WIDEST_PHYSICS_LABEL)
 
         # === Basics Group (Trail sensors and rule mutation) ===
         imgui.set_next_item_open(self.state.preferences.physics_group_basics)
@@ -231,6 +237,7 @@ class PhysicsWindowMixin:
         # Render the tooltip if window is hovered
         self.render_physics_tooltip()
 
+        imgui.pop_item_width()
         imgui.end()
 
         # Pop sweep preview style colors (pushed before imgui.begin)
