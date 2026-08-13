@@ -71,9 +71,27 @@ def test_structural_brain_settings_are_never_targets():
 
 
 def test_a_modality_with_no_float_settings_offers_no_rows():
+    """Structural settings change the parameter count, so modulating one would
+    reshape the brain buffer every frame. A modality declaring only those has
+    nothing to offer - stubbed, because every shipped modality now has scales.
+    """
+    from services.brains import Setting
+
+    class _Structural:
+        def settings_schema(self):
+            return [Setting("layers", "Layers", "layers", 1, 48, 16)]
+
+    assert brain_targets(_Structural(), None) == []
+
+
+def test_every_shipped_modality_offers_at_least_one_row():
+    """A modality with no continuous scale cannot be audio-modulated at all,
+    which reads as the panel being broken rather than as a property of that
+    brain."""
     from services import brains
-    m = brains.get("mlp")
-    assert brain_targets(m, m.layout_from_settings({})) == []
+    for name, m in brains.REGISTRY.items():
+        rows = brain_targets(m, m.layout_from_settings({}))
+        assert rows, f"{name} offers nothing to modulate"
 
 
 # --- deafness ----------------------------------------------------------------

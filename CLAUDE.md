@@ -912,7 +912,24 @@ mechanics these caveats assume.
   there turn out to be interesting the conclusion is that `W_SCALE` is wrong,
   not that the region should be fenced; promoting it to a `Setting(kind=
   "float")` makes it a decode scale, which neither splits the archive nor
-  resets a search.
+  resets a search. That is what `w_scale` and `b_scale` now are.
+
+- **`w_scale` 0.25–8.0 and `b_scale` 0.0–4.0 are measured, and the DEFAULTS
+  decode bit-identically to the constants they replaced.** MLP was the one
+  modality whose settings were all structural, so `brain_targets` offered
+  nothing and the audio panel's Brain section was empty under it — which reads
+  as the panel failing rather than as a property of that brain. Below `w_scale`
+  0.25 the hidden layer is near-linear and output magnitude stops tracking the
+  slider at all — p50 output is 0.41, 0.38, 0.35 at 0.1, 0.25, 0.5, i.e. flat
+  and slightly BACKWARDS. Upward the limit is saturation: on a lively input
+  units railed at |h| > 0.99 run 3.3% at 4.0, 21% at 8.0 and 38% at 12. Bias
+  stops at 4.0 on the same measure, 12% railed against 36% at 6.0. Two traps:
+  `encode` must divide by the SAME scales `decode` multiplies by, or the
+  modulator's encode-once/decode-many moves the brain the instant audio touches
+  it; and `b_scale` reaches 0 legitimately, so encode floors it rather than
+  dividing by zero. `python -m tools.measure_mlp_scale`. Guarded by
+  `tests/test_brain_scales.py`, which derives its cases from
+  `settings_schema()` — that is what proves a new scale is actually READ.
 
 - **A layer edit has an OWNER, and two states have none.** Under a tournament
   slot 0 is tile 0 of a running grid, which is rewritten every generation, so

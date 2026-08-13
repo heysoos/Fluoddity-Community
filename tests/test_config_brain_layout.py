@@ -175,7 +175,10 @@ def test_a_deep_mlp_config_round_trips():
         ConfigSaver().create_config(SimState(), genome, layout=lay).to_json()))
 
     assert back.brain_layout == "mlp-n8.6.4-a0.1.2"
-    assert back.brain_settings == {"layers": DEEP_LAYERS}
+    # The decode scales ride along with the structure: a saved rule is decoded,
+    # and anything re-encoding it divides by them.
+    assert back.brain_settings["layers"] == DEEP_LAYERS
+    assert back.brain_settings["w_scale"] == pytest.approx(2.0)
     assert np.allclose(np.asarray(back.rule).reshape(-1), genome, atol=1e-6)
     assert layout_for("mlp", back.brain_settings) == lay
 

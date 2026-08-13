@@ -17,7 +17,7 @@ from services.brains import (MAX_BRAIN_FLOATS, layout_from_signature,
                              settings_of, unit_count)
 from services.brains.mlp import (ACTIVATIONS, B_SCALE, MAX_DEEP_WIDTH,
                                  MAX_DEPTH, MAX_WIDTH, W_SCALE, MLPModality,
-                                 layer_spans)
+                                 _weight_mask, layer_spans)
 
 M = MLPModality()
 
@@ -106,7 +106,11 @@ def test_the_signature_round_trips(layers):
     lay = layout(layers)
     back = layout_from_signature(lay.signature())
     assert back is not None and back == lay
-    assert settings_of(lay) == {"layers": layers}
+    # The scales ride along because a saved rule is re-encoded by dividing by
+    # them; only `layers` is structural and so only it is in the signature.
+    got = settings_of(lay)
+    assert got.pop("layers") == layers
+    assert got == {"w_scale": W_SCALE, "b_scale": B_SCALE}
 
 
 @pytest.mark.parametrize("sig", ["mlp-n16-a1", "mlp-n16-a2"])
@@ -197,6 +201,54 @@ def test_the_normalisation_is_what_keeps_a_deep_draw_off_the_rails():
         f"normalised {rail_fraction(normalised):.3f} vs "
         f"plain {rail_fraction(plain):.3f}"
     )
+
+
+# ---- the decode scales -----------------------------------------------------
+
+def test_the_defaults_decode_exactly_as_the_constants_always_did():
+    """The scales are new; what they decode to at their defaults is not. A
+    different answer here would rewrite every genome on disk."""
+    lay = M.layout_from_settings({"layers": [[16, 0]]})
+    z = np.random.default_rng(3).normal(0.0, 0.5, lay.length).astype(np.float32)
+    want = np.where(_weight_mask(lay.shape), W_SCALE, B_SCALE) * np.tanh(z)
+    assert np.allclose(M.decode(z, lay), want.astype(np.float32))
+
+
+def test_the_weight_scale_scales_the_weights_and_leaves_the_biases():
+    lay_a = M.layout_from_settings({"layers": [[16, 0]], "w_scale": 2.0})
+    lay_b = M.layout_from_settings({"layers": [[16, 0]], "w_scale": 4.0})
+    z = np.random.default_rng(4).normal(0.0, 0.5, lay_a.length).astype(np.float32)
+    a, b = M.decode(z, lay_a), M.decode(z, lay_b)
+    w = _weight_mask(lay_a.shape)
+    assert np.allclose(b[w], 2.0 * a[w])
+    assert np.allclose(b[~w], a[~w])
+
+
+def test_encode_inverts_decode_under_a_non_default_scale():
+    """The modulator encodes once and re-decodes every frame; an encode that
+    ignored the scale would move the brain the moment audio touched it."""
+    lay = M.layout_from_settings({"layers": [[16, 0]], "w_scale": 5.0,
+                                  "b_scale": 3.0})
+    z = np.random.default_rng(5).normal(0.0, 0.5, lay.length).astype(np.float32)
+    back, _clamped = M.encode(M.decode(z, lay), lay)
+    assert np.allclose(back, z, atol=1e-3)
+
+
+def test_a_zero_bias_scale_does_not_divide_by_zero():
+    lay = M.layout_from_settings({"layers": [[16, 0]], "b_scale": 0.0})
+    z = np.zeros(lay.length, dtype=np.float32)
+    assert np.all(np.isfinite(M.decode(z, lay)))
+    assert np.all(np.isfinite(M.encode(M.decode(z, lay), lay)[0]))
+
+
+def test_the_scales_do_not_change_the_signature_or_the_length():
+    """They change what a z MEANS, not how many there are, so they must not
+    split an archive or reset a search."""
+    plain = M.layout_from_settings({"layers": [[16, 0]]})
+    scaled = M.layout_from_settings({"layers": [[16, 0]], "w_scale": 7.0})
+    assert scaled.signature() == plain.signature()
+    assert scaled.length == plain.length
+    assert scaled == plain
 
 
 # ---- limits ----------------------------------------------------------------

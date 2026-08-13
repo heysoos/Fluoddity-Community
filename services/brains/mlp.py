@@ -135,9 +135,17 @@ class MLPModality:
         # which layout_from_settings enforces - see the UI's `+` button, which
         # asks whether adding a layer changes the layout rather than
         # re-deriving either limit.
+        #
+        # The two scales are what every other modality already declares: they
+        # change what a z MEANS without changing how many floats it has, so
+        # they neither split the archive nor reset a search, and they are the
+        # only thing here a search or an audio mapping can move continuously.
+        # Their ranges are measured; see the MLP scale caveat in CLAUDE.md.
         return [
             Setting("layers", "Layers", "layers", MIN_WIDTH, MAX_WIDTH, 16,
                     choices=ACTIVATIONS),
+            Setting("w_scale", "Weight Scale", "float", 0.25, 8.0, W_SCALE),
+            Setting("b_scale", "Bias Scale", "float", 0.0, 4.0, B_SCALE),
         ]
 
     def layout_from_settings(self, s: dict) -> BrainLayout:
@@ -147,7 +155,17 @@ class MLPModality:
             # is the whole of the migration.
             layers = [[int(s.get("hidden", 16)), int(s.get("activation", 0))]]
         shape = _shape_from_layers(layers)
-        return BrainLayout("mlp", shape, layer_spans(shape)[3])
+        return BrainLayout("mlp", shape, layer_spans(shape)[3], scales=(
+            ("w_scale", float(s.get("w_scale", W_SCALE))),
+            ("b_scale", float(s.get("b_scale", B_SCALE))),
+        ))
+
+    @staticmethod
+    def _scales(layout: BrainLayout):
+        """(weight, bias). The weight scale is floored: at zero every weight is
+        zero, which is a brain with no input at all rather than a quiet one."""
+        return (max(layout.scale("w_scale", W_SCALE), EPS),
+                layout.scale("b_scale", B_SCALE))
 
     # ---- structure the generic helpers cannot derive --------------------
 
@@ -217,7 +235,8 @@ class MLPModality:
         always a genome the search could also have produced.
         """
         lo, hi = self.layer_parts(layout, i)[part]
-        scale = W_SCALE if part == "weights" else B_SCALE
+        w, b = self._scales(layout)
+        scale = w if part == "weights" else b
         return (scale * np.tanh(_draw_z(rng, hi - lo, int(dist)))
                 ).astype(np.float32)
 
@@ -245,12 +264,14 @@ class MLPModality:
         rather than a different thing per layer. A fan-in gain folded in here
         would not be a normalisation but a CAP - see random()."""
         z = np.asarray(z, dtype=np.float32).reshape(-1)
-        scale = np.where(_weight_mask(layout.shape), W_SCALE, B_SCALE)
+        w, b = self._scales(layout)
+        scale = np.where(_weight_mask(layout.shape), w, b)
         return (scale * np.tanh(z)).astype(np.float32)
 
     def encode(self, params: np.ndarray, layout: BrainLayout):
         p = np.asarray(params, dtype=np.float32).reshape(-1)
-        scale = np.where(_weight_mask(layout.shape), W_SCALE, B_SCALE)
+        w, b = self._scales(layout)
+        scale = np.where(_weight_mask(layout.shape), w, max(b, EPS))
         raw = p / scale
         n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))
