@@ -10,9 +10,29 @@ from dataclasses import dataclass
 import numpy as np
 
 FFT_SIZE = 2048
+HOP = 1024               # frames between analyses; the capture's callback size
 N_MEL = 40
 
 SIGNAL_NAMES: tuple[str, ...] = ("bass", "mid", "presence", "hi", "volume")
+
+# The spectrum is read in decibels over this fixed window, chosen so ordinary
+# material rests across the middle of the scale and a room's hiss floor does
+# not. A linear magnitude puts everything real against the bottom instead, and
+# makes each band a spiky ratio of energies rather than a level.
+DB_MIN = -90.0
+DB_MAX = -20.0
+
+# `volume` measures the whole block at once, which sits far above any single
+# bin, so it needs a window of its own.
+LEVEL_DB_MIN = -60.0
+LEVEL_DB_MAX = -6.0
+
+# The spectrum is averaged over this long before anything reads it. Without it
+# a band is one block's sample of a noisy quantity, which reads as vibration.
+SMOOTHING_SECONDS = 0.075
+
+# Below this a bin is silence rather than a very negative number of decibels.
+_MAG_FLOOR = 1e-9
 
 # The four spectral bands, in Hz. `volume` is RMS and has no band.
 BAND_EDGES_HZ: tuple[tuple[str, float, float], ...] = (
@@ -60,6 +80,15 @@ def analysis_matrix(sample_rate: float, fft_size: int = FFT_SIZE,
             out[i, rising] = (freqs[rising] - lo) / (ctr - lo)
         if hi > ctr:
             out[i, falling] = (hi - freqs[falling]) / (hi - ctr)
+        # Each row averages, like the band rows below. A high mel band spans
+        # twenty times the bins of a low one, so raw triangles would draw any
+        # spectrum at all as a ramp rising to the right.
+        total = out[i].sum()
+        if total > 0.0:
+            out[i] /= total
+        else:
+            nearest = int(np.argmin(np.abs(freqs - ctr)))
+            out[i, nearest] = 1.0
 
     for j, (_name, lo, hi) in enumerate(BAND_EDGES_HZ):
         sel = (freqs >= lo) & (freqs < min(hi, nyquist))
@@ -82,7 +111,8 @@ class Analyzer:
     """Stateful across blocks: auto-gain peaks and the sequence counter."""
 
     def __init__(self, sample_rate: float, fft_size: int = FFT_SIZE,
-                 n_mel: int = N_MEL, auto_gain: bool = True) -> None:
+                 n_mel: int = N_MEL, auto_gain: bool = True,
+                 hop: int = HOP) -> None:
         self.sample_rate = float(sample_rate)
         self.fft_size = int(fft_size)
         self.n_mel = int(n_mel)
@@ -97,6 +127,11 @@ class Analyzer:
             np.float32)
         self._peaks = np.full(len(BAND_EDGES_HZ) + 1, _PEAK_FLOOR,
                               dtype=np.float32)
+        self._spectrum = np.zeros(fft_size // 2 + 1, dtype=np.float32)
+        self._level = 0.0
+        block_dt = max(1, int(hop)) / max(1.0, self.sample_rate)
+        self._smooth_k = (1.0 if SMOOTHING_SECONDS <= 0.0 else
+                          1.0 - np.exp(-block_dt / SMOOTHING_SECONDS))
         self._seq = 0
 
     def _normalise(self, raw: np.ndarray) -> np.ndarray:
@@ -113,11 +148,24 @@ class Analyzer:
             b = np.resize(b, self.fft_size)
         mag = np.abs(np.fft.rfft(b * self._window)).astype(np.float32)
 
-        rows = self._m @ mag
+        db = 20.0 * np.log10(np.maximum(mag, _MAG_FLOOR))
+        spec = np.clip((db - DB_MIN) / (DB_MAX - DB_MIN), 0.0, 1.0)
+        self._spectrum += (spec.astype(np.float32) -
+                           self._spectrum) * self._smooth_k
+
+        rows = self._m @ self._spectrum
         mel = rows[:self.n_mel]
         raw = np.empty(len(BAND_EDGES_HZ) + 1, dtype=np.float32)
         raw[:len(BAND_EDGES_HZ)] = rows[self.n_mel:]
-        raw[-1] = np.sqrt(np.mean(b * b))
+        # Loudness of the block itself, on the same scale. Averaging the
+        # spectrum instead would measure the unlit bins, which outnumber the
+        # ones a kick drum lights by a hundred to one.
+        rms_db = 20.0 * np.log10(max(float(np.sqrt(np.mean(b * b))),
+                                     _MAG_FLOOR))
+        level = float(np.clip((rms_db - LEVEL_DB_MIN) /
+                              (LEVEL_DB_MAX - LEVEL_DB_MIN), 0.0, 1.0))
+        self._level += (level - self._level) * self._smooth_k
+        raw[-1] = self._level
 
         # A DC or clipped block can still produce a non-finite magnitude on some
         # inputs; scrub here so nothing downstream has to.

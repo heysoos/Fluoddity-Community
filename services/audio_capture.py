@@ -10,9 +10,10 @@ import threading
 
 import numpy as np
 
-from services.audio_analysis import FFT_SIZE, Analyzer, SignalSnapshot
+from services.audio_analysis import FFT_SIZE, HOP, Analyzer, SignalSnapshot
 
-_BLOCK = 1024        # frames per callback; the analyser keeps its own history
+# The analyser derives its smoothing from this, so the two must agree.
+_BLOCK = HOP
 
 
 def _pyaudio():
