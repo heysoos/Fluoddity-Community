@@ -884,12 +884,38 @@ mechanics these caveats assume.
   early while `_undo_preview_base` is set, which also covers the frame the
   preview is handed back on. Applying a step CLEARS that base, or the pointer
   leaving afterwards restores the pre-hover state and silently undoes the
-  click. Guarded by `tests/test_undo_preview_loop.py`, which drives the real
-  `App` methods — the frame-loop tests that modelled the sequence with a local
-  helper all passed while this was live.
+  click.
+
+  **THE UNDO PANEL IS NOT THE ONLY THING THAT HOVERS**, and covering only its
+  own preview is the shape this bug came back in. File > Load, the archive
+  browser and the clipboard each put a borrowed rule and its run physics on
+  screen the same way, and each recorded twice per row — once hovering, once
+  restoring. `CommandHandler.preview_active` is the one predicate over all
+  three flags, so a fourth preview is covered by naming its flag there rather
+  than by remembering a check at a fourth site. It reads the flags rather than
+  the borrow, because a same-brain preview borrows nothing. Suppression ends
+  on the CLICK, which clears the flag in the frame it commits, so a preset the
+  user actually loads still records.
+
+  Guarded by `tests/test_undo_preview_loop.py`, which drives the real `App`
+  methods — the frame-loop tests that modelled the sequence with a local helper
+  all passed while this was live.
   The capture is separately deferred while `any_widget_active`, which is read
   inside `ui.render()`: `orchestrate_frame` runs BETWEEN frames. That deferral
   is the whole of gesture coalescing.
+
+- **Restoring a brain must move the WINDOW, not just the sim.**
+  `_handle_brain_layout` applies `ui_state.brain` every frame — that is how a
+  count slider reaches the decode with no one-shot flag — so a restore that
+  writes only `sim.brain_layout` is undone by the very next frame, which reads
+  as an undo that works and then keeps the new brain on top.
+  `_restore_snapshot_brain` therefore calls `_put_brain_window` as well, and
+  still calls `apply_brain_layout` itself rather than leaving it to that frame,
+  because the rule it pushes immediately afterwards is measured against the
+  LIVE layout and silently refused on a mismatch. Both directions go through
+  it, so redo has the same requirement. `_apply_brain_layout` early-returns on
+  an unchanged layout, which is what stops the following frame paying for a
+  second archive rebuild.
 
 - **Undo covers the recipe, never the picture.** The canvas and entity buffers
   are out, so Clear Canvas, Reset and Fill have nothing to restore, and

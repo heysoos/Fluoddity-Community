@@ -72,6 +72,23 @@ class CommandHandler:
         # Deferred entity selection state (waits one frame for rule buffer to be written)
         self._pending_entity_selection = None  # Tuple of (entity_id, entity_pos, entity_cohort) or None
 
+    @property
+    def preview_active(self) -> bool:
+        """Is something BORROWED on screen right now - a hover, not a choice?
+
+        Every preview writes the rule and the physics the undo journal's
+        per-frame diff watches, so each one recorded a step, and un-hovering
+        restored and recorded another. Sliding down File > Load filled the
+        history in seconds and pushed the real steps off the end.
+
+        One predicate rather than a check per site: a fourth preview added
+        later is covered by naming its flag HERE, and forgetting to is a bug
+        with one home instead of three.
+        """
+        return (self.preview_rule_active
+                or self._archive_preview_id >= 0
+                or self.clipboard_preview_active)
+
     def _apply_config_with_locks(self, config, ui_state, watercolor_override=None):
         """Apply config with parameter lock snapshot/restore. Returns rule."""
         pls = self.param_lock_service
@@ -130,10 +147,34 @@ class CommandHandler:
                 layout = layout_from_signature(snap.brain_signature,
                                                snap.brain_settings)
                 if layout is not None:
+                    # The WINDOW as well as the sim. _handle_brain_layout
+                    # applies whatever it finds in ui_state.brain every frame,
+                    # so a restore that moves only the sim is put back by the
+                    # next one - an undo that appears to work and then keeps
+                    # the new brain on top. Applied here as well rather than
+                    # left to that frame, because apply_rule below measures the
+                    # rule against the LIVE layout and refuses a mismatch.
+                    self._put_brain_window(layout, ui_state)
                     self.apply_brain_layout(layout, ui_state)
         rule = np.array(snap.rule, copy=True)
         self.rule_manager.push_rule(rule, ui_state.sim.rule_seed)
         self.sim.apply_rule(rule)
+
+    @staticmethod
+    def _put_brain_window(layout, ui_state) -> None:
+        """Point the Brain window at `layout`, so it stops asking for another.
+
+        Through settings_of, which is what layout_for reads back - the same
+        round trip a config load makes, rather than a second opinion about how
+        a layout is spelled.
+        """
+        from services.brains import settings_of
+
+        bst = getattr(ui_state, "brain", None)
+        if bst is None:
+            return
+        bst.modality = layout.modality
+        bst.settings = dict(settings_of(layout))
 
     def _switch_will_apply(self, rule) -> bool:
         """Is a layout switch already going to apply this rule, this frame?

@@ -1345,6 +1345,11 @@ class App:
         # handed back too, which is the one that clears the base.
         if self._undo_preview_base is not None:
             return
+        # The undo panel is not the only thing that hovers. File > Load, the
+        # archive browser and the clipboard all put a borrowed rule and its
+        # physics on screen the same way.
+        if self.command_handler.preview_active:
+            return
         snap = uh.capture(ui_state, self.rule_manager.get_current_rule(),
                           self.sim.brain_layout)
         held = self.undo_history.current()
