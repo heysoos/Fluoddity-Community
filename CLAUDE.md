@@ -873,13 +873,23 @@ mechanics these caveats assume.
   and jitter are computed in the shader, and audio modulation hands
   `sim.apply_state` a `replace()`d copy rather than touching `ui_state.sim`.
 
-- **Applying an undo step must REBASE the journal, and a preview must run
-  AFTER the frame's capture.** Restoration writes the state the diff watches,
-  so without `rebase()` the next frame reads an undo as a fresh change and
-  commits it — the history growing in the direction it was asked to shrink.
-  The capture is deferred while `any_widget_active`, which is read inside
-  `ui.render()`: `orchestrate_frame` runs BETWEEN frames. That deferral is the
-  whole of gesture coalescing.
+- **Applying an undo step must REBASE the journal, and a HOVER PREVIEW must be
+  refused a recording outright.** Both write the state the diff watches.
+  Without `rebase()` the next frame reads an undo as a fresh change and commits
+  it — the history growing in the direction it was asked to shrink. The
+  preview is worse and ORDERING DOES NOT FIX IT: capturing before the preview
+  only defers its write to the NEXT frame's capture, which commits, which
+  shifts the rows under the pointer, so a different row previews and commits in
+  turn — the history fills in seconds. `_record_undo_step` therefore returns
+  early while `_undo_preview_base` is set, which also covers the frame the
+  preview is handed back on. Applying a step CLEARS that base, or the pointer
+  leaving afterwards restores the pre-hover state and silently undoes the
+  click. Guarded by `tests/test_undo_preview_loop.py`, which drives the real
+  `App` methods — the frame-loop tests that modelled the sequence with a local
+  helper all passed while this was live.
+  The capture is separately deferred while `any_widget_active`, which is read
+  inside `ui.render()`: `orchestrate_frame` runs BETWEEN frames. That deferral
+  is the whole of gesture coalescing.
 
 - **Undo covers the recipe, never the picture.** The canvas and entity buffers
   are out, so Clear Canvas, Reset and Fill have nothing to restore, and

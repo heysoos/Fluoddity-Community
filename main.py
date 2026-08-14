@@ -1323,6 +1323,11 @@ class App:
         ui_state.undo_notice = (
             f"{target.label} - settings only, the grid's owner keeps the brain"
             if skipped else target.label)
+        # Applying a step ENDS any preview: the state is now deliberately this
+        # one, so there is nothing to hand back, and restoring what was on
+        # screen before the hover would silently undo the click.
+        self._undo_preview_base = None
+        self._undo_preview_showing = ui_state.undo_preview_index
         # Re-baseline, or the next frame reads this restore as a fresh change.
         self.undo_history.rebase(
             uh.capture(ui_state, self.rule_manager.get_current_rule(),
@@ -1333,6 +1338,12 @@ class App:
         from services import undo_history as uh
 
         if ui_state.any_widget_active:
+            return
+        # A preview BORROWS a step; it is not a change, and recording it is a
+        # runaway - the commit shifts the rows under the pointer, so the next
+        # row previews and commits in turn. Covers the frame the preview is
+        # handed back too, which is the one that clears the base.
+        if self._undo_preview_base is not None:
             return
         snap = uh.capture(ui_state, self.rule_manager.get_current_rule(),
                           self.sim.brain_layout)

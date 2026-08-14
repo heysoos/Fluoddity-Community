@@ -125,8 +125,16 @@ it, and the first `Ctrl+Z` would find an empty list.
 Restoration writes the very state the diff watches, so a service that did not
 re-baseline would see its own undo as a fresh change on the next frame and
 commit it — every undo appending a step, and the history growing in the
-direction it was asked to shrink. The same applies to a preview and to its
-restore.
+direction it was asked to shrink.
+
+**A hover preview must be refused a recording outright, and ordering does not
+achieve that.** Capturing before the preview only defers the preview's write
+to the *next* frame's capture, which commits it; the commit shifts the rows
+under the pointer, so a different row previews and commits in turn, and the
+history fills in seconds. The capture returns early while a preview is held,
+which also covers the frame it is handed back on. Applying a step clears that
+held state, or the pointer leaving afterwards restores the pre-hover state and
+silently undoes the click.
 
 ### A prerequisite on the audio branch: `Mapping` needs a stable id
 
