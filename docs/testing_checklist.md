@@ -306,6 +306,10 @@ installed; without it the panel says so and everything else runs unchanged.
       pixels.
 - [ ] Nothing playing but room noise leaves the bands near the bottom of their
       range rather than part way up.
+- [ ] Hi-hats and snare hits SNAP: the `hi` and `presence` traces jump on the
+      transient and ease back down, rather than swelling into it. A steady note
+      still draws a flat trace - both halves matter, and a change to the
+      smoothing that fixes one usually breaks the other.
 - [ ] Binding bass to Sensor Gain visibly changes the simulation on a beat.
 - [ ] Unticking `Modulate` at the top freezes the simulation's response while
       the spectrum and every trace KEEP moving; the sliders lose their hatching.

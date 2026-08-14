@@ -9,8 +9,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# The window stays wide: it sets FREQUENCY resolution, and the bass band is
+# only about ten bins wide at 2048. The HOP is what sets time resolution, and
+# it is half the window so a transient is analysed twice on its way through.
 FFT_SIZE = 2048
-HOP = 1024               # frames between analyses; the capture's callback size
+HOP = 512                # frames between analyses; the capture's callback size
 N_MEL = 40
 
 SIGNAL_NAMES: tuple[str, ...] = ("bass", "mid", "presence", "hi", "volume")
@@ -27,8 +30,13 @@ DB_MAX = -20.0
 LEVEL_DB_MIN = -60.0
 LEVEL_DB_MAX = -6.0
 
-# The spectrum is averaged over this long before anything reads it. Without it
-# a band is one block's sample of a noisy quantity, which reads as vibration.
+# The spectrum is smoothed ASYMMETRICALLY, because the two directions are
+# solving different problems. Falling slowly is what stops a band being one
+# block's sample of a noisy quantity, which reads as vibration. Rising slowly
+# buys nothing and costs the transient: a hi-hat is over in a few milliseconds,
+# so a smoother that takes tens of them to respond reports a fraction of its
+# height and the highs lose their snap.
+ATTACK_SECONDS = 0.0
 SMOOTHING_SECONDS = 0.075
 
 # Below this a bin is silence rather than a very negative number of decibels.
@@ -47,6 +55,17 @@ BAND_EDGES_HZ: tuple[tuple[str, float, float], ...] = (
 _PEAK_DECAY = 0.9995
 # Below this the peak is treated as silence rather than divided by.
 _PEAK_FLOOR = 1e-6
+
+
+def _coeff(seconds: float, dt: float) -> float:
+    """One-pole coefficient reaching ~63% of a step in `seconds`.
+
+    A time constant at or below the block period is `1.0`: the smoother cannot
+    resolve anything faster than one analysis, so asking for it means "follow".
+    """
+    if seconds <= 0.0:
+        return 1.0
+    return float(min(1.0, 1.0 - np.exp(-dt / seconds)))
 
 
 def _hz_to_mel(f):
@@ -154,8 +173,8 @@ class Analyzer:
         self._level = 0.0
         self._mel_bands = mel_bar_bands(sample_rate, n_mel)
         block_dt = max(1, int(hop)) / max(1.0, self.sample_rate)
-        self._smooth_k = (1.0 if SMOOTHING_SECONDS <= 0.0 else
-                          1.0 - np.exp(-block_dt / SMOOTHING_SECONDS))
+        self._smooth_k = _coeff(SMOOTHING_SECONDS, block_dt)
+        self._attack_k = _coeff(ATTACK_SECONDS, block_dt)
         self._seq = 0
 
     def _normalise(self, raw: np.ndarray) -> np.ndarray:
@@ -174,8 +193,9 @@ class Analyzer:
 
         db = 20.0 * np.log10(np.maximum(mag, _MAG_FLOOR))
         spec = np.clip((db - DB_MIN) / (DB_MAX - DB_MIN), 0.0, 1.0)
-        self._spectrum += (spec.astype(np.float32) -
-                           self._spectrum) * self._smooth_k
+        delta = spec.astype(np.float32) - self._spectrum
+        self._spectrum += delta * np.where(delta > 0.0, self._attack_k,
+                                           self._smooth_k)
 
         rows = self._m @ self._spectrum
         mel = rows[:self.n_mel]
@@ -188,7 +208,8 @@ class Analyzer:
                                      _MAG_FLOOR))
         level = float(np.clip((rms_db - LEVEL_DB_MIN) /
                               (LEVEL_DB_MAX - LEVEL_DB_MIN), 0.0, 1.0))
-        self._level += (level - self._level) * self._smooth_k
+        d = level - self._level
+        self._level += d * (self._attack_k if d > 0.0 else self._smooth_k)
         raw[-1] = self._level
 
         # A DC or clipped block can still produce a non-finite magnitude on some

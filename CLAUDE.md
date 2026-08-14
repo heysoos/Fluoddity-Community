@@ -585,6 +585,48 @@ mechanics these caveats assume.
   otherwise call `configure()` on the same object every frame, so each bails out
   when the other owns the driver.
 
+### Audio input
+
+- **The window sets FREQUENCY resolution and the HOP sets time resolution, and
+  a transient is a hop problem, not a width one.** FFT_SIZE is 2048 and HOP is
+  512. Narrowing the window is the obvious fix for a soft transient and it is
+  the wrong one: 1024/512 buys a hi-hat peak of 0.812 against 0.749, and pays
+  for it with double the bin width, where the bass band (20–250 Hz) has only
+  about ten bins to begin with. Halving the hop instead costs one extra FFT per
+  block and nothing else.
+
+- **The band smoother is ASYMMETRIC, and the rise is not smoothed at all.** The
+  two directions solve different problems: falling slowly is what stops a
+  steady note drawing a fuzzy hash, while rising slowly only costs the
+  transient. A hi-hat decays in a few milliseconds, so the symmetric 75 ms
+  one-pole reported a peak of 0.315 where the signal was 0.749 — it was not
+  delaying the highs, it was eating 58% of their height. `ATTACK_SECONDS` is
+  therefore 0, `SMOOTHING_SECONDS` 0.075, and the cost is measured in the other
+  column: the per-analysis step on a steady note goes 0.00085 → 0.00109, still
+  23x calmer than the unsmoothed 0.0256 that made the traces vibrate. Both
+  numbers must be read together — `python -m tools.measure_audio_response`. A
+  mapping that wants a soft attack asks for one with the `smooth` shaper; the
+  analyser cannot give a snap back that it has already thrown away.
+
+- **The dB windows are measured and there are TWO of them.** The spectrum is
+  read over `[-90, -20]` dB, which rests ordinary material across the middle of
+  the scale and leaves a room's hiss floor near 0.05; `volume` measures the
+  whole block at once, which sits far above any single bin, so it has its own
+  `[-60, -6]`. Linear magnitude is what the first version used and it fails
+  twice over: every band pins at 1.0, and the mel rows — unnormalised triangles
+  whose width grows 20x from the bottom of the axis to the top — draw any
+  spectrum at all as a ramp rising to the right. The rows average instead.
+
+- **`imgui.ini` is shared between the app and the test suite, and the tests
+  must not read or write it.** Dear ImGui persists every window's size in
+  `create_context`/`destroy_context`, so the tests saved a layout and consumed
+  it on the next run: the archive gallery came back 382px tall, two of its
+  eight entries no longer fit, and a test that had always passed began failing
+  with no code change. Running the app writes the same file, so the suite's
+  result depended on whether anyone had resized a panel. `tests/conftest.py`
+  wraps `create_context` to null the filename. Never read it back —
+  `get_ini_filename()` on the null segfaults.
+
 ### UI and platform
 
 - **There is ONE save dialog, and every Save button in the app opens it.**

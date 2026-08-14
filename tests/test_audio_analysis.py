@@ -113,6 +113,56 @@ def test_smoothing_makes_a_band_move_far_less_per_block_than_its_input():
     assert steps.mean() < 0.02
 
 
+def _hat_through(analyzer, blocks=90, onset=30):
+    """One sharp bright transient; returns the `hi` band per block."""
+    rng = np.random.default_rng(0)
+    n = HOP * (blocks - onset)
+    t = np.arange(n) / SR
+    hit = (rng.standard_normal(n) * np.exp(-t * 90.0) * 0.6).astype(np.float32)
+    tail = np.zeros(FFT_SIZE, dtype=np.float32)
+    seen = []
+    for i in range(blocks):
+        chunk = np.zeros(HOP, dtype=np.float32)
+        if i >= onset:
+            j = (i - onset) * HOP
+            chunk = hit[j:j + HOP]
+        tail = np.roll(tail, -HOP)
+        tail[FFT_SIZE - HOP:] = chunk
+        seen.append(analyzer.process(tail).signals["hi"])
+    return np.asarray(seen)
+
+
+def test_a_transient_keeps_most_of_its_height():
+    """A hi-hat is over in a few milliseconds. Smoothing its RISE reported a
+    fraction of it and the highs lost their snap."""
+    a = Analyzer(SR, auto_gain=False)
+    assert _hat_through(a).max() > 0.6
+
+
+def test_the_rise_is_not_smoothed_but_the_fall_is():
+    """The two directions solve different problems: falling slowly is what
+    stops a steady band vibrating, rising slowly only costs the transient."""
+    from services.audio_analysis import ATTACK_SECONDS, SMOOTHING_SECONDS
+    assert ATTACK_SECONDS < SMOOTHING_SECONDS
+
+    a = Analyzer(SR, auto_gain=False)
+    seen = _hat_through(a)
+    peak = int(np.argmax(seen))
+    rise = peak - int(np.argmax(seen > 0.05 * seen.max()))
+    fall = int(np.argmax(seen[peak:] < 0.5 * seen.max()))
+    assert fall > rise, f"fall {fall} blocks is not slower than rise {rise}"
+
+
+def test_the_window_is_wide_and_the_hop_is_what_sets_time_resolution():
+    """Narrowing the window to chase the transient costs frequency resolution
+    where there is least to spare: the bass band is about ten bins wide."""
+    from services.audio_analysis import BAND_EDGES_HZ
+    bins = SR / FFT_SIZE
+    _n, lo, hi = BAND_EDGES_HZ[0]
+    assert (hi - lo) / bins >= 9.0
+    assert HOP <= FFT_SIZE // 2, "a transient must be analysed more than once"
+
+
 def test_volume_follows_loudness_rather_than_the_unlit_bins():
     """Averaging the spectrum measures the bins nothing is playing in, which
     outnumber the ones a bass hit lights by a hundred to one."""
