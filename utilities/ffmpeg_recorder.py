@@ -40,6 +40,59 @@ def find_ffmpeg():
         "Download FFmpeg from: https://ffmpeg.org/download.html"
     )
 
+# A take shorter than this cannot be judged by percentage alone: the tap and
+# the first frame never start on the same instant.
+_CLOCK_FLOOR_SECONDS = 0.25
+_CLOCK_TOLERANCE = 0.10
+
+
+def recording_fps(frame_count, audio_seconds, wall_seconds, nominal_fps):
+    """(fps, warning) for a finished take.
+
+    The soundtrack is the clock. The tap starts and stops with the recorder, so
+    both streams cover the same wall interval and frames divided by audio
+    seconds is exactly the rate that makes them the same length - sync falls
+    out of the arithmetic rather than depending on a timer, and it rides the
+    sound card's clock rather than the frame loop's.
+
+    Wall time is kept only as a cross-check. If a device dies mid-take the
+    audio is far too short, and the derived rate would silently speed the video
+    up to match it.
+    """
+    if frame_count <= 0:
+        return nominal_fps, ""
+    if audio_seconds <= 0.0:
+        return nominal_fps, ""          # silent take: unchanged behaviour
+    slack = max(_CLOCK_FLOOR_SECONDS, _CLOCK_TOLERANCE * wall_seconds)
+    if wall_seconds > 0.0 and abs(audio_seconds - wall_seconds) > slack:
+        return (frame_count / wall_seconds,
+                f"Audio ran {audio_seconds:.1f}s against {wall_seconds:.1f}s of "
+                f"recording, so the soundtrack may drift - the capture device "
+                f"probably stopped early.")
+    return frame_count / audio_seconds, ""
+
+
+def mux_command(ffmpeg, video_path, audio_path, out_path, itsscale,
+                sample_rate, channels):
+    """argv muxing the soundtrack onto a finished take and retiming it.
+
+    -itsscale is an input option and applies to the input it PRECEDES, so its
+    position is load-bearing. The video is stream-copied: the pixels are
+    already right and a second encode would only cost a generation.
+    """
+    return [
+        ffmpeg, '-y',
+        '-itsscale', f'{itsscale:.9f}',
+        '-i', str(video_path),
+        '-f', 'f32le', '-ar', str(int(sample_rate)), '-ac', str(int(channels)),
+        '-i', str(audio_path),
+        '-c:v', 'copy',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-shortest',
+        str(out_path),
+    ]
+
+
 class FFmpegVideoRecorder:
     """
     Video recorder that pipes frames directly to ffmpeg without intermediate PNG files.

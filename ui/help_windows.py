@@ -1,6 +1,8 @@
 """Help and informational windows: Controls, Tutorial, Parameter Sweeps, Performance, Video Recording."""
 from imgui_bundle import imgui
 
+from ui import notices
+
 
 class HelpWindowsMixin:
     """Mixin for help/informational windows. Combined into UI via multiple inheritance."""
@@ -363,6 +365,27 @@ class HelpWindowsMixin:
                 256
             )
             self._delayed_tooltip("Defaults to 'animation' if left empty. Saves to documents/Fluoddity/ All filenames get timestamps appended")
+
+            imgui.spacing()
+            if recording_active:
+                imgui.begin_disabled()
+            _, self.state.preferences.record_audio = imgui.checkbox(
+                "Record Audio",
+                self.state.preferences.record_audio
+            )
+            if recording_active:
+                imgui.end_disabled()
+            self._delayed_tooltip("Mux the audio the visuals are reacting to onto the recording.")
+            if self.state.preferences.record_audio:
+                imgui.indent(20)
+                imgui.text_colored(
+                    imgui.ImVec4(0.6, 0.6, 0.6, 1.0),
+                    "Physics rate follows Preferences, not Capture Frequency."
+                )
+                imgui.unindent(20)
+
+            notices.render_banner(self.state.preferences, "record_notice",
+                                  notices.WARN, scope="recording")
 
         imgui.end()
 

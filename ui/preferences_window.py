@@ -107,8 +107,9 @@ class PreferencesWindowMixin:
             # === Physics Update Frequency section ===
             imgui.text("Physics Update Frequency")
 
-            # Lock speedmult to motion_blur_samples when recording video
-            if recording_active:
+            # Lock speedmult to motion_blur_samples when recording video. With
+            # a soundtrack the rate stays the user's, so the slider stays live.
+            if recording_active and not self.state.preferences.record_audio:
                 locked_value = self.state.preferences.motion_blur_samples
                 imgui.begin_disabled()
                 imgui.slider_int(

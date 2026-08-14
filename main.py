@@ -847,6 +847,10 @@ class App:
 
         # 3.2. Check if pending video should start
         cmd = self.command_handler
+        # Pushed every frame, because recording starts from the toggle and from
+        # the scheduled-start check below.
+        self.video_service.configure(self.audio_runtime.capture,
+                                     ui_state.preferences.record_audio)
         if cmd.video_pending and self.sim.frame_count >= cmd.video_scheduled_start_frame:
             cmd.video_pending = False
             cmd.video_scheduled_start_frame = 0
@@ -881,9 +885,20 @@ class App:
             ui_state.preferences.blur_quality = self.user_blur_quality
 
         if is_recording:
-            ui_state.preferences.speedmult = ui_state.preferences.motion_blur_samples
+            # With a soundtrack the physics rate is the user's, not the capture
+            # frequency: blur samples ARE physics sub-steps, so forcing it up
+            # would render far below real time. The audio still sets the file's
+            # framerate, so sync holds at whatever rate is achieved - this only
+            # decides whether the result is smooth or blurred.
+            if not ui_state.preferences.record_audio:
+                ui_state.preferences.speedmult = ui_state.preferences.motion_blur_samples
             ui_state.preferences.motion_blur = ui_state.preferences.recording_motion_blur
             ui_state.preferences.blur_quality = ui_state.preferences.recording_blur_quality
+
+        if self.was_recording and not is_recording:
+            message = self.video_service.take_message()
+            if message:
+                ui_state.preferences.record_notice = message
 
         self.was_recording = is_recording
 

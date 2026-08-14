@@ -84,14 +84,31 @@ class AudioCapture:
         self._lock = threading.Lock()
         self._tail = np.zeros(FFT_SIZE, dtype=np.float32)
         self._channels = 1
+        # Set while a recording wants the soundtrack; receives each block's
+        # bytes verbatim. Read once into a local by the callback and cleared
+        # before teardown, exactly as _analyzer is.
+        self.tap = None
         # Captured at start, because the callback must not import anything.
         self._continue = None
+
+    @property
+    def channels(self) -> int:
+        """How the tap's bytes are interleaved; the sidecar carries no header."""
+        return self._channels
 
     def snapshot(self) -> SignalSnapshot | None:
         with self._lock:
             return self._snapshot
 
     def _on_block(self, in_data, _frame_count, _time_info, _status):
+        tap = self.tap
+        if tap is not None:
+            # Guarded separately from the analysis: the signals driving the sim
+            # must not stop because a recording's disk filled up.
+            try:
+                tap(in_data)
+            except Exception as exc:
+                self.last_error = repr(exc)
         try:
             analyzer = self._analyzer
             if analyzer is not None:
@@ -153,9 +170,11 @@ class AudioCapture:
             return False
 
     def stop(self) -> None:
-        # The analyser goes first, so a callback still in flight publishes
-        # nothing into a stream that is being torn down.
+        # The analyser and the tap go first, so a callback still in flight
+        # publishes nothing into a stream that is being torn down and writes
+        # nothing into a file the main thread is closing.
         self._analyzer = None
+        self.tap = None
         for close in (self._close_stream, self._close_pa):
             try:
                 close()

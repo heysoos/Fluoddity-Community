@@ -69,6 +69,8 @@ class PreferencesState:
     motion_blur_samples: int = 12
     supersample_k: int = 1
     filename_prefix: str = ""
+    record_audio: bool = False  # Mux the captured audio onto the recording
+    record_notice: str = ""  # Result of the last take, shown once and dismissed
     recording_motion_blur: bool = True  # Motion blur setting used during video recording
     recording_blur_quality: int = 1  # Blur quality setting used during video recording
     video_end_frame: int = 0  # Target frame for video to end on (0 = disabled, start immediately)
