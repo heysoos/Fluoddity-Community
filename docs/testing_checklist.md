@@ -94,6 +94,12 @@ Sync is the thing only a person can confirm, so use material with a hard beat.
 - [ ] **e.** Stop the capture device mid-take (unplug, or stop it in the Audio
       tab): the recording still saves, and the window shows a drift warning.
 - [ ] **f.** No `.video.mp4` or `.pcm` file is left behind after a take.
+- [ ] **g.** Audio Delay at 0 records exactly as before; the slider only
+      appears with Record Audio ticked, and right-click resets it.
+- [ ] **h.** Record the same passage at 0 and at 0.15: the second one has the
+      hit landing visibly later against the same picture. If both look
+      identical the delay is being accepted and ignored — the failure mode is
+      silent, so compare two takes rather than judging one.
 
 ## 6. Screenshots
 - [ ] **a.** Shift+P takes screenshot

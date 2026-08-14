@@ -382,6 +382,20 @@ class HelpWindowsMixin:
                     imgui.ImVec4(0.6, 0.6, 0.6, 1.0),
                     "Physics rate follows Preferences, not Capture Frequency."
                 )
+                changed, delay = imgui.slider_float(
+                    "Audio Delay",
+                    self.state.preferences.record_audio_delay,
+                    0.0, 0.5,
+                    format="%.3f s"
+                )
+                if changed:
+                    self.state.preferences.record_audio_delay = delay
+                self._delayed_tooltip("Delays the soundtrack to meet the picture, which lags the sound it reacts to.")
+                if imgui.begin_popup_context_item("audio_delay_reset"):
+                    if imgui.selectable("Reset to 0##do", False)[0]:
+                        self.state.preferences.record_audio_delay = 0.0
+                        imgui.close_current_popup()
+                    imgui.end_popup()
                 imgui.unindent(20)
 
             notices.render_banner(self.state.preferences, "record_notice",

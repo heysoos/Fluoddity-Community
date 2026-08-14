@@ -72,6 +72,18 @@ def test_a_stopped_take_does_not_leave_its_soundtrack_behind(service):
     assert service.recorder.audio is None
 
 
+def test_the_sync_offset_is_handed_to_the_soundtrack(service):
+    service.configure(_Capture(), record_audio=True, audio_offset=0.12)
+    service.start()
+    assert service.recorder.audio.audio_offset == pytest.approx(0.12)
+
+
+def test_the_offset_defaults_to_none_at_all(service):
+    service.configure(_Capture(), record_audio=True)
+    service.start()
+    assert service.recorder.audio.audio_offset == 0.0
+
+
 def test_the_result_of_a_take_is_reported_once(service):
     """A save the user cannot see reads as a no-op, and a notice that never
     clears would outlive the take it describes."""

@@ -31,10 +31,14 @@ class RecordingAudio:
     """Owns the sidecar and the tap for the length of one recording."""
 
     def __init__(self, capture, sidecar_path: str,
-                 nominal_fps: float = 50.0) -> None:
+                 nominal_fps: float = 50.0,
+                 audio_offset: float = 0.0) -> None:
         self.capture = capture
         self.sidecar_path = sidecar_path
         self.nominal_fps = float(nominal_fps)
+        # Positive delays the soundtrack, which is the direction that matters:
+        # the picture lags the sound it is reacting to.
+        self.audio_offset = float(audio_offset)
         self.track: AudioTrackWriter | None = None
 
     def start(self) -> bool:
@@ -62,7 +66,8 @@ class RecordingAudio:
                                      wall_seconds, self.nominal_fps)
         cmd = mux_command(find_ffmpeg(), video_path, self.sidecar_path,
                           out_path, self.nominal_fps / fps if fps > 0 else 1.0,
-                          track.sample_rate, track.channels)
+                          track.sample_rate, track.channels,
+                          self.audio_offset)
         ok, error = run_mux(cmd, out_path)
         if not ok:
             # The video is finished and complete on its own; keep it.

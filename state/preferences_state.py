@@ -70,6 +70,7 @@ class PreferencesState:
     supersample_k: int = 1
     filename_prefix: str = ""
     record_audio: bool = False  # Mux the captured audio onto the recording
+    record_audio_delay: float = 0.0  # Seconds to delay the soundtrack by
     record_notice: str = ""  # Result of the last take, shown once and dismissed
     recording_motion_blur: bool = True  # Motion blur setting used during video recording
     recording_blur_quality: int = 1  # Blur quality setting used during video recording

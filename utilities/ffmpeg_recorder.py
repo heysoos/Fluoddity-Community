@@ -85,13 +85,23 @@ def recording_fps(frame_count, audio_seconds, wall_seconds, nominal_fps):
 
 
 def mux_command(ffmpeg, video_path, audio_path, out_path, itsscale,
-                sample_rate, channels):
+                sample_rate, channels, audio_offset=0.0):
     """argv muxing the soundtrack onto a finished take and retiming it.
 
     -itsscale is an input option and applies to the input it PRECEDES, so its
-    position is load-bearing. The video is stream-copied: the pixels are
+    position is load-bearing. The video is stream-copied - the pixels are
     already right and a second encode would only cost a generation.
+
+    The delay is the `adelay` FILTER, not -itsoffset: in front of a headerless
+    raw input that flag shifts nothing, and the file still plays, so the only
+    way to tell is to decode the result and look. The audio is re-encoded
+    anyway, so a filter costs nothing extra.
+
+    A zero delay emits no filter at all, so a take made without one muxes
+    exactly as it did before the control existed.
     """
+    delay = [] if not audio_offset else [
+        '-af', f'adelay=delays={max(0.0, audio_offset) * 1000.0:.1f}:all=1']
     return [
         ffmpeg, '-y',
         '-itsscale', f'{itsscale:.9f}',
@@ -100,6 +110,7 @@ def mux_command(ffmpeg, video_path, audio_path, out_path, itsscale,
         '-i', str(audio_path),
         '-c:v', 'copy',
         '-c:a', 'aac', '-b:a', '192k',
+        *delay,
         '-shortest',
         str(out_path),
     ]

@@ -93,6 +93,30 @@ def test_the_retime_matches_the_frames_against_the_audio(paths, tmp_path, muxed)
     assert float(cmd[cmd.index("-itsscale") + 1]) == pytest.approx(50.0 / 30.0)
 
 
+def test_the_sync_offset_reaches_the_mux(paths, tmp_path, muxed):
+    """The picture lags the sound by the analysis block, the band smoother's
+    release and a frame or two, so the soundtrack is delayed to meet it."""
+    video, out = paths
+    cap = _Capture()
+    audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"), audio_offset=0.15)
+    audio.start()
+    cap.tap(b"\x00" * (4 * 2 * 48000))
+    audio.finish(str(video), str(out), frame_count=30, wall_seconds=1.0)
+
+    cmd, _ = muxed[0]
+    assert "delays=150.0" in cmd[cmd.index("-af") + 1]
+
+
+def test_no_offset_is_the_default(paths, tmp_path, muxed):
+    video, out = paths
+    cap = _Capture()
+    audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"))
+    audio.start()
+    cap.tap(b"\x00" * 4096)
+    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0)
+    assert "-af" not in muxed[0][0]
+
+
 def test_finishing_removes_the_tap(paths, tmp_path, muxed):
     video, out = paths
     cap = _Capture()

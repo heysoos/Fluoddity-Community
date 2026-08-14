@@ -14,8 +14,10 @@ class VideoRecorderService:
         self.recorder = VidSaver()
         self._capture = None
         self._record_audio = False
+        self._audio_offset = 0.0
 
-    def configure(self, capture, record_audio: bool) -> None:
+    def configure(self, capture, record_audio: bool,
+                  audio_offset: float = 0.0) -> None:
         """Push the soundtrack choice, which start() reads.
 
         Recording begins from the toggle and from the scheduled-start check, so
@@ -23,6 +25,7 @@ class VideoRecorderService:
         """
         self._capture = capture
         self._record_audio = bool(record_audio)
+        self._audio_offset = float(audio_offset)
 
     def is_active(self) -> bool:
         """Check if recording is active."""
@@ -44,7 +47,8 @@ class VideoRecorderService:
         # sidecar the first is still being muxed from.
         sidecar = os.path.join(tempfile.gettempdir(),
                                f"fluoddity-take-{next(self._takes)}.pcm")
-        return RecordingAudio(self._capture, sidecar)
+        return RecordingAudio(self._capture, sidecar,
+                              audio_offset=self._audio_offset)
 
     def stop(self) -> None:
         """Stop recording and save video."""

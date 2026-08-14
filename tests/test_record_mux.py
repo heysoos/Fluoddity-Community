@@ -71,7 +71,7 @@ def test_a_very_short_take_is_not_called_a_mismatch():
 def _cmd(**kw):
     args = dict(ffmpeg="ffmpeg", video_path="v.mp4", audio_path="a.pcm",
                 out_path="out.mp4", itsscale=1.0, sample_rate=48000,
-                channels=2)
+                channels=2, audio_offset=0.0)
     args.update(kw)
     return mux_command(**args)
 
@@ -120,3 +120,41 @@ def test_the_streams_are_cut_to_the_shorter_one():
 def test_an_existing_file_is_overwritten_without_a_prompt():
     """ffmpeg blocks on a y/n prompt otherwise, and nothing is reading stdin."""
     assert "-y" in _cmd()
+
+
+# --- the sync delay ---------------------------------------------------------
+#
+# These assert SHAPE only. That an argv is well formed says nothing about
+# whether ffmpeg acts on it - -itsoffset was accepted here and silently did
+# nothing. tests/test_record_delay_e2e.py is what proves the sound moves.
+
+def test_no_delay_leaves_the_command_exactly_as_it_was():
+    """A delay of zero is not a shift, and every take made before this control
+    existed has to keep muxing identically."""
+    assert "-af" not in _cmd(audio_offset=0.0)
+
+
+def test_the_delay_is_a_filter_rather_than_an_input_offset():
+    """-itsoffset in front of a headerless raw input shifts nothing at all."""
+    cmd = _cmd(audio_offset=0.15)
+    assert "-itsoffset" not in cmd
+    assert "adelay" in cmd[cmd.index("-af") + 1]
+
+
+def test_the_delay_is_expressed_in_milliseconds():
+    """adelay takes ms; handing it seconds would under-delay by 1000x."""
+    cmd = _cmd(audio_offset=0.15)
+    assert "delays=150.0" in cmd[cmd.index("-af") + 1]
+
+
+def test_the_delay_covers_every_channel():
+    """Without all=1 only the first channel moves, which reads as the sound
+    coming apart rather than as a sync control."""
+    assert "all=1" in _cmd(audio_offset=0.15)[
+        _cmd(audio_offset=0.15).index("-af") + 1]
+
+
+def test_the_delay_does_not_disturb_the_retime():
+    cmd = _cmd(audio_offset=0.15, itsscale=1.6666)
+    assert cmd.index("-itsscale") < cmd.index("v.mp4")
+    assert cmd[cmd.index("-c:v") + 1] == "copy"

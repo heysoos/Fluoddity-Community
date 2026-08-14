@@ -832,7 +832,8 @@ class App:
         # scheduled-start check below, which is why this is a per-frame push
         # rather than an argument at either call.
         self.video_service.configure(self.audio_runtime.capture,
-                                     ui_state.preferences.record_audio)
+                                     ui_state.preferences.record_audio,
+                                     ui_state.preferences.record_audio_delay)
 
         # 2. Process one-shot commands
         result = self.command_handler.process_commands(ui_state, tiling_mode)

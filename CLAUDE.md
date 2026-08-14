@@ -751,6 +751,18 @@ mechanics these caveats assume.
   trades fps for blur and sync is unaffected. Silent recording keeps the fixed
   50 fps and its exact previous behaviour.
 
+- **The soundtrack delay is the `adelay` FILTER, and `-itsoffset` is the trap.**
+  In front of a headerless raw input `-itsoffset` is accepted and shifts
+  nothing: the file still plays, so the only symptom is that the control does
+  nothing. What is left in the output is the AAC encoder's own priming delay,
+  0.021 s, identical at every setting — which reads like a working control with
+  a bad scale factor. An argv test cannot see this, so
+  `tests/test_record_delay_e2e.py` decodes the muxed audio and finds a click.
+  `adelay` takes MILLISECONDS and needs `all=1`, or only the first channel
+  moves. The picture lags the sound it reacts to — analysis block, the band
+  smoother's release, a frame, and the readback's frame — so delay is the
+  direction that matters and the slider does not go negative.
+
 - **The tap is guarded SEPARATELY from the analysis, not by the same
   `try`.** Sharing it means a full disk stops the signals driving the sim.
   Cleared before teardown in `stop()`, as `_analyzer` is, so a callback in
