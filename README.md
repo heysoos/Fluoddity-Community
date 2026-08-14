@@ -31,6 +31,22 @@ Any advice or criticism is welcome. This is a toy I made for myself and I am mor
  - Experimental system for mixing different saved configs.
  - Tournament mode: run a grid of creatures side by side and breed from the ones you like, by hand or by CLIP.
  - Swappable particle brains: Fourier, Gabor, Lenia or MLP.
+ - Undo and redo for every setting, with a browsable history.
+
+## Undo
+
+`Ctrl+Z` takes back the last change; `Ctrl+Shift+Z` or `Ctrl+Y` puts it back. A
+whole slider drag counts as one step, however long you spent on it, and so does
+loading a preset or pressing `Z` or `G`.
+
+`Extras > Undo History` lists the steps, newest first. Hover one to see it live,
+click to go back to it. Steps ahead of where you are sit greyed out, and making
+a new change discards them.
+
+It covers the settings and the brain, not the picture: the pattern regrows from
+the restored settings rather than rewinding the screen, so Clear Canvas, Reset
+and Fill are outside it, as is deleting a saved preset. Under a tournament the
+sliders step back and the grid stays with whatever is running it.
 
 ## Tournament Mode
 

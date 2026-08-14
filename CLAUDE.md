@@ -861,6 +861,41 @@ mechanics these caveats assume.
   pays `rescore_all()` on the first open after the closing flush learned to
   stamp `novelty_n` and once per unclean exit thereafter.
 
+- **Undo detects a change by DIFFING declared state, and a field nobody
+  classified is the defect that guards against.** Every field of `SimState` and
+  `PreferencesState` is in `UNDOABLE_FIELDS` or in `NOT_UNDOABLE` with a
+  reason, and `tests/test_undo_fields.py` derives its cases from
+  `__dataclass_fields__` so a new field fails until someone says which. An
+  explicit `push_undo()` at each mutation site was rejected for exactly this:
+  it fails nothing when forgotten. A call site may `tag()` a step to name it,
+  which is advisory — a forgotten tag costs a name, never coverage. The diff is
+  only viable because nothing writes the authoritative state per frame: sweeps
+  and jitter are computed in the shader, and audio modulation hands
+  `sim.apply_state` a `replace()`d copy rather than touching `ui_state.sim`.
+
+- **Applying an undo step must REBASE the journal, and a preview must run
+  AFTER the frame's capture.** Restoration writes the state the diff watches,
+  so without `rebase()` the next frame reads an undo as a fresh change and
+  commits it — the history growing in the direction it was asked to shrink.
+  The capture is deferred while `any_widget_active`, which is read inside
+  `ui.render()`: `orchestrate_frame` runs BETWEEN frames. That deferral is the
+  whole of gesture coalescing.
+
+- **Undo covers the recipe, never the picture.** The canvas and entity buffers
+  are out, so Clear Canvas, Reset and Fill have nothing to restore, and
+  deleting a preset or an archive entry stays outside. Under a tournament the
+  brain half is skipped and the settings still apply, the same split
+  `_grid_owner()` already makes for Z and G. Costs and the `Mapping.uid`
+  prerequisite for audio are in
+  `docs/superpowers/specs/2026-08-14-undo-redo-design.md`.
+
+- **A render test must not read `imgui.ini`.** ImGui restores each window's
+  saved size, position and scroll from it, and the file is gitignored — so a
+  test that draws a window passes on a fresh clone and fails on a machine that
+  has run the app. `tests/test_undo_window_render.py` sets
+  `io.set_ini_filename("")` in its fixture. Sizing the HOST window is not
+  enough; the window under test picks up its own saved geometry.
+
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own
   hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.
 
