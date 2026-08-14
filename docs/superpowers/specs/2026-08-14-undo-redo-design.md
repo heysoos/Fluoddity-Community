@@ -128,6 +128,30 @@ commit it — every undo appending a step, and the history growing in the
 direction it was asked to shrink. The same applies to a preview and to its
 restore.
 
+### Cost
+
+Measured 2026-08-14 against the real dataclasses (35 undoable `SimState`
+fields, 43 `PreferencesState` fields, a 580-float rule — the deepest reachable
+MLP stack):
+
+| | cost | of a 60 fps frame |
+|---|---|---|
+| compare, every frame | 6.9 us | 0.04% |
+| capture, on a change | 47.8 us | 0.29% |
+| memory | 4.8 KB/step | 200 steps = 0.9 MB |
+
+**The per-frame path allocates nothing.** It compares the declared fields
+against the committed snapshot and returns; the deep copy runs only on the
+frame something differs, which the drag deferral holds to at most once per
+gesture. The 6.9 us is the worst case rather than the average — the compare
+short-circuits on the first difference, so the figure is the steady state where
+everything matches and all 78 fields plus the rule array are walked. Nothing on
+either path touches the GPU.
+
+`AudioInState.mappings` is a list of dataclasses and is **not** in these
+figures; measure the capture again when that worktree merges. It sits on the
+capture path, so a large rig is paid per gesture and never per frame.
+
 ### Labels
 
 Derived from what differs: one field → its UI label ("Sensor Gain"); several
