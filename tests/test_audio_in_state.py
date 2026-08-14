@@ -48,7 +48,7 @@ def test_a_round_trip_preserves_a_mapping():
     st = AudioInState()
     st.mappings.append(Mapping(signal="bass", target="SENSOR_GAIN",
                                mode="multiply", depth=0.25, gain=1.5,
-                               shaper=ShaperParams(kind="lfo", rate_max=9.0)))
+                               shaper=ShaperParams(kind="phase", rate=3.0)))
     st.global_strength = 1.5
     st.strengths["SENSOR_GAIN"] = 0.5
 
@@ -58,9 +58,33 @@ def test_a_round_trip_preserves_a_mapping():
     m = fresh.mappings[0]
     assert (m.signal, m.target, m.mode) == ("bass", "SENSOR_GAIN", "multiply")
     assert m.depth == pytest.approx(0.25) and m.gain == pytest.approx(1.5)
-    assert m.shaper.kind == "lfo" and m.shaper.rate_max == pytest.approx(9.0)
+    assert m.shaper.kind == "phase" and m.shaper.rate == pytest.approx(3.0)
     assert fresh.global_strength == pytest.approx(1.5)
     assert fresh.strengths["SENSOR_GAIN"] == pytest.approx(0.5)
+
+
+def test_a_rig_saved_with_an_lfo_row_loads_as_a_phase_shaper():
+    """The free-running oscillator is gone; a stored row must not silently
+    become 'none', which is a mapping that does nothing."""
+    fresh = AudioInState()
+    apply_dict(fresh, {"mappings": [{
+        "signal": "mid", "target": "SENSOR_GAIN", "mode": "add", "depth": 0.4,
+        "gain": 1.0, "enabled": True,
+        "shaper": {"kind": "lfo", "rate_min": 0.5, "rate_max": 12.0,
+                   "wave": "triangle"},
+    }]})
+    m = fresh.mappings[0]
+    assert m.shaper.kind == "phase"
+    assert m.shaper.wave == "triangle"
+    assert m.depth == pytest.approx(0.4)
+    # rate_max was already the Hz a full-scale band asks for, so it carries
+    # straight over; rate_min was the floor that made it run on silence.
+    assert m.shaper.rate == pytest.approx(12.0)
+
+
+def test_auto_gain_is_off_until_it_is_asked_for():
+    """It amplifies a room's noise floor to near full scale on every band."""
+    assert AudioInState().auto_gain is False
 
 
 def test_brain_mappings_round_trip_per_modality():

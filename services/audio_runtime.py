@@ -74,6 +74,9 @@ class AudioRuntime:
             ast.request_stop = False
             self.capture.stop()
             ast.enabled = False
+        # Every frame, not just at Start: the checkbox is the only escape from
+        # auto-gain, so it must take effect without a Stop/Start.
+        self.capture.set_auto_gain(ast.auto_gain)
         ast.status = self.capture.status
         # The panel is passive and owns no service, so the snapshot is handed
         # to it here rather than reached for through the capture thread.
@@ -148,8 +151,10 @@ class AudioRuntime:
         signals = {n: 1.0 for n in SIGNAL_COLORS}
         bases = {k: float(getattr(ui_state.sim, k, 0.0)) for k in targets}
         # The shapers are skipped rather than run from a throwaway state: a
-        # fresh one is mid-attack or mid-phase, which reported roughly half the
-        # swing an LFO or a smoothed mapping actually has.
+        # fresh one is mid-attack, or a phase that has not travelled yet, which
+        # reported a fraction of the swing the mapping really has. Face value
+        # is the right answer for every kind, because the hatching asks how far
+        # a mapping could reach and each of them reaches full scale eventually.
         full = modulate(bases, list(targets.values()), ast.mappings, signals,
                         dict(), ast.strengths, ast.global_strength, 1 / 60.0,
                         deaf, apply_shapers=False)
@@ -180,9 +185,10 @@ class AudioRuntime:
         modality = brains.get(ui_state.brain.modality)
 
         # Re-encode only when the base brain actually changes; encode() clips
-        # at the rails, so a round trip per frame would drift.
+        # at the rails, so a round trip per frame would drift. A SCALE change
+        # is deliberately NOT a change of base - see CLAUDE.md.
         arr = np.asarray(current_rule, dtype=np.float32).reshape(-1)
-        ident = (id(current_rule), arr.size,
+        ident = (id(current_rule), arr.size, layout.length,
                  float(arr[:8].sum()) if arr.size else 0.0)
         if ident != self._base_brain_id:
             self._brain.set_base(arr, modality, layout)
@@ -191,7 +197,10 @@ class AudioRuntime:
         targets = brain_targets(modality, layout)
         if not targets:
             return None
-        bases = self._brain.base_scales()
+        # The scales come from the layout that is live NOW, never from the one
+        # captured when audio adopted this brain - that is what keeps the Brain
+        # window's scale sliders working while a rig is running.
+        bases = {k: float(v) for k, v in layout.scales}
         moved = modulate(bases, targets, mappings, signals, self._states,
                          ast.strengths, ast.global_strength, dt,
                          muted_targets(ast, f"{ui_state.brain.modality}:"),

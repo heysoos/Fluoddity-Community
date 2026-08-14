@@ -177,6 +177,18 @@ class Analyzer:
         self._attack_k = _coeff(ATTACK_SECONDS, block_dt)
         self._seq = 0
 
+    def set_auto_gain(self, on: bool) -> None:
+        """Switch the gain while blocks are arriving.
+
+        The peaks are dropped on any change - they record a level the switch
+        has just made meaningless.
+        """
+        on = bool(on)
+        if on == self.auto_gain:
+            return
+        self.auto_gain = on
+        self._peaks.fill(_PEAK_FLOOR)
+
     def _normalise(self, raw: np.ndarray) -> np.ndarray:
         """raw is [bass, mid, presence, hi, volume]."""
         if not self.auto_gain:

@@ -131,7 +131,7 @@ def _bound_host(open_target="SENSOR_GAIN", open_band="bass"):
     ast.mappings.append(Mapping(signal="bass", target="SENSOR_GAIN"))
     ast.mappings.append(Mapping(signal="mid", target="SENSOR_GAIN",
                                 mode="multiply",
-                                shaper=ShaperParams(kind="lfo")))
+                                shaper=ShaperParams(kind="phase")))
     ast.open_target = open_target
     ast.open_band = open_band
     host.audio_overlays = {
@@ -177,7 +177,7 @@ def test_the_total_tab_renders_with_overlaid_traces():
     _draw(imgui, host)
 
 
-@pytest.mark.parametrize("kind", ["none", "smooth", "gate", "envelope", "lfo",
+@pytest.mark.parametrize("kind", ["none", "smooth", "gate", "envelope", "phase",
                                   "sample_hold"])
 def test_every_shaper_kind_renders_its_own_controls(kind):
     """Each kind exposes a different set of fields; a missing range entry would
@@ -275,21 +275,21 @@ def test_the_spectrum_colours_every_bar_by_a_real_band():
 # --- the drawer has to show what the shaper does -----------------------------
 
 def test_modulate_reports_each_mapping_post_shaper_signal():
-    """An LFO turns a steady band into an oscillation; a drawer drawing the
-    raw band would show none of that."""
+    """A phase shaper integrates a steady band into a travelling wave; a drawer
+    drawing the raw band would show none of that."""
     from services.audio_mapping import Mapping, TargetDef, modulate
     from services.audio_shapers import ShaperParams
 
     t = TargetDef("K", "K", "physics", 0.0, 1.0, None, None)
     m = Mapping(signal="bass", target="K",
-                shaper=ShaperParams(kind="lfo", rate_min=8.0, rate_max=8.0))
+                shaper=ShaperParams(kind="phase", rate=8.0, wave="sine"))
     states, seen = {}, []
     for _ in range(40):
         shaped = {}
         modulate({"K": 0.5}, [t], [m], {"bass": 0.5}, states, {}, 1.0,
                  1 / 60.0, set(), shaped)
         seen.append(shaped[m.uid])
-    assert max(seen) - min(seen) > 0.5, "the LFO's swing was not reported"
+    assert max(seen) - min(seen) > 0.5, "the shaper's travel was not reported"
 
 
 def test_modulate_reports_nothing_when_no_dict_is_offered():
@@ -497,7 +497,7 @@ def _with_popups_open(imgui, host, frames=2):
         imgui.begin_popup_context_item = real
 
 
-@pytest.mark.parametrize("kind", ["none", "smooth", "gate", "envelope", "lfo",
+@pytest.mark.parametrize("kind", ["none", "smooth", "gate", "envelope", "phase",
                                   "sample_hold"])
 def test_every_reset_menu_in_the_drawer_actually_renders(kind):
     """Covers Depth, Gain and whichever shaper fields this kind exposes."""
@@ -536,7 +536,7 @@ def test_a_reset_returns_the_dataclass_default():
     from services.audio_shapers import ShaperParams
     assert Mapping(signal="bass", target="K").depth == pytest.approx(0.5)
     assert Mapping(signal="bass", target="K").gain == pytest.approx(1.0)
-    assert ShaperParams().rate_max == pytest.approx(12.0)
+    assert ShaperParams().rate == pytest.approx(1.0)
 
 
 def test_the_panel_reads_its_snapshot_from_state_not_from_a_service():

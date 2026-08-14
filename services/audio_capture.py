@@ -100,6 +100,12 @@ class AudioCapture:
         with self._lock:
             return self._snapshot
 
+    def set_auto_gain(self, on: bool) -> None:
+        """Retune a RUNNING analyser. A no-op when nothing is capturing."""
+        analyzer = self._analyzer
+        if analyzer is not None:
+            analyzer.set_auto_gain(on)
+
     def _on_block(self, in_data, _frame_count, _time_info, _status):
         tap = self.tap
         if tap is not None:

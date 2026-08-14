@@ -45,7 +45,7 @@ SHAPER_FIELDS: dict[str, tuple[str, ...]] = {
     "smooth": ("attack", "release"),
     "gate": ("threshold", "hold"),
     "envelope": ("threshold", "release"),
-    "lfo": ("rate_min", "rate_max", "wave"),
+    "phase": ("rate", "wave"),
     "sample_hold": ("threshold",),
 }
 
@@ -54,8 +54,12 @@ _FIELD_RANGE: dict[str, tuple[float, float, str]] = {
     "release": (0.0, 2.0, "%.3f s"),
     "threshold": (0.0, 1.0, "%.2f"),
     "hold": (0.0, 1.0, "%.3f s"),
-    "rate_min": (0.0, 20.0, "%.2f Hz"),
-    "rate_max": (0.0, 30.0, "%.2f Hz"),
+    "rate": (0.0, 20.0, "%.2f Hz"),
+}
+
+_FIELD_TIP: dict[str, str] = {
+    "rate": "How fast the wave travels while the band is at full scale; a "
+            "quieter band moves it proportionally slower, and silence stops it.",
 }
 
 
@@ -223,7 +227,8 @@ class AudioReactiveWindowMixin:
         changed, value = imgui.checkbox("Auto Gain", ast.auto_gain)
         if changed:
             ast.auto_gain = value
-        self._delayed_tooltip("Normalises each band against its recent peak.")
+        self._delayed_tooltip("Normalises each band against its recent peak, "
+                              "which also lifts a quiet room's hiss.")
 
         changed, value = self._audio_slider("Strength", ast.global_strength,
                                             0.0, 2.0, "%.2f", 1.0)
@@ -495,6 +500,8 @@ class AudioReactiveWindowMixin:
                 float(getattr(ShaperParams(), fname)))
             if changed:
                 setattr(m.shaper, fname, value)
+            if fname in _FIELD_TIP:
+                self._delayed_tooltip(_FIELD_TIP[fname])
 
         # The raw band faint, and what the shaper makes of it bright over the
         # top - the difference between the two IS the shaper's effect, which is

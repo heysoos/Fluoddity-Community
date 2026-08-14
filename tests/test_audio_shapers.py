@@ -12,7 +12,7 @@ def drive(state, params, values, dt=DT):
 
 
 def test_the_six_kinds_are_named():
-    assert SHAPER_KINDS == ("none", "smooth", "gate", "envelope", "lfo",
+    assert SHAPER_KINDS == ("none", "smooth", "gate", "envelope", "phase",
                             "sample_hold")
 
 
@@ -75,23 +75,99 @@ def test_envelope_does_not_retrigger_while_the_signal_stays_high():
     assert out[-1] < out[3]      # decayed; a retrigger would keep it pinned
 
 
-def test_lfo_oscillates_and_a_louder_signal_makes_it_faster():
-    p = ShaperParams(kind="lfo", rate_min=1.0, rate_max=20.0, wave="sine")
-    slow = drive(ShaperState(), p, [0.0] * 60)
-    fast = drive(ShaperState(), p, [1.0] * 60)
-
-    def crossings(seq):
-        c = np.array(seq) - 0.5
-        return int(np.count_nonzero(np.diff(np.sign(c)) != 0))
-
-    assert crossings(fast) > crossings(slow)
-    assert all(0.0 <= v <= 1.0 for v in slow + fast)
+def test_the_band_drives_the_phase_RATE_not_the_phase_itself():
+    """An INTEGRATOR: a steady note keeps the wave moving rather than parking
+    it. This is the whole difference from a plain waveshaper."""
+    p = ShaperParams(kind="phase", rate=4.0)
+    out = drive(ShaperState(), p, [0.5] * 120)
+    assert max(out) - min(out) > 0.9, "a held note should keep it cycling"
 
 
-def test_lfo_runs_even_when_the_signal_is_silent():
-    """rate_min is a floor, so the oscillator never stops dead."""
-    out = drive(ShaperState(), ShaperParams(kind="lfo", rate_min=4.0), [0.0] * 60)
-    assert max(out) - min(out) > 0.5
+def test_the_phase_only_ever_goes_forward():
+    """dphase = band, and the band cannot be negative, so it lurches forward
+    and never rewinds however the music moves."""
+    s = ShaperState()
+    p = ShaperParams(kind="phase", rate=1.0, wave="ramp")
+    rng = np.random.default_rng(0)
+    seen = []
+    for x in rng.random(200):
+        s.apply(float(x), DT, p)
+        seen.append(s._phase)
+    # A ramp wraps at 1.0; unwrap before checking monotonicity.
+    unwrapped = np.unwrap(np.asarray(seen) * 2 * np.pi) / (2 * np.pi)
+    assert np.all(np.diff(unwrapped) >= -1e-9)
+
+
+@pytest.mark.parametrize("wave", ("sine", "triangle", "ramp"))
+def test_a_silent_band_FREEZES_the_wave_where_it_stands(wave):
+    """Not back to zero - frozen. The complaint was MOTION with the music off,
+    and a stopped integrator is motionless wherever it happens to be."""
+    s = ShaperState()
+    p = ShaperParams(kind="phase", rate=6.0, wave=wave)
+    drive(s, p, [0.8] * 20)                    # music runs the phase along
+    held = drive(s, p, [0.0] * 120)            # and then stops
+    assert len(set(held)) == 1, "the wave kept moving on silence"
+
+
+def test_a_never_driven_phase_shaper_contributes_nothing():
+    """Phase starts at zero and every wave starts at zero, so a rig that has
+    heard nothing yet leaves the parameter on the user's own value."""
+    for wave in ("sine", "triangle", "ramp"):
+        p = ShaperParams(kind="phase", rate=6.0, wave=wave)
+        assert drive(ShaperState(), p, [0.0] * 60) == [0.0] * 60, wave
+
+
+def test_rate_is_cycles_per_second_at_a_full_scale_band():
+    s = ShaperState()
+    p = ShaperParams(kind="phase", rate=3.0)
+    for _ in range(60):                        # one second at full scale
+        s.apply(1.0, 1 / 60.0, p)
+    assert s._phase == pytest.approx(0.0, abs=1e-6)   # 3.0 cycles, wrapped
+    s2 = ShaperState()
+    for _ in range(30):                        # half a second
+        s2.apply(1.0, 1 / 60.0, p)
+    assert s2._phase == pytest.approx(0.5, abs=1e-6)  # 1.5 cycles
+
+
+def test_half_a_band_advances_half_as_far():
+    def phase_after(x):
+        s = ShaperState()
+        p = ShaperParams(kind="phase", rate=1.0)
+        for _ in range(30):
+            s.apply(x, 1 / 60.0, p)
+        return s._phase
+
+    assert phase_after(0.5) == pytest.approx(phase_after(1.0) / 2, abs=1e-6)
+
+
+def test_the_phase_advance_depends_on_elapsed_time_not_frame_count():
+    """Or a slow render would advance the wave less per second of music than a
+    fast one, and a recording would not match what was on screen."""
+    coarse = ShaperState()
+    fine = ShaperState()
+    p = ShaperParams(kind="phase", rate=2.0)
+    for _ in range(10):
+        coarse.apply(0.7, 1 / 30.0, p)
+    for _ in range(20):
+        fine.apply(0.7, 1 / 60.0, p)
+    assert coarse._phase == pytest.approx(fine._phase, abs=1e-6)
+
+
+def test_no_shaper_moves_on_its_own_when_the_band_is_silent():
+    """The rule the free-running LFO broke. NOT 'silence gives zero' - a
+    stopped integrator holds a non-zero value quite legitimately - but that
+    silence generates no MOTION. Derived from SHAPER_KINDS, so a kind added
+    later cannot skip it."""
+    for kind in SHAPER_KINDS:
+        s = ShaperState()
+        p = ShaperParams(kind=kind)
+        drive(s, p, [0.9] * 30)                # give it something to remember
+        settled = drive(s, p, [0.0] * 600)     # long enough for any release
+        tail = settled[-120:]
+        # A tolerance, not equality: `smooth` converges on its target rather
+        # than arriving, so it is still creeping by ~1e-18. The oscillation
+        # this rules out swung the whole 0..1.
+        assert max(tail) - min(tail) < 1e-9, kind
 
 
 def test_sample_hold_latches_until_the_next_crossing():

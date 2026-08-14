@@ -1,15 +1,18 @@
 """Per-mapping shaping of a signal before the modulation maths.
 
-Every shaper takes a value in [0,1] and returns one in [0,1]. State is per
-mapping, because the same band commonly drives one target directly and another
-through an oscillator.
+Every shaper takes a value in [0,1] and returns one in [0,1], and NONE of them
+moves on its own while the band is silent. That is not the same as answering
+silence with zero: a stopped integrator, like a latched sample-and-hold, holds
+a perfectly good non-zero value. What no shaper may do is generate motion from
+nothing. State is per mapping, because the same band commonly drives one target
+directly and another through an envelope.
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 
-SHAPER_KINDS: tuple[str, ...] = ("none", "smooth", "gate", "envelope", "lfo",
+SHAPER_KINDS: tuple[str, ...] = ("none", "smooth", "gate", "envelope", "phase",
                                  "sample_hold")
 
 
@@ -20,8 +23,7 @@ class ShaperParams:
     release: float = 0.25       # seconds to fall
     threshold: float = 0.5      # gate / envelope / sample-hold trigger level
     hold: float = 0.05          # seconds a gate stays open after falling below
-    rate_min: float = 0.5       # LFO Hz at signal 0
-    rate_max: float = 12.0      # LFO Hz at signal 1
+    rate: float = 1.0           # phase cycles per second at a full-scale band
     wave: str = "sine"          # "sine" | "triangle" | "ramp"
 
 
@@ -33,11 +35,13 @@ def _coeff(seconds: float, dt: float) -> float:
 
 
 def _wave(phase: float, wave: str) -> float:
+    """Every shape starts at ZERO, so a rig that has heard nothing contributes
+    nothing."""
     if wave == "triangle":
         return 1.0 - abs(2.0 * (phase % 1.0) - 1.0)
     if wave == "ramp":
         return phase % 1.0
-    return 0.5 + 0.5 * math.sin(2.0 * math.pi * phase)
+    return 0.5 - 0.5 * math.cos(2.0 * math.pi * phase)
 
 
 class ShaperState:
@@ -83,9 +87,12 @@ class ShaperState:
                 self._value -= self._value * _coeff(p.release, dt)
             return min(1.0, max(0.0, self._value))
 
-        if kind == "lfo":
-            rate = p.rate_min + (p.rate_max - p.rate_min) * x
-            self._phase = (self._phase + rate * dt) % 1.0
+        if kind == "phase":
+            # The band is INTEGRATED: it drives how fast the phase moves, not
+            # where the phase is. So it only ever lurches forward, a held note
+            # keeps the wave cycling, and silence stops it dead wherever it had
+            # got to rather than dragging the parameter back.
+            self._phase = (self._phase + x * p.rate * dt) % 1.0
             return min(1.0, max(0.0, _wave(self._phase, p.wave)))
 
         if kind == "sample_hold":

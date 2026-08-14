@@ -632,6 +632,66 @@ mechanics these caveats assume.
   the shapers that were waiting there. Guarded by `tests/test_audio_mapping.py`
   and `tests/test_audio_runtime.py`.
 
+- **NO shaper may generate MOTION from silence, which is NOT the same as
+  answering silence with zero.** A latched sample-and-hold and a stopped
+  integrator both sit on a perfectly good non-zero value; what none of them may
+  do is MOVE while the band is dead. The old `lfo` did: it drove the rate from
+  the band but floored that rate at `rate_min` (0.5 Hz), so a dead-zero band
+  still swung the full 0..1 forever — a rig that modulated hardest with the
+  music off. It was deliberate, and
+  `test_lfo_runs_even_when_the_signal_is_silent` asserted it. The FLOOR was the
+  defect; driving the rate from the band was right. Guarded by
+  `test_no_shaper_moves_on_its_own_when_the_band_is_silent`, derived from
+  `SHAPER_KINDS` so a kind added later cannot skip it — and asserting a
+  TOLERANCE rather than equality, because `smooth` converges on its target
+  instead of arriving and is still creeping by ~1e-18.
+
+- **`phase` INTEGRATES the band: `dphase = band * rate * dt`, so it only ever
+  lurches forward.** The band sets how fast the wave TRAVELS, never where it
+  sits — which is the whole difference from a waveshaper that maps level
+  straight onto phase. A held note therefore keeps it cycling rather than
+  parking it, and silence stops it DEAD WHEREVER IT HAD GOT TO rather than
+  dragging the parameter back to base. Measured over a track that plays, stops
+  and resumes: loud (0.9) travels a full sweep, quiet (0.2) travels 0.345 of
+  one in the same time, silence holds at exactly 0.345 with zero travel, and
+  the next loud passage carries on from there. `rate` is cycles per second at a
+  full-scale band, which is literally the old `rate_max` — so a stored `lfo`
+  row carries its rate straight across and loses only the floor. Two things are
+  load-bearing: the advance is scaled by `dt` and NOT per frame, or a slow
+  render moves the wave less per second of music than a fast one; and `_wave`
+  starts at ZERO for all three shapes, so a phase still at 0 — a rig that has
+  heard nothing — contributes nothing.
+
+- **Auto-gain divides each band by a peak the signal REACHES, so any steady
+  input normalises to its own top — it ships OFF.** `np.maximum(peaks, raw)`
+  puts the peak at the signal, and the 0.9995/block decay only matters on the
+  way down, so the output for steady material is 1.0 by construction whatever
+  its level. Measured on `mid`: a −50 dB room hiss reads raw 0.229 and gained
+  **0.962**; a −70 dB hiss reads raw 0.003 and gained **0.554**, swinging the
+  whole range; real material (a −12 dB kick loop) reads 0.735. There is no gap
+  between a room and a track, so the feature cannot be tuned into correctness —
+  `AudioInState.auto_gain` is therefore `False` and the checkbox is the escape
+  hatch. Only digital silence is safe, which is why a loopback endpoint with the
+  music off looks clean and a microphone does not, and why this survived:
+  `tools/measure_audio_response` passed `auto_gain=False` in every case. It now
+  prints the table. The checkbox is pushed to the analyser EVERY frame rather
+  than at Start, or the only way out needs a Stop/Start; the peaks are dropped
+  on the switch, since they record a level that has gone.
+
+- **The audio brain's base scales come from the LIVE layout, and its `z` is
+  never re-encoded on a scale change.** The Brain window's scale sliders and
+  the rig write the same slot, and `_apply_brain_layout` handles a scales-only
+  change with `sim.set_brain_scales` — which re-decodes from the sim's stored
+  `z` and does NOT touch `rule_manager`. So the rule the rig is handed is the
+  pre-drag one, and anchoring to the layout captured when audio adopted the
+  brain put that brain back every frame: dragging MLP Weight Scale 1.0 → 4.0
+  wrote p90|w| 1.5895 and the rig overwrote it with 0.4141. Re-encoding is NOT
+  the fix and makes it worse — `decode(encode(P, new), new)` is `P`, the very
+  brain that was on screen before the slider moved. Keep the first `z`, take
+  the scales off the layout that is live now. `layout.length` is in
+  `_base_brain_id` so a WIDTH change still forces a re-encode; the scales
+  deliberately are not.
+
 - **`imgui.ini` is shared between the app and the test suite, and the tests
   must not read or write it.** Dear ImGui persists every window's size in
   `create_context`/`destroy_context`, so the tests saved a layout and consumed

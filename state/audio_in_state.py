@@ -32,7 +32,10 @@ class AudioInState:
     show_window: bool = False           # is the panel open
 
     device_name: str = ""               # last chosen input, by name
-    auto_gain: bool = True
+    # Off by default: it normalises each band against its own running peak,
+    # which any steady input reaches, so a quiet room reads near full scale on
+    # every band. See the audio caveats in CLAUDE.md.
+    auto_gain: bool = False
 
     # Physics mappings, and brain mappings keyed by modality name so a rig
     # built for one brain is waiting when you switch back to it.
@@ -85,10 +88,19 @@ def _mapping_to_dict(m: Mapping) -> dict:
         "shaper": {
             "kind": m.shaper.kind, "attack": m.shaper.attack,
             "release": m.shaper.release, "threshold": m.shaper.threshold,
-            "hold": m.shaper.hold, "rate_min": m.shaper.rate_min,
-            "rate_max": m.shaper.rate_max, "wave": m.shaper.wave,
+            "hold": m.shaper.hold, "rate": m.shaper.rate,
+            "wave": m.shaper.wave,
         },
     }
+
+
+# A rig written before the free-running oscillator became an integrator. Its
+# `rate_max` was already the Hz a full-scale band asks for, so it IS the new
+# `rate`; `rate_min` was the floor that made the thing run on silence and has
+# no counterpart.
+_RENAMED_KINDS = {"lfo": "phase"}
+_RENAMED_FLOATS = {"rate_max": "rate"}
+_SHAPER_FLOATS = ("attack", "release", "threshold", "hold", "rate")
 
 
 def _mapping_from_dict(d) -> Mapping | None:
@@ -107,12 +119,12 @@ def _mapping_from_dict(d) -> Mapping | None:
     sd = d.get("shaper") or {}
     shaper = ShaperParams()
     if isinstance(sd, dict):
-        kind = sd.get("kind", "none")
+        kind = _RENAMED_KINDS.get(sd.get("kind"), sd.get("kind", "none"))
+        sd = {_RENAMED_FLOATS.get(k, k): v for k, v in sd.items()}
         shaper = replace(
             shaper,
             kind=kind if kind in SHAPER_KINDS else "none",
-            **{k: float(sd[k]) for k in
-               ("attack", "release", "threshold", "hold", "rate_min", "rate_max")
+            **{k: float(sd[k]) for k in _SHAPER_FLOATS
                if isinstance(sd.get(k), (int, float))},
         )
         if isinstance(sd.get("wave"), str):
