@@ -83,6 +83,25 @@ class PreferencesState:
     archive_name: str = "default"  # which Documents/Fluoddity/archives/<name> Explore mode loads
 
 
+# Undo classification. See state/sim_state.py for the same pair. Window
+# visibility and panel collapse are excluded wholesale: opening a panel must
+# never become an undo step.
+_VISIBILITY_PREFIXES = ("show_", "physics_group_", "load_menu_")
+
+NOT_UNDOABLE: dict[str, str] = {
+    **{f: "window visibility or panel collapse state"
+       for f in PreferencesState.__dataclass_fields__
+       if f.startswith(_VISIBILITY_PREFIXES)},
+    "advanced_drawing_enabled": "window visibility or panel collapse state",
+    "physics_tooltips_enabled": "UI chrome, not the look of the simulation",
+    "mouse_mode": "tool selection, not a change to the creature",
+    "archive_name": "names an external archive; switching it reloads the store",
+}
+
+UNDOABLE_FIELDS: tuple[str, ...] = tuple(
+    f for f in PreferencesState.__dataclass_fields__ if f not in NOT_UNDOABLE)
+
+
 def save_preferences(prefs: PreferencesState, filepath: Path | str = None) -> None:
     """Save preferences to a JSON file."""
     if filepath is None:
