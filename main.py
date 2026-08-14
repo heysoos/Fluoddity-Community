@@ -97,6 +97,11 @@ class App:
 
         # Create services (Orchestrator owns these)
         self.rule_manager = RuleManager()
+        from services.undo_history import UndoHistory
+
+        self.undo_history = UndoHistory()
+        self._undo_preview_base = None
+        self._undo_preview_showing = -1
         entity_stride = SIZE_OF_ENTITY_STRUCT // 4
         self.entity_picker = EntityPicker(self.sim.get_entity_buffer(), entity_stride)
         self.video_service = VideoRecorderService()
@@ -936,6 +941,10 @@ class App:
             expl.history_rows = (self.archive_store.load_history()
                                  if self.archive_store is not None else [])
 
+        # Undo/redo, before the commands: a restored preset must be applied in
+        # the same frame the key was pressed.
+        self._handle_undo(ui_state)
+
         # 2. Process one-shot commands
         result = self.command_handler.process_commands(ui_state, tiling_mode)
         if result == 'screenshot_pending' and not self.screenshot_pending and not self.screenshot_in_progress:
@@ -1007,6 +1016,11 @@ class App:
         self.sim.apply_camera_state(ui_state.camera)
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)
+        # The step reflects the state the frame actually ran under. BEFORE the
+        # preview, whose writes would otherwise commit as steps of their own.
+        self._record_undo_step(ui_state)
+        self._handle_undo_preview(ui_state)
+        self._push_undo_rows(ui_state)
         _auto_svc = self.auto_service
         # Auto and Explore are mutually exclusive; either counts as "running".
         _auto_on = ui_state.auto_tournament.enabled or ui_state.archive.enabled
@@ -1285,6 +1299,83 @@ class App:
             ui_state, self._auto_prev_aspect, self._auto_prev_speedmult,
             self._auto_prev_motion_blur,
             prev_hue=getattr(self, "_auto_prev_hue", None))
+
+    def _handle_undo(self, ui_state):
+        """Ctrl+Z / Ctrl+Shift+Z, and a click in the history panel."""
+        from services import undo_history as uh
+
+        target = None
+        if ui_state.request_undo:
+            target = self.undo_history.undo()
+            if target is None:
+                ui_state.undo_notice = "Nothing to undo"
+        elif ui_state.request_redo:
+            target = self.undo_history.redo()
+            if target is None:
+                ui_state.undo_notice = "Nothing to redo"
+        elif ui_state.undo_jump_index >= 0:
+            target = self.undo_history.jump(ui_state.undo_jump_index)
+        ui_state.undo_jump_index = -1
+        if target is None:
+            return
+
+        skipped = self.command_handler.apply_undo_snapshot(target, ui_state)
+        ui_state.undo_notice = (
+            f"{target.label} - settings only, the grid's owner keeps the brain"
+            if skipped else target.label)
+        # Re-baseline, or the next frame reads this restore as a fresh change.
+        self.undo_history.rebase(
+            uh.capture(ui_state, self.rule_manager.get_current_rule(),
+                       self.sim.brain_layout))
+
+    def _record_undo_step(self, ui_state):
+        """Commit a step if anything declared changed and no widget is active."""
+        from services import undo_history as uh
+
+        if ui_state.any_widget_active:
+            return
+        snap = uh.capture(ui_state, self.rule_manager.get_current_rule(),
+                          self.sim.brain_layout)
+        held = self.undo_history.current()
+        if held is not None and uh.same(held, snap):
+            return
+        self.undo_history.commit(snap)
+
+    def _handle_undo_preview(self, ui_state):
+        """Apply the hovered step, and put the live state back on un-hover.
+
+        The state before the FIRST hover is what a restore returns to;
+        re-hovering another row keeps it, because sliding down the list hovers
+        several rows with no gap in between.
+        """
+        from services import undo_history as uh
+
+        wanted = ui_state.undo_preview_index
+        if wanted == self._undo_preview_showing:
+            return
+        if self._undo_preview_base is None and wanted >= 0:
+            self._undo_preview_base = uh.capture(
+                ui_state, self.rule_manager.get_current_rule(),
+                self.sim.brain_layout)
+
+        step = (self.undo_history.steps[wanted]
+                if 0 <= wanted < len(self.undo_history.steps) else None)
+        if step is None:
+            if self._undo_preview_base is not None:
+                self.command_handler.apply_undo_snapshot(
+                    self._undo_preview_base, ui_state)
+                self._undo_preview_base = None
+        else:
+            self.command_handler.apply_undo_snapshot(step, ui_state)
+        self._undo_preview_showing = wanted
+
+    def _push_undo_rows(self, ui_state):
+        """Hand the panel its rows. The UI is passive and owns no journal."""
+        history = self.undo_history
+        self.ui.undo_steps = [
+            (i, s.label, i > history.cursor)
+            for i, s in enumerate(history.steps)]
+        self.ui.undo_cursor = history.cursor
 
     @staticmethod
     def _step(label, fn, *args, **kwargs):

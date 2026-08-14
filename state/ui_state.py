@@ -60,6 +60,18 @@ class UIState:
     request_camera_reset: bool = False
     request_clear_canvas_and_fields: bool = False
 
+    # Undo/redo. any_widget_active is written by the UI inside its own ImGui
+    # frame; a capture is deferred while it holds, which is what makes a whole
+    # drag one step. undo_jump_index is a one-shot; -1 is none.
+    request_undo: bool = False
+    request_redo: bool = False
+    undo_jump_index: int = -1
+    any_widget_active: bool = False
+    undo_notice: str = ""
+    # Which step the pointer is over, or -1. CONTINUOUS, not a one-shot: a
+    # panel that stops being drawn would otherwise strand the preview.
+    undo_preview_index: int = -1
+
     # Config save/load (Ctrl+C/Ctrl+V)
     request_save_config: bool = False
     request_load_config: bool = False

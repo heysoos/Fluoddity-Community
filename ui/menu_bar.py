@@ -339,6 +339,15 @@ class MenuBarMixin:
                     self.state.archive.open_browser_requested = want
                 self._delayed_tooltip("Browse saved creatures and preview them live.")
 
+                # Every change you have made this session, newest first.
+                changed, want = imgui.checkbox(
+                    "Undo History",
+                    self.show_undo_window
+                )
+                if changed:
+                    self.show_undo_window = want
+                self._delayed_tooltip("Browse every change you have made, and step back to one.")
+
                 # Which function the particles' brains actually compute
                 _, self.state.brain.enabled = imgui.checkbox(
                     "Brain Modality",

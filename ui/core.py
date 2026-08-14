@@ -21,6 +21,7 @@ from .help_windows import HelpWindowsMixin
 from .slider_widgets import SliderWidgetsMixin
 from .config_browser import ConfigBrowserMixin
 from .history_window import HistoryWindowMixin
+from .undo_window import UndoWindowMixin
 from .preferences_window import PreferencesWindowMixin
 from .menu_bar import MenuBarMixin
 from .physics_window import PhysicsWindowMixin
@@ -46,6 +47,7 @@ class UI(
     PopupModalsMixin,
     PhysicsWindowMixin,
     HistoryWindowMixin,
+    UndoWindowMixin,
     ConfigBrowserMixin,
     SliderWidgetsMixin,
     AdvancedDrawingWindowMixin,
@@ -96,6 +98,10 @@ class UI(
 
         # Config clipboard state
         self.show_history_window = False  # Toggled by Extras menu
+        self.show_undo_window = False  # Toggled by Extras menu
+        # Pushed by the orchestrator each frame: (index, label, is_redo).
+        self.undo_steps = []
+        self.undo_cursor = -1
         self.config_clipboard: list[tuple] = []  # [(PhysicsConfig, display_label, field_snapshot), ...]
         self.clipboard_counter: int = 0  # Global jersey counter (00, 01, 02...)
         self.clipboard_previewing_index: int | None = None
@@ -196,6 +202,8 @@ class UI(
         self._request_screenshot = False
         self._request_save_config = False
         self._request_load_config = False
+        self._request_undo = False
+        self._request_redo = False
         self._request_save_file = False
         self._request_load_file = False
         self._request_delete_file = False
@@ -367,8 +375,17 @@ class UI(
             ctrl_pressed = mods & glfw.MOD_CONTROL
             shift_pressed = mods & glfw.MOD_SHIFT
 
+            # Undo/redo first: Z is also bound to randomize_rules, which is
+            # tested without a modifier further down this chain.
+            if ctrl_pressed and key == self.keybindings.get_key("undo_with_ctrl"):
+                if shift_pressed:
+                    self._request_redo = True
+                else:
+                    self._request_undo = True
+            elif ctrl_pressed and key == self.keybindings.get_key("redo_with_ctrl"):
+                self._request_redo = True
             # Config save/load with Ctrl+C/Ctrl+V
-            if ctrl_pressed and key == self.keybindings.get_key("copy_config_with_ctrl"):
+            elif ctrl_pressed and key == self.keybindings.get_key("copy_config_with_ctrl"):
                 self._request_save_config = True
             elif ctrl_pressed and key == self.keybindings.get_key("paste_config_with_ctrl"):
                 self._request_load_config = True
@@ -453,6 +470,8 @@ class UI(
         self.state.request_screenshot = self._request_screenshot
         self.state.request_save_config = self._request_save_config
         self.state.request_load_config = self._request_load_config
+        self.state.request_undo = self._request_undo
+        self.state.request_redo = self._request_redo
         self.state.request_save_file = self._request_save_file
         self.state.request_load_file = self._request_load_file
         self.state.request_delete_file = self._request_delete_file
@@ -515,6 +534,8 @@ class UI(
         self._request_screenshot = False
         self._request_save_config = False
         self._request_load_config = False
+        self._request_undo = False
+        self._request_redo = False
         self._request_save_file = False
         self._request_load_file = False
         self._request_delete_file = False
@@ -691,6 +712,9 @@ class UI(
         if self.show_sidebar and self.show_history_window:
             self.render_history_window()
 
+        if self.show_undo_window:
+            self.render_undo_window()
+
         # Render Advanced Drawing window if enabled (hidden when windows toggled off)
         if self.show_sidebar and self.state.preferences.advanced_drawing_enabled:
             self.render_advanced_drawing_window()
@@ -713,6 +737,9 @@ class UI(
 
         # End dockspace window
         imgui.end()
+
+        # Read inside the frame: orchestrate_frame runs between frames.
+        self.state.any_widget_active = imgui.is_any_item_active()
 
         imgui.render()
         self.imgui_renderer.render(imgui.get_draw_data())
