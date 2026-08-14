@@ -1,6 +1,8 @@
 from .save_frame_gpu import save_frame_gpu, reset_gpu_frame_counter
 from .ffmpeg_recorder import FFmpegVideoRecorder
 from .paths import get_videos_dir
+from services.record_crop import record_sizes, world_crop
+from services.record_view import RecordView
 from datetime import datetime
 
 class VidSaver:
@@ -9,30 +11,38 @@ class VidSaver:
         self.current_frame = 0
         self.recorder = None
         self.ssk_w = 2
+        # Built on the first frame of a take and held for its whole length -
+        # the encoder cannot take a dimension change, so the size is frozen
+        # even though the crop rect is re-derived every frame.
+        self.view = None
+        self._source_size = None
 
-    def frame(self, ctx, tex, max_frames=-1, ssk_w=2, filename_prefix=""):
+    def _plan(self, tex, ssk_w, view_rect):
+        """(blit target size or None, video size) for a take starting now."""
+        if view_rect is None:
+            width, height = tex.size
+            return None, (width // ssk_w, height // ssk_w)
+        return record_sizes(world_crop(view_rect), tex.size, ssk_w)
+
+    def frame(self, ctx, tex, max_frames=-1, ssk_w=2, filename_prefix="",
+              view_rect=None):
         if not self.active:
             return
 
-        # Calculate current output dimensions
-        width, height = tex.size
-        output_width = width // ssk_w
-        output_height = height // ssk_w
+        fbo_size, (output_width, output_height) = self._plan(tex, ssk_w,
+                                                             view_rect)
 
-        # Initialize recorder on first frame OR if dimensions/settings changed
-        # Compare against input dimensions (not padded dimensions)
-        if self.recorder is None or (
-            self.recorder.input_width != output_width or
-            self.recorder.input_height != output_height or
-            self.ssk_w != ssk_w
-        ):
-            # If recorder exists but settings changed, close it and warn user
+        # Restart on a settings change. A cropped take is immune to a window
+        # resize, because its output size no longer tracks the window.
+        source_changed = view_rect is None and self._source_size != tex.size
+        if self.recorder is None or self.ssk_w != ssk_w or source_changed:
             if self.recorder is not None:
                 print(f"WARNING: Recording settings changed mid-recording!")
                 print(f"  Old: {self.recorder.input_width}x{self.recorder.input_height}, ssk={self.ssk_w}")
                 print(f"  New: {output_width}x{output_height}, ssk={ssk_w}")
                 print(f"  Finishing current video and starting new one...")
                 self.recorder.close()
+                self._release_view()
 
             # Create timestamped filename in Videos folder
             timestamp = datetime.now().strftime('%H-%M-%S')
@@ -48,8 +58,16 @@ class VidSaver:
                 output_path=output_path,
                 realtime=False
             )
+            if fbo_size is not None:
+                self.view = RecordView(ctx, fbo_size)
             self.ssk_w = ssk_w
+            self._source_size = tex.size
             self.current_frame = 0  # Reset frame counter for new recording
+
+        # Trim to the world before readback, so empty space around the canvas
+        # never reaches the file.
+        if self.view is not None:
+            tex = self.view.crop(tex, view_rect)
 
         # Process frame with GPU (spatial supersampling only)
         # Temporal accumulation and gamma correction happen in FrameAssembler before this
@@ -63,6 +81,11 @@ class VidSaver:
         if max_frames > 0 and self.current_frame >= max_frames:
             self.finish()
 
+    def _release_view(self):
+        if self.view is not None:
+            self.view.release()
+            self.view = None
+
     def finish(self):
         '''Save video and reset everything for another recording'''
 
@@ -70,7 +93,8 @@ class VidSaver:
             self.recorder.close()
             self.recorder = None
 
+        self._release_view()
+        self._source_size = None
         reset_gpu_frame_counter()
         self.current_frame = 0
         self.active = False
-                

@@ -28,7 +28,8 @@ class VideoRecorderService:
         else:
             self.start()
 
-    def process_frame(self, ctx, texture, max_frames: int, ssk_w: int, filename_prefix: str = "") -> None:
+    def process_frame(self, ctx, texture, max_frames: int, ssk_w: int,
+                      filename_prefix: str = "", view_rect=None) -> None:
         """Process a frame if recording is active.
 
         Args:
@@ -36,8 +37,12 @@ class VideoRecorderService:
             max_frames: Maximum frames to record
             ssk_w: Spatial supersample kernel width
             filename_prefix: Custom filename prefix (empty = use "animation")
+            view_rect: The canvas rect recorded with this texture. The frame is
+                trimmed to it, so empty space around the world never reaches
+                the file. None records the whole texture.
         """
-        self.recorder.frame(ctx, texture, max_frames, ssk_w, filename_prefix)
+        self.recorder.frame(ctx, texture, max_frames, ssk_w, filename_prefix,
+                            view_rect)
 
     def cleanup(self) -> None:
         """Cleanup resources."""

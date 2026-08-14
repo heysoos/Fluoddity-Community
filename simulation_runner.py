@@ -339,7 +339,8 @@ class SimulationRunner:
                 assembled_tex,
                 ui_state.preferences.max_frames,
                 ui_state.preferences.supersample_k,
-                ui_state.preferences.filename_prefix
+                ui_state.preferences.filename_prefix,
+                self.camera.assembled_view_rect,
             )
 
     def _run_with_motion_blur(self, ui_state, speedmult, draw_mode,
