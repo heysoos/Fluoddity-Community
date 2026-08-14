@@ -280,7 +280,18 @@ class ImgepDriver:
 
         Encoded under the SPEC's layout - the brain that is running - and only
         ever called on a native row, because that is the only kind of genome
-        this z is going to be mutated as."""
+        this z is going to be mutated as.
+
+        Stated as a check because it used to be stated only as a comment: a
+        foreign row reached this and surfaced as a reshape error inside
+        whichever modality happened to be running, several frames of stack away
+        from the sampler that chose it.
+        """
+        if not self.archive.is_native(i):
+            raise ValueError(
+                f"seed row {i} is a {self.archive.layout_at(i)} genome, but "
+                f"{self.spec.layout.signature()} is running; the sampler that "
+                f"chose it must filter through Archive.native_rows()")
         zb, _clamped = encode(self.archive.brain_at(i), self.spec.layout)
         if self.spec.dim <= len(zb):
             return zb[: self.spec.dim].astype(np.float32)
@@ -317,7 +328,13 @@ class ImgepDriver:
         """
         emb = (None if embedding is None
                else np.asarray(embedding, dtype=np.float32))
-        if seed_index is not None and 0 <= int(seed_index) < len(self.archive):
+        # NATIVE as well as in range. A seed becomes the optimizer's mean and is
+        # re-encoded under the running layout, so a row belonging to another
+        # brain is not a worse start but an unreadable one - and an archive
+        # pools every layout. A goal that names one falls through to
+        # _seed_index, which filters, exactly as an out-of-range index does.
+        if (seed_index is not None and 0 <= int(seed_index) < len(self.archive)
+                and self.archive.is_native(int(seed_index))):
             i = int(seed_index)
         elif emb is None:
             return False            # nothing to point at and nowhere to start

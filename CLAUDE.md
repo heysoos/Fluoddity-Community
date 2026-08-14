@@ -1067,6 +1067,24 @@ mechanics these caveats assume.
   is refused — which breaks the ordinary same-brain preview, not just the
   cross-brain one.
 
+- **EVERY sampler that picks a PARENT OR A SEED must filter through
+  `native_rows()`, and `novelty_goal` is where that was missed.** An archive
+  pools every layout, so most of what it holds may be another brain's — and a
+  seed becomes the optimizer's mean, re-encoded under the running layout, so a
+  foreign row is not a worse start but an unreadable one. `_ask_expansion` and
+  `_seed_index` both filtered; `novelty_goal` sampled `archive.entries` whole
+  and is the ONE goal kind that carries its own `seed_index`, which
+  `start_expedition_with` then bounds-checked but did not test for nativeness.
+  It killed a 2.5-hour overnight run inside Fourier's `encode` — "cannot
+  reshape array of size 71 into shape (10,8)", 71 being an `mlp-n3.4.4`
+  genome — and it is inherently **probabilistic**: the foreign entries were 5%
+  of the archive, so it took 2.5 hours to draw one. A mixed archive is the
+  normal case, not the exotic one, because changing brain mid-run leaves the
+  previous layout's entries in place. `_parent_z` now RAISES on a foreign row
+  rather than letting it reach a modality's reshape, since the old message
+  named neither the sampler nor the layouts. Guarded by
+  `tests/test_novelty_goals.py`.
+
 ### The MLP layer stack
 
 - **`MAX_MLP_WIDTH` is COMPILED PER LAYOUT, and that is the only reason a deep
