@@ -31,8 +31,8 @@ In scope:
   settings.
 - `AudioInState`: exactly its existing `PERSISTED_FIELDS` — mappings, brain
   mappings, strengths, global strength, auto gain, device, modulate, muted.
-  That state lives on the `audio-reactive` worktree and is covered the moment
-  it merges; no undo-side change is needed then beyond one declaration.
+  That state lives on the `audio-reactive` worktree and needs one prerequisite
+  there before it can join; see the `Mapping` uid section below.
 - The rule, its brain layout signature, and the brain's decode settings.
 
 **Out of scope, deliberately.** Each of these was considered and excluded, so
@@ -127,6 +127,41 @@ re-baseline would see its own undo as a fresh change on the next frame and
 commit it — every undo appending a step, and the history growing in the
 direction it was asked to shrink. The same applies to a preview and to its
 restore.
+
+### A prerequisite on the audio branch: `Mapping` needs a stable id
+
+`services/audio_mapping.modulate` keys per-mapping shaper state by
+`states.setdefault(id(m), ShaperState())`, and `AudioRuntime._states` is a bare
+`dict[int, object]` that is never pruned. **`id()` is the address, and CPython
+hands the same address straight back** — 1999 collisions over 2000
+create/delete cycles of a `Mapping`, measured 2026-08-14.
+
+That breaks undo: a snapshot holds deep copies, a deep copy has a new `id()`,
+so restoring one mints fresh `ShaperState`s and every envelope re-attacks and
+every LFO jumps phase. The same applies to a hover preview.
+
+It is **also a defect independent of undo**. `_render_audio_row` calls
+`mappings.remove(existing)` and nothing prunes `_states`, so the orphaned entry
+survives and the next mapping added can be allocated at the freed address and
+inherit the deleted row's envelope and LFO phase — starting mid-attack for no
+visible reason. Other allocations intervene in the real app, so it is
+probabilistic rather than certain. `shaped[id(m)]` aliases the same way, which
+can draw one row's trace in another row's drawer for a frame.
+
+One change closes both: give `Mapping` a `uid` assigned at construction, key
+`_states` and `shaped` by `m.uid`, and prune `_states` to live uids each frame.
+
+Two details, both checked rather than assumed. `uid` must take part in
+`__eq__` — with `compare=False`, deleting a row and adding an identical one
+compares equal and the diff never records it, a hole in the coverage this
+design exists to promise. And that does not break `mappings.remove(existing)`,
+which passes the list's own object, so identity implies equality. `uid` is
+in-session only and stays out of `_mapping_to_dict`, so stored rigs are
+untouched and `apply_dict` mints fresh ones on load.
+
+**Sequencing.** This lands on `audio-reactive` before it merges. Until it does,
+`AudioInState` declares no `UNDOABLE_FIELDS` and audio is simply outside the
+history — undo of physics and preferences does not depend on it.
 
 ### Cost
 
