@@ -253,33 +253,33 @@ def test_a_held_layer_width_commits_on_release(gui):
     assert ui._brain_draft == {}, "the draft outlived its commit"
 
 
-def test_a_deep_row_is_clamped_to_what_the_deep_path_carries(gui):
-    """The slider's range must stop where the modality stops building, not at
-    the schema's 48: a control that moves and changes nothing reads as broken,
-    and layout_for() would fall back to the defaults behind it."""
-    from services.brains.mlp import MAX_DEEP_WIDTH
-
+def test_a_deep_row_is_clamped_by_the_float_budget(gui):
+    """The slider's range must stop where the modality stops building: a
+    control that moves and changes nothing reads as broken, and layout_for()
+    would fall back to the defaults behind it. A narrow stack has room to reach
+    the schema's full range; a wide one does not."""
     s = REGISTRY["mlp"].settings_schema()[0]
     ui = _StubUI("mlp", {"layers": [[8, 0], [8, 0]]})
     st = ui.state.brain
     assert ui._max_width(st, dict(st.settings), s, [[8, 0], [8, 0]], 1) == \
-        MAX_DEEP_WIDTH
+        int(s.hi)
+    wide = ui._max_width(st, dict(st.settings), s, [[48, 0], [8, 0]], 1)
+    assert int(s.lo) < wide < int(s.hi)
     # ...and a lone layer keeps the full historical range.
     assert ui._max_width(st, {}, s, [[16, 0]], 0) == int(s.hi)
 
 
-def test_a_second_layer_narrows_the_first_and_the_state_follows(gui):
-    """Adding a layer re-clamps every row, so what the window stores has to be
-    what the modality BUILT - otherwise removing the row again would put a width
-    back that the layout never had."""
-    from services.brains.mlp import MAX_DEEP_WIDTH
-
+def test_a_second_layer_no_longer_narrows_the_first(gui):
+    """The cap that did it was a property of ONE shader serving every layout.
+    What the window stores is still what the modality BUILT, so removing the
+    row cannot put back a width the layout never had."""
     s = REGISTRY["mlp"].settings_schema()[0]
     ui = _StubUI("mlp", {"layers": [[48, 0]]})
     st = ui.state.brain
     w = ui._add_layer_width(st, dict(st.settings), s, [[48, 0]])
+    assert w is not None and w > 1
     built = ui._built(st, dict(st.settings), s, [[48, 0], [w, 0]])
-    assert built == [[MAX_DEEP_WIDTH, 0], [w, 0]]
+    assert built == [[48, 0], [w, 0]]
 
 
 # ---- the Source selector and the layer menu --------------------------------

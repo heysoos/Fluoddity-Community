@@ -998,30 +998,51 @@ mechanics these caveats assume.
 
 ### The MLP layer stack
 
-- **A DEEP stack's width cap is paid by every MLP, including the one-layer
-  ones.** Any depth above 1 must materialise a layer's activations, so
-  `mlp.glsl` ping-pongs two `float[MAX_MLP_WIDTH]` locals — and the driver
-  allocates those per invocation whatever the `BRAIN_DEPTH <= 1` branch does.
-  Against the pre-stack shader, at 300k particles, a depth-1 `mlp-n16-a0` step
-  costs **1.02x at cap 8, 1.22x at 12, 1.41x at 16 and 4.09x at 48**. So a LONE
-  layer keeps its historical 48 (`MAX_WIDTH`) and every layer of a deeper stack
-  is capped at 8 (`MAX_DEEP_WIDTH`) — which is why adding a second layer
-  NARROWS the first, and the Brain window says so before you click. Depth costs
-  roughly what its float count costs: against depth-1 `[16]`, `[8,8]` is 1.07x,
-  `[8]x8` 2.16x, and the historical `[48]` 1.47x. The Inspector's redraw stays
-  under 0.26 ms throughout. `python -m tools.measure_brain_depth`; the trap when
-  re-measuring is that the shader must be swapped inside ONE process against ONE
-  entity snapshot, or what is timed is the laptop's thermal state.
+- **`MAX_MLP_WIDTH` is COMPILED PER LAYOUT, and that is the only reason a deep
+  layer may be wide.** Any depth above 1 must materialise a layer's
+  activations, so `mlp.glsl` ping-pongs two `float[MAX_MLP_WIDTH]` locals — and
+  the driver allocates those per invocation whatever the `BRAIN_DEPTH <= 1`
+  branch does, in a program that also holds Fourier, Gabor and Lenia. So the
+  cap is not a cost the wide stack pays, it is one **every brain in the build**
+  pays. At 300k particles, the SAME layout under different caps: Fourier
+  0.92 ms at cap 8 and **1.79x** at 48; depth-1 `mlp-n16-a0` 1.18 ms at 8 and
+  **2.95x** at 48. That is what a raised constant would have cost, and it is
+  why the old shared cap was 8. Caps 4 and 8 measure the same (±4%), so the
+  floor is free — `SCRATCH_BUCKETS` starts at 4 because `mlp_hidden` seeds
+  `cur[0..3]` before it looks at any width, not for speed.
 
-- **The float budget is slack now, and the WIDTH cap is the only limit that
-  bites.** The deepest reachable stack is `[8]x8` = 580 floats against
-  `MAX_BRAIN_FLOATS` 1024 — still past 512, so the raise is load-bearing, but
-  nothing the UI can build goes over. `+ Add layer` is stopped by `MAX_DEPTH`
-  alone: a width-1 layer makes a brain SMALLER, because it narrows the output
-  layer's fan-in from `w_k` to 1. The UI derives both limits by asking whether
-  the layout BUILDS and comes back unclamped, never by repeating the packing
-  formula — which already has two homes, `layer_spans()` and `mlp.glsl`, guarded
-  by the GPU-versus-NumPy parity test.
+  `shader_defines(layout)` is asked of **every** modality, not the running one,
+  precisely because one program carries all four shaders; a modality answering
+  for someone else's layout returns its floor. `sim.py` keeps one compiled
+  entity-update program per distinct set of defines — Fourier, Gabor, Lenia and
+  every depth-1 MLP share one — so a hover borrow is a dict lookup and never a
+  recompile. Widths are BUCKETED so a slider drag lands on a handful of
+  variants. The shader's own `#ifndef` default is `MAX_WIDTH`, because the
+  builds that do not prepend (the Inspector, `tools/shader_compile_check.py`,
+  the GPU tests) must carry any stack; never lower it to save time there.
+
+  What a bucket costs, against depth-1 `[16]`: `[8,8]` 1.06x, `[8]x8` 2.31x,
+  `[48]` 1.46x, `[16,16]` **2.62x**, `[24,24]` **5.42x**, `[32,16]` 6.15x,
+  `[48,8]` **8.85x**. Cost tracks the BUCKET, not the float count — `[48,8]` is
+  668 floats against `[24,24]`'s 820 and costs 1.6x more — which is why the
+  Brain window names the bucket rather than reporting a slope. The Inspector's
+  redraw stays under 0.74 ms throughout. `python -m tools.measure_brain_depth`;
+  the trap when re-measuring is that the shader must be swapped inside ONE
+  process against ONE entity snapshot, or what is timed is the laptop's
+  thermal state.
+
+- **The float budget is the only limit that bites, and `_shape_from_layers`
+  CLAMPS to it.** Nothing else stops `[48]x8`, which is sixteen times over
+  `MAX_BRAIN_FLOATS`; and clamping rather than raising is load-bearing, because
+  the input may be a config written by a build with different limits. It is
+  applied as ONE cap across the stack, largest that fits, so a layer already
+  below it is left alone; it always terminates, since every layer at
+  `MIN_WIDTH` is 27 floats at the deepest. `+ Add layer` is stopped by
+  `MAX_DEPTH` or by the budget: a width-1 layer makes a brain SMALLER, because
+  it narrows the output layer's fan-in from `w_k` to 1. The UI derives every
+  limit by asking whether the layout BUILDS and comes back **unchanged in every
+  row** — not just the row being dragged, since the budget is shared and a
+  looser test lets one slider quietly narrow the row above it.
 
 - **Depth 1 is bit-identical, and that is what makes the rest safe.** `shape` is
   `(w1, a1, w2, a2, …)`, so a one-layer stack is `(16, 0)` — the same length

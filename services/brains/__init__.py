@@ -221,6 +221,26 @@ def unit_count(layout: BrainLayout) -> int:
     return int(layout.shape[0]) if layout.shape else 0
 
 
+def layout_defines(layout: BrainLayout) -> dict:
+    """Preprocessor constants the brain shaders must be COMPILED with.
+
+    Separate from layout_uniforms because a uniform cannot size a local array.
+    Anything in here changes the program, so it is also the cache key sim.py
+    keeps one compiled entity-update shader per.
+
+    EVERY modality is asked, not just the running one: one program carries all
+    four shaders, so MLP's scratch arrays are allocated per invocation while a
+    Fourier brain runs. A modality answers for its own constants given whatever
+    layout is live, and the answer for someone else's layout is its floor.
+    """
+    out: dict = {}
+    for m in REGISTRY.values():
+        fn = getattr(m, "shader_defines", None)
+        if fn is not None:
+            out.update(fn(layout))
+    return out
+
+
 def brain_rng(seed: float) -> np.random.Generator:
     """The generator every "draw brains for this seed" path shares.
 

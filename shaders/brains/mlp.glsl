@@ -15,16 +15,22 @@
 // PURE: reads only brain_params (through the mutation helpers), base, x,
 // BRAIN_SHAPE, BRAIN_DEPTH and BRAIN_LAYERS.
 
-// Mirrored in services/brains/mlp.py as MAX_DEEP_WIDTH and MAX_DEPTH.
-//
 // MAX_MLP_WIDTH sizes the ping-pong locals the deep path needs to hold a
-// layer's activations, and THAT COST IS PAID BY THE DEPTH-1 PATH TOO: the
-// arrays are allocated per invocation whatever the uniform branch does, so the
-// step time of an ordinary one-layer brain rises with this number and nothing
-// else. It is measured, it is small on purpose, and it is why a stack deeper
-// than one layer is capped far below a single layer's 48. See the caveat in
-// CLAUDE.md and tools/measure_brain_depth.py.
-#define MAX_MLP_WIDTH 8
+// layer's activations, and THAT COST IS PAID BY EVERY BRAIN IN THIS FILE - the
+// arrays are allocated per invocation whatever the uniform branch does, so a
+// Fourier preset's step time rises with this number without a line of MLP ever
+// running. It is therefore COMPILED PER LAYOUT: sim.py prepends the width the
+// live stack actually needs, and this default only covers a build that does
+// not (the Inspector, the compile check, the GPU tests). Never raise the
+// default to cover a wider stack - that taxes every other layout instead. See
+// the caveat in CLAUDE.md and tools/measure_brain_depth.py.
+//
+// The floor is 4: mlp_hidden seeds `cur` with the four sensor taps before it
+// looks at any width. MAX_MLP_DEPTH mirrors services/brains/mlp.py's MAX_DEPTH
+// and sizes a uniform array, which costs nothing per invocation.
+#ifndef MAX_MLP_WIDTH
+#define MAX_MLP_WIDTH 48
+#endif
 #define MAX_MLP_DEPTH 8
 
 // layout.shape verbatim, zero-padded: (w1, a1, w2, a2, ...). ONE encoding, so

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.brains import (BrainLayout, Setting, register,
+from services.brains import (MAX_BRAIN_FLOATS, BrainLayout, Setting, register,
                              unit_scale_mask)
 
 ACTIVATIONS = ("tanh", "sin", "gelu")
@@ -46,15 +46,30 @@ OUT_DIM = 4         # force xy and strafe xy
 
 MIN_WIDTH = 1
 # This modality's historical Hidden Width maximum, so every depth-1 genome ever
-# written is still reachable and still decodes to the same brain.
+# written is still reachable and still decodes to the same brain. Every layer
+# of every stack may reach it; what actually stops a stack growing is
+# MAX_BRAIN_FLOATS, which BrainLayout enforces.
 MAX_WIDTH = 48
-# The cap on EVERY layer of a stack deeper than one, and much lower, because it
-# sizes the ping-pong locals mlp.glsl needs to hold a layer's activations - a
-# cost the depth-1 path pays too, without ever using them. It is MEASURED; see
-# the variable-depth MLP caveat in CLAUDE.md and tools/measure_brain_depth.py.
-# Mirrored in mlp.glsl as MAX_MLP_WIDTH.
-MAX_DEEP_WIDTH = 8
 MAX_DEPTH = 8
+
+# What mlp.glsl's ping-pong locals must hold, and the ONLY thing the compiled
+# shader is sized by. Bucketed so a width drag lands on a handful of variants
+# rather than one per value, and floored at 4 because mlp_hidden seeds `cur`
+# with the four sensor taps before it looks at any width. A DEPTH-1 stack takes
+# the floor: it never enters the deep path, and the arrays it does not use are
+# exactly what used to tax it. Cost rises steeply with the bucket - see the
+# variable-depth MLP caveat in CLAUDE.md and tools/measure_brain_depth.py.
+SCRATCH_BUCKETS = (4, 8, 16, 24, 32, 48)
+
+
+def scratch_width(shape) -> int:
+    """-> the MAX_MLP_WIDTH bucket an interleaved `shape` needs."""
+    widths = [int(v) for v in shape[0::2]]
+    want = max(widths) if len(widths) > 1 else 0
+    for b in SCRATCH_BUCKETS:
+        if want <= b:
+            return b
+    return SCRATCH_BUCKETS[-1]
 
 
 def layer_spans(shape):
@@ -101,15 +116,39 @@ def _shape_from_layers(layers) -> tuple[int, ...]:
     came from, and layout_from_signature refuses on exactly that mismatch - a
     refusal being the one outcome better than a plausible layout of the wrong
     width.
+
+    The FLOAT BUDGET is clamped here too, and it is the only limit a deep stack
+    meets before MAX_WIDTH: nothing else stops [48]x8, which is sixteen times
+    over. Applied as one cap across the stack, largest that fits, so a narrow
+    layer is left alone. It always terminates - every layer at MIN_WIDTH is 27
+    floats at the deepest.
     """
     kept = list(layers)[:MAX_DEPTH]
-    hi = MAX_WIDTH if len(kept) <= 1 else MAX_DEEP_WIDTH
     shape: list[int] = []
     for pair in kept:
         w, a = (list(pair) + [0, 0])[:2]
-        shape.append(int(np.clip(int(w), MIN_WIDTH, hi)))
+        shape.append(int(np.clip(int(w), MIN_WIDTH, MAX_WIDTH)))
         shape.append(int(np.clip(int(a), 0, len(ACTIVATIONS) - 1)))
-    return tuple(shape) or (16, 0)
+    if not shape:
+        return (16, 0)
+
+    def capped(c):
+        return tuple(min(v, c) if i % 2 == 0 else v
+                     for i, v in enumerate(shape))
+
+    def fits(c):
+        return layer_spans(capped(c))[3] <= MAX_BRAIN_FLOATS
+
+    if fits(MAX_WIDTH):
+        return tuple(shape)
+    lo, hi = MIN_WIDTH, MAX_WIDTH
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if fits(mid):
+            lo = mid
+        else:
+            hi = mid - 1
+    return capped(lo)
 
 
 def _draw_z(rng, n: int, dist: int) -> np.ndarray:
@@ -186,6 +225,22 @@ class MLPModality:
         flat = [int(v) for v in layout.shape[: 2 * MAX_DEPTH]]
         flat += [0] * (2 * MAX_DEPTH - len(flat))
         return {"BRAIN_DEPTH": len(layout.shape) // 2, "BRAIN_LAYERS": flat}
+
+    def shader_defines(self, layout: BrainLayout) -> dict:
+        """What mlp.glsl must be COMPILED with while `layout` runs, NOT uniforms.
+
+        A uniform cannot size a local array, so the scratch width has to be
+        baked in - which is what makes the entity-update program per-layout and
+        why sim.py caches one per distinct set of these.
+
+        Answered for ANY layout, because mlp.glsl is compiled into the same
+        program as the other three and its arrays are allocated whether a
+        particle runs an MLP or not. Someone else's layout gets the floor,
+        which is what keeps a wide stack's cost off every other brain - it is
+        the whole reason this is a define rather than a raised constant.
+        """
+        shape = layout.shape if layout.modality == self.name else ()
+        return {"MAX_MLP_WIDTH": scratch_width(shape)}
 
     def unit_count(self, layout: BrainLayout) -> int:
         """The LAST hidden layer's units, the only ones that decompose

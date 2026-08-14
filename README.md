@@ -57,7 +57,9 @@ Auto and Explore need the optional packages in `requirements.txt` (`onnxruntime-
 
 Fourier, Gabor and Lenia each have one size setting (Centers, Filters, Bumps). MLP instead has a **layer stack**: one row per hidden layer, with its own width slider and activation, an `x` to remove it and **+ Add layer** at the bottom. A readout underneath shows how much of the parameter budget the stack uses.
 
-A single layer can be up to 48 units wide. A stack of two or more is capped at 8 units per layer, so adding a second layer narrows the first — the window says so before you do it. `+ Add layer` greys out at 8 layers.
+Every layer can be up to 48 units wide, at any depth. What stops a stack growing is the parameter budget in the readout — the sliders stop where the next unit would not fit, and `+ Add layer` greys out at 8 layers or when there is no room for one.
+
+Width is not free past one layer. A deep stack needs scratch space the shader is built for, so the readout names the size it was built for and stepping over it costs speed — sharply, and in steps rather than smoothly. Two 16-wide layers run a few times slower than one; two 24-wide layers, several times. A single layer of any width is unaffected, as are the other three modalities.
 
 **Right-click a layer** to work on its weights without changing its shape: pick a distribution (`normal`, `uniform`, `sparse`, `heavy-tail`), scale the layer up or down, reroll its weights or its biases, or reset it to how it was when the menu opened. These are ordinary rule edits — `Z` undoes them, and `Scale` records one undo step per drag, not one per frame. They are unavailable while the tournament grid is running, or while a hover preview is borrowing the brain.
 

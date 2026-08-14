@@ -9,7 +9,8 @@ from __future__ import annotations
 import numpy as np
 from imgui_bundle import imgui
 
-from services.brains import MAX_BRAIN_FLOATS, REGISTRY, get, settings_of
+from services.brains import (MAX_BRAIN_FLOATS, REGISTRY, get, layout_defines,
+                             settings_of)
 from ui import layout as layout_helpers
 
 # tanh(2.65) ~ 0.99, so |z| beyond this decodes to within 1% of its rail: the
@@ -290,12 +291,6 @@ class BrainWindowMixin:
         imgui.end_disabled()
         if added is None and imgui.is_item_hovered():
             imgui.set_tooltip("no room for another layer")
-        # Stated because it is not guessable from the sliders: a second layer
-        # narrows every layer, this one included.
-        deep = self._max_width(state, settings, s, [[1, 0], [1, 0]], 0)
-        if len(layers) == 1 and layers[0][0] > deep:
-            imgui.text_disabled(f"   a second layer narrows every layer "
-                                f"to {deep}")
 
         if layers != committed:
             # The BUILT stack, not the asked-for one: adding a second layer
@@ -397,10 +392,19 @@ class BrainWindowMixin:
         self._layer_scale_value = float(value)
 
     def _render_budget(self, state, settings, s, layers, shown) -> None:
-        length = layout_for(state.modality, settings).length
+        layout = layout_for(state.modality, settings)
+        length = layout.length
         imgui.text(f"{length} / {MAX_BRAIN_FLOATS} floats")
         imgui.progress_bar(min(length / float(MAX_BRAIN_FLOATS), 1.0),
                            imgui.ImVec2(-1.0, 0.0))
+        # The speed a stack deeper than one layer costs is a STEP, not a slope -
+        # the shader is compiled for a bucket - so the bucket is what to show.
+        # Nothing here is guessable from the sliders and it is not in the float
+        # count either: a narrow deep stack can cost more than a wide flat one.
+        bucket = layout_defines(layout).get("MAX_MLP_WIDTH")
+        if bucket is not None and len(shown) > 1:
+            imgui.text_disabled(f"   built for layers up to {bucket} wide; "
+                                "wider runs slower")
         # Only while a held slider actually differs from what is committed, so
         # the consequence is stated as it is being chosen and never nags.
         if layout_change_needed(state.modality, {**settings, s.key: layers},
@@ -445,15 +449,15 @@ class BrainWindowMixin:
     def _max_width(self, state, settings, s, layers, i) -> int:
         """The widest layer i can be with its neighbours where they are.
 
-        Clamping counts as not fitting. A slider whose range runs past what the
-        modality will build looks stuck, which reads as a broken control rather
-        than as a limit.
+        Clamping ANY row counts as not fitting, not just row i's. The budget is
+        shared, so a looser test would let one slider quietly narrow the row
+        above it - the limit has to mean "this row stops here", or the number
+        under the pointer is not the one being chosen.
         """
         def fits(w):
             trial = [list(p) for p in layers]
             trial[i][0] = int(w)
-            built = self._built(state, settings, s, trial)
-            return built is not None and int(built[i][0]) == int(w)
+            return self._built(state, settings, s, trial) == trial
 
         return self._widest(fits, int(s.lo), int(s.hi)) or int(s.lo)
 
@@ -464,9 +468,8 @@ class BrainWindowMixin:
         the depth cap, where the extra layer is clamped away.
         """
         def fits(w):
-            grown = self._built(state, settings, s, layers + [[int(w), 0]])
-            return (grown is not None and len(grown) == len(layers) + 1
-                    and int(grown[-1][0]) == int(w))
+            grown = layers + [[int(w), 0]]
+            return self._built(state, settings, s, grown) == grown
 
         return self._widest(fits, int(s.lo), int(s.default))
 
