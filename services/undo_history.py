@@ -102,3 +102,76 @@ def describe(old: Snapshot, new: Snapshot) -> str:
     if rule_moved:
         panels.add("Rule")
     return panels.pop() if len(panels) == 1 else "Settings"
+
+
+class UndoHistory:
+    """A linear journal with a cursor. The cursor names the step the live
+    state matches, so a fresh journal's single baseline cannot be undone."""
+
+    MAX_STEPS = 200
+
+    def __init__(self) -> None:
+        self.steps: list[Snapshot] = []
+        self.cursor: int = -1
+        self._pending_label: str = ""
+
+    def tag(self, label: str) -> None:
+        """Name the next commit. Advisory: a forgotten tag costs a name, never
+        coverage, because the commit itself is triggered by the diff."""
+        self._pending_label = label
+
+    def commit(self, snap: Snapshot) -> None:
+        """Push a step, discarding any redo tail."""
+        label = self._pending_label
+        self._pending_label = ""
+        if not label:
+            previous = self.current()
+            label = describe(previous, snap) if previous is not None else "Start"
+        object.__setattr__(snap, "label", label)
+
+        del self.steps[self.cursor + 1:]
+        self.steps.append(snap)
+        overflow = len(self.steps) - self.MAX_STEPS
+        if overflow > 0:
+            del self.steps[:overflow]
+        self.cursor = len(self.steps) - 1
+
+    def current(self) -> Snapshot | None:
+        return self.steps[self.cursor] if 0 <= self.cursor < len(self.steps) else None
+
+    def can_undo(self) -> bool:
+        return self.cursor > 0
+
+    def can_redo(self) -> bool:
+        return -1 <= self.cursor < len(self.steps) - 1
+
+    def undo(self) -> Snapshot | None:
+        if not self.can_undo():
+            return None
+        self.cursor -= 1
+        return self.steps[self.cursor]
+
+    def redo(self) -> Snapshot | None:
+        if not self.can_redo():
+            return None
+        self.cursor += 1
+        return self.steps[self.cursor]
+
+    def jump(self, index: int) -> Snapshot | None:
+        if not 0 <= index < len(self.steps):
+            return None
+        self.cursor = index
+        return self.steps[index]
+
+    def rebase(self, snap: Snapshot) -> None:
+        """Replace the step at the cursor, keeping its label and position.
+
+        Applying a step writes the very state the diff watches. Without this
+        the next frame would read the restore as a fresh change and commit it,
+        so every undo would append a step.
+        """
+        held = self.current()
+        if held is None:
+            return
+        object.__setattr__(snap, "label", held.label)
+        self.steps[self.cursor] = snap
