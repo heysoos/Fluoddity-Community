@@ -57,6 +57,28 @@ Use this after large refactors or significant new features. Items roughly ordere
 - [ ] **e.** Pending state: shows countdown, can cancel with record key
 - [ ] **f.** Video saved to Documents/Fluoddity/ with timestamp
 - [ ] **g.** Recording window shows status (RECORDING / WAITING / idle)
+- [ ] **h.** In a camera view (Camera / Tiled / Particles+Trails), zoom out so
+      black bars show around the canvas, then record: the file has no bars.
+- [ ] **i.** Zoom IN past the canvas edges and record: the framing is exactly
+      what is on screen, unchanged.
+- [ ] **j.** In the raw Canvas view the recording is unchanged from before.
+- [ ] **k.** Resize the window mid-take in a camera view: it stays ONE file.
+- [ ] **l.** Pan while zoomed out during a take: the world stays framed rather
+      than sliding, and no bar appears at the edge it was panned away from.
+
+### Video Recording with audio
+Sync is the thing only a person can confirm, so use material with a hard beat.
+- [ ] **a.** With audio capture running, tick Record Audio and record: the mp4
+      plays with sound, and a visible hit lands on the beat you can hear.
+- [ ] **b.** The same at the END of a two-minute take - drift accumulates, so a
+      short clip proves nothing.
+- [ ] **c.** With Record Audio ticked, the Preferences physics Rate slider is
+      NOT locked during recording; with it unticked, it is.
+- [ ] **d.** Record with audio capture stopped: the take completes silently and
+      is not an error.
+- [ ] **e.** Stop the capture device mid-take (unplug, or stop it in the Audio
+      tab): the recording still saves, and the window shows a drift warning.
+- [ ] **f.** No `.video.mp4` or `.pcm` file is left behind after a take.
 
 ## 6. Screenshots
 - [ ] **a.** Shift+P takes screenshot

@@ -627,6 +627,62 @@ mechanics these caveats assume.
   wraps `create_context` to null the filename. Never read it back —
   `get_ini_filename()` on the null segfaults.
 
+### Recording
+
+- **`generate_view_texture()` returns two different things, and the recorder
+  gets whichever arrived.** The camera views (Camera, Tiled, Particles+Trails —
+  `cam_brush_mode`) hand it `cam_brush_target`, a FRAMEBUFFER-sized buffer with
+  the camera already baked in; every other view hands it `sim.view_tex` at
+  canvas resolution with no camera applied. `FrameAssembler` sizes itself from
+  its input, so the assembled texture inherits that shape. Black bars exist
+  only in the first case, and so does zoom's cost: the world is rasterised into
+  however many pixels the zoom leaves it, so **no crop can restore resolution a
+  zoom-out never drew**. Recovering it needs the recording to own its
+  framebuffer and camera — a second particle raster per frame — which was
+  considered and rejected. Framing near fit-to-window is the user's half of the
+  bargain.
+
+- **The crop RECT is re-derived every frame; the crop TARGET is frozen at
+  record start.** The encoder rejects a mid-stream dimension change, so a zoom
+  rescales into the fixed target rather than resizing the file. The rect comes
+  from `camera.assembled_view_rect` and is never recomputed — that field is
+  assigned with the texture it describes, and recomputing it later crops one
+  frame's pixels with a later frame's camera. It is intersected with the
+  texture, so zoomed in the crop is an identity and framing is untouched.
+  Because the target no longer tracks the window, a mid-take resize stops
+  splitting the file. `record_sizes` derives the video size in OUTPUT space:
+  cropping first and dividing by the supersample kernel after can land on an
+  odd number, which the recorder pads — putting a black edge back on the side
+  the crop just removed. Guarded by `tests/test_record_view_gl.py`, whose rects
+  are all off-centre, because a centred camera cancels the `v`-flip and
+  validates any orientation bug you like.
+
+- **The SOUNDTRACK is the recording's clock, and wall time is only a
+  cross-check.** The tap starts and stops with the recorder, so both streams
+  cover the same wall interval and `frame_count / audio_seconds` is exactly the
+  rate that makes them the same length — sync is arithmetic rather than a
+  measurement, and it rides the sound card's clock rather than the frame
+  loop's. This is why the sidecar is muxed at close rather than piped live:
+  `-framerate` is fixed when the encoder starts, and the real rate is not
+  knowable until the take ends, so `-itsscale` retimes it during a stream copy.
+  `-itsscale` is an INPUT option and only affects the input it PRECEDES. Wall
+  time catches a device that died mid-take, where the audio is far too short
+  and the derived rate would silently speed the video up to match it.
+
+- **Because the clock is honest, hitting real time is a taste decision, not a
+  correctness one.** With audio the `speedmult` override in `main.py` is
+  skipped and the rate follows the user's slider: blur samples ARE physics
+  sub-steps, so forcing them up renders far below real time. Raising the slider
+  trades fps for blur and sync is unaffected. Silent recording keeps the fixed
+  50 fps and its exact previous behaviour.
+
+- **The tap is guarded SEPARATELY from the analysis, not by the same
+  `try`.** Sharing it means a full disk stops the signals driving the sim.
+  Cleared before teardown in `stop()`, as `_analyzer` is, so a callback in
+  flight cannot write into a file the main thread is closing. Every path
+  through `RecordingAudio.finish()` leaves the output file in place — a
+  soundtrack is worth strictly less than the recording it belongs to.
+
 ### UI and platform
 
 - **There is ONE save dialog, and every Save button in the app opens it.**

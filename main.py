@@ -827,6 +827,13 @@ class App:
             self._undo_auto_overrides(ui_state)
         self._explore_was_enabled = expl.enabled
 
+        # 1.9. The soundtrack choice, pushed BEFORE process_commands, which is
+        # where the record toggle starts a take. Recording also starts from the
+        # scheduled-start check below, which is why this is a per-frame push
+        # rather than an argument at either call.
+        self.video_service.configure(self.audio_runtime.capture,
+                                     ui_state.preferences.record_audio)
+
         # 2. Process one-shot commands
         result = self.command_handler.process_commands(ui_state, tiling_mode)
         if result == 'screenshot_pending' and not self.screenshot_pending and not self.screenshot_in_progress:
@@ -847,10 +854,6 @@ class App:
 
         # 3.2. Check if pending video should start
         cmd = self.command_handler
-        # Pushed every frame, because recording starts from the toggle and from
-        # the scheduled-start check below.
-        self.video_service.configure(self.audio_runtime.capture,
-                                     ui_state.preferences.record_audio)
         if cmd.video_pending and self.sim.frame_count >= cmd.video_scheduled_start_frame:
             cmd.video_pending = False
             cmd.video_scheduled_start_frame = 0
