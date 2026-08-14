@@ -473,6 +473,64 @@ def test_every_slider_in_the_panel_offers_a_reset():
     assert "begin_popup_context_item" in src
 
 
+def _with_popups_open(imgui, host, frames=2):
+    """Render with every context menu OPEN, so its body actually runs.
+
+    A popup body executes only while the popup is open, so nothing inside one
+    is reached by an ordinary render pass - which is how a selectable() missing
+    its p_selected argument got all the way to a crash in the user's hands.
+    open_popup hashes str_id against the same window and ID stack that
+    begin_popup_context_item does, so opening it here targets the right popup
+    even inside the row's push_id.
+    """
+    real = imgui.begin_popup_context_item
+
+    def spy(str_id=None, *a, **kw):
+        if str_id:
+            imgui.open_popup(str_id)
+        return real(str_id, *a, **kw)
+
+    imgui.begin_popup_context_item = spy
+    try:
+        _draw(imgui, host, frames=frames)
+    finally:
+        imgui.begin_popup_context_item = real
+
+
+@pytest.mark.parametrize("kind", ["none", "smooth", "gate", "envelope", "lfo",
+                                  "sample_hold"])
+def test_every_reset_menu_in_the_drawer_actually_renders(kind):
+    """Covers Depth, Gain and whichever shaper fields this kind exposes."""
+    imgui, host = _bound_host(open_band="bass")
+    host.state.audio.mappings[0].shaper.kind = kind
+    _with_popups_open(imgui, host)
+
+
+def test_the_strength_reset_menu_actually_renders():
+    imgui, host = _bound_host(open_band="")
+    _with_popups_open(imgui, host)
+
+
+def test_the_forced_popup_helper_really_opens_something():
+    """Guards the guard: if the spy stopped opening popups, every test above
+    would pass without executing a single popup body."""
+    imgui, host = _bound_host(open_band="bass")
+    seen = []
+    real = imgui.selectable
+
+    def spy(*a, **kw):
+        seen.append(a[0] if a else "")
+        return real(*a, **kw)
+
+    imgui.selectable = spy
+    try:
+        _with_popups_open(imgui, host)
+    finally:
+        imgui.selectable = real
+    assert any(s.startswith("Reset to") for s in seen), (
+        "no reset item was drawn, so the popup bodies never ran")
+
+
 def test_a_reset_returns_the_dataclass_default():
     from services.audio_mapping import Mapping
     from services.audio_shapers import ShaperParams

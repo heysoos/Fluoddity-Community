@@ -296,7 +296,10 @@ class AudioReactiveWindowMixin:
         """
         changed, v = imgui.slider_float(label, float(value), lo, hi, fmt)
         if imgui.begin_popup_context_item(f"{label}_reset"):
-            if imgui.selectable(f"Reset to {default:g}##do")[0]:
+            # p_selected has no default in this binding, and a popup body only
+            # runs while the popup is OPEN - so a wrong call here reaches the
+            # user rather than a test. See the drawer's forced-popup test.
+            if imgui.selectable(f"Reset to {default:g}##do", False)[0]:
                 v, changed = float(default), True
                 imgui.close_current_popup()
             imgui.end_popup()

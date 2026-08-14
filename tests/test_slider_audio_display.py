@@ -111,3 +111,61 @@ def test_a_fraction_maps_to_where_imgui_puts_the_grab(gui):
 
 def test_a_zero_width_track_does_not_divide_by_zero(gui):
     assert track_x(10.0, 0.0, 0.5) >= 10.0
+
+
+# --- the context menu, whose body only runs while it is OPEN ------------------
+
+class _Defaults:
+    source_filename = ""
+    values: dict = {}
+
+
+def _menu_host():
+    from state import UIState
+    from ui.slider_widgets import SliderWidgetsMixin
+
+    class Host(SliderWidgetsMixin):
+        def __init__(self):
+            self.state = UIState()
+            self.current_physics_defaults = _Defaults()
+            self.param_lock_service = None
+
+        def _delayed_tooltip(self, text):
+            pass
+
+    return Host()
+
+
+def test_the_physics_slider_context_menu_renders_when_open(gui):
+    """Nothing rendered this body, so the Audio... item added to it was never
+    executed by a test - the same blind spot that let a bad selectable() call
+    reach the user in the audio panel."""
+    host = _menu_host()
+    real = imgui.begin_popup_context_item
+
+    def spy(str_id=None, *a, **kw):
+        if str_id:
+            imgui.open_popup(str_id)
+        return real(str_id, *a, **kw)
+
+    imgui.begin_popup_context_item = spy
+    try:
+        for _ in range(2):
+            imgui.new_frame()
+            imgui.begin("menu host")
+            imgui.slider_float("Axial Force", 0.5, -1.0, 1.0)
+            host.add_slider_context_menu("Axial Force", -1.0, 1.0)
+            imgui.end()
+            imgui.end_frame()
+            imgui.render()
+    finally:
+        imgui.begin_popup_context_item = real
+
+
+def test_the_audio_item_targets_the_parameter_the_slider_edits(gui):
+    """It writes open_target, which the panel uses to jump to a row; a label
+    that did not map to a parameter name would silently open nothing."""
+    from ui.physics_params import PARAM_BY_LABEL
+    host = _menu_host()
+    assert host._label_to_param_name("Axial Force") == "AXIAL_FORCE"
+    assert "Axial Force" in PARAM_BY_LABEL

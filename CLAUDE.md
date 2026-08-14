@@ -698,6 +698,18 @@ mechanics these caveats assume.
   real pixels — the font is proportional, so character counts do not predict
   width.
 
+- **A POPUP BODY only runs while the popup is open, so a render smoke test
+  never enters one.** Every widget call inside `begin_popup*` is unexecuted by
+  an ordinary test pass, and imgui_bundle's bindings raise `TypeError` on a bad
+  signature rather than failing to compile — `imgui.selectable(label)` is
+  missing its `p_selected` and takes the whole app down the first time a user
+  right-clicks. A test opens the body by wrapping `begin_popup_context_item`
+  and calling `imgui.open_popup(str_id)` first: both hash `str_id` against the
+  same window and ID stack, so this reaches a popup nested inside a `push_id`.
+  Pair it with a test that the wrapper opened something, or the coverage is
+  imaginary. Guarded by
+  `tests/test_audio_reactive_window_render.py::test_the_forced_popup_helper_really_opens_something`.
+
 - **An ImGui widget's identity IS its label, and a duplicate silently kills the
   loser.** Two visible items hashing to one ID puts Dear ImGui's "conflicting
   ID" dialog over the app and stops one of them responding to the mouse at all
