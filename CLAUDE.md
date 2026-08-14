@@ -617,6 +617,21 @@ mechanics these caveats assume.
   whose width grows 20x from the bottom of the axis to the top — draw any
   spectrum at all as a ramp rising to the right. The rows average instead.
 
+- **A mapping's shaper state is keyed by a `uid` the `Mapping` carries, never
+  by `id()`.** CPython hands the address of a freed object straight to the next
+  one of its type: over 2000 create/delete cycles of the real class, 1999
+  reused an address just released. So a row added after one is deleted
+  inherited the deleted row's envelope and LFO phase — starting mid-attack for
+  no visible reason — and `shaped` aliased the same way, letting a drawer draw
+  another row's trace. `uid` is an ordinary dataclass field, so it takes part
+  in `__eq__` and a rig diffed by value sees a delete-and-re-add as the change
+  it is; it is copied with the mapping and never persisted, so a loaded rig
+  mints fresh ones. Nothing tells the runtime a row was deleted, so
+  `AudioRuntime._prune_states` cuts the table back every frame — to the WHOLE
+  rig, not the modality on screen, or switching brains and back would restart
+  the shapers that were waiting there. Guarded by `tests/test_audio_mapping.py`
+  and `tests/test_audio_runtime.py`.
+
 - **`imgui.ini` is shared between the app and the test suite, and the tests
   must not read or write it.** Dear ImGui persists every window's size in
   `create_context`/`destroy_context`, so the tests saved a layout and consumed

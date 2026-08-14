@@ -49,6 +49,18 @@ class AudioRuntime:
         self.capture.stop()
         self._brain.clear()
 
+    def _prune_states(self, ast) -> None:
+        """Drop the shaper state of every mapping the rig no longer holds.
+
+        The whole rig, not the modality on screen: switching brains and back
+        must not restart the shapers that were waiting there.
+        """
+        live = {m.uid for m in ast.mappings}
+        for rows in ast.brain_mappings.values():
+            live.update(m.uid for m in rows)
+        for uid in [u for u in self._states if u not in live]:
+            del self._states[uid]
+
     def _sync_capture(self, ast) -> None:
         if ast.request_start:
             ast.request_start = False
@@ -85,6 +97,9 @@ class AudioRuntime:
         # Cleared before any early return, so a bypassed or stopped rig empties
         # the drawer traces rather than freezing them on their last value.
         ast.shaped = {}
+        # Likewise before any early return: nothing tells the runtime a row was
+        # deleted, so the table is cut back to the rig every frame.
+        self._prune_states(ast)
 
         # Auto and Explore rank tiles against each other. Modulating physics
         # mid-comparison would move what is being compared.

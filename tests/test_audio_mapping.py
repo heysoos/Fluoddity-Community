@@ -1,4 +1,6 @@
 """The modulation maths, and which parameters may be modulated at all."""
+import copy
+
 import pytest
 
 from services.audio_mapping import (MODES, Mapping, TargetDef, brain_targets,
@@ -21,7 +23,7 @@ def gain_target(lo=0.0, hi=10.0, hard_lo=None, hard_hi=None):
 
 
 def run(mappings, targets, signals, bases, **kw):
-    states = {id(m): ShaperState() for m in mappings}
+    states = {m.uid: ShaperState() for m in mappings}
     return modulate(bases, targets, mappings, signals, states,
                     kw.get("strengths", {}), kw.get("global_strength", 1.0),
                     DT, kw.get("deaf", set()))
@@ -224,6 +226,60 @@ def test_a_bipolar_target_clamps_at_its_lower_rail():
     out = run([one(target="DRAG", mode="subtract", depth=1.0)], [t],
               {"bass": 1.0}, {"DRAG": 0.5})
     assert out["DRAG"] == pytest.approx(-1.0)
+
+
+# --- which mapping a shaper state belongs to ---------------------------------
+
+def test_every_mapping_gets_its_own_uid():
+    assert one().uid != one().uid
+
+
+def test_a_uid_survives_a_copy_so_the_shaper_keeps_its_continuity():
+    m = one()
+    assert copy.deepcopy(m).uid == m.uid
+
+
+def test_a_uid_takes_part_in_equality():
+    """Deleting a row and adding an identical one IS a change, and anything
+    diffing two rigs by value has to see it."""
+    assert Mapping(signal="bass", target="K") != Mapping(signal="bass", target="K")
+
+
+def test_a_freed_mappings_address_is_recycled_but_its_uid_is_not():
+    """The mechanism: CPython hands the next same-sized object the address it
+    has just freed, so id() cannot name a mapping across a delete."""
+    uids, addresses = set(), set()
+    for _ in range(200):
+        m = Mapping(signal="bass", target="SENSOR_GAIN")
+        uids.add(m.uid)
+        addresses.add(id(m))
+        del m
+    assert len(uids) == 200
+    assert len(addresses) < 200
+
+
+def test_a_new_mapping_never_inherits_a_deleted_ones_shaper_state():
+    """The row that replaces a deleted one must start at the foot of its
+    attack, not part-way up the deleted row's."""
+    smooth = ShaperParams(kind="smooth", attack=0.5, release=0.5)
+    states, mappings = {}, [one(shaper=smooth)]
+    for _ in range(60):
+        risen = modulate({"SENSOR_GAIN": 0.0}, [gain_target()], mappings,
+                         {"bass": 1.0}, states, {}, 1.0, DT, set())
+
+    mappings.clear()
+    mappings.append(one(shaper=smooth))
+    fresh = modulate({"SENSOR_GAIN": 0.0}, [gain_target()], mappings,
+                     {"bass": 1.0}, states, {}, 1.0, DT, set())
+    assert fresh["SENSOR_GAIN"] < risen["SENSOR_GAIN"] / 2
+
+
+def test_the_drawn_signal_is_keyed_by_uid_so_no_row_draws_another_s():
+    shaped = {}
+    mappings = [one(), one(signal="mid")]
+    modulate({"SENSOR_GAIN": 0.0}, [gain_target()], mappings,
+             {"bass": 1.0, "mid": 0.25}, {}, {}, 1.0, DT, set(), shaped)
+    assert set(shaped) == {m.uid for m in mappings}
 
 
 # --- the rule the whole design rests on --------------------------------------

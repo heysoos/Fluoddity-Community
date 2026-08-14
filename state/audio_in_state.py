@@ -70,13 +70,14 @@ class AudioInState:
     # orchestrator hands it the frame's analysis rather than the panel reaching
     # into the capture thread.
     snapshot: object = None
-    # Each applied mapping's post-shaper signal, by id(mapping). Only the
+    # Each applied mapping's post-shaper signal, by mapping uid. Only the
     # modulation maths sees it, and a drawer that drew the raw band instead
     # would show nothing of what its shaper does.
     shaped: dict = field(default_factory=dict)
 
 
 def _mapping_to_dict(m: Mapping) -> dict:
+    """`uid` is in-session only, so a loaded rig mints fresh ones."""
     return {
         "signal": m.signal, "target": m.target, "mode": m.mode,
         "depth": float(m.depth), "gain": float(m.gain),

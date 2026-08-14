@@ -288,7 +288,7 @@ def test_modulate_reports_each_mapping_post_shaper_signal():
         shaped = {}
         modulate({"K": 0.5}, [t], [m], {"bass": 0.5}, states, {}, 1.0,
                  1 / 60.0, set(), shaped)
-        seen.append(shaped[id(m)])
+        seen.append(shaped[m.uid])
     assert max(seen) - min(seen) > 0.5, "the LFO's swing was not reported"
 
 
@@ -331,7 +331,7 @@ def test_a_disabled_mapping_reports_no_shaped_signal():
 def test_the_drawer_draws_the_shaped_ring_it_was_given():
     imgui, host = _bound_host(open_band="mid")
     ast = host.state.audio
-    ast.shaped = {id(m): 0.5 for m in ast.mappings}
+    ast.shaped = {m.uid: 0.5 for m in ast.mappings}
     _draw(imgui, host)
     rings = host._audio_shaped_rings()
     assert set(rings) == set(ast.shaped)
@@ -340,7 +340,7 @@ def test_the_drawer_draws_the_shaped_ring_it_was_given():
 def test_a_mapping_that_stops_being_applied_drops_its_ring():
     imgui, host = _bound_host(open_band="mid")
     ast = host.state.audio
-    ast.shaped = {id(m): 0.5 for m in ast.mappings}
+    ast.shaped = {m.uid: 0.5 for m in ast.mappings}
     _draw(imgui, host)
     ast.shaped = {}
     _draw(imgui, host)

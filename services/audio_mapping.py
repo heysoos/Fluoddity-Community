@@ -5,11 +5,18 @@ cannot tell an FFT band from a shaper output from anything added later.
 """
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field
 
 from services.audio_shapers import ShaperParams, ShaperState
 
 MODES: tuple[str, ...] = ("add", "subtract", "multiply")
+
+_uid_counter = itertools.count(1)
+
+
+def _next_uid() -> int:
+    return next(_uid_counter)
 
 
 @dataclass(frozen=True)
@@ -33,6 +40,11 @@ class Mapping:
     gain: float = 1.0
     shaper: ShaperParams = field(default_factory=ShaperParams)
     enabled: bool = True
+    # Names this mapping's shaper state between frames; id() cannot, being
+    # handed to the next mapping the moment this one is deleted. Copied with
+    # the mapping, never persisted, and an ordinary field so that a rig diffed
+    # by value sees a delete-and-re-add.
+    uid: int = field(default_factory=_next_uid)
 
 
 def physics_targets(sim_state) -> list[TargetDef]:
@@ -90,9 +102,12 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
 
     `bases` is read and never written. Targets with no mapping, and targets a
     sweep has made deaf, are absent from the result. When `shaped` is given,
-    each applied mapping's post-shaper signal is recorded in it under `id(m)` -
+    each applied mapping's post-shaper signal is recorded in it under `m.uid` -
     the panel draws that, since the shaper is the whole point of the drawer and
     the raw band shows none of its effect.
+
+    `states` is keyed by `m.uid` too, and the caller owns it: nothing here
+    removes the entry of a mapping the user has deleted.
 
     `apply_shapers=False` takes every signal at face value. Every shaper
     answers a full-scale input with full scale eventually, so this is what asks
@@ -120,20 +135,20 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
         for m in adds.get(key, ()):
             s = min(1.0, max(0.0, signals[m.signal] * m.gain))
             if apply_shapers:
-                s = states.setdefault(id(m), ShaperState()).apply(
+                s = states.setdefault(m.uid, ShaperState()).apply(
                     s, dt, m.shaper)
             if shaped is not None:
-                shaped[id(m)] = s
+                shaped[m.uid] = s
             sign = -1.0 if m.mode == "subtract" else 1.0
             v += sign * s * m.depth * span
 
         for m in muls.get(key, ()):
             s = min(1.0, max(0.0, signals[m.signal] * m.gain))
             if apply_shapers:
-                s = states.setdefault(id(m), ShaperState()).apply(
+                s = states.setdefault(m.uid, ShaperState()).apply(
                     s, dt, m.shaper)
             if shaped is not None:
-                shaped[id(m)] = s
+                shaped[m.uid] = s
             v *= 1.0 + s * m.depth
 
         v = base + (v - base) * strengths.get(key, 1.0) * global_strength

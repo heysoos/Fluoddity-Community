@@ -136,6 +136,55 @@ def test_close_is_safe_to_call_twice():
     rt.close()
 
 
+# --- shaper state does not outlive the mapping that made it ------------------
+
+def test_a_deleted_mappings_shaper_state_is_dropped():
+    """Nothing prunes on delete, so the table has to be cut back to the rig -
+    an orphan left behind is the envelope the next row would inherit."""
+    rt, st = runtime_with({"bass": 1.0}), rig()
+    rt.update(st, 1 / 60, None, None)
+    gone = st.audio.mappings[0].uid
+    assert gone in rt._states
+
+    st.audio.mappings.clear()
+    st.audio.mappings.append(Mapping(signal="bass", target="SENSOR_GAIN",
+                                     mode="add", depth=0.5))
+    rt.update(st, 1 / 60, None, None)
+    assert gone not in rt._states
+    assert set(rt._states) == {st.audio.mappings[0].uid}
+
+
+def test_editing_the_rig_all_session_does_not_grow_the_state_table():
+    rt, st = runtime_with({"bass": 1.0}), rig()
+    for _ in range(50):
+        st.audio.mappings[:] = [Mapping(signal="bass", target="SENSOR_GAIN",
+                                        mode="add", depth=0.5)]
+        rt.update(st, 1 / 60, None, None)
+    assert len(rt._states) == 1
+
+
+def test_an_inactive_modality_keeps_its_shaper_state():
+    """The whole rig is live, not just the modality on screen: switching brains
+    and back must not restart the shapers that were waiting there."""
+    from services import brains
+    m = brains.get("fourier")
+    layout = m.layout_from_settings({})
+    params = m.random(np.random.default_rng(0), layout)
+
+    rt, st = runtime_with({"bass": 1.0}), rig()
+    st.brain.modality = "fourier"
+    st.audio.brain_mappings["fourier"] = [
+        Mapping(signal="bass", target="freq_scale", mode="add", depth=0.5)
+    ]
+    rt.update(st, 1 / 60, layout, params)
+    uid = st.audio.brain_mappings["fourier"][0].uid
+    assert uid in rt._states
+
+    st.brain.modality = "mlp"
+    rt.update(st, 1 / 60, layout, params)
+    assert uid in rt._states
+
+
 # --- status while a loopback endpoint is idle --------------------------------
 
 def test_an_active_capture_with_no_audio_yet_reads_waiting():

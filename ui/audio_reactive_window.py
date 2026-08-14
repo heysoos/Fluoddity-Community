@@ -500,7 +500,7 @@ class AudioReactiveWindowMixin:
         # top - the difference between the two IS the shaper's effect, which is
         # the only reason this drawer is open.
         raw = self._audio_rings().get(m.signal)
-        out = self._audio_shaped_rings().get(id(m))
+        out = self._audio_shaped_rings().get(m.uid)
         colour = SIGNAL_COLORS[m.signal]
         width = imgui.get_content_region_avail().x
         origin = imgui.get_cursor_screen_pos()
