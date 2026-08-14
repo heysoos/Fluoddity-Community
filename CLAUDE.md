@@ -493,13 +493,34 @@ mechanics these caveats assume.
   is append-only, so its `novelty` is forever the at-admission value: entry #50
   was scored against 49 neighbours and #4000 against 3999, and the stored column
   correlates **0.075** with a correct rescore. It lives in `vectors.npz`
-  (rewritten wholesale, an OPTIONAL key so older archives still open), and
-  `load_from_store` calls `rescore_all()` unconditionally — 0.42 s at 4808
-  entries, 4.3 s at capacity. Skipping it hands generation 0 — every tile
-  stamped 1.0 by the no-reference convention — 100% of the `p ~ novelty^4`
-  parent weight, and one of those entries is a black frame. Four things read
-  this column: expansion parents, `latent_goal`'s anchor, `prune_to_capacity`,
-  and the browser sort.
+  (rewritten wholesale, an OPTIONAL key so older archives still open). Trusting
+  it as written hands generation 0 — every tile stamped 1.0 by the no-reference
+  convention — 100% of the `p ~ novelty^4` parent weight, and one of those
+  entries is a black frame. Four things read this column: expansion parents,
+  `latent_goal`'s anchor, `prune_to_capacity`, and the browser sort.
+
+- **`rescore_all()` is paid by the CLOSING flush, not by every open, and
+  `novelty_n` is what makes that safe.** It is O(n²) — 0.23 s at 3792 entries,
+  4.3 s at capacity — and it used to run on every `load_from_store`, so
+  switching brain layouts to browse a different archive stalled for a quarter
+  second on work only the *search* needs. `maybe_flush(closing=True)` therefore
+  rescores when the column is dirty and stamps `novelty_n`, the ARCHIVE-wide
+  count it was scored against. **`force` is NOT the trigger**: it also covers
+  writes made while the archive stays open — deleting one entry from the
+  browser — where a rescore per click is the same stall back again. A periodic
+  flush stamps nothing either, since it runs mid-generation and the column
+  would be dirty on the next candidate. An open trusts the column only when
+  **every** layout directory claims the same count, it matches what actually
+  loaded, and reconciliation dropped nothing — otherwise it rescores exactly as
+  before, which is also what a new close path that forgets `closing` costs. On
+  a reopened archive the trusted column is bit-identical to the rescore it
+  replaces, both sides reading the same fp16 vectors; entries admitted in
+  memory were scored at fp32 and differ by under 2e-3, two orders below
+  `min_separation`. Browse-only reopen measured 230 → 60 ms at 3792 entries.
+  Only `rescore_all()` may set `_novelty_clean`; `_add` and `_remove` clear it,
+  and `refresh()` leaves it alone — a partial sweep does not make a dirty
+  column comparable. A file with no `novelty_n` reads as dirty, so every
+  archive written before this opens untouched and pays once.
 
 - **Novelty is measured against archive ∪ rejects ring.** The archive is gated,
   so without the ring the search has no memory of the regions it just rejected
@@ -836,8 +857,9 @@ mechanics these caveats assume.
   of it `_size_mb` walking every thumbnail with `Path.rglob` to print one number
   — `os.scandir` is 69.6x faster and byte-identical. What remains is real and
   must not be "fixed" by caching: `VisionScorer()` 1207 ms is the ONNX sessions
-  the mode runs on, and archive open (0–2439 ms) is `load_from_store`'s
-  load-bearing `rescore_all()`.
+  the mode runs on, and archive open (0–2439 ms) is `load_from_store`, which
+  pays `rescore_all()` on the first open after the closing flush learned to
+  stamp `novelty_n` and once per unclean exit thereafter.
 
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own
   hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.

@@ -163,6 +163,10 @@ class Archive:
             self._widths[sig] = int(self.layout.length)
         self._refresh_cursor = 0
         self._since_flush = 0
+        # Whether every entry's novelty was scored against exactly the set of
+        # entries now held. Only rescore_all() can set it; admitting or
+        # removing anything clears it. An empty archive is trivially clean.
+        self._novelty_clean = True
         # Bumped by anything that changes what a viewer would draw (entries or
         # their novelty), so a viewer can cache derived views instead of
         # recomputing every frame. Monotonic, never reset.
@@ -301,10 +305,12 @@ class Archive:
         """Re-score EVERY entry against the whole archive. -> how many.
 
         refresh() spreads this over generations, which is right during a run
-        but leaves the on-disk novelty column stale after a reload - each
-        entry was scored against however much archive existed at admission
-        time, so the values are not on a comparable scale. See CLAUDE.md.
+        but leaves entries scored against however much archive existed when
+        each was last visited, so the values are not on a comparable scale.
+        This is the only thing that makes them comparable, and the only thing
+        that marks the column clean. See CLAUDE.md.
         """
+        self._novelty_clean = True
         if self._n == 0:
             return 0
         nov = knn_novelty(self.embeddings, self.embeddings, k=self.k,
@@ -434,6 +440,9 @@ class Archive:
             self.store.append_index(row)
         self._since_flush += 1
         self.revision += 1
+        # Every entry near this one is now slightly less novel than its stored
+        # value says.
+        self._novelty_clean = False
         return entry
 
     def record_settings(self, current: dict, gen: int) -> int:
@@ -518,6 +527,7 @@ class Archive:
         self.entries.pop()
         self._n -= 1
         self.revision += 1
+        self._novelty_clean = False
         if self._refresh_cursor > self._n:
             self._refresh_cursor = 0
 
@@ -553,7 +563,8 @@ class Archive:
 
     # ---- persistence ---------------------------------------------------
 
-    def maybe_flush(self, every: int = 200, force: bool = False) -> bool:
+    def maybe_flush(self, every: int = 200, force: bool = False,
+                    closing: bool = False) -> bool:
         """Rewrite the vector arrays, ONE FILE PER LAYOUT.
 
         A signature directory holds only its own brain's entries, at its own
@@ -561,11 +572,21 @@ class Archive:
         what it has always been. Every layout is rewritten, not just the
         running one: pruning evicts across brains, so a generation can remove
         rows from a layout nothing has admitted to.
+
+        A CLOSING flush pays the rescore that makes the stored column exact
+        and so makes reopening free. Nothing else does: `force` alone also
+        covers writes that happen while the archive stays open - deleting one
+        entry from the browser - where the same cost would be a stall per
+        click. Forgetting `closing` on a new close path costs one rescore at
+        the next open, which is where every archive written before this pays
+        it too.
         """
         if self.store is None:
             return False
         if not force and self._since_flush < int(every):
             return False
+        if closing and not self._novelty_clean:
+            self.rescore_all()
         rows: dict[str, list[int]] = {}
         for i in range(self._n):
             rows.setdefault(self.layout_at(i), []).append(i)
@@ -579,6 +600,10 @@ class Archive:
                 self._phys[idx],
                 np.array([self.entries[i].novelty for i in idx],
                          dtype=np.float32),
+                # ARCHIVE-wide, not this directory's share: the column was
+                # scored across brains, so a reload can only trust it if every
+                # directory was written in the same pass.
+                novelty_n=(self._n if self._novelty_clean else -1),
             )
         self._since_flush = 0
         return True
@@ -611,6 +636,7 @@ class Archive:
         self._n = 0
         self.entries = []
         loaded = dropped = 0
+        claims: set[int] = set()
         sigs = [self.signature] + [
             p.name for p in signature_dirs(self.store.base)
             if p.name != self.signature]
@@ -619,21 +645,34 @@ class Archive:
             if store is None:
                 store = ArchiveStore(self.store.base, signature=sig)
                 self._stores[sig] = store
-            got, lost = self._load_one(sig, store)
+            got, lost, claim = self._load_one(sig, store)
             loaded += got
             dropped += lost
+            if got:
+                claims.add(claim)
 
-        # Unconditional, and now ACROSS brains: an entry's stored novelty was
-        # scored against however much archive existed at admission, under one
-        # layout. See CLAUDE.md.
-        self.rescore_all()
+        # The stored column is exact only if the last writer had just rescored
+        # AND wrote every directory in that one pass AND nothing has gone
+        # missing since - so one shared count, matching what loaded. Anything
+        # else, including an archive written before this was recorded, rescores
+        # as it always did: an entry's at-admission novelty was scored against
+        # however much archive existed at the time, under one layout, and is
+        # not on a comparable scale. See CLAUDE.md.
+        self._novelty_clean = not dropped and claims <= {self._n}
+        if not self._novelty_clean:
+            self.rescore_all()
         if dropped:
             print(f"[Archive] dropped {dropped} entries with no matching "
                   "index/vector row")
         return loaded, dropped
 
-    def _load_one(self, sig: str, store) -> tuple[int, int]:
-        """Append one layout directory's entries. -> (loaded, dropped)."""
+    def _load_one(self, sig: str, store) -> tuple[int, int, int]:
+        """Append one layout directory's entries.
+
+        -> (loaded, dropped, novelty_n), where novelty_n is the archive-wide
+        entry count this directory's novelty column was scored against, or -1
+        when it does not claim one. The caller decides whether to believe it.
+        """
         rows, arrays = store.load()
         by_id = {int(r["id"]): r for r in rows if isinstance(r, dict) and "id" in r}
         # From the INDEX (every id ever issued under this layout), not from the
@@ -641,7 +680,7 @@ class Archive:
         # and the next run re-issues ids that already exist. See CLAUDE.md.
         self._next_ids[sig] = max(by_id, default=-1) + 1
         if not arrays or not by_id:
-            return 0, len(by_id)
+            return 0, len(by_id), -1
 
         ids = np.asarray(arrays["ids"], dtype=np.int64)
         emb = np.asarray(arrays["embeddings"], dtype=np.float32)
@@ -670,6 +709,9 @@ class Archive:
         nov = (np.asarray(nov, dtype=np.float32)
                if nov is not None and len(np.asarray(nov)) == len(ids)
                else None)
+        # A column we are not using cannot be exact, whatever it claims.
+        claim = int(arrays["novelty_n"]) if (
+            nov is not None and "novelty_n" in arrays) else -1
         keep = [j for j, i in enumerate(ids) if int(i) in by_id]
         dropped = (len(ids) - len(keep)) + (len(by_id) - len(keep))
 
@@ -699,4 +741,4 @@ class Archive:
                 layout=sig,
                 cfg=int(r.get("cfg", 0)),
             ))
-        return len(keep), dropped
+        return len(keep), dropped, claim

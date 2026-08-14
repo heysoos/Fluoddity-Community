@@ -202,8 +202,8 @@ def test_the_archive_is_flushed_even_if_reading_ui_state_fails(monkeypatch, tmp_
     flushed = []
 
     class _Arc:
-        def maybe_flush(self, force=False):
-            flushed.append(force)
+        def maybe_flush(self, force=False, closing=False):
+            flushed.append((force, closing))
 
     app = _App()
     _wire(monkeypatch, tmp_path, app)
@@ -214,7 +214,7 @@ def test_the_archive_is_flushed_even_if_reading_ui_state_fails(monkeypatch, tmp_
 
     app.ui = _stub(get_state=explode, cleanup=lambda: None)
     _run(app)
-    assert flushed == [True]
+    assert flushed == [(True, True)]
 
 
 def test_a_cleanup_failure_does_not_mask_the_real_exception(monkeypatch, tmp_path):

@@ -43,8 +43,10 @@ class _FakeArchive:
         self._log = log
         self.cfg_version = 0
 
-    def maybe_flush(self, force=False):
-        self._log.note(f"flush(force={force})")
+    def maybe_flush(self, force=False, closing=False):
+        # closing is what makes the stored novelty column exact, so a switch
+        # that drops it hands the next open a full rescore.
+        self._log.note(f"flush(force={force},closing={closing})")
 
     def record_settings(self, current, gen):
         """Letting go of an archive records any change made since the last
@@ -183,8 +185,8 @@ def test_the_switch_happens_in_the_order_that_keeps_data(roots):
     # store - a change made after the last generation reaches the log nowhere
     # else.
     assert log == ["save_settings", "record_settings", "pause",
-                   "end_expedition", "flush(force=True)", "save_goals",
-                   "close_store", "release_thumbs"]
+                   "end_expedition", "flush(force=True,closing=True)",
+                   "save_goals", "close_store", "release_thumbs"]
 
 
 def test_the_switch_repoints_every_holder(roots):

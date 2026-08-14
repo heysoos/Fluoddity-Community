@@ -402,7 +402,7 @@ class App:
             # The CMA-ES mean was seeded from a parent in the OUTGOING archive.
             self.imgep_driver.end_expedition()
         if self.archive is not None:
-            self.archive.maybe_flush(force=True)
+            self.archive.maybe_flush(force=True, closing=True)
         if self.goal_list is not None:
             self.goal_list.save()
         if self.archive_store is not None:
@@ -919,7 +919,7 @@ class App:
                 self.auto_service.pause()
                 self.auto_service.driver = self.prompt_driver
             if self.archive is not None:
-                self.archive.maybe_flush(force=True)
+                self.archive.maybe_flush(force=True, closing=True)
             self._undo_auto_overrides(ui_state)
         self._explore_was_enabled = expl.enabled
 
@@ -1303,7 +1303,8 @@ class App:
         ui_state = self._step("read ui state", self.ui.get_state)
 
         if self.archive is not None:
-            self._step("flush archive", self.archive.maybe_flush, force=True)
+            self._step("flush archive", self.archive.maybe_flush,
+                       force=True, closing=True)
         if self.goal_list is not None:
             self._step("save goals", self.goal_list.save)
         if ui_state is not None:

@@ -27,11 +27,11 @@ THUMB_PX = 160
 THUMB_QUALITY = 85
 
 _ARRAY_KEYS = ("ids", "embeddings", "brains", "physics")
-# Newer field, absent from older archives. NOT in _ARRAY_KEYS and NOT a
+# Newer fields, absent from older archives. NOT in _ARRAY_KEYS and NOT a
 # format_version bump on purpose: both would quarantine every existing archive
-# on first open. A file without it simply loads without it, and
+# on first open. A file without them simply loads without them, and
 # Archive.load_from_store rescores from the embeddings anyway.
-_OPTIONAL_ARRAY_KEYS = ("novelty",)
+_OPTIONAL_ARRAY_KEYS = ("novelty", "novelty_n")
 
 
 def encoder_file(archive_dir) -> Path:
@@ -129,14 +129,19 @@ class ArchiveStore:
             print(f"[Archive] index write failed ({exc}); persistence disabled")
 
     def flush_vectors(self, ids, embeddings, brains, physics,
-                      novelty=None) -> None:
+                      novelty=None, novelty_n: int = -1) -> None:
         """Rewrite vectors.npz atomically. Embeddings go to disk as fp16 - half
         the bytes, well below the precision any novelty decision needs.
 
         novelty belongs HERE rather than in index.jsonl because it is the one
         stored field that CHANGES after admission: refresh() re-scores entries
         against the grown archive, and index.jsonl is append-only so it can
-        only ever hold the at-admission value. See CLAUDE.md."""
+        only ever hold the at-admission value. See CLAUDE.md.
+
+        novelty_n is how many entries the whole archive held when the column
+        was scored, or -1 for "scored against something else". A reload may
+        trust the column only when every layout agrees on it and it matches
+        what actually loaded."""
         if not self.enabled:
             return
         tmp = self.vectors_path.with_suffix(self.vectors_path.suffix + ".tmp")
@@ -156,6 +161,7 @@ class ArchiveStore:
                         np.zeros(len(np.asarray(ids)))
                         if novelty is None else novelty,
                         dtype=np.float32),
+                    novelty_n=np.array(int(novelty_n), dtype=np.int64),
                 )
             os.replace(tmp, self.vectors_path)
         except (OSError, ValueError) as exc:
