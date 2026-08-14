@@ -1,4 +1,5 @@
 """Command handler: processes one-shot UI commands each frame."""
+import copy
 import random
 import numpy as np
 from utilities.gl_helpers import readback_rule
@@ -89,6 +90,49 @@ class CommandHandler:
         self.rule_manager.push_rule(rule, ui_state.sim.rule_seed)
         if self._switch_will_apply(rule):
             return
+        self.sim.apply_rule(rule)
+
+    def apply_undo_snapshot(self, snap, ui_state) -> bool:
+        """Put a snapshot back. Returns True if the brain half was skipped.
+
+        The layout goes back BEFORE the rule: apply_rule measures a rule
+        against the live layout and silently refuses a mismatch. Under a
+        tournament the brain belongs to the grid's owner, so only the settings
+        are restored - the same split G already makes.
+        """
+        from services.undo_history import CONTAINERS
+
+        pls = self.param_lock_service
+        locked = (pls.snapshot_locked(ui_state.sim, ui_state.preferences)
+                  if pls else {})
+        for name, module, _panel in CONTAINERS:
+            target = getattr(ui_state, name)
+            held = snap.fields.get(name, {})
+            for f in module.UNDOABLE_FIELDS:
+                if f in held:            # absent means "keep what is on screen"
+                    setattr(target, f, copy.deepcopy(held[f]))
+        if pls:
+            pls.restore_locked(ui_state.sim, ui_state.preferences, locked)
+
+        if self._grid_owner(ui_state) is not None:
+            return True
+        if snap.rule is not None:
+            self._restore_snapshot_brain(snap, ui_state)
+        return False
+
+    def _restore_snapshot_brain(self, snap, ui_state) -> None:
+        """Layout first, then the rule."""
+        if snap.brain_signature and self.apply_brain_layout is not None:
+            live = getattr(getattr(self, "sim", None), "brain_layout", None)
+            if live is None or live.signature() != snap.brain_signature:
+                from services.brains import layout_from_signature
+
+                layout = layout_from_signature(snap.brain_signature,
+                                               snap.brain_settings)
+                if layout is not None:
+                    self.apply_brain_layout(layout, ui_state)
+        rule = np.array(snap.rule, copy=True)
+        self.rule_manager.push_rule(rule, ui_state.sim.rule_seed)
         self.sim.apply_rule(rule)
 
     def _switch_will_apply(self, rule) -> bool:
