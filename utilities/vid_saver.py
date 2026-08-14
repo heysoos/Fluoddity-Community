@@ -1,4 +1,4 @@
-from .save_frame_gpu import save_frame_gpu, reset_gpu_frame_counter
+from .save_frame_gpu import AsyncFrameReader, reset_gpu_frame_counter
 from .ffmpeg_recorder import FFmpegVideoRecorder
 from .paths import get_videos_dir
 from services.record_crop import record_sizes, world_crop
@@ -25,12 +25,26 @@ class VidSaver:
         # even though the crop rect is re-derived every frame.
         self.view = None
         self._source_size = None
+        # Nothing on the frame loop touches the pixels: the GPU supersamples
+        # into an RGBA8 target and the readback lands in a buffer mapped a
+        # frame late. See the recording caveats in CLAUDE.md.
+        self._reader = AsyncFrameReader()
+        # Remembered for finish(), which collects the frame still in flight and
+        # must not push a limited take one frame past its limit.
+        self._max_frames = -1
 
     def _plan(self, tex, ssk_w, view_rect):
-        """(blit target size or None, video size) for a take starting now."""
+        """(blit target size or None, video size) for a take starting now.
+
+        The ONE authority on the output size. H.264 refuses odd dimensions, so
+        both branches round down to even and the reader arrives at the same
+        number by the same rule - a frame whose size disagreed with the
+        recorder's header would be refused rather than encoded.
+        """
         if view_rect is None:
             width, height = tex.size
-            return None, (width // ssk_w, height // ssk_w)
+            return None, ((width // ssk_w) - (width // ssk_w) % 2,
+                          (height // ssk_w) - (height // ssk_w) % 2)
         return record_sizes(world_crop(view_rect), tex.size, ssk_w)
 
     def frame(self, ctx, tex, max_frames=-1, ssk_w=2, filename_prefix="",
@@ -52,6 +66,9 @@ class VidSaver:
                 print(f"  Finishing current video and starting new one...")
                 self.recorder.close()
                 self._release_view()
+                # The buffers are sized for the old geometry, and whatever is
+                # in flight belongs to the file just closed.
+                self._reader.release()
 
             # Create timestamped filename in Videos folder
             timestamp = datetime.now().strftime('%H-%M-%S')
@@ -87,14 +104,18 @@ class VidSaver:
         if self.view is not None:
             tex = self.view.crop(tex, view_rect)
 
-        # Process frame with GPU (spatial supersampling only)
-        # Temporal accumulation and gamma correction happen in FrameAssembler before this
-        # Use return_array=True to get numpy array instead of saving PNG
-        frame_array = save_frame_gpu(tex, ctx, supersample_k=ssk_w, return_array=True)
+        # Supersample on the GPU and collect the readback issued LAST frame,
+        # which has had a whole frame to complete. Temporal accumulation and
+        # gamma correction happened in FrameAssembler before this.
+        self._max_frames = max_frames
+        frame_bytes, _resized = self._reader.submit(ctx, tex, ssk_w)
 
-        # frame_array is always returned (no accumulation delay)
-        self.recorder.write_frame_from_array(frame_array)
-        self.current_frame += 1
+        # None only on the first frame of a take, while the first readback is
+        # still in flight; finish() collects the one left over at the end, so
+        # the count the soundtrack is timed against stays exact.
+        if frame_bytes is not None:
+            self.recorder.write_frame(frame_bytes)
+            self.current_frame += 1
 
         if max_frames > 0 and self.current_frame >= max_frames:
             self.finish()
@@ -106,6 +127,17 @@ class VidSaver:
 
     def finish(self):
         '''Save video and reset everything for another recording'''
+
+        if self.recorder is not None:
+            # The frame still in flight is part of the take, and the count
+            # below is what the soundtrack's length is divided by - so it is
+            # collected, unless the take stopped because it reached its limit
+            # and one more would run past it.
+            tail = self._reader.drain()
+            room = self._max_frames <= 0 or self.current_frame < self._max_frames
+            if tail is not None and room:
+                self.recorder.write_frame(tail)
+                self.current_frame += 1
 
         frames = self.current_frame
         if self.recorder is not None:
@@ -121,6 +153,8 @@ class VidSaver:
         self._video_path = None
 
         self._release_view()
+        self._reader.release()
+        self._max_frames = -1
         self._source_size = None
         reset_gpu_frame_counter()
         self.current_frame = 0

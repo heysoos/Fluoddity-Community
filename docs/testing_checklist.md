@@ -65,6 +65,21 @@ Use this after large refactors or significant new features. Items roughly ordere
 - [ ] **k.** Resize the window mid-take in a camera view: it stays ONE file.
 - [ ] **l.** Pan while zoomed out during a take: the world stays framed rather
       than sliding, and no bar appears at the edge it was panned away from.
+- [ ] **m.** The framerate barely moves when recording starts, and there are NO
+      periodic freezes. A lurch of a second or more means something is writing
+      to ffmpeg on the frame loop again.
+- [ ] **n.** The video plays and is the right way up. A vertical flip means the
+      two capture paths stopped agreeing about which way is up.
+- [ ] **o.** Set Video End Frame and let a take stop on its own: the file has
+      exactly the frames asked for, not one more. The readback runs a frame
+      behind, so the last one is collected at the end.
+- [ ] **p.** Record at a window size with an odd pixel dimension: the video is
+      one pixel smaller on that axis and encodes fine, rather than failing.
+- [ ] **q.** Record for several minutes and watch memory: it settles rather
+      than climbing. The frame queue is capped, so a slow encoder must slow the
+      sim instead of growing.
+- [ ] **r.** Shift+P during a recording still writes an upright screenshot at
+      the full window size, not the even-rounded video size.
 
 ### Video Recording with audio
 Sync is the thing only a person can confirm, so use material with a hard beat.

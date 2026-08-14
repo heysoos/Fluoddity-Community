@@ -758,6 +758,59 @@ mechanics these caveats assume.
   through `RecordingAudio.finish()` leaves the output file in place — a
   soundtrack is worth strictly less than the recording it belongs to.
 
+- **Nothing on the frame loop may touch the pixels, and `stdin.write` may not
+  happen on it at all.** Recording used to cost **44.1 ms per frame** at
+  1920x1080 before ffmpeg saw anything — a `read()` of an RGBA **float32**
+  target (16.6 ms, 33.2 MB, and a synchronous readback stalls the whole
+  pipeline) then `*255 -> clip -> astype -> flipud -> tobytes` on the host
+  (27.5 ms, four passes over eight million floats). It then blocked on a pipe
+  to an encoder at preset `slow`, whose **worst single write was 1118 ms**.
+  Three fixes, all needed: an RGBA8 target read through a PAIR of buffers
+  mapped a frame late (a synchronous `texture.read_into(host)` is 24.5 ms; via
+  a PBO it is 2.5); the flip done in the vertex shader so the readback IS the
+  `rgba` ffmpeg is given, with no host pass; and a writer thread, so a full
+  pipe never reaches the caller. Now **8–15 ms mean**.
+  `python -m tools.measure_recording`. The trap when re-measuring is the one
+  the canvas-format caveat names: this is a laptop, so two runs measure its
+  thermal state as much as the code. Read the columns against each other in
+  ONE run, never across runs.
+
+- **The encoder must DRAIN faster than the sim produces.** At 1080p, preset
+  `slow` drains 32–48 fps with a worst single write over a SECOND; `veryfast`
+  drains 64–84 with a worst write of 29 ms. `PRESET` is therefore
+  `veryfast`/CRF 20. The queue is bounded by MEMORY (256 MB, 4..32 frames) and
+  BLOCKING: a full queue slows the sim rather than dropping a frame, so the
+  file is exactly what the sim produced — which is also what lets
+  `recording_fps` divide by it.
+
+- **The readback is a frame LATE, so `finish()` collects the one in flight —
+  but never past `max_frames`.** The frame count is what the soundtrack's
+  length is divided by, so losing the last frame would stretch the take and
+  keeping one too many would run a limited take long. `VidSaver._max_frames`
+  is remembered for exactly that check. Guarded by
+  `tests/test_vid_saver_audio.py::test_hitting_the_frame_limit_still_muxes`,
+  which caught the extra frame the drain first introduced.
+
+- **RGB8 is smaller and NOT a required color-renderable format.** It works on
+  this machine (2.55 ms against RGBA8's 3.09, and 6.2 MB over the pipe against
+  8.3) and it is the same trap as RGB32F elsewhere in this file. RGBA8 is
+  required, ffmpeg takes `rgba` natively, and the difference is 79.6 fps
+  against 76.1 — so the format is RGBA8 and the alpha is ffmpeg's problem.
+
+- **`VidSaver._plan` is the ONE authority on the output size, and it rounds
+  DOWN to even.** H.264 refuses odd dimensions, and the old path rebuilt the
+  whole image into a padded host array every frame to fix it. `record_sizes`
+  already produced even sizes for a cropped take; the uncropped branch now
+  does too, and `FFmpegVideoRecorder` raises on odd rather than accepting what
+  it cannot encode. The reader reaches the same number by the same rule — a
+  frame whose size disagreed with the encoder's header would be refused.
+
+- **The flip lives in the vertex shader, so both capture paths share it.**
+  `save_frame_gpu` (screenshots, synchronous, PNG, exact dimensions) and
+  `AsyncFrameReader` (recording) run the same program; a leftover `np.flipud`
+  on either side would put that one upside down silently. Guarded by
+  `tests/test_video_recording.py::test_the_screenshot_path_agrees_with_the_recorder_on_which_way_is_up`.
+
 ### UI and platform
 
 - **There is ONE save dialog, and every Save button in the app opens it.**

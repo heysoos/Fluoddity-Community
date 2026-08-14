@@ -22,13 +22,40 @@ class _FakeRecorder:
         self.closed = False
         _FakeRecorder.instances.append(self)
 
-    def write_frame_from_array(self, arr):
-        assert arr.shape == (self.input_height, self.input_width, 3), (
-            "the array handed to ffmpeg must match the size it was opened with")
+    def write_frame(self, frame_bytes):
+        assert len(frame_bytes) == self.input_width * self.input_height * 4, (
+            "the bytes handed to ffmpeg must match the size it was opened with")
         self.frames += 1
 
     def close(self):
         self.closed = True
+
+
+class _FakeReader:
+    """Stands in for the GPU readback, with the same one-frame latency.
+
+    The latency is modelled rather than skipped: the frame count is what the
+    soundtrack's length is divided by, so a reader that answered immediately
+    would hide an off-by-one in the take's length.
+    """
+
+    def __init__(self):
+        self._pending = None
+        self.released = 0
+
+    def submit(self, ctx, tex, supersample_k):
+        w = tex.size[0] // supersample_k
+        h = tex.size[1] // supersample_k
+        out, self._pending = self._pending, bytes(w * h * 4)
+        return out, False
+
+    def drain(self):
+        out, self._pending = self._pending, None
+        return out
+
+    def release(self):
+        self._pending = None
+        self.released += 1
 
 
 class _FakeView:
@@ -60,11 +87,7 @@ def saver(monkeypatch):
     monkeypatch.setattr(vs, "FFmpegVideoRecorder", _FakeRecorder)
     monkeypatch.setattr(vs, "RecordView", make_view)
     monkeypatch.setattr(vs, "reset_gpu_frame_counter", lambda: None)
-    monkeypatch.setattr(
-        vs, "save_frame_gpu",
-        lambda tex, ctx, supersample_k=1, return_array=True: np.zeros(
-            (tex.size[1] // supersample_k, tex.size[0] // supersample_k, 3),
-            dtype=np.uint8))
+    monkeypatch.setattr(vs, "AsyncFrameReader", _FakeReader)
     s = vs.VidSaver()
     s.active = True
     s.views = views
@@ -82,6 +105,10 @@ def test_the_size_is_frozen_even_though_the_rect_keeps_moving(saver):
     assert len(_FakeRecorder.instances) == 1, "the take must not be split"
     rec = _FakeRecorder.instances[0]
     assert (rec.input_width, rec.input_height) == (960, 1080)
+    # The readback is a frame behind, so the last one lands when the take ends.
+    # Every submitted frame must still reach the file: the count is what the
+    # soundtrack's length is divided by.
+    saver.finish()
     assert rec.frames == 3
 
 

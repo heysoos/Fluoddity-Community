@@ -21,11 +21,31 @@ class _FakeRecorder:
         self.frames = 0
         _FakeRecorder.instances.append(self)
 
-    def write_frame_from_array(self, arr):
+    def write_frame(self, frame_bytes):
         self.frames += 1
 
     def close(self):
         pass
+
+
+class _FakeReader:
+    """Stands in for the GPU readback, one frame of latency and all."""
+
+    def __init__(self):
+        self._pending = None
+
+    def submit(self, ctx, tex, supersample_k):
+        w = tex.size[0] // supersample_k
+        h = tex.size[1] // supersample_k
+        out, self._pending = self._pending, bytes(w * h * 4)
+        return out, False
+
+    def drain(self):
+        out, self._pending = self._pending, None
+        return out
+
+    def release(self):
+        self._pending = None
 
 
 class _FakeAudio:
@@ -50,11 +70,7 @@ def saver(monkeypatch):
     _FakeRecorder.instances = []
     monkeypatch.setattr(vs, "FFmpegVideoRecorder", _FakeRecorder)
     monkeypatch.setattr(vs, "reset_gpu_frame_counter", lambda: None)
-    monkeypatch.setattr(
-        vs, "save_frame_gpu",
-        lambda tex, ctx, supersample_k=1, return_array=True: np.zeros(
-            (tex.size[1] // supersample_k, tex.size[0] // supersample_k, 3),
-            dtype=np.uint8))
+    monkeypatch.setattr(vs, "AsyncFrameReader", _FakeReader)
     clock = {"t": 100.0}
     monkeypatch.setattr(vs, "perf_counter", lambda: clock["t"])
     s = vs.VidSaver()
