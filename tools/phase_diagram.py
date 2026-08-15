@@ -282,7 +282,8 @@ class Harness:
 
 
 def _write_sidecar(out, args, harness, path, feats, frames, series, spread, done,
-                   strip, xs, ys, probe_steps, snaps, measures, raw_idx) -> None:
+                   strip, xs, ys, probe_steps, snaps, measures, raw_idx,
+                   noise_at) -> None:
     """The features file. Rewritten wholesale, cheaply enough to run mid-sweep."""
     np.savez_compressed(
         out / "features.npz",
@@ -305,6 +306,10 @@ def _write_sidecar(out, args, harness, path, feats, frames, series, spread, done
             "particle_density": args.density,
             "canvas": [harness.width, harness.height],
             "entity_count": harness.sim.entity_count,
+            # Where the noise strip was run. A floor sized somewhere other than
+            # the point it is quoted against is worse than none, so the file
+            # says which point rather than leaving it to be assumed.
+            "noise_at": noise_at,
             "coverage_threshold": args.coverage_threshold,
             "pr_bracket": [args.pr_lo, args.pr_hi],
             "rho_floor": args.rho_floor,
@@ -324,6 +329,20 @@ def sweep(args) -> int:
         if not hasattr(state, axis):
             harness.release()
             raise SystemExit(f"{axis!r} is not a SimState field")
+    if args.x_param == args.y_param:
+        # The two overrides are one dict, so a shared key keeps only the y
+        # value and the x axis would sweep nothing while still being labelled.
+        harness.release()
+        raise SystemExit("--x-param and --y-param must differ. To spend the y "
+                         "axis on repeats, pin a second parameter instead: "
+                         "--y-param X --y-range v v.")
+
+    # Read BEFORE the sweep. run_cell writes the overrides straight into
+    # `state` and never puts them back, so after the loop these two fields hold
+    # the last cell's values and a noise floor read here would size the splat
+    # race at a corner of the diagram while claiming to size it at the preset.
+    preset_base = {args.x_param: float(getattr(state, args.x_param)),
+                   args.y_param: float(getattr(state, args.y_param))}
 
     r = int(args.grid)
     xs = np.linspace(args.x_range[0], args.x_range[1], r)
@@ -410,7 +429,8 @@ def sweep(args) -> int:
         recoverable.
         """
         _write_sidecar(out, args, harness, path, feats, frames, series, spread,
-                       done, strip, xs, ys, probe_steps, snaps, measures, raw_idx)
+                       done, strip, xs, ys, probe_steps, snaps, measures,
+                       raw_idx, preset_base)
 
     order = (progressive_order(r) if args.order == "progressive"
              else [(iy, ix) for iy in range(r) for ix in range(r)])
@@ -463,14 +483,13 @@ def sweep(args) -> int:
         # EVERYTHING identical, both seeds included: both are held fixed across
         # the grid, so the intrinsic splat race is the grid's only noise source
         # and reproducing exactly that is the only way to size it.
-        print(f"noise floor: {args.noise_strip} repeats at the preset's own values")
-        base = {args.x_param: getattr(state, args.x_param),
-                args.y_param: getattr(state, args.y_param)}
+        print(f"noise floor: {args.noise_strip} repeats at "
+              + ", ".join(f"{k}={v:g}" for k, v in preset_base.items()))
         rows = []
         for _ in range(args.noise_strip):
             s, probed, f, _, _ = harness.run_cell(
-                base, args.seed, args.steps, args.probe_every, snaps, measures,
-                args.coverage_threshold, False)
+                preset_base, args.seed, args.steps, args.probe_every, snaps,
+                measures, args.coverage_threshold, False)
             rows.append(pm.cell_row(f, probed, s, args.pr_lo, args.pr_hi,
                                     args.steps, rho_floor=args.rho_floor))
         strip = np.asarray(rows, dtype=np.float32)
