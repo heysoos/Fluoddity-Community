@@ -419,6 +419,9 @@ def main(argv) -> int:
     ap.add_argument("--out", default="")
     ap.add_argument("--mark", action="store_true",
                     help="crosshair at the preset's own parameter values")
+    ap.add_argument("--spread", action="store_true",
+                    help="plot the DISAGREEMENT between a cell's repeats "
+                         "rather than their mean; needs a sweep run with --reps")
     ap.add_argument("--temporal", default="",
                     help="map a probe's fluctuation WITHIN each run (the "
                          "attractor's width), e.g. --temporal change")
@@ -444,6 +447,11 @@ def main(argv) -> int:
     if args.recompute or args.rho_floor is not None:
         feats = recompute_series_columns(data, meta, args.pr_lo, args.pr_hi,
                                          args.rho_floor)
+    if args.spread:
+        if "cell_spread" not in data.files or int(meta.get("reps", 1)) < 2:
+            raise SystemExit("this sweep has no repeats to disagree; rerun the "
+                             "diagram with --reps 2 or more.")
+        feats = data["cell_spread"]
     if args.ridge:
         dimensionality(data, meta, feats)
         return 0
