@@ -92,6 +92,14 @@ def fill_holes(plane: np.ndarray, done: np.ndarray) -> np.ndarray:
         before = np.isnan(out).sum()
         for shift, axis in ((1, 0), (-1, 0), (1, 1), (-1, 1)):
             donor = np.roll(out, shift, axis=axis)
+            # np.roll WRAPS, and the two ends of an axis are opposite ends of a
+            # parameter range - the top row must never be filled from the
+            # bottom one. Blank whichever edge the roll brought around.
+            edge = 0 if shift > 0 else -1
+            if axis == 0:
+                donor[edge, :] = np.nan
+            else:
+                donor[:, edge] = np.nan
             out = np.where(np.isnan(out), donor, out)
         if np.isnan(out).sum() == before:
             break
@@ -152,6 +160,39 @@ def render(data, meta, feature: str | None, rgb: list[str] | None,
     if scale > 1:
         img = np.repeat(np.repeat(img, scale, axis=0), scale, axis=1)
     return img, title
+
+
+def mark_preset(img: np.ndarray, meta: dict) -> np.ndarray:
+    """Draw a crosshair where the preset's OWN parameters sit.
+
+    The diagram exists to explain one preset, and without this it is a landscape
+    with no "you are here" - which quadrant the thing you actually run lives in
+    is the first question anyone asks of it.
+    """
+    phys = (meta.get("config") or {}).get("physics") or {}
+    xv = phys.get(meta["x_param"].lower())
+    yv = phys.get(meta["y_param"].lower())
+    if xv is None or yv is None:
+        return img
+    h, w = img.shape[:2]
+    (x0, x1), (y0, y1) = meta["x_range"], meta["y_range"]
+    cx = int(round((xv - x0) / (x1 - x0) * (w - 1)))
+    cy = int(round((1.0 - (yv - y0) / (y1 - y0)) * (h - 1)))   # y is flipped
+    if not (0 <= cx < w and 0 <= cy < h):
+        return img
+
+    out = img.copy()
+    arm, gap = max(6, h // 40), max(2, h // 160)
+    for d in range(gap, arm):
+        for py, px in ((cy - d, cx), (cy + d, cx), (cy, cx - d), (cy, cx + d)):
+            if 0 <= py < h and 0 <= px < w:
+                # White core, black shoulders, so it reads on any colormap.
+                out[py, px] = 255
+                for oy, ox in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    qy, qx = py + oy, px + ox
+                    if 0 <= qy < h and 0 <= qx < w and out[qy, qx].max() != 255:
+                        out[qy, qx] = 0
+    return out
 
 
 def summarise(feats: np.ndarray, strip: np.ndarray, names: list[str],
@@ -224,6 +265,8 @@ def main(argv) -> int:
     ap.add_argument("--hi-pct", type=float, default=98.0)
     ap.add_argument("--scale", type=int, default=4, help="nearest-neighbour zoom")
     ap.add_argument("--out", default="")
+    ap.add_argument("--mark", action="store_true",
+                    help="crosshair at the preset's own parameter values")
     ap.add_argument("--recompute", action="store_true",
                     help="re-derive change_rate and alive_steps from the stored "
                          "probe series, under the thresholds given below")
@@ -245,6 +288,8 @@ def main(argv) -> int:
     rgb = [s.strip() for s in args.rgb.split(",") if s.strip()]
     img, title = render(data, meta, args.feature, rgb or None,
                         args.lo_pct, args.hi_pct, args.scale, feats)
+    if args.mark:
+        img = mark_preset(img, meta)
     dest = Path(args.out) if args.out else path / f"{title}.png"
     Image.fromarray(img).save(dest)
     print(f"wrote {dest}  ({img.shape[1]}x{img.shape[0]})")
