@@ -186,22 +186,64 @@ def test_a_translating_pattern_changes_while_its_structure_does_not():
 
 # --- alive_steps: the Lenia transcription ----------------------------------
 
+def _series(pr, rho=0.01):
+    """(n, len(PROBE_NAMES)) with the two columns alive_steps reads."""
+    pr = np.atleast_1d(np.asarray(pr, dtype=float))
+    out = np.zeros((len(pr), len(pm.PROBE_NAMES)))
+    out[:, pm.PROBE_NAMES.index("participation_ratio")] = pr
+    out[:, pm.PROBE_NAMES.index("rho_mean")] = rho
+    return out
+
+
 def test_a_run_that_stays_in_the_bracket_survives_the_whole_budget():
     steps = np.arange(0, 500, 50)
-    pr = np.full(len(steps), 0.4)
-    assert pm.alive_steps(steps, pr, 0.05, 0.95, 500) == 500.0
+    assert pm.alive_steps(steps, _series(np.full(len(steps), 0.4)),
+                          0.05, 0.95, 500) == 500.0
 
 
-def test_the_first_departure_is_what_is_reported():
+def test_the_sustained_death_is_what_is_reported_not_a_dip():
+    """A dip that recovers is not a death; the run is alive afterwards."""
     steps = np.array([0, 50, 100, 150, 200])
-    pr = np.array([0.4, 0.4, 0.99, 0.4, 0.001])
-    assert pm.alive_steps(steps, pr, 0.05, 0.95, 200) == 100.0
+    s = _series([0.4, 0.4, 0.99, 0.4, 0.001])
+    assert pm.alive_steps(steps, s, 0.05, 0.95, 200) == 200.0
 
 
 def test_collapse_and_saturation_are_both_deaths():
     steps = np.array([0, 50, 100])
-    assert pm.alive_steps(steps, np.array([0.4, 0.001, 0.4]), .05, .95, 100) == 50.0
-    assert pm.alive_steps(steps, np.array([0.4, 0.999, 0.4]), .05, .95, 100) == 50.0
+    assert pm.alive_steps(steps, _series([0.4, 0.4, 0.001]), .05, .95, 100) == 100.0
+    assert pm.alive_steps(steps, _series([0.4, 0.4, 0.999]), .05, .95, 100) == 100.0
+
+
+def test_a_slow_starter_is_not_a_corpse():
+    """Every cell begins with an empty canvas, so mass crosses the floor from
+    below and the first probes are under it in any cell that starts slowly."""
+    steps = np.array([0, 50, 100, 150])
+    s = _series([0.4, 0.4, 0.4, 0.4],
+                rho=np.array([1e-6, 1e-6, 1e-2, 1e-2]))
+    assert pm.alive_steps(steps, s, 0.05, 0.95, 150) == 150.0
+
+
+def test_a_run_that_never_lived_is_told_apart_from_one_that_died():
+    steps = np.array([0, 50, 100])
+    never = _series([0.4, 0.4, 0.4], rho=1e-9)
+    assert pm.alive_steps(steps, never, 0.05, 0.95, 100) == 0.0
+
+
+def test_a_faded_canvas_is_dead_even_at_a_perfectly_healthy_shape():
+    """The failure this feature got wrong at first.
+
+    Participation ratio is scale-invariant by construction, so a canvas that has
+    faded to nothing still scores an ordinary value and the shape test alone
+    calls it alive forever.
+    """
+    steps = np.array([0, 50, 100, 150])
+    rho = np.array([0.01, 0.01, 1e-6, 1e-6])
+    s = _series([0.4, 0.4, 0.4, 0.4])
+    s[:, pm.PROBE_NAMES.index("rho_mean")] = rho
+
+    assert pm.alive_steps(steps, s, 0.05, 0.95, 150, rho_floor=1e-4) == 100.0
+    # ...and with no mass floor it would have survived the whole budget.
+    assert pm.alive_steps(steps, s, 0.05, 0.95, 150, rho_floor=0.0) == 150.0
 
 
 # --- assembly --------------------------------------------------------------

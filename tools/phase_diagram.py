@@ -262,6 +262,7 @@ def _write_sidecar(out, args, harness, path, feats, frames, series, done,
             "entity_count": harness.sim.entity_count,
             "coverage_threshold": args.coverage_threshold,
             "pr_bracket": [args.pr_lo, args.pr_hi],
+            "rho_floor": args.rho_floor,
             "particle_subsample": len(harness.sub),
             "config": harness.raw_config,
         })))
@@ -346,7 +347,7 @@ def sweep(args) -> int:
         series[iy, ix, :len(s)] = s[:n_probe]
         frames[iy, ix, :len(f)] = f
         feats[iy, ix] = pm.cell_row(f, probed, s, args.pr_lo, args.pr_hi,
-                                    args.steps)
+                                    args.steps, rho_floor=args.rho_floor)
         done[iy, ix] = True
         if want_raw:
             canvas_mm[raw_pos[iy], raw_pos[ix]] = canvas
@@ -373,7 +374,7 @@ def sweep(args) -> int:
                 base, args.seed, args.steps, args.probe_every, snaps, measures,
                 args.coverage_threshold, False)
             rows.append(pm.cell_row(f, probed, s, args.pr_lo, args.pr_hi,
-                                    args.steps))
+                                    args.steps, rho_floor=args.rho_floor))
         strip = np.asarray(rows, dtype=np.float32)
 
     canvas_mm.flush()
@@ -419,7 +420,7 @@ def pilot(args) -> int:
                     args.steps, args.probe_every, snaps, measures,
                     args.coverage_threshold, False)
                 rows.append(pm.cell_row(f, probed, s, args.pr_lo, args.pr_hi,
-                                        args.steps))
+                                        args.steps, rho_floor=args.rho_floor))
         per = (time.time() - started) / len(rows)
         arr = np.asarray(rows)
 
@@ -472,6 +473,9 @@ def main(argv) -> int:
     ap.add_argument("--coverage-threshold", type=float,
                     default=DEFAULT_COVERAGE_THRESHOLD)
     ap.add_argument("--pr-lo", type=float, default=DEFAULT_PR_BRACKET[0])
+    ap.add_argument("--rho-floor", type=float, default=pm.DEFAULT_RHO_FLOOR,
+                    help="a trail below this mean has faded to nothing; "
+                         "participation ratio is scale-free and cannot see it")
     ap.add_argument("--pr-hi", type=float, default=DEFAULT_PR_BRACKET[1])
     ap.add_argument("--noise-strip", type=int, default=32,
                     help="repeats at identical parameters, to size the speckle")

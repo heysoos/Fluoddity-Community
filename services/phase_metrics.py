@@ -277,25 +277,64 @@ def frame_row(pos: np.ndarray, vel: np.ndarray, field: np.ndarray,
     ], dtype=np.float64)
 
 
-def alive_steps(steps: np.ndarray, pr: np.ndarray, lo: float, hi: float,
-                budget: int) -> float:
-    """First step at which participation ratio leaves [lo, hi], else `budget`.
+DEFAULT_RHO_FLOOR = 1e-4
 
-    The Lenia transcription. The bracket is not guessable in advance - the
-    caller reads it off a pilot and writes it into the sidecar, so a diagram
-    always carries the definition that produced it.
+
+def alive_steps(steps: np.ndarray, series: np.ndarray, lo: float, hi: float,
+                budget: int, rho_floor: float = DEFAULT_RHO_FLOOR) -> float:
+    """First step the run stops being alive, else `budget`. The Lenia transcription.
+
+    Alive means BOTH the trail still carries mass and it is neither collapsed to
+    a blob nor spread flat:
+
+        rho_mean >= rho_floor   and   lo <= participation_ratio <= hi
+
+    The mass half is not optional and was the whole feature at first attempt.
+    `participation_ratio` is deliberately scale-invariant, so a canvas that has
+    faded to nothing still scores a perfectly ordinary value - measured on `fish
+    soup`, cells at `rho_mean` 6e-5 scored 0.24 to 0.63. `change` is normalised
+    the same way and is WORSE: a near-zero field still turns over most of itself
+    relative to itself, so those same cells scored 0.61 to 0.80, reading as the
+    liveliest things on the diagram.
+
+    Trail mass IS free here, which is what makes it the honest analogue of
+    Lenia's. The canvas is a VELOCITY field, so a slow particle deposits almost
+    nothing: `rho_mean` spans three orders of magnitude across one preset's
+    parameter plane while the particle count never moves.
+
+    Neither bound is guessable in advance; the caller reads them off a pilot and
+    writes them into the sidecar, so a diagram carries the definition that
+    produced it.
+
+    Death must be SUSTAINED, so this scans from the end for the last moment the
+    run was alive rather than from the start for the first moment it was not.
+    Every cell begins with an empty canvas, so the trail crosses any mass floor
+    from below: measured on `fish soup`, 18 of 384 cells sat under the floor at
+    the first probe and 10 of them were merely slow, climbing past it and
+    staying there. Reporting the first dip would have called those dead at step
+    50 and made the feature a coin flip on how fast a cell starts.
+
+    A run never alive at any probe returns 0 - it did not die, it never lived,
+    and those are different enough to be worth telling apart on the picture.
     """
     s = np.asarray(steps)
-    v = np.asarray(pr, dtype=np.float64)
-    outside = (v < float(lo)) | (v > float(hi))
-    if not outside.any():
+    a = np.asarray(series, dtype=np.float64)
+    pr = a[:, PROBE_NAMES.index("participation_ratio")]
+    rho = a[:, PROBE_NAMES.index("rho_mean")]
+    alive = ((pr >= float(lo)) & (pr <= float(hi))
+             & (rho >= float(rho_floor)))
+    if not alive.any():
+        return 0.0
+    last = int(np.max(np.nonzero(alive)[0]))
+    if last == len(alive) - 1:
         return float(budget)
-    return float(s[int(np.argmax(outside))])
+    return float(s[last + 1])
 
 
 def cell_row(frames: np.ndarray, steps: np.ndarray, series: np.ndarray,
              pr_lo: float, pr_hi: float, budget: int,
-             tail_fraction: float = 0.25) -> np.ndarray:
+             tail_fraction: float = 0.25,
+             rho_floor: float = DEFAULT_RHO_FLOOR) -> np.ndarray:
     """The diagram's row for one cell, in CELL_NAMES order.
 
     `frames` is (M, len(FRAME_NAMES)) taken at the LAST M probe times and
@@ -314,8 +353,8 @@ def cell_row(frames: np.ndarray, steps: np.ndarray, series: np.ndarray,
     ch = ser[:, PROBE_NAMES.index("change")]
     tail = max(1, int(round(len(ch) * float(tail_fraction))))
     change_rate = float(ch[-tail:].mean()) if len(ch) else 0.0
-    pr = ser[:, PROBE_NAMES.index("participation_ratio")]
     return np.concatenate([
         last,
-        [change_rate, alive_steps(steps, pr, pr_lo, pr_hi, budget)],
+        [change_rate,
+         alive_steps(steps, ser, pr_lo, pr_hi, budget, rho_floor)],
     ])

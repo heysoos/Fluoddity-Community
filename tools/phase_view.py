@@ -21,6 +21,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+import ui  # noqa: F401,E402  prime the services/ui import cycle
+
 # Perceptually ordered enough to read a landscape off, and defined here rather
 # than pulled from matplotlib, which is not a dependency of this project.
 _VIRIDIS = np.array([
@@ -34,6 +36,44 @@ def load(path: Path):
     data = np.load(path / "features.npz", allow_pickle=False)
     meta = json.loads(str(data["meta"]))
     return data, meta
+
+
+def recompute_series_columns(data, meta, pr_lo=None, pr_hi=None,
+                             rho_floor=None) -> np.ndarray:
+    """Re-derive the series-backed columns from the stored probe series.
+
+    `change_rate` and `alive_steps` are functions of `probe_series`, which is
+    kept in full - so their definitions can change after a sweep has run
+    without re-running it. That is the whole reason the series is stored rather
+    than only the scalars it reduces to, and it is what let the mass floor be
+    added to `alive_steps` mid-sweep.
+    """
+    from services import phase_metrics as pm
+
+    feats = np.array(data["cell_features"])
+    series = data["probe_series"]
+    steps = data["probe_steps"]
+    done = data["done"]
+    lo, hi = meta.get("pr_bracket", (0.02, 0.98))
+    lo = lo if pr_lo is None else pr_lo
+    hi = hi if pr_hi is None else pr_hi
+    floor = (meta.get("rho_floor", pm.DEFAULT_RHO_FLOOR)
+             if rho_floor is None else rho_floor)
+    budget = int(meta["steps"])
+
+    ci = list(pm.CELL_NAMES).index("change_rate")
+    ai = list(pm.CELL_NAMES).index("alive_steps")
+    for iy, ix in zip(*np.nonzero(done)):
+        ser = np.asarray(series[iy, ix], dtype=np.float64)
+        keep = np.isfinite(ser).all(axis=1)
+        if not keep.any():
+            continue
+        ser, st = ser[keep], np.asarray(steps)[keep]
+        ch = ser[:, pm.PROBE_NAMES.index("change")]
+        tail = max(1, int(round(len(ch) * 0.25)))
+        feats[iy, ix, ci] = ch[-tail:].mean()
+        feats[iy, ix, ai] = pm.alive_steps(st, ser, lo, hi, budget, floor)
+    return feats
 
 
 def fill_holes(plane: np.ndarray, done: np.ndarray) -> np.ndarray:
@@ -85,9 +125,10 @@ def colormap(norm: np.ndarray) -> np.ndarray:
 
 
 def render(data, meta, feature: str | None, rgb: list[str] | None,
-           lo_pct: float, hi_pct: float, scale: int) -> tuple[np.ndarray, str]:
+           lo_pct: float, hi_pct: float, scale: int,
+           feats: np.ndarray | None = None) -> tuple[np.ndarray, str]:
     names = [str(n) for n in data["cell_names"]]
-    feats = data["cell_features"]
+    feats = data["cell_features"] if feats is None else feats
     done = data["done"]
 
     def plane(name: str) -> np.ndarray:
@@ -158,8 +199,9 @@ def summarise(feats: np.ndarray, strip: np.ndarray, names: list[str],
                   f"discriminate.")
 
 
-def describe(data, meta) -> None:
+def describe(data, meta, feats=None) -> None:
     names = [str(n) for n in data["cell_names"]]
+    feats = data["cell_features"] if feats is None else feats
     print(f"{meta['preset_name']}  {meta['brain_layout']}")
     print(f"  {meta['x_param']} {meta['x_range']} x "
           f"{meta['y_param']} {meta['y_range']}")
@@ -167,8 +209,7 @@ def describe(data, meta) -> None:
           f"world_size {meta['world_size']}, canvas {meta['canvas'][0]}")
     done = data["done"]
     print(f"  {int(done.sum())}/{done.size} cells complete\n")
-    summarise(data["cell_features"], data["noise_strip"], names,
-              meta.get("pr_bracket"))
+    summarise(feats[done], data["noise_strip"], names, meta.get("pr_bracket"))
 
 
 def main(argv) -> int:
@@ -183,17 +224,27 @@ def main(argv) -> int:
     ap.add_argument("--hi-pct", type=float, default=98.0)
     ap.add_argument("--scale", type=int, default=4, help="nearest-neighbour zoom")
     ap.add_argument("--out", default="")
+    ap.add_argument("--recompute", action="store_true",
+                    help="re-derive change_rate and alive_steps from the stored "
+                         "probe series, under the thresholds given below")
+    ap.add_argument("--pr-lo", type=float, default=None)
+    ap.add_argument("--pr-hi", type=float, default=None)
+    ap.add_argument("--rho-floor", type=float, default=None)
     args = ap.parse_args(argv)
 
     path = Path(args.path)
     data, meta = load(path)
+    feats = None
+    if args.recompute or args.rho_floor is not None:
+        feats = recompute_series_columns(data, meta, args.pr_lo, args.pr_hi,
+                                         args.rho_floor)
     if args.list:
-        describe(data, meta)
+        describe(data, meta, feats)
         return 0
 
     rgb = [s.strip() for s in args.rgb.split(",") if s.strip()]
     img, title = render(data, meta, args.feature, rgb or None,
-                        args.lo_pct, args.hi_pct, args.scale)
+                        args.lo_pct, args.hi_pct, args.scale, feats)
     dest = Path(args.out) if args.out else path / f"{title}.png"
     Image.fromarray(img).save(dest)
     print(f"wrote {dest}  ({img.shape[1]}x{img.shape[0]})")

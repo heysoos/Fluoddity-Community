@@ -162,10 +162,50 @@ From the probe series:
 | | |
 |---|---|
 | `change_rate` | mean over the last window of `‖ρ_t − ρ_{t−K}‖₁ / ‖ρ_t‖₁`. `descriptor.liveness()` without the CLIP bill |
-| `alive_steps` | first probe where `participation_ratio` leaves `[pr_lo, pr_hi]`, else the step budget. The Lenia transcription. The bracket is not guessable in advance — it comes from the pilot's observed range and is written into the sidecar, so a diagram always carries the definition that produced it |
+| `alive_steps` | the step after which the run is dead for good, else the budget; 0 if it never lived. The Lenia transcription — see below |
 
 `descriptor.liveness()` itself is deliberately excluded: it needs CLIP, and at
 thousands of cells the ONNX session cost dominates everything else here.
+
+### `rho_mean` is the mass, and the scale-free features are blind to death
+
+The first version of `alive_steps` bracketed `participation_ratio` alone, on the
+reasoning that particle count is fixed so only concentration is free. Measured
+on `fish soup`, that is wrong twice over:
+
+- **`participation_ratio` is scale-invariant by construction**, so a canvas that
+  has faded to nothing still scores an ordinary value — cells at `rho_mean` 6e-5
+  scored 0.24 to 0.63 and read as perfectly healthy.
+- **`change` is normalised the same way and is worse.** A near-zero field still
+  turns over most of itself relative to itself, so those same dead cells scored
+  0.61 to 0.80 — the liveliest-looking things on the diagram.
+
+Trail mass IS free here, which is what makes it the honest analogue of Lenia's:
+the canvas is a VELOCITY field, so a slow particle deposits almost nothing, and
+`rho_mean` spans 6e-5 to 4.2e-2 across one preset's parameter plane while the
+particle count never moves. The gate is therefore `rho_mean >= rho_floor` AND
+`pr` in bracket, with the floor at 1e-4 (about 2% of the 5e-3 a fully depositing
+canvas reaches).
+
+**Death must be sustained, so the scan runs from the END.** Every cell starts
+with an empty canvas, so mass crosses any floor from below: 18 of 384 cells sat
+under it at the first probe and 10 were merely slow starters that climbed past
+and stayed. Reporting the first dip made the feature a coin flip on how fast a
+cell begins.
+
+**And on this preset it comes out BINARY.** With the fix: 8 cells never lived, 0
+died mid-run, 376 survived the budget. Lenia's "time till divergence" gradient
+does not exist in this plane — a cell either never gets going or it lasts. The
+feature still earns its place as a clean dead-region mask, but it is not a
+continuum, and reading it as one would be reading noise.
+
+### Series-backed features are re-derivable after the fact
+
+`change_rate` and `alive_steps` are functions of `probe_series`, which is stored
+in full — so their definitions can change without re-running the sweep.
+`tools/phase_view.py --recompute` re-derives them. This is why the series is
+kept rather than only the scalars it reduces to, and it is what let the mass
+floor be added to a sweep that was already running.
 
 ## Two time resolutions
 
