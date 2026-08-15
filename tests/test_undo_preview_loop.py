@@ -48,7 +48,12 @@ def build():
         rule_manager=FakeRuleManager(),
         sim=FakeSim(),
         ui=types.SimpleNamespace(undo_steps=[], undo_cursor=-1),
+        # Nothing has commandeered the render preferences in these tests.
+        video_service=types.SimpleNamespace(is_active=lambda: False),
+        screenshot_in_progress=False,
     )
+    app._preferences_are_borrowed = types.MethodType(
+        main.App._preferences_are_borrowed, app)
     app.command_handler = CommandHandler(
         sim=app.sim, camera=None, ui=None, rule_manager=app.rule_manager,
         entity_picker=None, video_service=None, config_saver=None,

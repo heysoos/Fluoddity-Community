@@ -1270,6 +1270,40 @@ mechanics these caveats assume.
   an unchanged layout, which is what stops the following frame paying for a
   second archive rebuild.
 
+- **An undo step must be something the USER did, and three parts of the app
+  drive undoable preferences on their own.** An automatic mode, a recording
+  and a screenshot each commandeer `speedmult`, `motion_blur` and
+  `blur_quality` and put them back when they finish. All three are undoable,
+  so every phase change of those state machines looked to the per-frame diff
+  exactly like a slider moving: a generation deposits several, `MAX_STEPS` is
+  200, and leaving Explore running discarded every real step the user had
+  made — after which half the surviving steps restore `speedmult = 0`, which
+  stops the sim and leaves a black canvas under a working UI.
+  `App._preferences_are_borrowed` is the one predicate over all three, for the
+  same reason `preview_active` is one over the previews: a fourth borrower is
+  covered by naming it there. Guarded by `tests/test_undo_ownership.py`.
+
+- **A DECODE SCALE is not in the signature, and the restore has to compare the
+  settings as well.** Keeping scales out of `signature()` is deliberate —
+  dragging one must not tear down the archive — but `Snapshot.brain_settings`
+  carries them, so a drag DOES commit a step. Gated on the signature alone
+  that step restored nothing, and the `rebase()` immediately after it
+  overwrote the old scale with the new one, putting the value out of reach for
+  good: the panel showed a row, Ctrl+Z did nothing, and the number was gone.
+  `_brain_matches` compares both; a snapshot carrying no settings at all means
+  "the signature is all we know", not "the defaults". MLP is the modality this
+  matters most for, since `w_scale`/`b_scale` are what a rig modulates.
+
+- **A hover BORROWS the state an undo would write, so an undo is refused while
+  one is live.** `_end_archive_preview` restores the pre-hover physics
+  wholesale when the pointer leaves, and `pop_rule()` takes back the rule — so
+  an undo applied underneath a preview is reverted a moment later with nothing
+  on screen to say so, and the rebase has already consumed the step it undid.
+  Hovering does not set `want_capture_keyboard`, so Ctrl+Z genuinely reaches
+  the orchestrator with a borrow outstanding. `_handle_undo` therefore returns
+  early on `preview_active` with a notice, which is the same predicate
+  `_record_undo_step` already uses.
+
 - **Undo covers the recipe, never the picture.** The canvas and entity buffers
   are out, so Clear Canvas, Reset and Fill have nothing to restore, and
   deleting a preset or an archive entry stays outside. Under a tournament the
@@ -1281,9 +1315,11 @@ mechanics these caveats assume.
 - **A render test must not read `imgui.ini`.** ImGui restores each window's
   saved size, position and scroll from it, and the file is gitignored — so a
   test that draws a window passes on a fresh clone and fails on a machine that
-  has run the app. `tests/test_undo_window_render.py` sets
-  `io.set_ini_filename("")` in its fixture. Sizing the HOST window is not
-  enough; the window under test picks up its own saved geometry.
+  has run the app. Sizing the HOST window is not enough; the window under test
+  picks up its own saved geometry. `tests/conftest.py` handles the whole suite
+  by wrapping `create_context`, and a fixture must NOT set the filename again
+  itself — see the `imgui.ini` caveat under UI and platform for why that set
+  has exactly one home.
 
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own
   hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.

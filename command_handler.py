@@ -141,7 +141,13 @@ class CommandHandler:
         """Layout first, then the rule."""
         if snap.brain_signature and self.apply_brain_layout is not None:
             live = getattr(getattr(self, "sim", None), "brain_layout", None)
-            if live is None or live.signature() != snap.brain_signature:
+            # The SETTINGS as well as the signature. A decode scale is
+            # deliberately outside the signature - dragging one must not tear
+            # down the archive - but the snapshot carries it, so a drag does
+            # commit a step. Gated on the signature alone that step restored
+            # nothing, and the rebase after it overwrote the old scale with
+            # the new one, putting the value out of reach for good.
+            if live is None or not self._brain_matches(live, snap):
                 from services.brains import layout_from_signature
 
                 layout = layout_from_signature(snap.brain_signature,
@@ -159,6 +165,18 @@ class CommandHandler:
         rule = np.array(snap.rule, copy=True)
         self.rule_manager.push_rule(rule, ui_state.sim.rule_seed)
         self.sim.apply_rule(rule)
+
+    @staticmethod
+    def _brain_matches(live, snap) -> bool:
+        """Is the live layout the one the snapshot holds, scales included?"""
+        from services.brains import settings_of
+
+        if live.signature() != snap.brain_signature:
+            return False
+        # An older snapshot may carry no settings at all; that means "the
+        # signature is all we know", not "the defaults".
+        return not snap.brain_settings or (
+            dict(settings_of(live)) == snap.brain_settings)
 
     @staticmethod
     def _put_brain_window(layout, ui_state) -> None:
@@ -299,7 +317,7 @@ class CommandHandler:
         # the GPU buffers and resets the optimizer.
         self._handle_brain_layout(ui_state)
 
-        # Automatic (CLIP-guided) tournament mode
+        # Automatic (vision-guided) tournament mode
         self._handle_auto_tournament(ui_state)
 
         # Archive management, before Explore so a switch lands this frame
@@ -809,7 +827,7 @@ class CommandHandler:
         print(f"[tournament] saved {written}")
 
     # ------------------------------------------------------------------
-    # Automatic (CLIP-guided) tournament
+    # Automatic (vision-guided) tournament
     # ------------------------------------------------------------------
 
     @staticmethod

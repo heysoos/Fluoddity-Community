@@ -133,7 +133,7 @@ class App:
         self._auto_prev_hue = None
         self._auto_was_enabled = False
         self._last_crops = None
-        # Explore (IMGEP) mode, also lazy - it needs the same CLIP scorer.
+        # Explore (IMGEP) mode, also lazy - it needs the same vision scorer.
         self.imgep_driver = None
         self.prompt_driver = None
         self.archive = None
@@ -227,11 +227,11 @@ class App:
             self.ui.state.archive.open_browser_requested = True
 
     # ------------------------------------------------------------------
-    # Automatic (CLIP-guided) tournament
+    # Automatic (vision-guided) tournament
     # ------------------------------------------------------------------
 
     def _ensure_auto_service(self):
-        """Build the CLIP scorer, capture buffer and service on first use.
+        """Build the vision scorer, capture buffer and service on first use.
 
         Imports stay lazy (onnxruntime/cmaes must not load at startup); Auto
         mode degrades to a message instead of crashing when they're absent.
@@ -605,7 +605,6 @@ class App:
         _release_archive is what flushes, closes and drops the thumbnails.
         """
         from services.archive_library import resolve
-        from services.genome_spec import physics_spec_for, spec_for
         from utilities.paths import get_archives_root
 
         current = self.sim.brain_layout
@@ -1386,6 +1385,18 @@ class App:
         """Ctrl+Z / Ctrl+Shift+Z, and a click in the history panel."""
         from services import undo_history as uh
 
+        # A hover puts someone else's rule and physics on screen, and the
+        # un-hover puts back what was there before it - wholesale. An undo
+        # applied underneath one is therefore reverted a moment later with no
+        # sign that anything happened, and the rebase below has already
+        # overwritten the step it undid. Refuse, and say why.
+        if self.command_handler.preview_active:
+            if (ui_state.request_undo or ui_state.request_redo
+                    or ui_state.undo_jump_index >= 0):
+                ui_state.undo_notice = "Finish the preview first"
+            ui_state.undo_jump_index = -1
+            return
+
         target = None
         if ui_state.request_undo:
             target = self.undo_history.undo()
@@ -1415,6 +1426,18 @@ class App:
             uh.capture(ui_state, self.rule_manager.get_current_rule(),
                        self.sim.brain_layout))
 
+    def _preferences_are_borrowed(self, ui_state) -> bool:
+        """Is something other than the user driving the render preferences?
+
+        One predicate rather than a check per site, for the same reason
+        CommandHandler.preview_active is one: a fourth borrower added later is
+        covered by naming it HERE.
+        """
+        return bool(ui_state.auto_tournament.enabled
+                    or ui_state.archive.enabled
+                    or self.screenshot_in_progress
+                    or self.video_service.is_active())
+
     def _record_undo_step(self, ui_state):
         """Commit a step if anything declared changed and no widget is active."""
         from services import undo_history as uh
@@ -1431,6 +1454,15 @@ class App:
         # archive browser and the clipboard all put a borrowed rule and its
         # physics on screen the same way.
         if self.command_handler.preview_active:
+            return
+        # Nor is a preference the user did not set. An automatic mode, a
+        # recording and a screenshot each commandeer speedmult, motion_blur
+        # and blur_quality - all three undoable - and put them back when they
+        # finish, so the journal saw a slider move every time the state
+        # machine changed phase. A generation deposits several, and the cap is
+        # 200 steps: leaving Explore running discarded every real step the
+        # user had made, and half the survivors restore speedmult = 0.
+        if self._preferences_are_borrowed(ui_state):
             return
         snap = uh.capture(ui_state, self.rule_manager.get_current_rule(),
                           self.sim.brain_layout)
