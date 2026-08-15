@@ -36,6 +36,35 @@ Three pieces, split so the part that has to be correct needs no GPU:
 The sweep is the expensive part and the picture is free, so the picture is never
 baked into the sweep. Re-render as often as you like without re-running.
 
+## `world_size` barely buys time — MEASURED, and it contradicts the plan above
+
+The pilot on `fish soup` at 5000 steps, 3x3 cells:
+
+| `world_size` | canvas | particles | s/cell |
+|---|---|---|---|
+| 0.20 | 457² | 120k | 3.23 |
+| 0.10 | 323² | 60k | 2.67 |
+| 0.05 | 228² | 30k | 2.58 |
+| 0.025 | 161² | 15k | 2.39 |
+
+An **8x** cut in particles and a **4x** cut in canvas area buys **26%**. A cell
+is dominated by per-step Python dispatch — `sim.update()` and its uniform
+pushes, ~0.48 ms of floor against ~0.17 ms of GPU at the small end — not by GPU
+work, so the knob the design was built around is nearly inert.
+
+The consequence inverts the recommendation: **use the LARGEST world the storage
+budget allows**, not the smallest that survives finite-size effects. `0.20` costs
+35% more than `0.025` and buys 8x the particles, 4x the area, and far less
+finite-size distortion. The default is `0.10`.
+
+What actually sets the wall clock is `--grid` and `--steps`. A 128² grid is
+11–15 hours at 5000 steps whatever the world size; the honest levers are a
+coarser grid, fewer steps, or an early exit on dead cells.
+
+Storage moves with the larger world: at `world_size` 0.20 a raw cell is ~4.1 MiB
+rather than ~1.15 MiB, so `--raw-stride` wants to be 8 rather than 4 to stay near
+1 GiB.
+
 ## Why `world_size` is the resolution knob and `particle_density` is not
 
 Every length in `entity_update.glsl` is scaled by `1/sqrt(WORLD_SIZE)` — sensor
