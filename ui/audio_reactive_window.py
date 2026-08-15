@@ -16,7 +16,7 @@ import numpy as np
 from imgui_bundle import imgui
 
 from services import audio_capture
-from services.audio_analysis import SIGNAL_NAMES
+from services.audio_analysis import BAND_NAMES, SIGNAL_NAMES
 from services.audio_mapping import (MODES, Mapping, brain_targets,
                                     deaf_targets, physics_targets)
 from services.audio_shapers import SHAPER_KINDS, ShaperParams
@@ -28,10 +28,12 @@ SIGNAL_COLORS: dict[str, tuple] = {
     "presence": (0.50, 0.82, 0.38, 1.0),
     "hi": (0.25, 0.63, 0.88, 1.0),
     "volume": (0.71, 0.55, 0.94, 1.0),
+    "centroid": (0.94, 0.85, 0.45, 1.0),
 }
 
 SIGNAL_ABBR: dict[str, str] = {
     "bass": "B", "mid": "M", "presence": "P", "hi": "H", "volume": "V",
+    "centroid": "C",
 }
 
 WAVE_KINDS: tuple[str, ...] = ("sine", "triangle", "ramp")
@@ -49,12 +51,32 @@ SHAPER_FIELDS: dict[str, tuple[str, ...]] = {
     "sample_hold": ("threshold",),
 }
 
+# Attack and release reach half a minute, which is a SONG SECTION rather than
+# a smoothing time: `smooth` over tens of seconds is what turns any band into
+# the slow envelope that follows a track's arrangement. Both are logarithmic,
+# or everything under a second - which is every percussive setting - would
+# share the first pixel of the track.
 _FIELD_RANGE: dict[str, tuple[float, float, str]] = {
-    "attack": (0.0, 1.0, "%.3f s"),
-    "release": (0.0, 2.0, "%.3f s"),
+    "attack": (0.0, 30.0, "%.3f s"),
+    "release": (0.0, 30.0, "%.3f s"),
     "threshold": (0.0, 1.0, "%.2f"),
     "hold": (0.0, 1.0, "%.3f s"),
     "rate": (0.0, 20.0, "%.2f Hz"),
+}
+
+# Which shaper fields need a logarithmic track.
+_FIELD_LOG: frozenset = frozenset({"attack", "release"})
+
+# What a signal whose measure is not a choice is measuring instead.
+_FIXED_MEASURE_BLURB: dict[str, str] = {
+    "volume": "the block's own loudness",
+    "centroid": "brightness: where the energy sits",
+}
+
+# The track a band's window slider covers, by unit.
+_WINDOW_TRACK: dict[str, tuple[float, float]] = {
+    "dB": (-120.0, 0.0),
+    "Hz": (20.0, 16000.0),
 }
 
 _FIELD_TIP: dict[str, str] = {
@@ -308,8 +330,8 @@ class AudioReactiveWindowMixin:
             setting = effective[name]
             imgui.text_colored(imgui.ImVec4(*SIGNAL_COLORS[name]), f"{name:9}")
             imgui.same_line()
-            if name == "volume":
-                imgui.text_disabled("the block's own loudness")
+            if name in aa.FIXED_MEASURES:
+                imgui.text_disabled(_FIXED_MEASURE_BLURB[name])
             else:
                 imgui.set_next_item_width(110)
                 current = list(aa.MEASURES).index(setting["measure"])
@@ -324,20 +346,21 @@ class AudioReactiveWindowMixin:
                     "it rests at the floor between hits; mean_db averages "
                     "every bin's level, including the ones carrying nothing.")
 
-            lo_default, hi_default = aa.MEASURE_WINDOWS.get(
-                setting["measure"], (aa.LEVEL_DB_MIN, aa.LEVEL_DB_MAX))
+            lo_default, hi_default = aa.MEASURE_WINDOWS[setting["measure"]]
+            unit = aa.MEASURE_UNITS.get(setting["measure"], "dB")
+            track_lo, track_hi = _WINDOW_TRACK[unit]
             imgui.set_next_item_width(90)
             changed, value = self._audio_slider(
-                f"##floor_{name}", setting["floor"], -120.0, 0.0,
-                "floor %.0f dB", lo_default)
+                f"##floor_{name}", setting["floor"], track_lo, track_hi,
+                f"from %.0f {unit}", lo_default, log=unit == "Hz")
             if changed:
                 self._write_band(ast, name, floor=value)
             self._delayed_tooltip("Everything below this reads zero.")
             imgui.same_line()
             imgui.set_next_item_width(90)
             changed, value = self._audio_slider(
-                f"##ceiling_{name}", setting["ceiling"], -120.0, 0.0,
-                "top %.0f dB", hi_default)
+                f"##ceiling_{name}", setting["ceiling"], track_lo, track_hi,
+                f"to %.0f {unit}", hi_default, log=unit == "Hz")
             if changed:
                 self._write_band(ast, name, ceiling=value)
             self._delayed_tooltip("At this level and above the band reads one.")
@@ -390,7 +413,7 @@ class AudioReactiveWindowMixin:
         size = imgui.ImVec2(imgui.get_content_region_avail().x, 46)
         origin = imgui.get_cursor_screen_pos()
         drawn = 0
-        for index, name in enumerate(SIGNAL_NAMES[:-1]):
+        for index, name in enumerate(BAND_NAMES):
             masked = np.where(bands == index, mel, 0.0).astype(np.float32)
             if not masked.any():
                 continue
@@ -412,13 +435,18 @@ class AudioReactiveWindowMixin:
             imgui.plot_histogram("##audio_spectrum", mel, scale_min=0.0,
                                  scale_max=1.0, graph_size=size)
 
-    def _audio_slider(self, label, value, lo, hi, fmt, default):
+    def _audio_slider(self, label, value, lo, hi, fmt, default, log=False):
         """A slider whose right-click menu puts it back to its default.
 
         Every number in this panel came from a dataclass field, so there is
-        always exactly one value to go back to.
+        always exactly one value to go back to. `log` is for the tracks that
+        span decades - seconds from a frame to half a minute, hertz from a
+        rumble to a cymbal - where a linear grab has no resolution at the
+        bottom, which is where the useful settings are.
         """
-        changed, v = imgui.slider_float(label, float(value), lo, hi, fmt)
+        flags = imgui.SliderFlags_.logarithmic if log else 0
+        changed, v = imgui.slider_float(label, float(value), lo, hi, fmt,
+                                        flags)
         if imgui.begin_popup_context_item(f"{label}_reset"):
             # p_selected has no default in this binding, and a popup body only
             # runs while the popup is OPEN - so a wrong call here reaches the
@@ -616,7 +644,8 @@ class AudioReactiveWindowMixin:
             changed, value = self._audio_slider(
                 fname.replace("_", " ").title(),
                 float(getattr(m.shaper, fname)), lo, hi, fmt,
-                float(getattr(ShaperParams(), fname)))
+                float(getattr(ShaperParams(), fname)),
+                log=fname in _FIELD_LOG)
             if changed:
                 setattr(m.shaper, fname, value)
             if fname in _FIELD_TIP:

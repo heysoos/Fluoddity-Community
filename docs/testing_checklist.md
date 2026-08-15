@@ -436,6 +436,20 @@ installed; without it the panel says so and everything else runs unchanged.
       gaps rather than drifting on.
 - [ ] The measures, the windows and Release all survive a quit, and a rig saved
       before they existed still loads.
+- [ ] Setting a band to `flux` makes it fire on ATTACKS and drop straight back:
+      a sustained bass note holds `power` open for its whole length and leaves
+      `flux` at zero after the first moment. `hi`/flux tracks the hi-hats.
+- [ ] `centroid` moves with brightness and NOT with level: turn the system
+      volume down and it stays put while every other trace drops. A filter
+      sweep or the hats entering moves it.
+- [ ] Stopping the music leaves `centroid` where it was rather than diving; it
+      is at zero on a fresh launch, before anything has played.
+- [ ] The shaper's Attack and Release reach 30 s and the low end is still
+      controllable - the track is logarithmic, so 0.05 s is a real position on
+      it and not the first pixel.
+- [ ] Loading the `Dancing` preset binds four rows (centroid, volume, bass,
+      hi), sets bass and hi to `flux`, and Release to 0. The device you had
+      selected is unchanged.
 
 ### Rig presets, and the rig surviving a second copy
 

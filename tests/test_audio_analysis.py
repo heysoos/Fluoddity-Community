@@ -13,8 +13,16 @@ def tone(hz, n=FFT_SIZE, sr=SR, amp=0.5):
     return (amp * np.sin(2 * np.pi * hz * t)).astype(np.float32)
 
 
-def test_signal_names_are_the_five_the_ui_shows():
-    assert SIGNAL_NAMES == ("bass", "mid", "presence", "hi", "volume")
+def test_signal_names_are_the_ones_the_ui_shows():
+    assert SIGNAL_NAMES == ("bass", "mid", "presence", "hi", "volume",
+                            "centroid")
+
+
+def test_the_bands_are_the_spectral_ones_only():
+    """`volume` and `centroid` are signals but not bands: neither is one
+    band's bins reduced to a number."""
+    from services.audio_analysis import BAND_EDGES_HZ, BAND_NAMES
+    assert BAND_NAMES == tuple(n for n, _lo, _hi in BAND_EDGES_HZ)
 
 
 def test_the_matrix_is_the_display_bars_and_nothing_else():
@@ -311,6 +319,140 @@ def test_a_stored_window_overrides_only_what_it_names():
     bands = effective_bands({"mid": {"floor": -42.0}})
     assert bands["mid"]["floor"] == -42.0
     assert bands["mid"]["ceiling"] == MEASURE_WINDOWS["power"][1]
+
+
+# --- flux: what is NEW, not what is there ------------------------------------
+
+def _flux_analyzer():
+    return Analyzer(SR, auto_gain=False, release=0.0, bands={
+        "bass": {"measure": "flux", "floor": -35.0, "ceiling": 0.0}})
+
+
+def _run(analyzer, blocks, amp):
+    """Feed `blocks` of an 80 Hz tone; -> the `bass` reading per block."""
+    tail = np.zeros(FFT_SIZE, dtype=np.float32)
+    seen = []
+    for i in range(blocks):
+        t = (np.arange(HOP) + i * HOP) / SR
+        chunk = (amp * np.sin(2 * np.pi * 80 * t)).astype(np.float32)
+        tail = np.roll(tail, -HOP)
+        tail[FFT_SIZE - HOP:] = chunk
+        seen.append(analyzer.process(tail).signals["bass"])
+    return seen
+
+
+def test_flux_ignores_a_sustained_note_however_loud():
+    """A held bass note keeps `power` open for its whole length; flux is
+    supposed to fire on the attack and then get out of the way."""
+    seen = _run(_flux_analyzer(), 30, 0.5)
+    assert max(seen[-8:]) < 0.05
+
+
+def test_flux_fires_when_the_sound_arrives():
+    a = _flux_analyzer()
+    _run(a, 8, 0.0)
+    assert max(_run(a, 6, 0.5)) > 0.3
+
+
+def test_the_first_block_is_not_treated_as_one_big_onset():
+    """Everything is new against an empty buffer, so without a guard every
+    flux mapping would fire the instant capture starts."""
+    a = _flux_analyzer()
+    assert a.process(tone(80, amp=0.5)).signals["bass"] == 0.0
+
+
+def test_flux_is_silent_on_silence():
+    assert max(_run(_flux_analyzer(), 10, 0.0)) == 0.0
+
+
+# --- centroid: brightness, and not loudness ----------------------------------
+
+def _centroid(hz, amp=0.3, blocks=4):
+    a = Analyzer(SR, auto_gain=False, release=0.0)
+    tail = np.zeros(FFT_SIZE, dtype=np.float32)
+    for i in range(blocks):
+        t = (np.arange(HOP) + i * HOP) / SR
+        tail = np.roll(tail, -HOP)
+        tail[FFT_SIZE - HOP:] = (amp * np.sin(2 * np.pi * hz * t)
+                                 ).astype(np.float32)
+    return a.process(tail).signals["centroid"]
+
+
+def test_a_brighter_sound_reads_higher():
+    assert _centroid(300) < _centroid(1500) < _centroid(7000)
+
+
+def test_centroid_ignores_level():
+    """The property no band has: a quiet bright break and a loud dark one are
+    indistinguishable to every loudness signal there is."""
+    loud, quiet = _centroid(4000, amp=0.5), _centroid(4000, amp=0.02)
+    assert loud == pytest.approx(quiet, abs=0.02)
+
+
+def test_centroid_is_read_on_a_log_axis():
+    """An octave is the same distance anywhere: 400->800 must move it as far
+    as 2000->4000, or the whole control lives in the top of the range."""
+    low = _centroid(800) - _centroid(400)
+    high = _centroid(4000) - _centroid(2000)
+    assert low == pytest.approx(high, abs=0.03)
+
+
+def test_centroid_holds_through_silence_rather_than_going_dark():
+    """A ratio over silence is not a dark sound, it is no sound - and a signal
+    that dived to zero every gap would drag its target with it."""
+    a = Analyzer(SR, auto_gain=False, release=0.0)
+    tail = np.zeros(FFT_SIZE, dtype=np.float32)
+    for i in range(6):
+        t = (np.arange(HOP) + i * HOP) / SR
+        tail = np.roll(tail, -HOP)
+        tail[FFT_SIZE - HOP:] = (0.4 * np.sin(2 * np.pi * 6000 * t)
+                                 ).astype(np.float32)
+        bright = a.process(tail).signals["centroid"]
+    assert bright > 0.5
+
+    silence = np.zeros(FFT_SIZE, dtype=np.float32)
+    for _ in range(10):
+        held = a.process(silence).signals["centroid"]
+    assert held == pytest.approx(bright, abs=1e-6)
+
+
+def test_centroid_starts_at_zero_so_a_rig_that_has_heard_nothing_is_still():
+    a = Analyzer(SR, auto_gain=False, release=0.0)
+    assert a.process(np.zeros(FFT_SIZE, dtype=np.float32)
+                     ).signals["centroid"] == 0.0
+
+
+def test_auto_gain_leaves_the_centroid_alone():
+    """Dividing a ratio by its own running peak means nothing, and would put
+    every bright moment at 1.0."""
+    gained = Analyzer(SR, auto_gain=True, release=0.0)
+    plain = Analyzer(SR, auto_gain=False, release=0.0)
+    block = tone(2000, amp=0.4)
+    for _ in range(20):
+        a = gained.process(block).signals["centroid"]
+        b = plain.process(block).signals["centroid"]
+    assert a == pytest.approx(b)
+
+
+def test_the_centroid_window_is_in_hertz_not_decibels():
+    from services.audio_analysis import (FIXED_MEASURES, MEASURE_UNITS,
+                                         MEASURE_WINDOWS)
+    measure = FIXED_MEASURES["centroid"]
+    assert MEASURE_UNITS[measure] == "Hz"
+    assert MEASURE_WINDOWS[measure] == (200.0, 8000.0)
+
+
+def test_the_centroid_window_moves_where_the_range_sits():
+    a = Analyzer(SR, auto_gain=False, release=0.0, bands={
+        "centroid": {"measure": "centroid_hz", "floor": 2000.0,
+                     "ceiling": 16000.0}})
+    tail = np.zeros(FFT_SIZE, dtype=np.float32)
+    for i in range(4):
+        t = (np.arange(HOP) + i * HOP) / SR
+        tail = np.roll(tail, -HOP)
+        tail[FFT_SIZE - HOP:] = (0.3 * np.sin(2 * np.pi * 500 * t)
+                                 ).astype(np.float32)
+    assert a.process(tail).signals["centroid"] == 0.0
 
 
 # --- the release is the user's, and the rise is nobody's ---------------------

@@ -615,6 +615,28 @@ mechanics these caveats assume.
   caveat down. `python -m tools.measure_audio_response` prints the table the
   windows come from; the room rows must read 0.00.
 
+- **The five loudness signals ask ONE question in five ranges, which is why a
+  rig could not follow a song's arrangement.** Two answer different questions.
+  `flux` is a MEASURE (`Σ max(0, |X| - |X_prev|)` over the band), so a
+  sustained note reads **0.00 however loud it is** and only the attack
+  registers — `bass`/flux is a kick and `hi`/flux is a hi-hat, with no new
+  signal names and the same window machinery. It is deliberately level-
+  dependent like the other measures; a ratio would put a quiet passage's hits
+  at full scale, which is the complaint the measures answer. Its floor sits
+  **10 dB above the levels'** because broadband noise is new every block, so a
+  room's hiss fluxes in `hi` where it barely registers in `power`.
+  `centroid` is a SIGNAL — the energy-weighted centre of the spectrum, read on
+  a LOG axis over a window in HERTZ, not decibels. It is a ratio, so it says
+  nothing about level: a quiet bright break reads high and a loud bass-only
+  drop reads low, which no band can tell apart. Three consequences: auto-gain
+  must skip it (dividing a ratio by its own running peak means nothing and
+  would put every bright moment at 1.0), it is HELD while the block is under
+  `volume`'s floor rather than diving to zero, and it starts at 0 so a rig
+  that has heard nothing contributes nothing. The slow envelope needed no new
+  machinery at all — `smooth` reaches 30 s now, on a LOGARITHMIC track,
+  because every percussive setting is under a second and would otherwise share
+  the first pixel.
+
 - **The band smoother is ASYMMETRIC, and the rise is not smoothed at all.** The
   two directions solve different problems: falling slowly is what stops a
   steady note drawing a fuzzy hash, while rising slowly only costs the

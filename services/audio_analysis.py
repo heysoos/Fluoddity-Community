@@ -16,7 +16,8 @@ FFT_SIZE = 2048
 HOP = 512                # frames between analyses; the capture's callback size
 N_MEL = 40
 
-SIGNAL_NAMES: tuple[str, ...] = ("bass", "mid", "presence", "hi", "volume")
+SIGNAL_NAMES: tuple[str, ...] = ("bass", "mid", "presence", "hi", "volume",
+                                 "centroid")
 
 # The DISPLAY spectrum is read in decibels over this fixed window, chosen so
 # ordinary material rests across the middle of the scale. It draws the mel bars
@@ -33,7 +34,12 @@ LEVEL_DB_MAX = -6.0
 # converts once, so a band rests at its floor between hits; `mean_db` averages
 # each bin's decibel level, where the hundreds of bins carrying nothing set the
 # result - `hi` spans about 600 bins and a cymbal lights a handful of them.
-MEASURES: tuple[str, ...] = ("power", "rms", "peak", "mean_db")
+#
+# `flux` is the odd one: it measures what is NEW rather than what is there, so
+# a sustained note reads zero however loud it is and only the attack registers.
+# It is level-dependent like the rest, deliberately - a ratio would put a quiet
+# passage's hits at full scale, which is the complaint the others answer.
+MEASURES: tuple[str, ...] = ("power", "rms", "peak", "flux", "mean_db")
 
 # Each measure lives on its own scale - a sum over 600 bins is not a mean over
 # them - so each carries its own dB window. Measured, see
@@ -45,13 +51,31 @@ MEASURE_WINDOWS: dict[str, tuple[float, float]] = {
     "power": (-45.0, -5.0),
     "rms": (-62.0, -20.0),
     "peak": (-60.0, -12.0),
+    # Flux sits higher than the levels: broadband noise is new every block, so
+    # the floor has to clear a room's hiss in `hi` as well as its level.
+    "flux": (-35.0, 0.0),
     # The historical measure keeps the display window it was defined against.
     "mean_db": (DB_MIN, DB_MAX),
+    # Not decibels: where the spectrum's centre of mass sits, in Hz, read on a
+    # log axis because pitch is.
+    "centroid_hz": (200.0, 8000.0),
+    "block_rms": (LEVEL_DB_MIN, LEVEL_DB_MAX),
 }
 
-# `volume` is the block's own RMS in the time domain; the spectral measures do
-# not apply to it.
-VOLUME_MEASURE = "block_rms"
+# Signals whose measure is not a choice. `volume` is the block's own RMS in the
+# time domain and `centroid` is a ratio across the whole spectrum; neither is
+# one band's bins reduced to a number.
+FIXED_MEASURES: dict[str, str] = {
+    "volume": "block_rms",
+    "centroid": "centroid_hz",
+}
+VOLUME_MEASURE = FIXED_MEASURES["volume"]
+
+# What a measure's window is expressed in, so the panel can label it.
+MEASURE_UNITS: dict[str, str] = {"centroid_hz": "Hz"}
+
+# The spectral bands, in order. `volume` and `centroid` are not among them.
+BAND_NAMES: tuple[str, ...] = ("bass", "mid", "presence", "hi")
 
 # The DISPLAY spectrum's own smoothing. Not the band release below: the bars
 # are there to be read, and an unsmoothed spectrum vibrates.
@@ -107,12 +131,10 @@ def _mel_to_hz(m):
 
 
 def default_band(name: str) -> dict:
-    """The measure and dB window a band uses until the user changes them."""
-    if name == "volume":
-        return {"measure": VOLUME_MEASURE, "floor": LEVEL_DB_MIN,
-                "ceiling": LEVEL_DB_MAX}
-    lo, hi = MEASURE_WINDOWS["power"]
-    return {"measure": "power", "floor": lo, "ceiling": hi}
+    """The measure and window a signal uses until the user changes them."""
+    measure = FIXED_MEASURES.get(name, "power")
+    lo, hi = MEASURE_WINDOWS[measure]
+    return {"measure": measure, "floor": lo, "ceiling": hi}
 
 
 def effective_bands(stored: dict | None = None) -> dict[str, dict]:
@@ -126,7 +148,8 @@ def effective_bands(stored: dict | None = None) -> dict[str, dict]:
         if name not in out or not isinstance(value, dict):
             continue
         measure = value.get("measure")
-        allowed = (VOLUME_MEASURE,) if name == "volume" else MEASURES
+        allowed = ((FIXED_MEASURES[name],) if name in FIXED_MEASURES
+                   else MEASURES)
         if measure in allowed:
             out[name]["measure"] = measure
         for key in ("floor", "ceiling"):
@@ -214,8 +237,37 @@ class SignalSnapshot:
     mel_bands: np.ndarray
 
 
+def spectral_centroid_hz(power: np.ndarray, freqs: np.ndarray) -> float:
+    """Where the spectrum's centre of mass sits, weighted by energy.
+
+    A RATIO, so it says nothing about level: a quiet bright break reads high
+    and a loud bass-only drop reads low. That is the point - no band can tell
+    those apart.
+    """
+    total = float(power.sum())
+    if total <= _POWER_FLOOR:
+        return 0.0
+    return float((power * freqs).sum() / total)
+
+
+def centroid_value(setting: dict, hz: float) -> float:
+    """The centroid over its window, read on a LOG axis because pitch is.
+
+    An octave is the same distance anywhere on the scale, so a filter opening
+    from 400 to 800 Hz moves it as far as one from 4k to 8k.
+    """
+    floor = max(1.0, float(setting["floor"]))
+    ceiling = max(floor + 1.0, float(setting["ceiling"]))
+    if hz <= 0.0:
+        return 0.0
+    span = np.log(ceiling) - np.log(floor)
+    return float(np.clip((np.log(max(hz, 1.0)) - np.log(floor)) / span,
+                         0.0, 1.0))
+
+
 def band_value(setting: dict, mag: np.ndarray, power: np.ndarray,
-               db: np.ndarray, lo: int, hi: int) -> float:
+               db: np.ndarray, lo: int, hi: int,
+               rise: np.ndarray | None = None) -> float:
     """One band, as 0..1 over its own dB window.
 
     `power` and `rms` sum LINEAR energy and take decibels once at the end, so a
@@ -229,21 +281,27 @@ def band_value(setting: dict, mag: np.ndarray, power: np.ndarray,
     span = max(1e-6, float(setting["ceiling"]) - floor)
     if setting["measure"] == "mean_db":
         return float(np.clip((db[lo:hi] - floor) / span, 0.0, 1.0).mean())
-    level = band_level_db(setting["measure"], mag, power, lo, hi)
+    level = band_level_db(setting["measure"], mag, power, lo, hi, rise)
     return float(np.clip((level - floor) / span, 0.0, 1.0))
 
 
 def band_level_db(measure: str, mag: np.ndarray, power: np.ndarray,
-                  lo: int, hi: int) -> float:
+                  lo: int, hi: int, rise: np.ndarray | None = None) -> float:
     """A band's level in dB, before any window is applied.
 
     Defined apart from `band_value` so the calibration tool reads the same
     number the analyser does rather than a second copy of the formula.
+    `rise` is the half-wave rectified change since the last block, which only
+    `flux` reads.
     """
     if measure == "power":
         return 10.0 * np.log10(max(float(power[lo:hi].sum()), _POWER_FLOOR))
     if measure == "rms":
         return 10.0 * np.log10(max(float(power[lo:hi].mean()), _POWER_FLOOR))
+    if measure == "flux":
+        if rise is None:
+            return 20.0 * np.log10(_MAG_FLOOR)
+        return 20.0 * np.log10(max(float(rise[lo:hi].sum()), _MAG_FLOOR))
     return 20.0 * np.log10(max(float(mag[lo:hi].max()), _MAG_FLOOR))
 
 
@@ -269,10 +327,22 @@ class Analyzer:
         window = np.hanning(fft_size)
         self._window = (window * (2.0 / max(window.sum(), 1e-9))).astype(
             np.float32)
-        self._peaks = np.full(len(BAND_EDGES_HZ) + 1, _PEAK_FLOOR,
-                              dtype=np.float32)
+        # Auto-gain covers the levels only. Dividing a ratio by its own running
+        # peak means nothing, so `centroid` is left out of it.
+        self._gained = len(BAND_EDGES_HZ) + 1
+        self._peaks = np.full(self._gained, _PEAK_FLOOR, dtype=np.float32)
         self._spectrum = np.zeros(fft_size // 2 + 1, dtype=np.float32)
         self._values = np.zeros(len(SIGNAL_NAMES), dtype=np.float32)
+        self._freqs = np.fft.rfftfreq(fft_size,
+                                      d=1.0 / self.sample_rate).astype(
+                                          np.float32)
+        # None until a second block arrives: the first one has nothing to be
+        # new against, and calling all of it new would fire every flux mapping
+        # the moment capture starts.
+        self._prev_mag = None
+        # Held through silence rather than snapping to an end of its range -
+        # there is no brightness to report when nothing is playing.
+        self._centroid = 0.0
         self._mel_bands = mel_bar_bands(sample_rate, n_mel)
         self._block_dt = max(1, int(hop)) / max(1.0, self.sample_rate)
         self._display_k = _coeff(DISPLAY_SMOOTHING_SECONDS, self._block_dt)
@@ -310,12 +380,16 @@ class Analyzer:
         self._peaks.fill(_PEAK_FLOOR)
 
     def _normalise(self, raw: np.ndarray) -> np.ndarray:
-        """raw is [bass, mid, presence, hi, volume]."""
+        """raw is SIGNAL_NAMES in order; only the levels are gained."""
+        out = np.clip(raw, 0.0, 1.0)
         if not self.auto_gain:
-            return np.clip(raw, 0.0, 1.0)
+            return out
+        n = self._gained
         self._peaks *= _PEAK_DECAY
-        np.maximum(self._peaks, raw, out=self._peaks)
-        return np.clip(raw / np.maximum(self._peaks, _PEAK_FLOOR), 0.0, 1.0)
+        np.maximum(self._peaks, raw[:n], out=self._peaks)
+        out[:n] = np.clip(raw[:n] / np.maximum(self._peaks, _PEAK_FLOOR),
+                          0.0, 1.0)
+        return out
 
     def process(self, block: np.ndarray) -> SignalSnapshot:
         b = np.asarray(block, dtype=np.float32)
@@ -333,10 +407,15 @@ class Analyzer:
         mel = self._m @ self._spectrum
 
         power = (mag * mag).astype(np.float32)
+        rise = (np.zeros_like(mag) if self._prev_mag is None
+                else np.maximum(mag - self._prev_mag, 0.0))
+        self._prev_mag = mag
+
         raw = np.empty(len(SIGNAL_NAMES), dtype=np.float32)
-        for i, (name, _lo_hz, _hi_hz) in enumerate(BAND_EDGES_HZ):
+        for i, name in enumerate(BAND_NAMES):
             lo, hi = self._bins[name]
-            raw[i] = band_value(self._bands[name], mag, power, db, lo, hi)
+            raw[i] = band_value(self._bands[name], mag, power, db, lo, hi,
+                                rise)
         # Loudness of the block itself. Measuring the spectrum instead would
         # count the unlit bins, which outnumber the ones a kick drum lights by
         # a hundred to one.
@@ -344,7 +423,16 @@ class Analyzer:
         rms_db = 20.0 * np.log10(max(float(np.sqrt(np.mean(b * b))),
                                      _MAG_FLOOR))
         span = max(1e-6, float(vol["ceiling"]) - float(vol["floor"]))
-        raw[-1] = np.clip((rms_db - float(vol["floor"])) / span, 0.0, 1.0)
+        level = float(np.clip((rms_db - float(vol["floor"])) / span, 0.0, 1.0))
+        raw[len(BAND_NAMES)] = level
+
+        # Brightness, held while the block is below `volume`'s own floor: a
+        # ratio over silence is not a dark sound, it is no sound.
+        if level > 0.0:
+            self._centroid = centroid_value(
+                self._bands["centroid"],
+                spectral_centroid_hz(power, self._freqs))
+        raw[len(BAND_NAMES) + 1] = self._centroid
 
         # A DC or clipped block can still produce a non-finite magnitude on some
         # inputs; scrub here so nothing downstream has to.

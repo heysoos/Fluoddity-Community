@@ -160,19 +160,24 @@ def band_levels(db, dynamic, measure, blocks=120, hop=None):
     setting = dict(zip(("floor", "ceiling"), aa.MEASURE_WINDOWS[measure]))
     setting["measure"] = measure
     tail = np.zeros(aa.FFT_SIZE, dtype=np.float32)
-    out = {name: ([], []) for name, _lo, _hi in aa.BAND_EDGES_HZ}
+    out = {name: ([], []) for name in aa.BAND_NAMES}
+    prev = None
     for i in range(blocks):
         tail = np.roll(tail, -hop)
         tail[aa.FFT_SIZE - hop:] = _material(db, dynamic, hop, i)
         mag = np.abs(np.fft.rfft(tail * an._window)).astype(np.float32)
         power = (mag * mag).astype(np.float32)
         spec_db = 20.0 * np.log10(np.maximum(mag, 1e-9))
-        for name, _lo, _hi in aa.BAND_EDGES_HZ:
+        rise = np.zeros_like(mag) if prev is None else np.maximum(mag - prev, 0)
+        prev = mag
+        for name in aa.BAND_NAMES:
             lo, hi = an._bins[name]
             levels, values = out[name]
             levels.append(np.nan if measure == "mean_db"
-                          else aa.band_level_db(measure, mag, power, lo, hi))
-            values.append(aa.band_value(setting, mag, power, spec_db, lo, hi))
+                          else aa.band_level_db(measure, mag, power, lo, hi,
+                                                rise))
+            values.append(aa.band_value(setting, mag, power, spec_db, lo, hi,
+                                        rise))
     return {k: (np.asarray(v[0][blocks // 3:]), np.asarray(v[1][blocks // 3:]))
             for k, v in out.items()}
 
@@ -182,14 +187,14 @@ def measure_table() -> None:
         floor, ceiling = aa.MEASURE_WINDOWS[measure]
         print(f"\n{measure}, window [{floor:.0f}, {ceiling:.0f}] dB "
               f"| level at the peak, and what the band reads there 0..1")
-        print(f"{'material':20} " + " ".join(f"{n:>14}" for n, _l, _h
-                                             in aa.BAND_EDGES_HZ))
+        print(f"{'material':20} " + " ".join(f"{n:>14}"
+                                             for n in aa.BAND_NAMES))
         print("-" * 80)
         for label, db, dynamic in MEASURE_MATERIAL:
             levels = band_levels(db, dynamic, measure)
             name = f"{label} {db:.0f}" if db is not None else label
             cells = []
-            for band, _l, _h in aa.BAND_EDGES_HZ:
+            for band in aa.BAND_NAMES:
                 lv, vals = levels[band]
                 top = "  --" if measure == "mean_db" else f"{lv.max():4.0f}"
                 cells.append(f"{top} {vals.max():4.2f} ({np.median(vals):4.2f})")
