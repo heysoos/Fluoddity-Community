@@ -281,12 +281,13 @@ class Harness:
         self.ctx.release()
 
 
-def _write_sidecar(out, args, harness, path, feats, frames, series, done,
+def _write_sidecar(out, args, harness, path, feats, frames, series, spread, done,
                    strip, xs, ys, probe_steps, snaps, measures, raw_idx) -> None:
     """The features file. Rewritten wholesale, cheaply enough to run mid-sweep."""
     np.savez_compressed(
         out / "features.npz",
         cell_features=feats, frame_features=frames, probe_series=series,
+        cell_spread=spread,
         done=done, noise_strip=strip, x_values=xs, y_values=ys,
         probe_steps=probe_steps, snapshot_steps=snaps, measure_steps=measures,
         raw_index=raw_idx,
@@ -297,7 +298,7 @@ def _write_sidecar(out, args, harness, path, feats, frames, series, done,
             "brain_layout": harness.sim.brain_layout.signature(),
             "x_param": args.x_param, "y_param": args.y_param,
             "x_range": list(args.x_range), "y_range": list(args.y_range),
-            "grid": int(args.grid), "steps": args.steps,
+            "grid": int(args.grid), "steps": args.steps, "reps": int(args.reps),
             "probe_every": args.probe_every, "measure_frames": args.measure_frames,
             "raw_stride": (0 if args.no_raw else args.raw_stride),
             "seed": args.seed, "world_size": args.world_size,
@@ -341,7 +342,8 @@ def sweep(args) -> int:
     print(f"preset      {path.name}  ({harness.sim.brain_layout.signature()})")
     print(f"axes        {args.x_param} {args.x_range} x "
           f"{args.y_param} {args.y_range}")
-    print(f"grid        {r}x{r} = {r * r} cells, {args.steps} steps each")
+    print(f"grid        {r}x{r} = {r * r} cells, {args.steps} steps each"
+          + (f", x{args.reps} repeats" if args.reps > 1 else ""))
     print(f"world       size {args.world_size}, canvas "
           f"{harness.width}x{harness.height}, {harness.sim.entity_count} particles")
     print(f"measure     {list(measures)} (frame features averaged over these)")
@@ -355,6 +357,10 @@ def sweep(args) -> int:
     frames = np.full((r, r, len(measures), len(pm.FRAME_NAMES)), np.nan,
                      dtype=np.float32)
     series = np.full((r, r, n_probe, len(pm.PROBE_NAMES)), np.nan, dtype=np.float32)
+    # How far the repeats of ONE cell disagree. This is the chaos map: the
+    # parameters are identical between repeats, so anything here grew out of
+    # the splat race. NaN at --reps 1, where a spread is not defined.
+    spread = np.full((r, r, len(pm.CELL_NAMES)), np.nan, dtype=np.float32)
     done = np.zeros((r, r), dtype=bool)
 
     if args.resume and (out / "features.npz").exists():
@@ -372,6 +378,10 @@ def sweep(args) -> int:
         frames[:] = prior["frame_features"]
         series[:] = prior["probe_series"]
         done[:] = prior["done"]
+        # Absent from every sweep written before repeats existed, so a resume
+        # of one keeps its cells and simply has no spread for them.
+        if "cell_spread" in prior.files:
+            spread[:] = prior["cell_spread"]
         print(f"resuming: {int(done.sum())} cells already complete")
 
     # "r+" on a resume: "w+" truncates, which would throw away every raw field
@@ -399,8 +409,8 @@ def sweep(args) -> int:
         diagram of however many rows are done - useful rather than merely
         recoverable.
         """
-        _write_sidecar(out, args, harness, path, feats, frames, series, done,
-                       strip, xs, ys, probe_steps, snaps, measures, raw_idx)
+        _write_sidecar(out, args, harness, path, feats, frames, series, spread,
+                       done, strip, xs, ys, probe_steps, snaps, measures, raw_idx)
 
     order = (progressive_order(r) if args.order == "progressive"
              else [(iy, ix) for iy in range(r) for ix in range(r)])
@@ -411,15 +421,31 @@ def sweep(args) -> int:
         if done[iy, ix]:
             continue
         want_raw = ix in raw_pos and iy in raw_pos
-        s, probed, f, canvas, parts = harness.run_cell(
-            {args.x_param: xs[ix], args.y_param: ys[iy]},
-            args.seed, args.steps, args.probe_every, snaps, measures,
-            args.coverage_threshold, want_raw)
+        rows, sum_s, sum_f, canvas, parts = [], None, None, None, None
+        for rep in range(args.reps):
+            # The seed is held FIXED across repeats, so the splat race is the
+            # only thing that differs and a repeat measures how far a
+            # float-level perturbation has grown by the end of the run.
+            s, probed, f, c, p = harness.run_cell(
+                {args.x_param: xs[ix], args.y_param: ys[iy]},
+                args.seed, args.steps, args.probe_every, snaps, measures,
+                args.coverage_threshold, want_raw and rep == 0)
+            rows.append(pm.cell_row(f, probed, s, args.pr_lo, args.pr_hi,
+                                    args.steps, rho_floor=args.rho_floor))
+            sum_s = s if sum_s is None else sum_s + s
+            sum_f = f if sum_f is None else sum_f + f
+            if rep == 0:
+                canvas, parts = c, p
 
-        series[iy, ix, :len(s)] = s[:n_probe]
-        frames[iy, ix, :len(f)] = f
-        feats[iy, ix] = pm.cell_row(f, probed, s, args.pr_lo, args.pr_hi,
-                                    args.steps, rho_floor=args.rho_floor)
+        rows = np.asarray(rows)
+        # The stored series is the repeat MEAN, which keeps a recomputed
+        # change_rate equal to the mean of the repeats' own - it averages the
+        # same column over the same times, in the other order.
+        series[iy, ix, :len(sum_s)] = (sum_s / args.reps)[:n_probe]
+        frames[iy, ix, :len(sum_f)] = sum_f / args.reps
+        feats[iy, ix] = np.nanmean(rows, axis=0)
+        if args.reps > 1:
+            spread[iy, ix] = np.nanstd(rows, axis=0, ddof=1)
         done[iy, ix] = True
         if want_raw:
             canvas_mm[raw_pos[iy], raw_pos[ix]] = canvas
@@ -520,6 +546,10 @@ def main(argv) -> int:
     ap.add_argument("--y-range", type=float, nargs=2, default=(-1.0, 1.0))
     ap.add_argument("--grid", type=int, default=128)
     ap.add_argument("--steps", type=int, default=5000)
+    ap.add_argument("--reps", type=int, default=1,
+                    help="runs per cell, identical in every parameter and in "
+                         "the seed. Their spread is what an infinitesimal "
+                         "perturbation grew to, so it maps chaos, not error.")
     ap.add_argument("--probe-every", type=int, default=50)
     ap.add_argument("--snapshots", type=int, default=5)
     ap.add_argument("--order", choices=("progressive", "raster"),

@@ -162,6 +162,55 @@ def render(data, meta, feature: str | None, rgb: list[str] | None,
     return img, title
 
 
+def bifurcation(data, meta, feature: str, bins: int, scale: int,
+                feats: np.ndarray | None = None) -> tuple[np.ndarray, str]:
+    """One parameter across, the feature's DISTRIBUTION up, count as brightness.
+
+    The sweep behind this has a collapsed y range, so every row of a column is
+    the same parameters run again and differs only by the splat race. A column
+    that stays a thin line is reproducible; one that spreads into a band has
+    amplified a float-level perturbation into a visible difference, which is
+    what makes this the diagram that separates chaos from measurement noise.
+
+    Counts are log-scaled: a band's rare edges are the interesting part and a
+    linear scale renders them as black.
+    """
+    names = [str(n) for n in data["cell_names"]]
+    if feature not in names:
+        raise SystemExit(f"no feature {feature!r}; try --list")
+    feats = data["cell_features"] if feats is None else feats
+    col = feats[:, :, names.index(feature)]
+    done = data["done"]
+
+    ys = data["y_values"]
+    if float(np.ptp(ys)) > 0.0:
+        raise SystemExit(
+            "--bifurcation wants a sweep whose y range is collapsed, so that "
+            f"its rows are repeats rather than a second parameter. This one "
+            f"varies {meta['y_param']} over {meta['y_range']}.")
+
+    good = np.isfinite(col) & done
+    vals = col[good]
+    if not vals.size:
+        raise SystemExit(f"{feature} is empty")
+    lo, hi = np.percentile(vals, [0.5, 99.5])
+    if hi <= lo:
+        lo, hi = float(vals.min()), float(vals.max()) + 1e-9
+
+    hist = np.zeros((bins, col.shape[1]), dtype=np.float64)
+    for ix in range(col.shape[1]):
+        v = col[:, ix][good[:, ix]]
+        if not v.size:
+            continue
+        idx = np.clip(((v - lo) / (hi - lo) * bins).astype(int), 0, bins - 1)
+        hist[:, ix] = np.bincount(idx, minlength=bins)
+
+    img = colormap(normalise(np.flipud(np.log1p(hist)), 0.0, 100.0))
+    if scale > 1:
+        img = np.repeat(img, scale, axis=1)
+    return img, f"bifurcation-{feature}"
+
+
 def mark_preset(img: np.ndarray, meta: dict) -> np.ndarray:
     """Draw a crosshair where the preset's OWN parameters sit.
 
@@ -240,6 +289,93 @@ def summarise(feats: np.ndarray, strip: np.ndarray, names: list[str],
                   f"discriminate.")
 
 
+def _binned_r2(key: np.ndarray, v: np.ndarray, nb: int) -> float:
+    """Share of v's variance recovered by binning on `key` alone."""
+    idx = np.clip(((key - key.min()) / (np.ptp(key) + 1e-12) * nb).astype(int),
+                  0, nb - 1)
+    cnt = np.bincount(idx, minlength=nb)
+    mean = np.bincount(idx, weights=v, minlength=nb) / np.maximum(cnt, 1)
+    return float(1.0 - np.var(v - mean[idx]) / np.var(v))
+
+
+def best_1d(plane: np.ndarray, done: np.ndarray, xs: np.ndarray,
+            ys: np.ndarray, nb: int = 0, ndir: int = 180) -> tuple[float, str]:
+    """-> (best single coordinate's share of the variance, what that was).
+
+    Two candidate coordinates, both cheap and both physical:
+
+      LINEAR, constant along parallel lines. What a plane looks like when one
+      of its axes does nothing, or when the two trade off against each other.
+      Searched over direction, on axes rescaled to the unit square so that two
+      parameters with different units are still comparable.
+
+      POLAR, constant along rays from the parameter origin. What a plane looks
+      like when its axes are really a magnitude and a ratio - scaling both
+      together is then some third parameter the sweep never varied, and only
+      the ratio was ever swept. Tested at the parameter origin, which is the
+      one point where a multiplicative pair degenerates.
+
+    A high score means the sweep spent two axes measuring a curve.
+    """
+    r, c = plane.shape[:2]
+    nb = nb or max(16, min(r, c) // 3)
+    m = done & np.isfinite(plane)
+    v = plane[m].astype(np.float64)
+    # Relative, because a channel in step counts sits at 2500 and one in
+    # cosine sits at 0.5 - an absolute floor calls only the second one flat.
+    if v.size < 4 * nb or np.std(v) <= 1e-6 * max(1.0, abs(float(np.mean(v)))):
+        return float("nan"), "flat"
+
+    gy, gx = np.mgrid[0:r, 0:c]
+    x, y = (gx / max(c - 1, 1))[m], (gy / max(r - 1, 1))[m]
+    best, label = -np.inf, "?"
+    for phi in np.linspace(0.0, np.pi, ndir, endpoint=False):
+        score = _binned_r2(x * np.cos(phi) + y * np.sin(phi), v, nb)
+        if score > best:
+            best, label = score, f"linear @{np.degrees(phi):3.0f} deg"
+
+    # Only meaningful when the rays actually fan out inside the swept box.
+    if xs.min() < 0.0 < xs.max() and ys.min() < 0.0 < ys.max():
+        XV, YV = np.meshgrid(xs, ys)
+        score = _binned_r2(np.arctan2(YV[m], XV[m]), v, nb)
+        if score > best:
+            best, label = score, "polar"
+    return float(best), label
+
+
+def dimensionality(data, meta, feats=None) -> None:
+    """Whether the plane earned its second axis.
+
+    A sweep is expensive and a plane that turns out to be a line is the
+    expensive way to measure a curve, so this is worth a coarse pilot before a
+    long run rather than a post-mortem after one.
+    """
+    names = [str(n) for n in data["cell_names"]]
+    feats = data["cell_features"] if feats is None else feats
+    done, xs, ys = data["done"], data["x_values"], data["y_values"]
+    print(f"{meta['x_param']} x {meta['y_param']}   "
+          f"(a linear angle of 0 deg lies along {meta['x_param']})")
+    print(f"{'feature':<22}{'1-D R2':>8}   {'coordinate':<18}verdict")
+    scores = []
+    for i, name in enumerate(names):
+        r2, label = best_1d(feats[..., i], done, xs, ys)
+        if not np.isfinite(r2):
+            print(f"{name:<22}{'flat':>8}")
+            continue
+        scores.append(r2)
+        verdict = ("1-D" if r2 >= 0.90 else
+                   "mostly 1-D" if r2 >= 0.75 else
+                   "2-D" if r2 < 0.60 else "partly 2-D")
+        print(f"{name:<22}{r2:>8.3f}   {label:<18}{verdict}")
+    if scores:
+        med = float(np.median(scores))
+        print(f"\nmedian 1-D R2 {med:.3f} - "
+              + ("this plane is a LINE; one axis is redundant with the other "
+                 "or with a parameter outside the sweep."
+                 if med >= 0.85 else
+                 "the second axis carries structure of its own."))
+
+
 def describe(data, meta, feats=None) -> None:
     names = [str(n) for n in data["cell_names"]]
     feats = data["cell_features"] if feats is None else feats
@@ -267,6 +403,14 @@ def main(argv) -> int:
     ap.add_argument("--out", default="")
     ap.add_argument("--mark", action="store_true",
                     help="crosshair at the preset's own parameter values")
+    ap.add_argument("--bifurcation", action="store_true",
+                    help="for a sweep whose y range is collapsed to repeats: "
+                         "--feature's distribution against the x parameter")
+    ap.add_argument("--bins", type=int, default=256,
+                    help="vertical resolution of --bifurcation")
+    ap.add_argument("--ridge", action="store_true",
+                    help="whether the plane earned its second axis: the best "
+                         "single direction's share of each feature's variance")
     ap.add_argument("--recompute", action="store_true",
                     help="re-derive change_rate and alive_steps from the stored "
                          "probe series, under the thresholds given below")
@@ -281,20 +425,30 @@ def main(argv) -> int:
     if args.recompute or args.rho_floor is not None:
         feats = recompute_series_columns(data, meta, args.pr_lo, args.pr_hi,
                                          args.rho_floor)
+    if args.ridge:
+        dimensionality(data, meta, feats)
+        return 0
     if args.list:
         describe(data, meta, feats)
         return 0
 
     rgb = [s.strip() for s in args.rgb.split(",") if s.strip()]
-    img, title = render(data, meta, args.feature, rgb or None,
-                        args.lo_pct, args.hi_pct, args.scale, feats)
-    if args.mark:
-        img = mark_preset(img, meta)
+    if args.bifurcation:
+        img, title = bifurcation(data, meta, args.feature, args.bins,
+                                 args.scale, feats)
+    else:
+        img, title = render(data, meta, args.feature, rgb or None,
+                            args.lo_pct, args.hi_pct, args.scale, feats)
+        if args.mark:
+            img = mark_preset(img, meta)
     dest = Path(args.out) if args.out else path / f"{title}.png"
     Image.fromarray(img).save(dest)
     print(f"wrote {dest}  ({img.shape[1]}x{img.shape[0]})")
     print(f"  x = {meta['x_param']} {meta['x_range']} left to right")
-    print(f"  y = {meta['y_param']} {meta['y_range']} bottom to top")
+    if args.bifurcation:
+        print(f"  y = {args.feature} value, low to high, brightness = count")
+    else:
+        print(f"  y = {meta['y_param']} {meta['y_range']} bottom to top")
     return 0
 
 
