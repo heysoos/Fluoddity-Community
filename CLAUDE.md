@@ -595,6 +595,26 @@ mechanics these caveats assume.
   about ten bins to begin with. Halving the hop instead costs one extra FFT per
   block and nothing else.
 
+- **A band SUMS LINEAR ENERGY and takes decibels once; averaging each bin's dB
+  level is what stopped it ever reaching zero.** The old measure mapped every
+  bin onto `[-90, -20]` dB and averaged the results over the band, so the
+  hundreds of bins carrying nothing set the answer — `hi` spans about 600 bins
+  at 2048/48k and a cymbal lights a handful. Over the calibration material
+  every band read **0.17–0.18 with only room hiss playing** and sat at 0.25–0.44
+  between hits on a loud track: a rig that modulates hardest when nothing is
+  happening, and a `phase` shaper that never stops travelling. `power`
+  (`10·log10(Σ|X|²)`) is the default and reads **0.00** on both room rows.
+  `rms`, `peak` and `mean_db` are the alternatives, per band, and `mean_db` is
+  kept only so a rig built against it still plays.
+  **Each measure carries its OWN dB window, because they are not on one scale**
+  — a sum over 600 bins is not a mean over them — and the floor is set ABOVE a
+  quiet passage rather than above the noise floor, since a quiet part of a
+  track passing a healthy signal is the whole complaint. Nothing here adapts:
+  a running floor or a running peak makes the same sound read differently
+  depending on what played before it, which is exactly the auto-gain defect one
+  caveat down. `python -m tools.measure_audio_response` prints the table the
+  windows come from; the room rows must read 0.00.
+
 - **The band smoother is ASYMMETRIC, and the rise is not smoothed at all.** The
   two directions solve different problems: falling slowly is what stops a
   steady note drawing a fuzzy hash, while rising slowly only costs the
@@ -607,15 +627,23 @@ mechanics these caveats assume.
   numbers must be read together — `python -m tools.measure_audio_response`. A
   mapping that wants a soft attack asks for one with the `smooth` shaper; the
   analyser cannot give a snap back that it has already thrown away.
+  The release is now a SETTING (`AudioInState.release_seconds`, default 0.075)
+  and **0 hands every shaper the raw per-block measurement** — the point of the
+  shapers is to do the smoothing, so the analyser has to be able to stay out of
+  it. It applies to the BAND, last, after the measure and the auto-gain, so it
+  means the same thing whichever measure produced the number; the DISPLAY
+  spectrum keeps its own fixed smoothing, because the bars are there to be read.
 
-- **The dB windows are measured and there are TWO of them.** The spectrum is
-  read over `[-90, -20]` dB, which rests ordinary material across the middle of
-  the scale and leaves a room's hiss floor near 0.05; `volume` measures the
-  whole block at once, which sits far above any single bin, so it has its own
-  `[-60, -6]`. Linear magnitude is what the first version used and it fails
-  twice over: every band pins at 1.0, and the mel rows — unnormalised triangles
-  whose width grows 20x from the bottom of the axis to the top — draw any
-  spectrum at all as a ramp rising to the right. The rows average instead.
+- **The DISPLAY spectrum's dB window is not a band's.** The mel bars are read
+  over `[-90, -20]` dB, which rests ordinary material across the middle of the
+  scale — right for something to look at, and the reason a band measured off
+  those bars could not reach zero. Bands carry their own windows
+  (`MEASURE_WINDOWS`), and `volume` measures the whole block at once, which
+  sits far above any single bin, so it has its own `[-60, -6]`. Raw linear
+  magnitude is what the first version drew and it fails twice over: every band
+  pins at 1.0, and the mel rows — unnormalised triangles whose width grows 20x
+  from the bottom of the axis to the top — draw any spectrum at all as a ramp
+  rising to the right. The rows average instead.
 
 - **A mapping's shaper state is keyed by a `uid` the `Mapping` carries, never
   by `id()`.** CPython hands the address of a freed object straight to the next

@@ -20,7 +20,8 @@ if TYPE_CHECKING:                       # annotations only - see below
 # `enabled` is deliberately absent: opening the app must never start capturing.
 PERSISTED_FIELDS: tuple[str, ...] = (
     "mappings", "brain_mappings", "strengths", "global_strength",
-    "auto_gain", "device_name", "modulate", "muted",
+    "auto_gain", "device_name", "modulate", "muted", "bands",
+    "release_seconds",
 )
 
 _STRENGTH_MAX = 2.0
@@ -44,6 +45,15 @@ class AudioInState:
 
     strengths: dict[str, float] = field(default_factory=dict)
     global_strength: float = 1.0
+
+    # How each band turns its bins into one number, and over what dB window:
+    # {"bass": {"measure": "power", "floor": -60.0, "ceiling": -5.0}, ...}.
+    # Empty means the analyser's defaults, so a rig saved before these existed
+    # opens on them. See services/audio_analysis.effective_bands.
+    bands: dict[str, dict] = field(default_factory=dict)
+    # The band smoother's release. 0 hands every shaper the raw per-block
+    # measurement; the rise is never smoothed at any setting.
+    release_seconds: float = 0.075
 
     # The master bypass, and the per-target one. Both silence the modulation
     # while leaving capture running, so the traces keep moving and you can see
@@ -160,6 +170,11 @@ def to_dict(state: AudioInState) -> dict:
         "modulate": bool(state.modulate),
         # Only the muted ones, so a rig does not carry a row per parameter.
         "muted": sorted(k for k, v in state.muted.items() if v),
+        "bands": {k: {"measure": str(v.get("measure", "")),
+                      "floor": float(v.get("floor", 0.0)),
+                      "ceiling": float(v.get("ceiling", 0.0))}
+                  for k, v in state.bands.items() if isinstance(v, dict)},
+        "release_seconds": float(state.release_seconds),
     }
 
 
@@ -198,3 +213,11 @@ def apply_dict(state: AudioInState, data: dict) -> None:
         state.modulate = data["modulate"]
     if isinstance(data.get("muted"), list):
         state.muted = {k: True for k in data["muted"] if isinstance(k, str)}
+    if isinstance(data.get("bands"), dict):
+        # Validated in the analyser, which owns what a measure and a window
+        # mean; anything it does not recognise falls back to the default.
+        state.bands = {k: dict(v) for k, v in data["bands"].items()
+                       if isinstance(k, str) and isinstance(v, dict)}
+    if isinstance(data.get("release_seconds"), (int, float)):
+        state.release_seconds = max(0.0, min(2.0,
+                                             float(data["release_seconds"])))

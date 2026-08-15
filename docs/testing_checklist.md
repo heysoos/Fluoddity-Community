@@ -355,8 +355,11 @@ installed; without it the panel says so and everything else runs unchanged.
       current value. On a steady note a trace is FLAT, not a fuzzy hash: the
       bands are smoothed, and a trace never draws more samples than it has
       pixels.
-- [ ] Nothing playing but room noise leaves the bands near the bottom of their
-      range rather than part way up.
+- [ ] Nothing playing but room noise leaves every band at ZERO, not part way
+      up. This is what the measures were changed for; if a band sits high with
+      nothing playing, raise its Floor under Bands.
+- [ ] A quiet passage of a track reads far lower than a loud one, and the bands
+      return to zero between hits rather than resting half-lit.
 - [ ] Hi-hats and snare hits SNAP: the `hi` and `presence` traces jump on the
       transient and ease back down, rather than swelling into it. A steady note
       still draws a flat trace - both halves matter, and a change to the
@@ -415,6 +418,24 @@ installed; without it the panel says so and everything else runs unchanged.
       enabled.
 - [ ] The Sonification window (Extras) still opens and works alongside this one;
       the two panels are separate and neither replaces the other.
+
+### How each band is measured
+
+- [ ] The Bands section shows a measure per band, a floor and a ceiling, with
+      `volume` naming its own measure and offering only the window.
+- [ ] Switching a band to `mean_db` makes it sit high with quiet material, and
+      back to `power` drops it. That contrast is the whole change.
+- [ ] Switching a measure moves the floor and ceiling to that measure's own
+      defaults; right-clicking either puts it back.
+- [ ] Raising a band's Floor above the music makes it read zero, immediately,
+      with the track still playing - no Stop and Start.
+- [ ] Setting Release to 0 makes the traces snap back the instant the sound
+      stops; the rise is identical at every setting. The spectrum bars stay
+      smooth either way.
+- [ ] With Release at 0 and a `phase` shaper bound, the wave stops dead in the
+      gaps rather than drifting on.
+- [ ] The measures, the windows and Release all survive a quit, and a rig saved
+      before they existed still loads.
 
 ### Rig presets, and the rig surviving a second copy
 

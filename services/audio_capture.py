@@ -90,6 +90,9 @@ class AudioCapture:
         self.tap = None
         # Captured at start, because the callback must not import anything.
         self._continue = None
+        # Remembered so a Start picks up settings pushed while nothing ran.
+        self._bands: dict = {}
+        self._release: float | None = None
 
     @property
     def channels(self) -> int:
@@ -105,6 +108,19 @@ class AudioCapture:
         analyzer = self._analyzer
         if analyzer is not None:
             analyzer.set_auto_gain(on)
+
+    def set_bands(self, bands: dict | None) -> None:
+        """The per-band measure and dB window, pushed while blocks arrive."""
+        self._bands = dict(bands or {})
+        analyzer = self._analyzer
+        if analyzer is not None:
+            analyzer.set_bands(self._bands)
+
+    def set_release(self, seconds: float) -> None:
+        self._release = max(0.0, float(seconds))
+        analyzer = self._analyzer
+        if analyzer is not None:
+            analyzer.set_release(self._release)
 
     def _on_block(self, in_data, _frame_count, _time_info, _status):
         tap = self.tap
@@ -153,7 +169,9 @@ class AudioCapture:
 
             self.sample_rate = float(info["defaultSampleRate"])
             self._channels = max(1, int(info.get("maxInputChannels", 1)))
-            self._analyzer = Analyzer(self.sample_rate, auto_gain=auto_gain)
+            self._analyzer = Analyzer(self.sample_rate, auto_gain=auto_gain,
+                                      bands=self._bands,
+                                      release=self._release)
             self._tail = np.zeros(FFT_SIZE, dtype=np.float32)
 
             self._stream = self._pa.open(

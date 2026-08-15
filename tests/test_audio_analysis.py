@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from services.audio_analysis import (FFT_SIZE, HOP, SIGNAL_NAMES, Analyzer,
-                                     analysis_matrix)
+                                     band_bins, mel_matrix)
 
 SR = 48000
 
@@ -17,15 +17,20 @@ def test_signal_names_are_the_five_the_ui_shows():
     assert SIGNAL_NAMES == ("bass", "mid", "presence", "hi", "volume")
 
 
-def test_the_matrix_has_one_row_per_mel_bin_plus_one_per_band():
-    m = analysis_matrix(SR, FFT_SIZE, n_mel=40)
-    assert m.shape == (44, FFT_SIZE // 2 + 1)
+def test_the_matrix_is_the_display_bars_and_nothing_else():
+    """Bands left it deliberately: a mean over one of these rows is the one
+    measure that cannot rest at zero."""
+    m = mel_matrix(SR, FFT_SIZE, n_mel=40)
+    assert m.shape == (40, FFT_SIZE // 2 + 1)
 
 
-def test_every_band_row_sums_to_one_so_it_is_a_mean():
-    m = analysis_matrix(SR, FFT_SIZE, n_mel=40)
-    for row in m[40:]:
-        assert row.sum() == pytest.approx(1.0, abs=1e-5)
+def test_every_band_covers_the_bins_its_edges_name():
+    bins = band_bins(SR, FFT_SIZE)
+    freqs = np.fft.rfftfreq(FFT_SIZE, d=1.0 / SR)
+    for name, lo_hz, hi_hz in [("bass", 20.0, 250.0), ("hi", 6000.0, 20000.0)]:
+        lo, hi = bins[name]
+        assert freqs[lo] >= lo_hz and freqs[hi - 1] < hi_hz
+        assert freqs[lo - 1] < lo_hz
 
 
 @pytest.mark.parametrize("hz,expected", [
@@ -88,14 +93,14 @@ def test_auto_gain_off_leaves_a_quiet_signal_quieter():
 def test_the_mel_rows_average_so_a_flat_spectrum_draws_flat():
     """Unnormalised triangles grow with the band's width, which tilts the
     display upward and reads as a ramp whatever is playing."""
-    m = analysis_matrix(SR, FFT_SIZE, n_mel=40)
-    for row in m[:40]:
+    m = mel_matrix(SR, FFT_SIZE, n_mel=40)
+    for row in m:
         assert row.sum() == pytest.approx(1.0, abs=1e-5)
 
 
 def test_a_flat_spectrum_is_not_a_ramp():
-    m = analysis_matrix(SR, FFT_SIZE, n_mel=40)
-    mel = m[:40] @ np.ones(FFT_SIZE // 2 + 1, dtype=np.float32)
+    m = mel_matrix(SR, FFT_SIZE, n_mel=40)
+    mel = m @ np.ones(FFT_SIZE // 2 + 1, dtype=np.float32)
     assert mel.max() / max(mel.min(), 1e-9) < 1.05
 
 
@@ -203,3 +208,150 @@ def test_seq_increments_so_a_reader_can_tell_snapshots_apart():
     a = Analyzer(SR)
     first = a.process(tone(80)).seq
     assert a.process(tone(80)).seq == first + 1
+
+
+# --- how a band is measured --------------------------------------------------
+
+def test_power_is_the_default_measure():
+    """A band must be able to rest at zero, and averaging per-bin decibels
+    cannot: the hundreds of bins carrying nothing set the result."""
+    from services.audio_analysis import default_band
+    assert default_band("bass")["measure"] == "power"
+
+
+def _quiet_band(measure, amp=0.003):
+    """What `hi` reads for a faint broadband signal - a quiet passage."""
+    from services.audio_analysis import MEASURE_WINDOWS
+    rng = np.random.default_rng(0)
+    a = Analyzer(SR, auto_gain=False, release=0.0, bands={
+        "hi": dict(zip(("floor", "ceiling"), MEASURE_WINDOWS[measure]),
+                   measure=measure)})
+    tail = np.zeros(FFT_SIZE, dtype=np.float32)
+    for _ in range(30):
+        tail = np.roll(tail, -HOP)
+        tail[FFT_SIZE - HOP:] = (rng.standard_normal(HOP) * amp).astype(
+            np.float32)
+        value = a.process(tail).signals["hi"]
+    return value
+
+
+def test_a_quiet_passage_reads_zero_under_power_and_did_not_under_mean_db():
+    """The complaint this measure exists for: every band reporting a healthy
+    signal with almost nothing playing."""
+    assert _quiet_band("power") == 0.0
+    assert _quiet_band("mean_db") > 0.1
+
+
+def test_a_sparse_band_is_not_outvoted_by_its_empty_bins():
+    """`hi` spans about 600 bins and a cymbal lights a handful. Averaging each
+    bin's level hides it; summing the band's energy does not."""
+    from services.audio_analysis import MEASURE_WINDOWS
+
+    def read(measure):
+        a = Analyzer(SR, auto_gain=False, release=0.0, bands={
+            "hi": dict(zip(("floor", "ceiling"), MEASURE_WINDOWS[measure]),
+                       measure=measure)})
+        return a.process(tone(9000, amp=0.5)).signals["hi"]
+
+    assert read("power") > 0.8
+    assert read("mean_db") < 0.2
+
+
+@pytest.mark.parametrize("measure", ["power", "rms", "peak", "mean_db"])
+def test_every_measure_is_silent_on_silence_and_rises_with_level(measure):
+    from services.audio_analysis import MEASURE_WINDOWS
+
+    def read(amp):
+        a = Analyzer(SR, auto_gain=False, release=0.0, bands={
+            "bass": dict(zip(("floor", "ceiling"), MEASURE_WINDOWS[measure]),
+                         measure=measure)})
+        block = (np.zeros(FFT_SIZE, dtype=np.float32) if amp == 0
+                 else tone(80, amp=amp))
+        return a.process(block).signals["bass"]
+
+    assert read(0) == 0.0
+    assert 0.0 <= read(0.01) < read(0.5) <= 1.0
+
+
+def test_the_floor_is_what_decides_where_zero_is():
+    """Calibration, not a running average: the same sound always reads the
+    same, which is exactly what a moving floor could not promise."""
+    quiet = tone(80, amp=0.02)
+    low = Analyzer(SR, auto_gain=False, release=0.0, bands={
+        "bass": {"measure": "power", "floor": -60.0, "ceiling": -5.0}})
+    high = Analyzer(SR, auto_gain=False, release=0.0, bands={
+        "bass": {"measure": "power", "floor": -30.0, "ceiling": -5.0}})
+    assert low.process(quiet).signals["bass"] > 0.2
+    assert high.process(quiet).signals["bass"] == 0.0
+
+
+def test_an_unknown_measure_falls_back_rather_than_raising():
+    from services.audio_analysis import effective_bands
+    bands = effective_bands({"bass": {"measure": "wavelets"}})
+    assert bands["bass"]["measure"] == "power"
+
+
+def test_volume_keeps_its_own_measure():
+    """It is the block's loudness in the time domain; a spectral measure has
+    no meaning for it."""
+    from services.audio_analysis import VOLUME_MEASURE, effective_bands
+    bands = effective_bands({"volume": {"measure": "peak"}})
+    assert bands["volume"]["measure"] == VOLUME_MEASURE
+
+
+def test_a_rig_that_stored_nothing_gets_the_defaults():
+    from services.audio_analysis import SIGNAL_NAMES, effective_bands
+    bands = effective_bands({})
+    assert set(bands) == set(SIGNAL_NAMES)
+    assert all("floor" in b and "ceiling" in b for b in bands.values())
+
+
+def test_a_stored_window_overrides_only_what_it_names():
+    from services.audio_analysis import MEASURE_WINDOWS, effective_bands
+    bands = effective_bands({"mid": {"floor": -42.0}})
+    assert bands["mid"]["floor"] == -42.0
+    assert bands["mid"]["ceiling"] == MEASURE_WINDOWS["power"][1]
+
+
+# --- the release is the user's, and the rise is nobody's ---------------------
+
+def _fall(analyzer, blocks=6):
+    """Loud, then silence: what `bass` reads on each block afterwards."""
+    analyzer.process(tone(80, amp=0.5))
+    silence = np.zeros(FFT_SIZE, dtype=np.float32)
+    return [analyzer.process(silence).signals["bass"] for _ in range(blocks)]
+
+
+def test_a_zero_release_hands_the_shapers_the_raw_measurement():
+    """The point of the shapers is to do the smoothing; the analyser must be
+    able to stay out of it entirely."""
+    assert _fall(Analyzer(SR, auto_gain=False, release=0.0))[0] == 0.0
+
+
+def test_a_release_makes_the_fall_take_several_blocks():
+    seen = _fall(Analyzer(SR, auto_gain=False, release=0.075))
+    assert seen[0] > 0.3
+    assert seen[-1] < seen[0]
+
+
+def test_the_rise_is_never_smoothed_whatever_the_release():
+    slow = Analyzer(SR, auto_gain=False, release=1.0)
+    fast = Analyzer(SR, auto_gain=False, release=0.0)
+    loud = tone(80, amp=0.5)
+    assert slow.process(loud).signals["bass"] == pytest.approx(
+        fast.process(loud).signals["bass"])
+
+
+def test_the_release_can_be_retuned_while_blocks_arrive():
+    a = Analyzer(SR, auto_gain=False, release=0.075)
+    a.set_release(0.0)
+    assert _fall(a)[0] == 0.0
+
+
+def test_retuning_the_bands_takes_effect_on_the_next_block():
+    a = Analyzer(SR, auto_gain=False, release=0.0)
+    before = a.process(tone(80, amp=0.02)).signals["bass"]
+    a.set_bands({"bass": {"measure": "power", "floor": -30.0,
+                          "ceiling": -5.0}})
+    assert before > 0.0
+    assert a.process(tone(80, amp=0.02)).signals["bass"] == 0.0

@@ -74,9 +74,12 @@ class AudioRuntime:
             ast.request_stop = False
             self.capture.stop()
             ast.enabled = False
-        # Every frame, not just at Start: the checkbox is the only escape from
-        # auto-gain, so it must take effect without a Stop/Start.
+        # Every frame, not just at Start: these are the only escape from a
+        # setting that is wrong for the material, so they must take effect
+        # while it plays rather than after a Stop/Start.
         self.capture.set_auto_gain(ast.auto_gain)
+        self.capture.set_bands(ast.bands)
+        self.capture.set_release(ast.release_seconds)
         ast.status = self.capture.status
         # The panel is passive and owns no service, so the snapshot is handed
         # to it here rather than reached for through the capture thread.

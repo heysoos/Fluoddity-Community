@@ -577,6 +577,74 @@ def test_the_forced_popup_helper_really_opens_something():
         "no reset item was drawn, so the popup bodies never ran")
 
 
+# --- the Bands section ------------------------------------------------------
+
+def _with_headers_open(imgui, host, frames=2):
+    """Render with every collapsing header OPEN.
+
+    A header's body does not run while it is shut, so the measure combos and
+    the dB windows are unexecuted by an ordinary pass. The real header is
+    still drawn, so its own call is covered too.
+    """
+    real = imgui.collapsing_header
+
+    def spy(*a, **kw):
+        return real(*a, **kw) or True
+
+    imgui.collapsing_header = spy
+    try:
+        _draw(imgui, host, frames=frames)
+    finally:
+        imgui.collapsing_header = real
+
+
+def test_the_bands_section_renders():
+    imgui, host = _bound_host(open_band="bass")
+    _with_headers_open(imgui, host)
+
+
+@pytest.mark.parametrize("measure", ["power", "rms", "peak", "mean_db"])
+def test_the_bands_section_renders_for_every_measure(measure):
+    imgui, host = _bound_host(open_band="bass")
+    host.state.audio.bands = {"hi": {"measure": measure, "floor": -50.0,
+                                     "ceiling": -10.0}}
+    _with_headers_open(imgui, host)
+
+
+def test_the_forced_header_helper_really_opens_something():
+    """Guards the guard: without this the tests above would pass having drawn
+    nothing but the header itself."""
+    imgui, host = _bound_host(open_band="bass")
+    seen = []
+    real = imgui.combo
+
+    def spy(*a, **kw):
+        seen.append(a[0] if a else "")
+        return real(*a, **kw)
+
+    imgui.combo = spy
+    try:
+        _with_headers_open(imgui, host)
+    finally:
+        imgui.combo = real
+    assert any(s.startswith("##measure_") for s in seen), (
+        "no measure combo was drawn, so the section body never ran")
+
+
+def test_writing_one_band_leaves_the_others_on_their_defaults():
+    """A band is absent from the rig until it is touched, so a partial write
+    must not strand the rest without a floor."""
+    from services.audio_analysis import MEASURE_WINDOWS, effective_bands
+    from ui.audio_reactive_window import AudioReactiveWindowMixin
+
+    _imgui, host = _host(True)
+    AudioReactiveWindowMixin._write_band(host.state.audio, "hi", floor=-30.0)
+    bands = effective_bands(host.state.audio.bands)
+    assert bands["hi"]["floor"] == -30.0
+    assert bands["hi"]["ceiling"] == MEASURE_WINDOWS["power"][1]
+    assert bands["bass"] == effective_bands({})["bass"]
+
+
 def test_a_reset_returns_the_dataclass_default():
     from services.audio_mapping import Mapping
     from services.audio_shapers import ShaperParams

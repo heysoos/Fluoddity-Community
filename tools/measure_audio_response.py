@@ -132,6 +132,74 @@ def auto_gain_table() -> None:
           "cannot\ntell a room's hiss from music, which is why it ships off.")
 
 
+# --- what a band's level actually is, per measure ---------------------------
+#
+# The dB windows in MEASURE_WINDOWS come from this table. A measure is only
+# usable if the room rows sit BELOW its floor and the music rows spread across
+# the range: a floor the hiss clears is what made every band read half-lit
+# with nothing playing.
+
+MEASURE_MATERIAL = (
+    ("digital silence", None, False),
+    ("room hiss", -70.0, False),
+    ("room hiss", -50.0, False),
+    ("quiet music", -35.0, True),
+    ("music", -20.0, True),
+    ("loud music", -12.0, True),
+)
+
+
+def band_levels(db, dynamic, measure, blocks=120, hop=None):
+    """Per band, the raw dB level and the 0..1 the analyser would report.
+
+    Read through the analyser's own functions rather than a second copy of the
+    formulas, so the table cannot drift from what the app does.
+    """
+    hop = hop or aa.HOP
+    an = aa.Analyzer(SR, auto_gain=False, hop=hop)
+    setting = dict(zip(("floor", "ceiling"), aa.MEASURE_WINDOWS[measure]))
+    setting["measure"] = measure
+    tail = np.zeros(aa.FFT_SIZE, dtype=np.float32)
+    out = {name: ([], []) for name, _lo, _hi in aa.BAND_EDGES_HZ}
+    for i in range(blocks):
+        tail = np.roll(tail, -hop)
+        tail[aa.FFT_SIZE - hop:] = _material(db, dynamic, hop, i)
+        mag = np.abs(np.fft.rfft(tail * an._window)).astype(np.float32)
+        power = (mag * mag).astype(np.float32)
+        spec_db = 20.0 * np.log10(np.maximum(mag, 1e-9))
+        for name, _lo, _hi in aa.BAND_EDGES_HZ:
+            lo, hi = an._bins[name]
+            levels, values = out[name]
+            levels.append(np.nan if measure == "mean_db"
+                          else aa.band_level_db(measure, mag, power, lo, hi))
+            values.append(aa.band_value(setting, mag, power, spec_db, lo, hi))
+    return {k: (np.asarray(v[0][blocks // 3:]), np.asarray(v[1][blocks // 3:]))
+            for k, v in out.items()}
+
+
+def measure_table() -> None:
+    for measure in aa.MEASURES:
+        floor, ceiling = aa.MEASURE_WINDOWS[measure]
+        print(f"\n{measure}, window [{floor:.0f}, {ceiling:.0f}] dB "
+              f"| level at the peak, and what the band reads there 0..1")
+        print(f"{'material':20} " + " ".join(f"{n:>14}" for n, _l, _h
+                                             in aa.BAND_EDGES_HZ))
+        print("-" * 80)
+        for label, db, dynamic in MEASURE_MATERIAL:
+            levels = band_levels(db, dynamic, measure)
+            name = f"{label} {db:.0f}" if db is not None else label
+            cells = []
+            for band, _l, _h in aa.BAND_EDGES_HZ:
+                lv, vals = levels[band]
+                top = "  --" if measure == "mean_db" else f"{lv.max():4.0f}"
+                cells.append(f"{top} {vals.max():4.2f} ({np.median(vals):4.2f})")
+            print(f"{name:20} " + " ".join(f"{c:>14}" for c in cells))
+    print("\nEvery room row must read 0.00 and the music rows must differ from "
+          "each other.\nRead mean_db's room rows against the others: a band "
+          "that cannot reach zero\nwith nothing playing is what the default "
+          "moved away from.")
+
+
 def main() -> None:
     shipped = (aa.FFT_SIZE, aa.HOP, aa.ATTACK_SECONDS, aa.SMOOTHING_SECONDS)
     print(f"{'fft/hop':>10} {'attack':>8} {'release':>8} | "
@@ -147,6 +215,7 @@ def main() -> None:
     finally:
         aa.ATTACK_SECONDS, aa.SMOOTHING_SECONDS = shipped[2], shipped[3]
     print("\nhat peak: taller is snappier.  steady step: lower is calmer.")
+    measure_table()
     auto_gain_table()
 
 

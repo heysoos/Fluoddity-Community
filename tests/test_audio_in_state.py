@@ -126,3 +126,32 @@ def test_strengths_are_clamped_to_the_slider_range():
     apply_dict(st, {"global_strength": 99.0, "strengths": {"DRAG": -4.0}})
     assert st.global_strength == pytest.approx(2.0)
     assert st.strengths["DRAG"] == pytest.approx(0.0)
+
+
+def test_the_band_measures_and_the_release_survive_a_save():
+    st = AudioInState()
+    st.bands = {"hi": {"measure": "peak", "floor": -40.0, "ceiling": -8.0}}
+    st.release_seconds = 0.0
+
+    back = AudioInState()
+    apply_dict(back, to_dict(st))
+    assert back.bands["hi"] == {"measure": "peak", "floor": -40.0,
+                                "ceiling": -8.0}
+    assert back.release_seconds == pytest.approx(0.0)
+
+
+def test_a_rig_saved_before_the_measures_existed_opens_on_the_defaults():
+    from services.audio_analysis import effective_bands
+
+    st = AudioInState()
+    apply_dict(st, {"global_strength": 1.0})
+    assert st.bands == {}
+    assert effective_bands(st.bands)["bass"]["measure"] == "power"
+
+
+def test_the_release_is_clamped_to_the_slider_range():
+    st = AudioInState()
+    apply_dict(st, {"release_seconds": -3.0})
+    assert st.release_seconds == pytest.approx(0.0)
+    apply_dict(st, {"release_seconds": 99.0})
+    assert st.release_seconds == pytest.approx(2.0)

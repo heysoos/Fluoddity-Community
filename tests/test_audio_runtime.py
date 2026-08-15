@@ -251,6 +251,47 @@ def test_a_swept_target_draws_no_overlay():
     assert "SENSOR_GAIN" not in rt.overlays(st, sim_out)
 
 
+# --- the analyser follows the panel while it plays ---------------------------
+
+class _SpyCapture:
+    """Records what the runtime pushes at it each frame."""
+
+    def __init__(self):
+        self.status = "active"
+        self.last_error = ""
+        self.pushed = []
+        self._snap = FakeSnapshot(bass=1.0)
+
+    def snapshot(self):
+        return self._snap
+
+    def set_auto_gain(self, on):
+        pass
+
+    def set_bands(self, bands):
+        self.pushed.append(("bands", dict(bands or {})))
+
+    def set_release(self, seconds):
+        self.pushed.append(("release", seconds))
+
+
+def test_the_measures_and_the_release_are_pushed_every_frame():
+    """Otherwise the only way to change one is a Stop and a Start, with the
+    music still playing."""
+    rt, st = AudioRuntime(), rig()
+    rt.capture = _SpyCapture()
+    st.audio.bands = {"hi": {"measure": "peak", "floor": -40.0,
+                             "ceiling": -8.0}}
+    st.audio.release_seconds = 0.0
+
+    rt.update(st, 1 / 60, None, None)
+    rt.update(st, 1 / 60, None, None)
+
+    assert rt.capture.pushed.count(("release", 0.0)) == 2
+    bands = [v for k, v in rt.capture.pushed if k == "bands"]
+    assert len(bands) == 2 and bands[0]["hi"]["measure"] == "peak"
+
+
 def test_probing_full_scale_does_not_disturb_the_live_shaper_state():
     """overlays() drives the mappings at signal 1.0; a shared shaper state
     would make the next frame's envelope think a peak had just arrived."""

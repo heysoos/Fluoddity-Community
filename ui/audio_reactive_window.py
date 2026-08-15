@@ -280,6 +280,81 @@ class AudioReactiveWindowMixin:
             ast.global_strength = value
         self._delayed_tooltip("Scales every mapping at once.")
 
+        changed, value = self._audio_slider("Release", ast.release_seconds,
+                                            0.0, 0.5, "%.3f s", 0.075)
+        if changed:
+            ast.release_seconds = value
+        self._delayed_tooltip(
+            "How long a band takes to fall. Zero hands every shaper the raw "
+            "measurement; the rise is never smoothed.")
+
+        self._render_audio_bands(ast)
+
+    # --- how each band is measured --------------------------------------
+
+    def _render_audio_bands(self, ast):
+        """A measure and a dB window per band.
+
+        Both are calibration, deliberately fixed rather than adaptive: the same
+        sound must always produce the same number, which is what a running
+        peak or floor cannot promise.
+        """
+        from services import audio_analysis as aa
+
+        if not imgui.collapsing_header("Bands##audio_bands"):
+            return
+        effective = aa.effective_bands(ast.bands)
+        for name in SIGNAL_NAMES:
+            setting = effective[name]
+            imgui.text_colored(imgui.ImVec4(*SIGNAL_COLORS[name]), f"{name:9}")
+            imgui.same_line()
+            if name == "volume":
+                imgui.text_disabled("the block's own loudness")
+            else:
+                imgui.set_next_item_width(110)
+                current = list(aa.MEASURES).index(setting["measure"])
+                changed, idx = imgui.combo(f"##measure_{name}", current,
+                                           list(aa.MEASURES))
+                if changed:
+                    lo, hi = aa.MEASURE_WINDOWS[aa.MEASURES[idx]]
+                    self._write_band(ast, name, measure=aa.MEASURES[idx],
+                                     floor=lo, ceiling=hi)
+                self._delayed_tooltip(
+                    "power sums the band's energy and takes decibels once, so "
+                    "it rests at the floor between hits; mean_db averages "
+                    "every bin's level, including the ones carrying nothing.")
+
+            lo_default, hi_default = aa.MEASURE_WINDOWS.get(
+                setting["measure"], (aa.LEVEL_DB_MIN, aa.LEVEL_DB_MAX))
+            imgui.set_next_item_width(90)
+            changed, value = self._audio_slider(
+                f"##floor_{name}", setting["floor"], -120.0, 0.0,
+                "floor %.0f dB", lo_default)
+            if changed:
+                self._write_band(ast, name, floor=value)
+            self._delayed_tooltip("Everything below this reads zero.")
+            imgui.same_line()
+            imgui.set_next_item_width(90)
+            changed, value = self._audio_slider(
+                f"##ceiling_{name}", setting["ceiling"], -120.0, 0.0,
+                "top %.0f dB", hi_default)
+            if changed:
+                self._write_band(ast, name, ceiling=value)
+            self._delayed_tooltip("At this level and above the band reads one.")
+
+    @staticmethod
+    def _write_band(ast, name, **changes):
+        """Store one band's settings, filling in what it is using now.
+
+        A band is absent from the rig until it is touched, so the stored entry
+        has to be complete rather than a lone key.
+        """
+        from services.audio_analysis import effective_bands
+
+        setting = dict(effective_bands(ast.bands)[name])
+        setting.update(changes)
+        ast.bands = dict(ast.bands, **{name: setting})
+
     # --- spectrum and band traces ---------------------------------------
 
     def _render_audio_signals(self, ast):

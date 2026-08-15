@@ -18,10 +18,9 @@ N_MEL = 40
 
 SIGNAL_NAMES: tuple[str, ...] = ("bass", "mid", "presence", "hi", "volume")
 
-# The spectrum is read in decibels over this fixed window, chosen so ordinary
-# material rests across the middle of the scale and a room's hiss floor does
-# not. A linear magnitude puts everything real against the bottom instead, and
-# makes each band a spiky ratio of energies rather than a level.
+# The DISPLAY spectrum is read in decibels over this fixed window, chosen so
+# ordinary material rests across the middle of the scale. It draws the mel bars
+# and nothing else - a band signal is measured from linear magnitudes, below.
 DB_MIN = -90.0
 DB_MAX = -20.0
 
@@ -30,17 +29,48 @@ DB_MAX = -20.0
 LEVEL_DB_MIN = -60.0
 LEVEL_DB_MAX = -6.0
 
-# The spectrum is smoothed ASYMMETRICALLY, because the two directions are
-# solving different problems. Falling slowly is what stops a band being one
-# block's sample of a noisy quantity, which reads as vibration. Rising slowly
-# buys nothing and costs the transient: a hi-hat is over in a few milliseconds,
-# so a smoother that takes tens of them to respond reports a fraction of its
-# height and the highs lose their snap.
+# How a band turns its bins into one number. `power` sums LINEAR energy and
+# converts once, so a band rests at its floor between hits; `mean_db` averages
+# each bin's decibel level, where the hundreds of bins carrying nothing set the
+# result - `hi` spans about 600 bins and a cymbal lights a handful of them.
+MEASURES: tuple[str, ...] = ("power", "rms", "peak", "mean_db")
+
+# Each measure lives on its own scale - a sum over 600 bins is not a mean over
+# them - so each carries its own dB window. Measured, see
+# `python -m tools.measure_audio_response`.
+# The floor is where a band reads zero, and it is set ABOVE a quiet passage
+# rather than above the noise floor: a quiet part of a track passing a healthy
+# signal is the complaint these measures answer.
+MEASURE_WINDOWS: dict[str, tuple[float, float]] = {
+    "power": (-45.0, -5.0),
+    "rms": (-62.0, -20.0),
+    "peak": (-60.0, -12.0),
+    # The historical measure keeps the display window it was defined against.
+    "mean_db": (DB_MIN, DB_MAX),
+}
+
+# `volume` is the block's own RMS in the time domain; the spectral measures do
+# not apply to it.
+VOLUME_MEASURE = "block_rms"
+
+# The DISPLAY spectrum's own smoothing. Not the band release below: the bars
+# are there to be read, and an unsmoothed spectrum vibrates.
+DISPLAY_SMOOTHING_SECONDS = 0.075
+
+# A band is smoothed ASYMMETRICALLY, because the two directions solve different
+# problems. Falling slowly is what stops a band being one block's sample of a
+# noisy quantity, which reads as vibration. Rising slowly buys nothing and
+# costs the transient: a hi-hat is over in a few milliseconds, so a smoother
+# that takes tens of them to respond reports a fraction of its height.
+#
+# The release is a SETTING (AudioInState.release_seconds). At 0 a band is the
+# raw per-block measurement and every shaper in the rig sees it unsmoothed.
 ATTACK_SECONDS = 0.0
 SMOOTHING_SECONDS = 0.075
 
 # Below this a bin is silence rather than a very negative number of decibels.
 _MAG_FLOOR = 1e-9
+_POWER_FLOOR = _MAG_FLOOR * _MAG_FLOOR
 
 # The four spectral bands, in Hz. `volume` is RMS and has no band.
 BAND_EDGES_HZ: tuple[tuple[str, float, float], ...] = (
@@ -76,16 +106,57 @@ def _mel_to_hz(m):
     return 700.0 * (10.0 ** (m / 2595.0) - 1.0)
 
 
-def analysis_matrix(sample_rate: float, fft_size: int = FFT_SIZE,
-                    n_mel: int = N_MEL) -> np.ndarray:
-    """Rows 0..n_mel-1 are a mel filterbank; the last four average one band each.
+def default_band(name: str) -> dict:
+    """The measure and dB window a band uses until the user changes them."""
+    if name == "volume":
+        return {"measure": VOLUME_MEASURE, "floor": LEVEL_DB_MIN,
+                "ceiling": LEVEL_DB_MAX}
+    lo, hi = MEASURE_WINDOWS["power"]
+    return {"measure": "power", "floor": lo, "ceiling": hi}
 
-    Both live in one matrix so a single matmul yields the display spectrum and
-    the band signals together.
+
+def effective_bands(stored: dict | None = None) -> dict[str, dict]:
+    """Every signal's settings, with anything stored overriding the defaults.
+
+    A rig saved before these existed stores nothing, so it opens on the
+    defaults rather than on a band that measures nothing.
+    """
+    out = {name: default_band(name) for name in SIGNAL_NAMES}
+    for name, value in (stored or {}).items():
+        if name not in out or not isinstance(value, dict):
+            continue
+        measure = value.get("measure")
+        allowed = (VOLUME_MEASURE,) if name == "volume" else MEASURES
+        if measure in allowed:
+            out[name]["measure"] = measure
+        for key in ("floor", "ceiling"):
+            if isinstance(value.get(key), (int, float)):
+                out[name][key] = float(value[key])
+    return out
+
+
+def band_bins(sample_rate: float, fft_size: int = FFT_SIZE) -> dict:
+    """Each band's half-open bin range into the rfft, by name."""
+    freqs = np.fft.rfftfreq(fft_size, d=1.0 / sample_rate)
+    nyquist = sample_rate / 2.0
+    out = {}
+    for name, lo, hi in BAND_EDGES_HZ:
+        sel = np.nonzero((freqs >= lo) & (freqs < min(hi, nyquist)))[0]
+        out[name] = ((int(sel[0]), int(sel[-1]) + 1) if sel.size else (0, 0))
+    return out
+
+
+def mel_matrix(sample_rate: float, fft_size: int = FFT_SIZE,
+               n_mel: int = N_MEL) -> np.ndarray:
+    """A mel filterbank for the display bars, one row per bar.
+
+    Bands are NOT in here: they are measured from linear magnitudes over the
+    bin ranges `band_bins` gives, because a mean over a row of this matrix is
+    the one measure that cannot rest at zero.
     """
     n_bins = fft_size // 2 + 1
     freqs = np.fft.rfftfreq(fft_size, d=1.0 / sample_rate)
-    out = np.zeros((n_mel + len(BAND_EDGES_HZ), n_bins), dtype=np.float32)
+    out = np.zeros((n_mel, n_bins), dtype=np.float32)
 
     nyquist = sample_rate / 2.0
     edges = _mel_to_hz(np.linspace(_hz_to_mel(20.0),
@@ -108,12 +179,6 @@ def analysis_matrix(sample_rate: float, fft_size: int = FFT_SIZE,
         else:
             nearest = int(np.argmin(np.abs(freqs - ctr)))
             out[i, nearest] = 1.0
-
-    for j, (_name, lo, hi) in enumerate(BAND_EDGES_HZ):
-        sel = (freqs >= lo) & (freqs < min(hi, nyquist))
-        count = int(np.count_nonzero(sel))
-        if count:
-            out[n_mel + j, sel] = 1.0 / count
     return out
 
 
@@ -149,17 +214,54 @@ class SignalSnapshot:
     mel_bands: np.ndarray
 
 
+def band_value(setting: dict, mag: np.ndarray, power: np.ndarray,
+               db: np.ndarray, lo: int, hi: int) -> float:
+    """One band, as 0..1 over its own dB window.
+
+    `power` and `rms` sum LINEAR energy and take decibels once at the end, so a
+    bin carrying nothing contributes nothing. `mean_db` maps each bin on its
+    own first and averages the results, which is the historical measure and the
+    reason a band never returned to zero.
+    """
+    if hi <= lo:
+        return 0.0
+    floor = float(setting["floor"])
+    span = max(1e-6, float(setting["ceiling"]) - floor)
+    if setting["measure"] == "mean_db":
+        return float(np.clip((db[lo:hi] - floor) / span, 0.0, 1.0).mean())
+    level = band_level_db(setting["measure"], mag, power, lo, hi)
+    return float(np.clip((level - floor) / span, 0.0, 1.0))
+
+
+def band_level_db(measure: str, mag: np.ndarray, power: np.ndarray,
+                  lo: int, hi: int) -> float:
+    """A band's level in dB, before any window is applied.
+
+    Defined apart from `band_value` so the calibration tool reads the same
+    number the analyser does rather than a second copy of the formula.
+    """
+    if measure == "power":
+        return 10.0 * np.log10(max(float(power[lo:hi].sum()), _POWER_FLOOR))
+    if measure == "rms":
+        return 10.0 * np.log10(max(float(power[lo:hi].mean()), _POWER_FLOOR))
+    return 20.0 * np.log10(max(float(mag[lo:hi].max()), _MAG_FLOOR))
+
+
 class Analyzer:
     """Stateful across blocks: auto-gain peaks and the sequence counter."""
 
     def __init__(self, sample_rate: float, fft_size: int = FFT_SIZE,
                  n_mel: int = N_MEL, auto_gain: bool = True,
-                 hop: int = HOP) -> None:
+                 hop: int = HOP, bands: dict | None = None,
+                 release: float | None = None) -> None:
         self.sample_rate = float(sample_rate)
         self.fft_size = int(fft_size)
         self.n_mel = int(n_mel)
         self.auto_gain = bool(auto_gain)
-        self._m = analysis_matrix(sample_rate, fft_size, n_mel)
+        self._m = mel_matrix(sample_rate, fft_size, n_mel)
+        self._stored_bands = dict(bands or {})
+        self._bands = effective_bands(bands)
+        self._bins = band_bins(sample_rate, fft_size)
         # The window carries its own coherent gain, so a full-scale sine reads
         # 1.0 at its bin. Without it a band is raw FFT magnitude, which is far
         # above the [0,1] clip for any real input - every band would pin at 1.0
@@ -170,12 +272,30 @@ class Analyzer:
         self._peaks = np.full(len(BAND_EDGES_HZ) + 1, _PEAK_FLOOR,
                               dtype=np.float32)
         self._spectrum = np.zeros(fft_size // 2 + 1, dtype=np.float32)
-        self._level = 0.0
+        self._values = np.zeros(len(SIGNAL_NAMES), dtype=np.float32)
         self._mel_bands = mel_bar_bands(sample_rate, n_mel)
-        block_dt = max(1, int(hop)) / max(1.0, self.sample_rate)
-        self._smooth_k = _coeff(SMOOTHING_SECONDS, block_dt)
-        self._attack_k = _coeff(ATTACK_SECONDS, block_dt)
+        self._block_dt = max(1, int(hop)) / max(1.0, self.sample_rate)
+        self._display_k = _coeff(DISPLAY_SMOOTHING_SECONDS, self._block_dt)
+        self.release = (SMOOTHING_SECONDS if release is None
+                        else max(0.0, float(release)))
+        self._release_k = _coeff(self.release, self._block_dt)
+        self._attack_k = _coeff(ATTACK_SECONDS, self._block_dt)
         self._seq = 0
+
+    def set_bands(self, bands: dict | None) -> None:
+        """Retune a RUNNING analyser; ignored when nothing actually changed."""
+        stored = dict(bands or {})
+        if stored == self._stored_bands:
+            return
+        self._stored_bands = stored
+        self._bands = effective_bands(stored)
+
+    def set_release(self, seconds: float) -> None:
+        seconds = max(0.0, float(seconds))
+        if seconds == self.release:
+            return
+        self.release = seconds
+        self._release_k = _coeff(seconds, self._block_dt)
 
     def set_auto_gain(self, on: bool) -> None:
         """Switch the gain while blocks are arriving.
@@ -203,35 +323,42 @@ class Analyzer:
             b = np.resize(b, self.fft_size)
         mag = np.abs(np.fft.rfft(b * self._window)).astype(np.float32)
 
-        db = 20.0 * np.log10(np.maximum(mag, _MAG_FLOOR))
+        db = 20.0 * np.log10(np.maximum(mag, _MAG_FLOOR)).astype(np.float32)
+
+        # The display bars, and only them: their smoothing is fixed because
+        # they are there to be read.
         spec = np.clip((db - DB_MIN) / (DB_MAX - DB_MIN), 0.0, 1.0)
         delta = spec.astype(np.float32) - self._spectrum
-        self._spectrum += delta * np.where(delta > 0.0, self._attack_k,
-                                           self._smooth_k)
+        self._spectrum += delta * np.where(delta > 0.0, 1.0, self._display_k)
+        mel = self._m @ self._spectrum
 
-        rows = self._m @ self._spectrum
-        mel = rows[:self.n_mel]
-        raw = np.empty(len(BAND_EDGES_HZ) + 1, dtype=np.float32)
-        raw[:len(BAND_EDGES_HZ)] = rows[self.n_mel:]
-        # Loudness of the block itself, on the same scale. Averaging the
-        # spectrum instead would measure the unlit bins, which outnumber the
-        # ones a kick drum lights by a hundred to one.
+        power = (mag * mag).astype(np.float32)
+        raw = np.empty(len(SIGNAL_NAMES), dtype=np.float32)
+        for i, (name, _lo_hz, _hi_hz) in enumerate(BAND_EDGES_HZ):
+            lo, hi = self._bins[name]
+            raw[i] = band_value(self._bands[name], mag, power, db, lo, hi)
+        # Loudness of the block itself. Measuring the spectrum instead would
+        # count the unlit bins, which outnumber the ones a kick drum lights by
+        # a hundred to one.
+        vol = self._bands["volume"]
         rms_db = 20.0 * np.log10(max(float(np.sqrt(np.mean(b * b))),
                                      _MAG_FLOOR))
-        level = float(np.clip((rms_db - LEVEL_DB_MIN) /
-                              (LEVEL_DB_MAX - LEVEL_DB_MIN), 0.0, 1.0))
-        d = level - self._level
-        self._level += d * (self._attack_k if d > 0.0 else self._smooth_k)
-        raw[-1] = self._level
+        span = max(1e-6, float(vol["ceiling"]) - float(vol["floor"]))
+        raw[-1] = np.clip((rms_db - float(vol["floor"])) / span, 0.0, 1.0)
 
         # A DC or clipped block can still produce a non-finite magnitude on some
         # inputs; scrub here so nothing downstream has to.
         np.nan_to_num(raw, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         norm = self._normalise(raw)
 
+        # The release, last, so it means what the slider says whatever measure
+        # produced the number. The rise is never smoothed.
+        d = norm - self._values
+        self._values += d * np.where(d > 0.0, self._attack_k, self._release_k)
+
         self._seq += 1
         return SignalSnapshot(
-            signals={n: float(v) for n, v in zip(SIGNAL_NAMES, norm)},
+            signals={n: float(v) for n, v in zip(SIGNAL_NAMES, self._values)},
             mel=np.nan_to_num(mel, nan=0.0, posinf=0.0, neginf=0.0),
             seq=self._seq,
             mel_bands=self._mel_bands,
