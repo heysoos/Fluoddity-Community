@@ -9,8 +9,8 @@
 //   - ONE scalar scales all four frequency components of a centre, so the
 //     frequency VECTOR keeps its direction and only changes magnitude.
 //     Jittering each component independently rotates it as well, which is a
-//     different function - measured at 56% mean deviation over a 4096-point
-//     input grid (scratchpad purefn.py), not a rounding difference.
+//     different function, not a rounding difference - see the brain mutation
+//     caveat in CLAUDE.md.
 //   - amplitudes take a vec4 from ONE hash4() per centre, not four hash().
 //   - the seed is derived from the rule's CONTENT, so two cohorts holding
 //     different rules diverge even at the same cohort index.

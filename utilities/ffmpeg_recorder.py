@@ -3,7 +3,6 @@ import subprocess
 import threading
 from datetime import datetime
 import sys
-import os
 from pathlib import Path
 from utilities.paths import get_videos_dir
 
@@ -188,7 +187,6 @@ class FFmpegVideoRecorder:
         # Start ffmpeg process
         # Optionally capture ffmpeg output to log file for debugging
         if debug_log:
-            import os
             self.stderr_log_path = output_path.replace('.mp4', '_ffmpeg.log')
             self.stderr_log = open(self.stderr_log_path, 'w')
             stderr_dest = self.stderr_log

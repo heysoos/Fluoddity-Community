@@ -5,8 +5,8 @@
 
 The envelope is the point. A unit responds near its centre and is silent
 elsewhere, so a brain is a set of localised "when I see roughly this, do that"
-rules rather than one global interference pattern. It also damps the drift
-measured on the Fourier runs: a high frequency inside a narrow envelope makes a
+rules rather than one global interference pattern. It also damps the frequency
+drift the Fourier runs show: a high frequency inside a narrow envelope makes a
 locally intricate response, not global chaos.
 
 Layout, 14 floats per filter: centre(4), frequency(4), amplitude(4), sigma, phase.
@@ -25,25 +25,10 @@ FLOATS_PER_FILTER = 14
 # multiple of it: a centre lives in the input's own space, a sigma is a distance
 # in that space, and a frequency is one over it.
 #
-# It has to be a setting because it is not a property of the brain, it is a
-# property of the PRESET. Measured over all 23 of physics_configs/Core by
-# tools/brain_input_scale.py, the median |input| per preset runs 0.0016
-# (Searching) to 1.43 (Bubbles) - a spread of about 900x - with a median of
-# 0.057 and a median p90 of 0.36. No constant can be right for all of them.
-#
-# 0.5 covers the p90-p99 band of the median preset. The old value was 2.0, which
-# put every centre 10x further out than the input ever reached: the envelope was
-# then near-constant over everything a particle actually reads, so it did
-# nothing and a Gabor filter degenerated into a plain oscillation. Measured as
-# the correlation between a unit's response and the same unit with its envelope
-# removed - 1.0 means it IS a Fourier - the median preset scored 0.85 at 2.0
-# against 0.74 at 0.35, and the presets with room to work moved much further
-# (Salt 0.84 -> 0.61, Bubbles 0.71 -> 0.35).
-#
-# Lenia deliberately does NOT get this treatment. Its bump compares w.x, not x,
-# and the projection amplifies by W_SCALE and sums four terms, which lands it
-# near its own mu range already - which is why its Inspector atlas showed the
-# narrow bands its spec asks for while Gabor's showed broad plane waves.
+# It has to be a setting because it is a property of the PRESET, not of the
+# brain, and no constant suits all of them. Read a preset's figure off
+# tools/brain_input_scale.py; see the brain input scale caveat in CLAUDE.md for
+# the spread and for why Lenia does not need this.
 INPUT_SCALE = 0.5
 
 # Dimensionless shape, in multiples of INPUT_SCALE. At the default they come out

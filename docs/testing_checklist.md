@@ -412,7 +412,7 @@ installed; without it the panel says so and everything else runs unchanged.
 - [ ] EVERY modality offers at least one Brain row, MLP included (Weight Scale
       and Bias Scale). Mapping a band to Weight Scale visibly changes how hard
       the brain drives the particles.
-- [ ] Enabling Auto (CLIP) stops audio modulating anything; disabling restores it.
+- [ ] Enabling Auto (Prompt) stops audio modulating anything; disabling restores it.
 - [ ] Quitting and relaunching restores the mappings, with capture stopped.
 - [ ] With the panel closed, the frame rate matches a run with the feature never
       enabled.

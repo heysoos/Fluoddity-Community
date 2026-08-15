@@ -1,4 +1,4 @@
-"""Does CLIP-guided search actually train, and which brain trains best?
+"""Does vision-guided search actually train, and which brain trains best?
 
     python -m tools.brain_search_bench --smoke
     python -m tools.brain_search_bench --out runs/bench.json \
@@ -100,7 +100,6 @@ class Bench:
         from services.capture_view import CaptureView
         from services.vision_scorer import VisionScorer
         from services.config_saver import ConfigSaver
-        from services.tile_capture import TileCapture
         from sim import Sim
         from state import SimState
         from state.ui_state import UIState
@@ -280,10 +279,9 @@ class Bench:
             "mean": [c[1] for c in curve],
             "std": [c[2] for c in curve],
             "best_fitness": float(best_f) if np.isfinite(best_f) else None,
-            # 10% of coordinates hard-saturated was measured on real runs while
-            # the reported sigma barely moved - a saturated coordinate is one
-            # the search can no longer move, so this is the honest "is the
-            # optimizer still able to steer" reading.
+            # A saturated coordinate is one the search can no longer move, and
+            # the reported sigma does not reveal it - so this is the honest
+            # "is the optimizer still able to steer" reading.
             "saturation": (saturation_fraction(best_z)
                            if best_z is not None and np.isfinite(best_f) else None),
             "seconds": time.time() - t0,

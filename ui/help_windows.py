@@ -302,7 +302,7 @@ class HelpWindowsMixin:
                 v_max=100,
                 format=f"x%d ({current_hz}hz)"
             )
-            self._delayed_tooltip("Physics steps per frame for video/screenshots.\nHigher values = faster physics with smoother motion blur.\nAlso determines screenshot exposure (# of samples to blend together).")
+            self._delayed_tooltip("Physics steps per frame for video and screenshots.")
 
             if recording_active:
                 imgui.end_disabled()
@@ -351,7 +351,7 @@ class HelpWindowsMixin:
                     1, 20,
                     format=blur_format
                 )
-                self._delayed_tooltip("Motion Blur can be expensive at high frequencies,\nskip some frames to improve performance.\nThis setting overrides the Blur Quality slider in Preferences while recording.")
+                self._delayed_tooltip("How often a recorded frame gets motion blur.")
                 imgui.unindent(20)
 
             # Downsample Resolution Factor (was Supersample Kernel Width)

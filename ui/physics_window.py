@@ -167,7 +167,7 @@ class PhysicsWindowMixin:
                 self.state.sim.DISABLE_SYMMETRY = new_ds
             if pls:
                 pls.pop_locked_style(ds_lock_colors)
-            self._delayed_tooltip("Allow particles to display \"right / left handed\" behavior,\nleading to clockwise/counterclockwise bias.\nTurn it on to see why we go through trouble\nof calculating \"mirror world\" behavior in entity_update.glsl")
+            self._delayed_tooltip("Give particles a left/right handedness, and so a rotational bias.")
 
             # Absolute Orientation (combo box with 3 modes)
             combo_items = ["Off", "Y axis", "Radial"]
@@ -203,7 +203,7 @@ class PhysicsWindowMixin:
                     self.state.sim.ORIENTATION_MIX = new_om
                 if pls:
                     pls.pop_locked_style(om_lock_colors)
-                self._delayed_tooltip("Blend factor for orientation calculations (0.0 = velocity only, 1.0 = full absolute orientation)")
+                self._delayed_tooltip("Blend between heading-from-velocity and absolute orientation.")
 
             imgui.separator()
 

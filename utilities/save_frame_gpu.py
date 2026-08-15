@@ -1,7 +1,6 @@
 import moderngl
 import numpy as np
 from PIL import Image
-import os
 from utilities.paths import get_screenshots_dir
 
 def create_supersample_shader(ctx, supersample_k):

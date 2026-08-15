@@ -17,8 +17,8 @@ import ui  # noqa: F401  - imported first, or services/ hits a circular import
 from services import brains
 from services.brains.mlp import IN_DIM, OUT_DIM, layer_spans
 
-# The brain's input scale is a property of the PRESET and spans ~900x over the
-# library; these bracket its measured median and p90.
+# The brain's input scale is a property of the PRESET; these bracket the
+# library's median and p90. See the brain input scale caveat in CLAUDE.md.
 GRIDS = {"typical |x|~0.06": 0.06, "lively |x|~0.36": 0.36}
 W_SCALES = (0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0)
 B_SCALES = (0.0, 0.5, 1.0, 2.0, 4.0, 6.0)

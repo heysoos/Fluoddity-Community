@@ -21,10 +21,10 @@ SATURATION_Z = 2.65
 def saturation_fraction(z) -> float:
     """Fraction of search coordinates within 1% of their decoded limit.
 
-    Worth showing because nothing else on screen reveals it: measured over five
-    runs, evolved genomes drift from ~0% to 10% hard-saturated while the
-    reported sigma barely moves. A saturated coordinate is one the search can no
-    longer move, so a rising number means the run is quietly losing dimensions.
+    Worth showing because nothing else on screen reveals it: the reported sigma
+    barely moves as a run saturates. A saturated coordinate is one the search
+    can no longer move, so a rising number means the run is quietly losing
+    dimensions.
     """
     if z is None:
         return 0.0

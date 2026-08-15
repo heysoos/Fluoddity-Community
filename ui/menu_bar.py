@@ -379,7 +379,7 @@ class MenuBarMixin:
                     "Strong Determinism",
                     self.state.preferences.strong_determinism
                 )
-                self._delayed_tooltip("Enables double buffering for the canvas. When checked,\nevents will unfold exactly the same way after every\nsimulation reset. Comes with a small ~3% performance penalty.")
+                self._delayed_tooltip("Make events unfold the same way after every simulation reset.")
 
                 # Advanced Drawing toggle
                 _, self.state.preferences.advanced_drawing_enabled = imgui.checkbox(

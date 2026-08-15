@@ -170,9 +170,9 @@ int tournament_home_tile(uint index){
 // A tile owns a WHOLE NUMBER of texels rather than an equal share of the world,
 // because the canvas rarely divides by the grid: it is 647 texels wide at the
 // default world_size of 0.40 and the grid slider goes 2..8, so no canvas size
-// makes every setting divide. Measured 2026-08-09 at grid 8 with an evenly
-// divided seam, the middle column of the diffusion retained 25.7% of its own
-// trail and 39 of 64 tiles lit a tile they could not legally reach.
+// makes every setting divide. An evenly divided seam leaks a tile's trail into
+// its neighbours - see the tiling caveat in CLAUDE.md and
+// tests/test_tile_isolation_gl.py.
 //
 // Integers, not floats, because a seam is decided by the last bit and GLSL does
 // not require division to be correctly rounded: 647*4/8 is exactly 323.5, and

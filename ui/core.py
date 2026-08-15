@@ -670,7 +670,7 @@ class UI(
             imgui.push_style_color(imgui.Col_.header_active, imgui.ImVec4(0.5, 0.17, 0.17, 1.0))
             color_push_count = 9
         elif sweeps_active:
-            # Yellow tint for parameter sweeps mode (30% less intense)
+            # Yellow tint for parameter sweeps mode
             imgui.push_style_color(imgui.Col_.window_bg, imgui.ImVec4(0.205, 0.19, 0.13, 0.94))
             imgui.push_style_color(imgui.Col_.menu_bar_bg, imgui.ImVec4(0.245, 0.231, 0.161, 1.0))
             imgui.push_style_color(imgui.Col_.title_bg, imgui.ImVec4(0.17, 0.161, 0.119, 1.0))

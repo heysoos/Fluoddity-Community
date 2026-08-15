@@ -52,10 +52,8 @@ class LeniaModality:
         #
         # It is a CEILING on a trained value, not a trained value itself - the
         # projection is 4 searchable floats per bump and the optimizer moves
-        # them freely inside +/- this. Wide range because the effect is mild:
-        # measured over 0.5 to 12 against a realistic input, in-band coverage
-        # runs 27.4% to 17.4% and output p50 moves 18%. A narrow range would
-        # be a slider that does nothing.
+        # them freely inside +/- this. Wide range because the effect is mild
+        # across the slider; a narrow one would be a control that does nothing.
         return [
             Setting("bumps", "Bumps", "int", 4, 48, 12),
             Setting("w_scale", "Projection Scale", "float", 0.5, 12.0, W_SCALE),

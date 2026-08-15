@@ -113,10 +113,8 @@ def _mapping_to_dict(m: Mapping) -> dict:
     }
 
 
-# A rig written before the free-running oscillator became an integrator. Its
-# `rate_max` was already the Hz a full-scale band asks for, so it IS the new
-# `rate`; `rate_min` was the floor that made the thing run on silence and has
-# no counterpart.
+# `rate_max` was already the Hz a full-scale band asks for, so it becomes
+# `rate`; `rate_min`, the silence floor, has no counterpart.
 _RENAMED_KINDS = {"lfo": "phase"}
 _RENAMED_FLOATS = {"rate_max": "rate"}
 _SHAPER_FLOATS = ("attack", "release", "threshold", "hold", "rate")

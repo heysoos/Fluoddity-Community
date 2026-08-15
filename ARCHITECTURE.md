@@ -68,6 +68,9 @@ Mixin-based architecture. The `UI` class in `core.py` inherits all mixins via mu
 | `config_browser.py` | 232 | Config file scanning, caching, hierarchical load submenu rendering |
 | `popup_modals.py` | 85 | Save/Overwrite/Delete confirmation dialogs |
 | `archive_window.py` | 905 | Explore (IMGEP) tab, archive picker, gallery, and the 2-D semantic map |
+| `audio_reactive_window.py` | 731 | Audio device and bands, the mapping rig, per-row shapers, rig presets |
+| `brain_window.py` | 572 | Brain modality picker, per-modality settings, the MLP layer stack, Inspector |
+| `undo_window.py` | 54 | Undo history: every step, hover to preview, click to jump |
 
 ### Simulation & Rendering
 | File | Lines | Description |
@@ -86,6 +89,24 @@ Stateless or near-stateless helpers owned by the orchestrator.
 | `entity_picker.py` | 63 | Find nearest particle to mouse click (CPU readback) |
 | `rule_manager.py` | 60 | Rule history stack with push/pop/undo |
 | `video_recorder.py` | 45 | Thin facade over VidSaver for video recording |
+| `undo_history.py` | 177 | The undo/redo journal: snapshot the declared fields, name what changed |
+| `record_audio.py` / `record_crop.py` / `record_view.py` | 102 / 56 / 41 | The soundtrack tap, the world-space crop rect, and which texture a take reads |
+
+### Audio input (`services/`)
+A block of samples becomes named signals; a rig binds those to physics and
+brain parameters. Nothing here writes the user's sliders — the runtime hands
+the sim a modulated COPY, which is also what keeps the undo journal quiet.
+
+| File | Lines | Description |
+|------|-------|-------------|
+| `audio_analysis.py` | 469 | FFT, bands and their measures, the centroid and its gate, the mel display |
+| `audio_capture.py` | 220 | Device enumeration and the capture thread; a loopback endpoint or a microphone |
+| `audio_runtime.py` | 216 | Per-frame seam: shaper state, the modulated copy, the slider overlays |
+| `audio_mapping.py` | 163 | What a rig row is, which targets exist, and the modulation maths |
+| `audio_shapers.py` | 115 | Per-row shaping; none of them may generate motion from silence |
+| `audio_track.py` | 71 | Writes the raw soundtrack a recording is muxed with |
+| `audio_brain.py` | 69 | Encode once, decode many: audio moving a brain's decode scales |
+| `audio_rig_io.py` | 68 | The last-used rig and the named rig presets |
 
 ### Search and exploration (`services/`)
 Auto (Prompt) mode and Explore (IMGEP) mode share one rollout machine
@@ -129,6 +150,11 @@ rebuilds the archive, goal list, projection and thumbnail cache and repoints
 every holder at the new directory; which archive is active is
 `preferences.archive_name`.
 
+`services/phase_metrics.py` (381 lines) is the offline half: per-cell measures
+for the phase-diagram sweeps driven by `tools/phase_diagram.py`,
+`tools/phase_figure.py` and `tools/phase_view.py`. It runs headless and is not
+on the frame loop.
+
 ### State (`state/`)
 Plain dataclasses. No logic, just fields with defaults.
 
@@ -138,7 +164,11 @@ Plain dataclasses. No logic, just fields with defaults.
 | `preferences_state.py` | 122 | User preferences: motion blur, recording, mouse mode, keybindings, active archive |
 | `ui_state.py` | 94 | Combined state snapshot returned by `UI.get_state()` |
 | `archive_state.py` | 129 | Explore (IMGEP) settings, browser view state, and one-shot flags |
+| `audio_in_state.py` | 221 | The audio rig: device, bands, mappings, and its persistence allowlist |
+| `brain_state.py` | 85 | Which modality is live and its per-modality settings |
+| `auto_tournament_state.py` | 53 | Auto (Prompt) settings: prompt, encoder key, optimizer |
 | `multi_load_state.py` | 24 | Multi-load toggle and config list |
+| `tournament_state.py` | 24 | Manual tournament: grid size and tile selection |
 | `camera_state.py` | 11 | Camera position + zoom |
 | `recording_state.py` | 7 | Recording active flag |
 

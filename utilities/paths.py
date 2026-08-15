@@ -69,7 +69,9 @@ def migrate_imgui_ini(user_dir=None, app_dir=None) -> Path:
     if target.exists():
         return target
     base = Path(app_dir) if app_dir is not None else get_app_dir()
-    for source in (base / "imgui.ini", base / "default_imgui.ini"):
+    # An arranged layout first, the bundled one second.
+    for source in (base / "imgui.ini",
+                   get_default_imgui_ini_path(base)):
         if source.exists():
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -153,9 +155,10 @@ def get_default_keyboard_controls_path() -> Path:
     return get_app_dir() / "default_keyboard_controls.json"
 
 
-def get_default_imgui_ini_path() -> Path:
+def get_default_imgui_ini_path(app_dir=None) -> Path:
     """Get path to bundled default_imgui.ini."""
-    return get_app_dir() / "default_imgui.ini"
+    base = Path(app_dir) if app_dir is not None else get_app_dir()
+    return base / "default_imgui.ini"
 
 
 def initialize_user_data():
