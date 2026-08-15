@@ -357,12 +357,38 @@ def sweep(args) -> int:
     series = np.full((r, r, n_probe, len(pm.PROBE_NAMES)), np.nan, dtype=np.float32)
     done = np.zeros((r, r), dtype=bool)
 
+    if args.resume and (out / "features.npz").exists():
+        prior = np.load(out / "features.npz", allow_pickle=False)
+        shapes_match = (prior["cell_features"].shape == feats.shape
+                        and prior["probe_series"].shape == series.shape
+                        and prior["frame_features"].shape == frames.shape)
+        if not shapes_match:
+            raise SystemExit(
+                "--resume found a features.npz of a different shape. Grid, "
+                "steps, probe-every and measure-frames must all match the run "
+                "being resumed; a partial merge of two schedules would be a "
+                "diagram whose cells do not mean the same thing.")
+        feats[:] = prior["cell_features"]
+        frames[:] = prior["frame_features"]
+        series[:] = prior["probe_series"]
+        done[:] = prior["done"]
+        print(f"resuming: {int(done.sum())} cells already complete")
+
+    # "r+" on a resume: "w+" truncates, which would throw away every raw field
+    # already written and leave the sub-lattice half empty with no sign of it.
+    canvas_shape = (rr, rr, n_snap, harness.height, harness.width, 2)
+    particle_shape = (rr, rr, n_snap, len(harness.sub), 4)
+    reopen = args.resume and (out / "canvas.npy").exists()
     canvas_mm = np.lib.format.open_memmap(
-        out / "canvas.npy", mode="w+", dtype=np.float16,
-        shape=(rr, rr, n_snap, harness.height, harness.width, 2))
+        out / "canvas.npy", mode=("r+" if reopen else "w+"),
+        dtype=np.float16, shape=None if reopen else canvas_shape)
     particle_mm = np.lib.format.open_memmap(
-        out / "particles.npy", mode="w+", dtype=np.float16,
-        shape=(rr, rr, n_snap, len(harness.sub), 4))
+        out / "particles.npy", mode=("r+" if reopen else "w+"),
+        dtype=np.float16, shape=None if reopen else particle_shape)
+    if reopen and (canvas_mm.shape != canvas_shape
+                   or particle_mm.shape != particle_shape):
+        raise SystemExit("--resume found raw arrays of a different shape; "
+                         "world size, snapshots or raw-stride changed")
 
     strip = np.zeros((0, len(pm.CELL_NAMES)), dtype=np.float32)
 
@@ -382,6 +408,8 @@ def sweep(args) -> int:
     total = r * r
     every = max(1, min(512, total // 128))
     for n, (iy, ix) in enumerate(order, start=1):
+        if done[iy, ix]:
+            continue
         want_raw = ix in raw_pos and iy in raw_pos
         s, probed, f, canvas, parts = harness.run_cell(
             {args.x_param: xs[ix], args.y_param: ys[iy]},
@@ -527,6 +555,9 @@ def main(argv) -> int:
     ap.add_argument("--pilot", action="store_true")
     ap.add_argument("--pilot-sizes", default="0.20,0.10,0.05,0.025")
     ap.add_argument("--pilot-grid", type=int, default=5)
+    ap.add_argument("--resume", action="store_true",
+                    help="continue an interrupted sweep in the same folder, "
+                         "skipping cells already done")
     ap.add_argument("--no-uniform-cache", action="store_true",
                     help="re-upload every uniform every step, as the app does")
     args = ap.parse_args(argv)
