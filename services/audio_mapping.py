@@ -97,7 +97,7 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
              states: dict[int, ShaperState], strengths: dict[str, float],
              global_strength: float, dt: float,
              deaf: set[str], shaped: dict | None = None,
-             apply_shapers: bool = True) -> dict[str, float]:
+             apply_shapers: bool = True, held=()) -> dict[str, float]:
     """Modulated values for the targets that have an enabled mapping.
 
     `bases` is read and never written. Targets with no mapping, and targets a
@@ -113,6 +113,10 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
     answers a full-scale input with full scale eventually, so this is what asks
     how far a mapping could reach without waiting out an attack or an
     oscillator's phase.
+
+    `held` names the signals reporting a remembered value rather than a
+    measured one. A held value is not a small one, so without this a shaper
+    that integrates keeps running after the music stops.
     """
     by_target = {t.key: t for t in targets}
     adds: dict[str, list] = {}
@@ -136,7 +140,7 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
             s = min(1.0, max(0.0, signals[m.signal] * m.gain))
             if apply_shapers:
                 s = states.setdefault(m.uid, ShaperState()).apply(
-                    s, dt, m.shaper)
+                    s, dt, m.shaper, m.signal not in held)
             if shaped is not None:
                 shaped[m.uid] = s
             sign = -1.0 if m.mode == "subtract" else 1.0
@@ -146,7 +150,7 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
             s = min(1.0, max(0.0, signals[m.signal] * m.gain))
             if apply_shapers:
                 s = states.setdefault(m.uid, ShaperState()).apply(
-                    s, dt, m.shaper)
+                    s, dt, m.shaper, m.signal not in held)
             if shaped is not None:
                 shaped[m.uid] = s
             v *= 1.0 + s * m.depth

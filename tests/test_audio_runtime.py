@@ -292,6 +292,42 @@ def test_the_measures_and_the_release_are_pushed_every_frame():
     assert len(bands) == 2 and bands[0]["hi"]["measure"] == "peak"
 
 
+def test_a_held_signal_does_not_keep_a_phase_shaper_travelling():
+    """End to end, because this is the seam the bug crossed: the analyser
+    holds the centroid, the runtime has to pass that on, and only then does
+    the integrator know to stop."""
+    from services.audio_shapers import ShaperParams
+
+    rt, st = AudioRuntime(), rig()
+    st.audio.mappings[0].signal = "centroid"
+    st.audio.mappings[0].shaper = ShaperParams(kind="phase", rate=2.0)
+
+    snap = FakeSnapshot(bass=0.0, centroid=0.73)
+    snap.held = frozenset({"centroid"})
+    rt.capture._snapshot = snap
+
+    seen = []
+    for _ in range(120):
+        out, _ = rt.update(st, 1 / 60, None, None)
+        seen.append(out.SENSOR_GAIN)
+    assert max(seen) - min(seen) < 1e-9, "the music stopped and it kept moving"
+
+
+def test_a_live_signal_still_drives_the_phase_shaper():
+    from services.audio_shapers import ShaperParams
+
+    rt, st = AudioRuntime(), rig()
+    st.audio.mappings[0].signal = "centroid"
+    st.audio.mappings[0].shaper = ShaperParams(kind="phase", rate=2.0)
+    rt.capture._snapshot = FakeSnapshot(bass=0.0, centroid=0.73)
+
+    seen = []
+    for _ in range(120):
+        out, _ = rt.update(st, 1 / 60, None, None)
+        seen.append(out.SENSOR_GAIN)
+    assert max(seen) - min(seen) > 0.1
+
+
 def test_probing_full_scale_does_not_disturb_the_live_shaper_state():
     """overlays() drives the mappings at signal 1.0; a shared shaper state
     would make the next frame's envelope think a peak had just arrived."""

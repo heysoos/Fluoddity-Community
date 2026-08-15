@@ -243,6 +243,10 @@ class SignalSnapshot:
     mel: np.ndarray
     seq: int
     mel_bands: np.ndarray
+    # Signals this block did not measure, and is reporting their last value
+    # for. A held value is not a small one, so a shaper that integrates would
+    # run on forever without being told. Default for anything older.
+    held: frozenset = frozenset()
 
 
 def spectral_centroid_hz(power: np.ndarray, freqs: np.ndarray) -> float:
@@ -438,7 +442,8 @@ class Analyzer:
         # ratio over a room's noise floor is not a dark sound or a bright one,
         # it is no sound - and it wanders, because noise is a fresh spectrum
         # every block.
-        if level >= CENTROID_GATE:
+        live = level >= CENTROID_GATE
+        if live:
             self._centroid = centroid_value(
                 self._bands["centroid"],
                 spectral_centroid_hz(power, self._freqs))
@@ -456,6 +461,7 @@ class Analyzer:
 
         self._seq += 1
         return SignalSnapshot(
+            held=frozenset() if live else frozenset({"centroid"}),
             signals={n: float(v) for n, v in zip(SIGNAL_NAMES, self._values)},
             mel=np.nan_to_num(mel, nan=0.0, posinf=0.0, neginf=0.0),
             seq=self._seq,

@@ -4,7 +4,8 @@ Every shaper takes a value in [0,1] and returns one in [0,1], and NONE of them
 moves on its own while the band is silent. That is not the same as answering
 silence with zero: a stopped integrator, like a latched sample-and-hold, holds
 a perfectly good non-zero value. What no shaper may do is generate motion from
-nothing. State is per mapping, because the same band commonly drives one target
+nothing - which includes a signal that is merely being HELD, so `apply` takes
+`live`. State is per mapping, because the same band commonly drives one target
 directly and another through an envelope.
 """
 from __future__ import annotations
@@ -58,7 +59,14 @@ class ShaperState:
         self._above = False
         self._latched = 0.0
 
-    def apply(self, x: float, dt: float, p: ShaperParams) -> float:
+    def apply(self, x: float, dt: float, p: ShaperParams,
+              live: bool = True) -> float:
+        """`live` is False while the signal is being HELD rather than measured.
+
+        A held signal is a perfectly good non-zero number, which is why the
+        integrator below has to be told: without this, a centroid parked at
+        0.73 by a paused track kept the wave travelling forever.
+        """
         x = 0.0 if x != x else min(1.0, max(0.0, float(x)))
         dt = max(1e-6, float(dt))
         kind = p.kind
@@ -92,7 +100,8 @@ class ShaperState:
             # where the phase is. So it only ever lurches forward, a held note
             # keeps the wave cycling, and silence stops it dead wherever it had
             # got to rather than dragging the parameter back.
-            self._phase = (self._phase + x * p.rate * dt) % 1.0
+            self._phase = (self._phase + (x if live else 0.0)
+                           * p.rate * dt) % 1.0
             return min(1.0, max(0.0, _wave(self._phase, p.wave)))
 
         if kind == "sample_hold":

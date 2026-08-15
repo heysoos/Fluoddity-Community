@@ -704,6 +704,14 @@ mechanics these caveats assume.
   `SHAPER_KINDS` so a kind added later cannot skip it — and asserting a
   TOLERANCE rather than equality, because `smooth` converges on its target
   instead of arriving and is still creeping by ~1e-18.
+  **A HELD signal is the second way in, and the first guard did not see it.**
+  That test drives an input of exactly zero, but `centroid` parks at whatever
+  the last music was, so a paused track left `phase` integrating 0.73 forever
+  — the free-running LFO again, by another road. `SignalSnapshot.held` names
+  the signals reporting a remembered value, `AudioRuntime` passes it to
+  `modulate`, and `ShaperState.apply` takes `live`. Holding must stop MOTION
+  without silencing the signal: the parameter has to stay where the music left
+  it, which is the whole reason the centroid holds rather than diving.
 
 - **`phase` INTEGRATES the band: `dphase = band * rate * dt`, so it only ever
   lurches forward.** The band sets how fast the wave TRAVELS, never where it

@@ -444,6 +444,10 @@ installed; without it the panel says so and everything else runs unchanged.
       sweep or the hats entering moves it.
 - [ ] Stopping the music leaves `centroid` where it was rather than diving; it
       is at zero on a fresh launch, before anything has played.
+- [ ] Bind `centroid` to a `phase` shaper, let it run, then PAUSE the music on
+      a loopback device: the wave must stop where it is. It holds a non-zero
+      value, so an integrator would otherwise keep travelling with nothing
+      playing.
 - [ ] On a MICROPHONE with the room quiet, `centroid` is frozen - not drifting.
       Its trace must be a flat line. If it still moves, the room is above the
       gate: raise `volume`'s Floor until volume itself reads near zero.

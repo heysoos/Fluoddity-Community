@@ -122,6 +122,8 @@ class AudioRuntime:
         if snap is None:
             return ui_state.sim, None
         signals = snap.signals
+        # Which of them are remembered rather than measured this block.
+        held = getattr(snap, "held", frozenset())
 
         sim_out = ui_state.sim
         p_targets = physics_targets(ui_state.sim)
@@ -130,12 +132,12 @@ class AudioRuntime:
                  for t in p_targets}
         moved = modulate(bases, p_targets, ast.mappings, signals, self._states,
                          ast.strengths, ast.global_strength, dt, deaf,
-                         ast.shaped)
+                         ast.shaped, held=held)
         if moved:
             sim_out = replace(ui_state.sim, **moved)
 
         brain_out = self._update_brain(ui_state, ast, signals, dt,
-                                       brain_layout, current_rule)
+                                       brain_layout, current_rule, held)
         return sim_out, brain_out
 
     def overlays(self, ui_state, modulated_sim) -> dict:
@@ -177,7 +179,8 @@ class AudioRuntime:
             }
         return out
 
-    def _update_brain(self, ui_state, ast, signals, dt, layout, current_rule):
+    def _update_brain(self, ui_state, ast, signals, dt, layout, current_rule,
+                      held=()):
         if layout is None or current_rule is None:
             return None
         mappings = ast.brain_mappings.get(ui_state.brain.modality, ())
@@ -207,7 +210,7 @@ class AudioRuntime:
         moved = modulate(bases, targets, mappings, signals, self._states,
                          ast.strengths, ast.global_strength, dt,
                          muted_targets(ast, f"{ui_state.brain.modality}:"),
-                         ast.shaped)
+                         ast.shaped, held=held)
         if not moved:
             return None
         return self._brain.modulated({**bases, **moved})

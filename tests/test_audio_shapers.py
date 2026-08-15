@@ -170,6 +170,43 @@ def test_no_shaper_moves_on_its_own_when_the_band_is_silent():
         assert max(tail) - min(tail) < 1e-9, kind
 
 
+def test_no_shaper_moves_on_its_own_when_the_signal_is_only_being_HELD():
+    """The same rule, and the hole the first version left in it.
+
+    A held signal is not a silent one: `centroid` parks at whatever the last
+    music was, so the test above - which drives an input of exactly zero -
+    walked straight past a `phase` integrator swinging the full range with the
+    track paused. `live=False` is how a shaper is told the difference.
+    """
+    for kind in SHAPER_KINDS:
+        s = ShaperState()
+        p = ShaperParams(kind=kind)
+        for _ in range(30):
+            s.apply(0.9, DT, p)                # something to remember
+        settled = [s.apply(0.73, DT, p, False) for _ in range(600)]
+        tail = settled[-120:]
+        assert max(tail) - min(tail) < 1e-9, kind
+
+
+def test_a_held_signal_still_reaches_the_shapers_at_its_real_value():
+    """Holding must stop MOTION, not silence the signal - the whole point is
+    that the parameter stays where the music left it."""
+    s = ShaperState()
+    p = ShaperParams(kind="none")
+    assert s.apply(0.73, DT, p, False) == pytest.approx(0.73)
+
+
+def test_a_live_signal_is_the_default():
+    """Every caller that predates holding must behave exactly as it did."""
+    live, told = ShaperState(), ShaperState()
+    p = ShaperParams(kind="phase", rate=2.0)
+    for _ in range(30):
+        a = live.apply(0.7, DT, p)
+        b = told.apply(0.7, DT, p, True)
+    assert a == pytest.approx(b)
+    assert live._phase > 0.0
+
+
 def test_sample_hold_latches_until_the_next_crossing():
     s = ShaperState()
     p = ShaperParams(kind="sample_hold", threshold=0.5)
