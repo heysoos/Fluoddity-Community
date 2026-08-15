@@ -77,6 +77,14 @@ MEASURE_UNITS: dict[str, str] = {"centroid_hz": "Hz"}
 # The spectral bands, in order. `volume` and `centroid` are not among them.
 BAND_NAMES: tuple[str, ...] = ("bass", "mid", "presence", "hi")
 
+# How far up `volume`'s own scale a block must reach before the centroid is
+# read from it at all. Measured: a room's noise floor at -60 to -40 dBFS reads
+# 0.08 to 0.45 there, and the centroid of noise WANDERS - a block's spectrum is
+# a fresh random draw, so it swings 0.14 on pink and 0.36 on brown while
+# nothing is playing. Expressed as a fraction of the scale rather than in dB,
+# so `volume`'s floor slider moves the gate with it.
+CENTROID_GATE = 0.25
+
 # The DISPLAY spectrum's own smoothing. Not the band release below: the bars
 # are there to be read, and an unsmoothed spectrum vibrates.
 DISPLAY_SMOOTHING_SECONDS = 0.075
@@ -426,9 +434,11 @@ class Analyzer:
         level = float(np.clip((rms_db - float(vol["floor"])) / span, 0.0, 1.0))
         raw[len(BAND_NAMES)] = level
 
-        # Brightness, held while the block is below `volume`'s own floor: a
-        # ratio over silence is not a dark sound, it is no sound.
-        if level > 0.0:
+        # Brightness, held while the block is too quiet to read one from: a
+        # ratio over a room's noise floor is not a dark sound or a bright one,
+        # it is no sound - and it wanders, because noise is a fresh spectrum
+        # every block.
+        if level >= CENTROID_GATE:
             self._centroid = centroid_value(
                 self._bands["centroid"],
                 spectral_centroid_hz(power, self._freqs))

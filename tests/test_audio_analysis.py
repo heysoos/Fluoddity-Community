@@ -416,6 +416,45 @@ def test_centroid_holds_through_silence_rather_than_going_dark():
     assert held == pytest.approx(bright, abs=1e-6)
 
 
+def _room(exponent, db, blocks=60, seed=1):
+    """A room's noise floor, coloured: 0 white, 1 pink, 2 brown."""
+    rng = np.random.default_rng(seed)
+    a = Analyzer(SR, auto_gain=False, release=0.0)
+    tail = np.zeros(FFT_SIZE, dtype=np.float32)
+    seen = []
+    for _ in range(blocks):
+        spec = (rng.standard_normal(HOP // 2 + 1)
+                + 1j * rng.standard_normal(HOP // 2 + 1))
+        f = np.arange(spec.size)
+        f[0] = 1
+        spec /= f ** (exponent / 2.0)
+        chunk = np.fft.irfft(spec, HOP)
+        chunk = chunk / max(float(chunk.std()), 1e-12) * 10 ** (db / 20.0)
+        tail = np.roll(tail, -HOP)
+        tail[FFT_SIZE - HOP:] = chunk.astype(np.float32)
+        seen.append(a.process(tail).signals["centroid"])
+    return np.asarray(seen[blocks // 3:])
+
+
+@pytest.mark.parametrize("colour", [0.0, 1.0, 2.0])
+def test_a_room_with_nothing_playing_does_not_move_the_centroid(colour):
+    """A block's noise spectrum is a fresh random draw, so its centre of mass
+    wanders - and being a ratio it does so at full strength however quiet the
+    room is. The gate is what stops that reaching the rig."""
+    seen = _room(colour, -50.0)
+    assert seen.max() - seen.min() == 0.0
+
+
+def test_the_gate_is_above_a_loud_room_and_below_quiet_music():
+    """Both are levels, so they cannot be told apart by anything but where the
+    line is drawn; this pins where."""
+    from services.audio_analysis import CENTROID_GATE, MEASURE_WINDOWS
+
+    floor, ceiling = MEASURE_WINDOWS["block_rms"]
+    at_db = floor + CENTROID_GATE * (ceiling - floor)
+    assert -50.0 < at_db < -35.0
+
+
 def test_centroid_starts_at_zero_so_a_rig_that_has_heard_nothing_is_still():
     a = Analyzer(SR, auto_gain=False, release=0.0)
     assert a.process(np.zeros(FFT_SIZE, dtype=np.float32)

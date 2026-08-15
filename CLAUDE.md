@@ -630,9 +630,18 @@ mechanics these caveats assume.
   nothing about level: a quiet bright break reads high and a loud bass-only
   drop reads low, which no band can tell apart. Three consequences: auto-gain
   must skip it (dividing a ratio by its own running peak means nothing and
-  would put every bright moment at 1.0), it is HELD while the block is under
-  `volume`'s floor rather than diving to zero, and it starts at 0 so a rig
-  that has heard nothing contributes nothing. The slow envelope needed no new
+  would put every bright moment at 1.0), it starts at 0 so a rig that has
+  heard nothing contributes nothing, and it must be HELD below
+  `CENTROID_GATE`.
+  **The gate is the whole feature, and "any signal at all" is not a gate.**
+  Being a ratio, the centroid reports a room's noise floor at full strength
+  however quiet the room is — the −60, −50 and −40 dBFS rows read identically
+  — and a noise spectrum is a fresh random draw every block, so it WANDERS:
+  swing 0.14 on pink and 0.36 on brown, 0.06 per block, with nothing playing.
+  The first version gated on `volume > 0`, which a −60 dBFS room already
+  clears at 0.08. The gate is 0.25 of `volume`'s own scale, which is measured
+  to sit above a loud room and below quiet music; expressing it as a fraction
+  rather than in dB means `volume`'s floor slider moves it. The slow envelope needed no new
   machinery at all — `smooth` reaches 30 s now, on a LOGARITHMIC track,
   because every percussive setting is under a second and would otherwise share
   the first pixel.

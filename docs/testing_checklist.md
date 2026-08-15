@@ -444,6 +444,9 @@ installed; without it the panel says so and everything else runs unchanged.
       sweep or the hats entering moves it.
 - [ ] Stopping the music leaves `centroid` where it was rather than diving; it
       is at zero on a fresh launch, before anything has played.
+- [ ] On a MICROPHONE with the room quiet, `centroid` is frozen - not drifting.
+      Its trace must be a flat line. If it still moves, the room is above the
+      gate: raise `volume`'s Floor until volume itself reads near zero.
 - [ ] The shaper's Attack and Release reach 30 s and the low end is still
       controllable - the track is logarithmic, so 0.05 s is a real position on
       it and not the first pixel.
