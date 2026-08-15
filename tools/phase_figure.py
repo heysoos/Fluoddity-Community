@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+import textwrap
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -52,23 +54,88 @@ def font(size: int, weight: str = "regular"):
         return ImageFont.load_default()
 
 
-# What each channel means, in one line, and which end is which. A colourbar
-# with bare numbers makes the reader guess the direction of "more".
-MEANING = {
-    "participation_ratio": ("Trail concentration", "one blob", "spread evenly"),
-    "coverage":            ("Fraction of canvas visited", "empty", "full"),
-    "change_rate":         ("Field turnover per probe", "frozen", "churning"),
-    "structure":           ("Spatial self-similarity", "white noise", "coherent"),
-    "field_order":         ("Flow alignment", "disordered", "one coherent flow"),
-    "polar_order":         ("Particle alignment", "disordered", "one flock"),
-    "particle_pr":         ("Particle clustering", "clumped", "uniform"),
-    "spec_entropy":        ("Spectral breadth", "one sharp scale", "broadband"),
-    "spec_peak_wavelen":   ("Characteristic scale", "fine", "canvas-sized"),
-    "speed_p50":           ("Median particle speed", "still", "fast"),
-    "speed_p90":           ("90th pct particle speed", "still", "fast"),
-    "alive_steps":         ("Steps before dying", "never lived", "survived"),
-    "rho_mean":            ("Mean trail mass", "faded", "dense"),
+class Channel(NamedTuple):
+    """What a feature is called, which end is which, and how it is computed.
+
+    The formula is on the figure because a phase diagram is an argument about a
+    quantity, and a reader cannot check the argument against a name. Kept in one
+    table so a channel cannot acquire a plot without acquiring a definition -
+    `tests/test_phase_figure.py` fails when one does.
+    """
+    title: str
+    low: str
+    high: str
+    formula: str
+    note: str
+
+
+# rho is the per-texel trail magnitude ||canvas.xy||; N is the texel count.
+CHANNELS: dict[str, Channel] = {
+    "participation_ratio": Channel(
+        "Trail concentration", "one blob", "spread evenly",
+        "PR  =  (Σρ)²  /  (N · Σρ²)",
+        "mass sitting in m of N texels scores m/N. Scale-free: it sees shape, "
+        "never amount"),
+    "coverage": Channel(
+        "Fraction of canvas visited", "empty", "full",
+        "C  =  fraction of texels with  ρ > τ,   τ = 0.01",
+        "τ is one particle's deposit. Absolute, so cells stay comparable"),
+    "change_rate": Channel(
+        "Field turnover per probe", "frozen", "churning",
+        "R  =  mean[ Σ|ρ(t) − ρ(t−k)|  /  Σρ(t) ]  over the last ¼ of probes",
+        "k = 50 steps. Normalised by its own mass, so a faded field still "
+        "scores high"),
+    "structure": Channel(
+        "Spatial self-similarity", "white noise", "coherent",
+        "S  =  max | mean(g · g+l) / mean(g²) |   for lag l in "
+        "{1,2,3,4,6,8,12,16}, both axes",
+        "g = ρ − mean(ρ), and g+l is g shifted by l texels. Lag 1 alone scores a "
+        "3px lattice exactly what noise scores, hence the several lags"),
+    "field_order": Channel(
+        "Flow alignment", "disordered", "one coherent flow",
+        "Φ  =  ‖ Σ v ‖  /  Σ‖v‖      (v = trail vector per texel)",
+        "the ρ-weighted mean unit vector — the Vicsek order parameter, read off "
+        "the field"),
+    "polar_order": Channel(
+        "Particle alignment", "disordered", "one flock",
+        "Ψ  =  ‖ (1/n) Σ v/‖v‖ ‖      over particles",
+        "direction only; a fast swarm and a slow one going the same way score "
+        "alike"),
+    "particle_pr": Channel(
+        "Particle clustering", "clumped", "uniform",
+        "PR of a 64×64 histogram of particle positions",
+        "the same participation ratio, asked of where particles ARE rather than "
+        "of the trail they left"),
+    "spec_entropy": Channel(
+        "Spectral breadth", "one sharp scale", "broadband",
+        "H  =  −Σ q ln q  /  ln B,    q = P(k) / ΣP",
+        "P(k) is the 2-D FFT power AVERAGED over each annulus; a sum would make "
+        "white noise slope upward"),
+    "spec_peak_wavelen": Channel(
+        "Characteristic scale", "fine", "canvas-sized",
+        "λ  =  W / argmax P(k),   sub-bin by a parabola through ln P",
+        "in texels; W is the canvas width. The interpolation is what stops λ "
+        "terracing at W, W/2, W/3"),
+    "speed_p50": Channel(
+        "Median particle speed", "still", "fast",
+        "median ‖v‖  over the particle subsample", "canvas units per step"),
+    "speed_p90": Channel(
+        "90th pct particle speed", "still", "fast",
+        "90th percentile ‖v‖  over the particle subsample",
+        "canvas units per step"),
+    "alive_steps": Channel(
+        "Steps before dying", "never lived", "survived",
+        "last t with  mean(ρ) >= 1e-4  and  0.02 <= PR <= 0.98",
+        "the mass floor is load-bearing: PR is scale-free and reads a faded "
+        "canvas as healthy"),
+    "rho_mean": Channel(
+        "Mean trail mass", "faded", "dense", "mean(ρ)  over all texels",
+        "the free variable here — the canvas is a velocity field, so a slow "
+        "particle deposits almost nothing"),
 }
+
+# Kept as the (title, low, high) view the colourbar and header already use.
+MEANING = {k: (c.title, c.low, c.high) for k, c in CHANNELS.items()}
 
 RAMPS = {
     "viridis": np.array([
@@ -120,7 +187,7 @@ class Figure:
     """One panel, its axes, its colourbar and its header."""
 
     PAD_L, PAD_R = 96, 128
-    PAD_T, PAD_B = 108, 122
+    PAD_T, PAD_B = 160, 122   # PAD_T carries title, formula and gloss
 
     def __init__(self, plot_px: int = 620):
         self.plot = plot_px
@@ -221,6 +288,32 @@ class Figure:
         for yy, word, anch in ((y - 14, high_word, "ls"), (y + h + 18, low_word, "ls")):
             self._text((x - 2, yy), word, small, INK_FAINT, anch)
 
+    def caption(self, feature: str) -> int:
+        """The formula and its one-line gloss. Returns the y it ended at.
+
+        A phase diagram is an argument about a quantity, and a name is not
+        enough to check the argument against - so the definition travels with
+        the picture rather than living only in the source.
+        """
+        ch = CHANNELS.get(feature)
+        if ch is None:
+            return 62
+        right = self.w - self.PAD_R + 100
+        width_px = right - self.PAD_L
+
+        y = 66
+        self._text((self.PAD_L, y), ch.formula, font(13, "mono"), INK_DIM, "la")
+        y += 22
+
+        # Wrap on measured pixels: the note is proportional text and a character
+        # count mispredicts its width by enough to overrun the panel.
+        note, f = ch.note, font(12)
+        avg = max(1.0, self.d.textlength("abcdefghij", font=f) / 10.0)
+        for line in textwrap.wrap(note, width=max(20, int(width_px / avg))):
+            self._text((self.PAD_L, y), line, f, INK_FAINT, "la")
+            y += 15
+        return y
+
     def header(self, meta, feature: str, done: int, total: int,
                compact: bool = False) -> None:
         title, _, _ = MEANING.get(feature, (feature.replace("_", " ").title(),
@@ -231,8 +324,7 @@ class Figure:
         # On a sheet every panel carries the same run, so stating it per panel
         # is six copies of one fact - and at panel width the two collide.
         if compact:
-            self.d.line([self.PAD_L, 68, self.w - self.PAD_R + 100, 68],
-                        fill=RULE, width=1)
+            self._rule(self.caption(feature) + 8)
             return
 
         cfg = meta.get("config") or {}
@@ -249,12 +341,16 @@ class Figure:
                 + ("" if done == total else f" ({pct:.0f}%, coarse cells filled)"))
         self._text((self.w - self.PAD_R + 100, 48), note, font(12), INK_FAINT,
                    "ra")
-        self.d.line([self.PAD_L, 68, self.w - self.PAD_R + 100, 68], fill=RULE,
+        # Below the caption, not at a fixed 68 - the formula lives there now and
+        # a fixed rule struck straight through it.
+        self._rule(self.caption(feature) + 8)
+
+    def _rule(self, y: float) -> None:
+        self.d.line([self.PAD_L, y, self.w - self.PAD_R + 100, y], fill=RULE,
                     width=1)
 
     def footer(self, text: str) -> None:
-        self.d.line([self.PAD_L, self.h - 46, self.w - self.PAD_R + 100,
-                     self.h - 46], fill=RULE, width=1)
+        self._rule(self.h - 46)
         self._text((self.PAD_L, self.h - 22), text, font(11), INK_FAINT, "ls")
 
 

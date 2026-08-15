@@ -78,11 +78,42 @@ def test_every_declared_feature_can_be_drawn(sweep):
         assert img.size[0] > 0
 
 
-def test_every_feature_has_a_stated_meaning():
-    """The colourbar's end labels are what make it readable; a feature missing
-    from MEANING silently renders as bare numbers."""
-    missing = [n for n in pm.CELL_NAMES if n not in figure.MEANING]
-    assert not missing, f"no MEANING entry for {missing}"
+def test_every_feature_has_a_stated_meaning_and_a_formula():
+    """A channel must not acquire a plot without acquiring a definition."""
+    missing = [n for n in pm.CELL_NAMES if n not in figure.CHANNELS]
+    assert not missing, f"no CHANNELS entry for {missing}"
+    for name in pm.CELL_NAMES:
+        ch = figure.CHANNELS[name]
+        assert ch.formula.strip(), f"{name} has no formula"
+        assert ch.note.strip(), f"{name} has no gloss"
+
+
+def test_every_caption_glyph_actually_renders():
+    """A missing glyph draws a .notdef BOX, and a box still has a bounding box -
+    so the obvious check (does this glyph have an extent?) passes on exactly the
+    characters that are broken. Compare against notdef itself instead.
+
+    This shipped once: the angle brackets of a mean, and the set-membership
+    sign, all drew as tofu in a formula that read correctly in the source.
+    """
+    from PIL import Image, ImageDraw
+
+    def bitmap(f, ch):
+        im = Image.new("L", (30, 30), 0)
+        ImageDraw.Draw(im).text((2, 2), ch, font=f, fill=255)
+        return im.tobytes()
+
+    chars = set()
+    for c in figure.CHANNELS.values():
+        chars |= set(c.formula) | set(c.note) | set(c.title) | set(c.low) | set(c.high)
+
+    broken = []
+    for weight in ("mono", "regular"):
+        f = figure.font(16, weight)
+        notdef = bitmap(f, "￾")
+        broken += [(weight, hex(ord(c))) for c in sorted(chars)
+                   if bitmap(f, c) == notdef]
+    assert not broken, f"unrenderable glyphs: {broken}"
 
 
 def test_an_unknown_feature_is_refused_by_name(sweep):
