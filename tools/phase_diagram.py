@@ -48,6 +48,50 @@ PARTICLE_SUBSAMPLE = 4096
 SUBSAMPLE_SEED = 20260814
 
 
+def cache_uniform_writes() -> None:
+    """Skip re-uploading a uniform whose value has not changed.
+
+    Measured: `sim.entity_update()` issues 138 `tryset` calls per step and they
+    are 90% of the step, while the GPU takes a fraction of a millisecond and
+    idles the rest. Within one cell NOTHING those calls carry changes - the
+    physics are set once and then the same numbers are pushed 2500 times.
+
+    Patched here rather than in `sim.py`, which is user-owned, and scoped to
+    this tool. The cache is keyed on the PROGRAM as well as the name, because
+    `sim` keeps one compiled program per set of shader defines and swaps
+    between them; a name alone would carry one program's value into another.
+
+    Values are compared by their repr-free equality after normalising sequences
+    to tuples, so a numpy scalar and a float that compare equal count as equal
+    and a tuple uniform is not compared element-wise by identity.
+    """
+    from utilities import gl_helpers
+
+    if getattr(gl_helpers, "_phase_cached", False):
+        return
+    original = gl_helpers.tryset
+    cache: dict[tuple[int, str], object] = {}
+
+    def cached_tryset(program, uniform, value):
+        key = (id(program), uniform)
+        probe = tuple(value) if isinstance(value, (list, tuple)) else value
+        if key in cache:
+            try:
+                if cache[key] == probe:
+                    return
+            except ValueError:      # array-valued uniform; never cheap to compare
+                pass
+        original(program, uniform, value)
+        cache[key] = probe
+
+    gl_helpers.tryset = cached_tryset
+    gl_helpers._phase_cached = True
+    # sim.py imported the name directly, so rebinding the module attribute
+    # alone would leave every call site on the original.
+    import sim as _sim
+    _sim.tryset = cached_tryset
+
+
 def find_preset(name: str) -> Path:
     """User configs first, then the shipped library. Accepts a path too."""
     from utilities.paths import (get_app_physics_configs_dir,
@@ -483,8 +527,12 @@ def main(argv) -> int:
     ap.add_argument("--pilot", action="store_true")
     ap.add_argument("--pilot-sizes", default="0.20,0.10,0.05,0.025")
     ap.add_argument("--pilot-grid", type=int, default=5)
+    ap.add_argument("--no-uniform-cache", action="store_true",
+                    help="re-upload every uniform every step, as the app does")
     args = ap.parse_args(argv)
 
+    if not args.no_uniform_cache:
+        cache_uniform_writes()
     return pilot(args) if args.pilot else sweep(args)
 
 
