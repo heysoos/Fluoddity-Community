@@ -162,6 +162,22 @@ def render(data, meta, feature: str | None, rgb: list[str] | None,
     return img, title
 
 
+def temporal(data, meta, probe: str, lo_pct: float, hi_pct: float,
+             scale: int) -> tuple[np.ndarray, str]:
+    """Map of how much a probe fluctuates within each cell's own run."""
+    from services import phase_metrics as pm
+
+    names = [str(n) for n in data["probe_names"]]
+    if probe not in names:
+        raise SystemExit(f"no probe {probe!r}; have {names}")
+    sd = pm.probe_tail_sd(data["probe_series"], probe)
+    img = colormap(normalise(np.flipud(fill_holes(sd, data["done"])),
+                             lo_pct, hi_pct))
+    if scale > 1:
+        img = np.repeat(np.repeat(img, scale, axis=0), scale, axis=1)
+    return img, f"temporal-sd-{probe}"
+
+
 def bifurcation(data, meta, feature: str, bins: int, scale: int,
                 feats: np.ndarray | None = None) -> tuple[np.ndarray, str]:
     """One parameter across, the feature's DISTRIBUTION up, count as brightness.
@@ -403,6 +419,9 @@ def main(argv) -> int:
     ap.add_argument("--out", default="")
     ap.add_argument("--mark", action="store_true",
                     help="crosshair at the preset's own parameter values")
+    ap.add_argument("--temporal", default="",
+                    help="map a probe's fluctuation WITHIN each run (the "
+                         "attractor's width), e.g. --temporal change")
     ap.add_argument("--bifurcation", action="store_true",
                     help="for a sweep whose y range is collapsed to repeats: "
                          "--feature's distribution against the x parameter")
@@ -433,7 +452,10 @@ def main(argv) -> int:
         return 0
 
     rgb = [s.strip() for s in args.rgb.split(",") if s.strip()]
-    if args.bifurcation:
+    if args.temporal:
+        img, title = temporal(data, meta, args.temporal, args.lo_pct,
+                              args.hi_pct, args.scale)
+    elif args.bifurcation:
         img, title = bifurcation(data, meta, args.feature, args.bins,
                                  args.scale, feats)
     else:

@@ -306,3 +306,46 @@ def test_change_rate_reads_the_tail_and_not_the_opening_transient():
     frames = np.zeros((1, len(pm.FRAME_NAMES)))
     row = pm.cell_row(frames, steps, series, 0.05, 0.95, 800)
     assert row[pm.CELL_NAMES.index("change_rate")] == pytest.approx(0.0)
+
+
+def _series_with_change(values):
+    """(P, C) probe series carrying `values` in the change column."""
+    s = np.zeros((len(values), len(pm.PROBE_NAMES)))
+    s[:, pm.PROBE_NAMES.index("change")] = values
+    return s
+
+
+def test_a_steady_run_has_no_attractor_width():
+    s = _series_with_change(np.full(40, 0.7))
+    assert pm.probe_tail_sd(s, "change") == pytest.approx(0.0)
+
+
+def test_the_attractor_width_ignores_the_opening_transient():
+    """It shares change_rate's tail, so the two are the spread and the centre
+    of one sample rather than two unrelated windows."""
+    v = np.concatenate([np.tile([0.0, 20.0], 15), np.full(10, 0.5)])
+    assert pm.probe_tail_sd(s := _series_with_change(v), "change") \
+        == pytest.approx(0.0)
+    # ...and the same series' mean over that tail is the steady value.
+    frames = np.zeros((1, len(pm.FRAME_NAMES)))
+    row = pm.cell_row(frames, np.arange(len(v)) * 50 + 50, s, 0.05, 0.95, 2000)
+    assert row[pm.CELL_NAMES.index("change_rate")] == pytest.approx(0.5)
+
+
+def test_a_churning_run_is_separated_from_a_busy_but_steady_one():
+    """The point of the channel: mean activity and its variability are
+    different questions, and a cell can score high on either alone."""
+    steady = _series_with_change(np.full(40, 0.9))
+    churn = _series_with_change(np.where(np.arange(40) % 2, 0.9, 0.1))
+    assert pm.probe_tail_sd(steady, "change") < pm.probe_tail_sd(churn, "change")
+    ci = pm.PROBE_NAMES.index("change")
+    assert steady[-10:, ci].mean() > churn[-10:, ci].mean()
+
+
+def test_it_reduces_a_whole_grid_at_once():
+    """phase_view hands it the sweep's (r, r, P, C) array, not one cell."""
+    grid = np.zeros((4, 5, 40, len(pm.PROBE_NAMES)))
+    grid[..., pm.PROBE_NAMES.index("change")] = np.arange(40) % 2
+    out = pm.probe_tail_sd(grid, "change")
+    assert out.shape == (4, 5)
+    assert np.allclose(out, out[0, 0])

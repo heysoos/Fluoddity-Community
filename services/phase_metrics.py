@@ -331,6 +331,27 @@ def alive_steps(steps: np.ndarray, series: np.ndarray, lo: float, hi: float,
     return float(s[last + 1])
 
 
+def probe_tail_sd(series: np.ndarray, probe: str,
+                  tail_fraction: float = 0.25) -> np.ndarray:
+    """(..., P, C) -> (...), how much a probe FLUCTUATES over its own tail.
+
+    The ATTRACTOR'S WIDTH, and a different question from what a repeat asks. A
+    cell can churn violently and still land in the same place every run, or sit
+    perfectly steady within a run and land somewhere else each time; the first
+    is this, the second is the spread across repeats. Measured over the same
+    tail `change_rate` averages, so the two are the spread and the centre of one
+    sample rather than two unrelated windows.
+
+    Derived rather than stored: every sweep already holds the dense series, so
+    this costs nothing and needs no re-run. On the force plane it correlates
+    +0.06 with change_rate, which is why it is worth looking at separately.
+    """
+    ser = np.asarray(series, dtype=np.float64)
+    col = ser[..., PROBE_NAMES.index(probe)]
+    tail = max(1, int(round(col.shape[-1] * float(tail_fraction))))
+    return np.nanstd(col[..., -tail:], axis=-1)
+
+
 def cell_row(frames: np.ndarray, steps: np.ndarray, series: np.ndarray,
              pr_lo: float, pr_hi: float, budget: int,
              tail_fraction: float = 0.25,
