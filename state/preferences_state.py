@@ -26,7 +26,18 @@ class PreferencesState:
     bloom_radius: float = 1.0  # Bloom blur spread
 
     # UI preferences
+    # Which windows were open last time. ImGui remembers where each one sat
+    # (imgui.ini); this is what remembers whether it was on screen at all.
     show_preferences_window: bool = True  # Whether preferences window is visible
+    show_sidebar: bool = True  # Master toggle (X) for the window group
+    show_physics_settings_window: bool = True
+    show_video_recording_window: bool = False
+    show_history_window: bool = False  # Config clipboard
+    # Mirrors of the flags the audio and archive states own. Those two are
+    # written by their own features, so the preference follows them rather
+    # than replacing them.
+    show_audio_window: bool = False
+    show_archive_browser: bool = False
     show_controls_window: bool = False  # Help controls window
     show_parameter_sweeps_window: bool = False  # Help parameter sweeps window
     show_tutorial_window: bool = True  # Help tutorial window

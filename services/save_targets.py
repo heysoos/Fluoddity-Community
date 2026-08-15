@@ -19,6 +19,9 @@ TOURNAMENT_TILE = "tournament_tile"
 AUTO_BEST = "auto_best"
 AUTO_TILE = "auto_tile"
 ARCHIVE_ENTRY = "archive_entry"
+# The one subject that does not land in the configs directory - see
+# services/audio_rig_io.rigs_dir.
+AUDIO_RIG = "audio_rig"
 
 _ILLEGAL = '<>:"/\\|?*'
 
@@ -47,6 +50,8 @@ def suggested_name(kind: str, arg: int = -1, generation: int = 0,
         return f"tile{int(arg)}_gen{int(generation):04d}"
     if kind == ARCHIVE_ENTRY:
         return f"archive_{int(arg):06d}"
+    if kind == AUDIO_RIG:
+        return "rig"
     return safe_stem(current_project)
 
 
@@ -68,6 +73,8 @@ def subject_label(kind: str, arg: int = -1, tiles=()) -> str:
         return f"Auto mode tile {int(arg)}"
     if kind == ARCHIVE_ENTRY:
         return f"Archive entry #{int(arg)}"
+    if kind == AUDIO_RIG:
+        return "The audio rig"
     return "Current physics and rule"
 
 

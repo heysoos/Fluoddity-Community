@@ -58,6 +58,15 @@ class AudioInState:
     # One-shot commands, read and cleared by the orchestrator.
     request_start: bool = False
     request_stop: bool = False
+    request_load_preset: bool = False
+
+    # Which named rig the preset row shows. Not persisted: the rig itself is
+    # what comes back at launch, and a name would claim the live rig is still
+    # that preset after an edit.
+    preset_name: str = ""
+    # Result of the last rig save or load, shown in the panel and dismissed.
+    notice: str = ""
+    warning: str = ""
 
     # Which row's drawer is open, by target key, and which band tab it shows
     # ("" is the total). One drawer at a time, as in the boids panel, so only

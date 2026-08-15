@@ -125,7 +125,6 @@ Write-Host "  - keyboard_controls.json" -ForegroundColor Gray
 Write-Host "  - physics_configs\ (user-created)" -ForegroundColor Gray
 Write-Host "  - Screenshots\" -ForegroundColor Gray
 Write-Host "  - Videos\" -ForegroundColor Gray
-Write-Host ""
-Write-Host "Note: imgui.ini stays in app folder (imgui_bundle limitation)" -ForegroundColor Gray
+Write-Host "  - imgui.ini (window layout, seeded from default_imgui.ini)" -ForegroundColor Gray
 Write-Host ""
 Write-Host "To test the build, run: .\dist\Fluoddity\Fluoddity.exe" -ForegroundColor Cyan

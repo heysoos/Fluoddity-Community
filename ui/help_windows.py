@@ -242,7 +242,7 @@ class HelpWindowsMixin:
         if recording_active or video_pending:
             imgui.push_style_color(imgui.Col_.window_bg, imgui.ImVec4(0.3, 0.1, 0.1, 1.0))
 
-        expanded, self.show_video_recording_window = imgui.begin("Screen Recording", True)
+        expanded, self.state.preferences.show_video_recording_window = imgui.begin("Screen Recording", True)
 
         if expanded:
             record_key = self.keybindings.get_key_display_name('record_screen')

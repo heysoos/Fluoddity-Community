@@ -45,6 +45,7 @@ class _App:
     _step = staticmethod(App._step)
     _write_crash_log = App._write_crash_log
     _cleanup_safely = App._cleanup_safely
+    _save_last_rig = App._save_last_rig
 
     def __init__(self, boom=None):
         self.window = object()

@@ -34,7 +34,7 @@ def _host():
         def __init__(self):
             self.state = UIState()
             self.keybindings = _Keys()
-            self.show_video_recording_window = True
+            self.state.preferences.show_video_recording_window = True
             self._display_info = {}
 
         def _delayed_tooltip(self, text):

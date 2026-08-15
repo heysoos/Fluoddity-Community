@@ -13,27 +13,34 @@ class PopupModalsMixin:
     """Mixin for popup modal dialogs. Combined into UI via multiple inheritance."""
 
     def open_save_popup(self, kind: str = save_targets.CONFIG, arg: int = -1,
-                        tiles=(), generation: int = 0) -> None:
+                        tiles=(), generation: int = 0, name: str = "") -> None:
         """Open the save dialog for one subject, prefilled with a suggestion.
 
         Every Save button in the app calls this rather than writing a file, so
         there is exactly one place that decides where saves go and one place
-        that asks before overwriting.
+        that asks before overwriting. `name` overrides the suggestion.
         """
         self.save_popup_open = True
         self.save_popup_kind = kind
         self.save_popup_arg = int(arg)
         self.save_popup_tiles = tuple(tiles)
-        self.save_filename_buffer = save_targets.suggested_name(
+        self.save_filename_buffer = name or save_targets.suggested_name(
             kind, arg, generation=generation, tiles=tiles,
             current_project=getattr(self, "currently_open_project", "") or "")
+
+    def _save_dir(self):
+        """Where this subject lands. Everything but a rig is a config file."""
+        if self.save_popup_kind == save_targets.AUDIO_RIG:
+            from services.audio_rig_io import rigs_dir
+            return rigs_dir()
+        return self.user_configs_dir
 
     def _existing_stems(self, base):
         """Which of this save's target files are already on disk."""
         stems = save_targets.target_stems(
             self.save_popup_kind, base, self.save_popup_tiles)
-        return [s for s in stems
-                if (self.user_configs_dir / f"{s}.json").exists()]
+        directory = self._save_dir()
+        return [s for s in stems if (directory / f"{s}.json").exists()]
 
     def _commit_save(self, filename):
         """Hand the save to the orchestrator as a one-shot request."""
@@ -67,8 +74,10 @@ class PopupModalsMixin:
                 imgui.text_disabled(
                     f"Writes {len(stems)} files: {', '.join(s + '.json' for s in stems[:3])}"
                     + (", ..." if len(stems) > 3 else ""))
-            imgui.text_disabled(
-                f"Saves to {self.user_configs_dir}  (File > Load > Custom)")
+            where = f"Saves to {self._save_dir()}"
+            if self.save_popup_kind != save_targets.AUDIO_RIG:
+                where += "  (File > Load > Custom)"
+            imgui.text_disabled(where)
 
             imgui.separator()
             can_save = bool(stems)

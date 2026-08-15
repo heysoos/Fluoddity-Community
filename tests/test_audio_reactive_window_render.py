@@ -157,6 +157,52 @@ def test_a_closed_window_renders_nothing_and_does_not_raise():
     imgui.render()
 
 
+# --- the preset row ---------------------------------------------------------
+
+def _with_presets(names, monkeypatch):
+    from services import audio_rig_io
+
+    monkeypatch.setattr(audio_rig_io, "list_rigs", lambda: list(names))
+    return _host(True)
+
+
+def test_the_preset_row_renders_with_nothing_saved_yet(monkeypatch):
+    imgui, host = _with_presets([], monkeypatch)
+    _draw(imgui, host)
+
+
+def test_the_preset_row_renders_with_a_selection(monkeypatch):
+    imgui, host = _with_presets(["kelp", "reef"], monkeypatch)
+    host.state.audio.preset_name = "reef"
+    _draw(imgui, host)
+
+
+def test_a_selection_that_is_no_longer_on_disk_still_renders(monkeypatch):
+    """The folder is another window's to change, and a stale name must not
+    index past the list."""
+    imgui, host = _with_presets(["kelp"], monkeypatch)
+    host.state.audio.preset_name = "deleted"
+    _draw(imgui, host)
+
+
+def test_a_notice_renders_and_refreshes_the_list(monkeypatch):
+    """Every save and load sets a notice, which is exactly when the folder can
+    have gained a file."""
+    imgui, host = _with_presets(["kelp"], monkeypatch)
+    _draw(imgui, host)
+    monkeypatch.setattr("services.audio_rig_io.list_rigs",
+                        lambda: ["kelp", "reef"])
+    host.state.audio.notice = "Rig saved as reef"
+    _draw(imgui, host)
+    assert host._audio_preset_names() == ["kelp", "reef"]
+
+
+def test_a_warning_renders(monkeypatch):
+    imgui, host = _with_presets(["kelp"], monkeypatch)
+    host.state.audio.warning = "Could not write the rig"
+    _draw(imgui, host)
+
+
 # --- the drawer, which is where the API misuse would hide --------------------
 
 def _draw(imgui, host, frames=2):

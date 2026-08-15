@@ -10,6 +10,7 @@ from services.field_handler import FieldHandler
 from services.parameter_lock_service import ParameterLockService
 from utilities.paths import initialize_user_data, get_user_physics_configs_dir, get_app_physics_configs_dir, get_screenshots_dir
 from state import load_preferences, save_preferences, SimState
+from state.audio_in_state import to_dict as rig_to_dict
 from command_handler import CommandHandler
 from simulation_runner import SimulationRunner
 from camera_input import process_camera_input
@@ -92,6 +93,7 @@ class App:
 
         # Apply loaded preferences to UI
         self.ui.state.preferences = loaded_prefs
+        self._restore_open_windows(loaded_prefs)
         self.ui._last_applied_world_size = loaded_prefs.world_size
         self.ui._last_applied_particle_density = loaded_prefs.particle_density
 
@@ -108,6 +110,11 @@ class App:
         self.audio_runtime = AudioRuntime()
         from services.audio_rig_io import load_rig
         load_rig(self.ui.state.audio)
+        # The rig file is shared by every copy of Fluoddity, and the write at
+        # exit used to be unconditional - so a second instance that never
+        # touched audio wrote its empty rig over the one you had just built.
+        # A session writes only what it changed. See _save_last_rig.
+        self._rig_at_start = rig_to_dict(self.ui.state.audio)
         # Built lazily on first use of Auto mode - onnxruntime and cmaes must
         # never be imported at startup.
         self.auto_service = None
@@ -200,6 +207,19 @@ class App:
         self._load_default_config()
         self.sim.reload()
         self.sim.reset()
+
+    def _restore_open_windows(self, prefs):
+        """Reopen the windows that were on screen when the app last closed.
+
+        Only the two windows whose flag lives outside PreferencesState need
+        anything here. The browser's open is a one-shot request, asked for
+        once at construction: repeating it would reload the archive every
+        frame, and that reload rescores every entry.
+        """
+        self.ui.state.audio.show_window = prefs.show_audio_window
+        if prefs.show_archive_browser:
+            self.ui.state.archive.show_browser = True
+            self.ui.state.archive.open_browser_requested = True
 
     # ------------------------------------------------------------------
     # Automatic (CLIP-guided) tournament
@@ -1207,6 +1227,22 @@ class App:
             self._auto_prev_motion_blur,
             prev_hue=getattr(self, "_auto_prev_hue", None))
 
+    def _save_last_rig(self, ui_state):
+        """Write the last-used rig, but only if this session changed it.
+
+        Several copies of the app share the one file, so an untouched instance
+        must leave it exactly as it found it.
+        """
+        from services.audio_rig_io import rig_path, save_rig
+
+        current = rig_to_dict(ui_state.audio)
+        if current == getattr(self, "_rig_at_start", None):
+            return False
+        if save_rig(ui_state.audio):
+            return True
+        print(f"[cleanup] the audio rig could not be written to {rig_path()}")
+        return False
+
     @staticmethod
     def _step(label, fn, *args, **kwargs):
         """Run one shutdown step; log and continue if it raises, so a failing
@@ -1234,8 +1270,10 @@ class App:
             self._step("restore auto overrides",
                        self._restore_auto_overrides, ui_state)
             self._step("save preferences", save_preferences, ui_state.preferences)
-            from services.audio_rig_io import save_rig
-            self._step("save audio rig", save_rig, ui_state.audio)
+            # The lookup goes inside the lambda, as below: _step guards the
+            # call, not the expression that produces it.
+            self._step("save audio rig",
+                       lambda: self._save_last_rig(ui_state))
 
         # The scoring thread only reads its own copy of the frame buffer, so
         # closing it after the flush cannot race the archive.

@@ -20,7 +20,7 @@ from services.audio_analysis import SIGNAL_NAMES
 from services.audio_mapping import (MODES, Mapping, brain_targets,
                                     deaf_targets, physics_targets)
 from services.audio_shapers import SHAPER_KINDS, ShaperParams
-from ui import layout
+from ui import layout, notices
 
 SIGNAL_COLORS: dict[str, tuple] = {
     "bass": (0.88, 0.31, 0.38, 1.0),
@@ -138,6 +138,10 @@ class AudioReactiveWindowMixin:
 
         # push_settings_width pairs with imgui.pop_item_width, not a layout call.
         layout.push_settings_width()
+        self._render_audio_presets(ast)
+        notices.render_banner(ast, "warning", notices.BAD, scope="audio")
+        notices.render_banner(ast, "notice", notices.OK, scope="audio")
+        imgui.separator()
         self._render_audio_source(ast)
         imgui.separator()
         self._render_audio_signals(ast)
@@ -174,6 +178,46 @@ class AudioReactiveWindowMixin:
                 min(1.0, max(0.0, float(value))))
         for gone in [k for k in srings if k not in shaped]:
             del srings[gone]
+
+    # --- presets --------------------------------------------------------
+
+    def _audio_preset_names(self, refresh: bool = False) -> list:
+        """The rig names on disk, re-read only when a save or load moves them.
+
+        A directory listing every frame is a syscall per frame for a folder
+        that changes about twice a session.
+        """
+        if refresh or not hasattr(self, "_audio_preset_cache"):
+            from services.audio_rig_io import list_rigs
+            self._audio_preset_cache = list_rigs()
+        return self._audio_preset_cache
+
+    def _render_audio_presets(self, ast):
+        """Pick a named rig, load it over the live one, or save the live one."""
+        from services import save_targets
+
+        # Every save and load sets a notice, so a change to it is exactly when
+        # the folder can have gained a file.
+        if getattr(self, "_audio_preset_notice", None) != ast.notice:
+            self._audio_preset_notice = ast.notice
+            self._audio_preset_names(refresh=True)
+
+        names = self._audio_preset_names()
+        current = names.index(ast.preset_name) if ast.preset_name in names else -1
+        changed, idx = imgui.combo("Preset", current, names)
+        if changed and 0 <= idx < len(names):
+            ast.preset_name = names[idx]
+        self._delayed_tooltip("A saved rig: every mapping, strength and mute.")
+
+        if imgui.button("Load##audio_preset") and ast.preset_name:
+            ast.request_load_preset = True
+        imgui.same_line()
+        if imgui.button("Save##audio_preset"):
+            self.open_save_popup(save_targets.AUDIO_RIG,
+                                 name=ast.preset_name or "rig")
+        imgui.same_line()
+        if imgui.button("Rescan##audio_preset"):
+            self._audio_preset_names(refresh=True)
 
     # --- source ---------------------------------------------------------
 

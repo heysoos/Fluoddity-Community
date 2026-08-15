@@ -135,6 +135,14 @@ Sync is the thing only a person can confirm, so use material with a hard beat.
 - [ ] **e.** Draw size / Draw power visible only in Draw Trail mode
 - [ ] **f.** Debug arrows toggle + sensitivity slider
 - [ ] **g.** Preferences saved on exit, restored on next launch
+- [ ] **h.** Window layout: open Physics, Screen Recording, Config Clipboard
+      and Audio Reactive, move and resize them, quit and relaunch — each is
+      back where it was. The windows left closed stay closed.
+- [ ] **i.** `Documents/Fluoddity/imgui.ini` exists and is the file that
+      changes; running from a different folder gets the same layout.
+- [ ] **j.** With the Archive Browser open at quit, the next launch reopens it
+      on the same archive (it costs a moment while the archive loads).
+- [ ] **k.** Tournament Mode is OFF at launch however it was left.
 
 ## 10. Menu Auto-Close
 - [ ] **a.** Main menu bar: menus close when mouse moves far away
@@ -407,3 +415,21 @@ installed; without it the panel says so and everything else runs unchanged.
       enabled.
 - [ ] The Sonification window (Extras) still opens and works alongside this one;
       the two panels are separate and neither replaces the other.
+
+### Rig presets, and the rig surviving a second copy
+
+- [ ] Build a rig, press Save at the top of the panel, name it: the dialog says
+      it saves to `Documents/Fluoddity/audio_rigs`, NOT to physics_configs, and
+      the name appears in the Preset combo straight away.
+- [ ] The saved rig does not appear anywhere under File > Load.
+- [ ] Saving under a name that already exists asks before overwriting.
+- [ ] Clear the rig, pick the preset, press Load: every mapping, strength and
+      mute comes back.
+- [ ] Quit and relaunch with no preset touched: the rig you left is the rig you
+      get, with capture stopped.
+- [ ] **The wipe.** Open two copies of Fluoddity. Build a rig in the first;
+      touch nothing in the second. Close the SECOND, then the first. Relaunch:
+      the rig is still there. (Before this rule the untouched copy overwrote
+      it, which is why the rig seemed to save only sometimes.)
+- [ ] Load a preset in one copy and close it last: that preset is what comes
+      back next launch.

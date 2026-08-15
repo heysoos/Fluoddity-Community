@@ -22,6 +22,12 @@ import ui  # noqa: E402,F401
 # whether anyone had resized a panel since.
 from imgui_bundle import imgui  # noqa: E402
 
+from ui import ini_path  # noqa: E402
+
+# The app points ImGui at Documents/Fluoddity/imgui.ini during UI construction,
+# which runs after create_context and would undo the null below.
+ini_path.suppress()
+
 _create_context = imgui.create_context
 
 

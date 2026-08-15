@@ -1513,6 +1513,9 @@ class CommandHandler:
                 else:
                     print("Failed to load config from clipboard")
 
+        # Audio rig preset (Audio Reactive panel)
+        self._handle_audio_preset(ui_state)
+
         # File save (menu)
         if ui_state.request_save_file:
             self._handle_file_save(ui_state)
@@ -1552,7 +1555,38 @@ class CommandHandler:
         if kind == save_targets.ARCHIVE_ENTRY:
             return self._export_archive_entry(ui_state, int(ui_state.save_arg),
                                               filename)
+        if kind == save_targets.AUDIO_RIG:
+            return self._save_audio_rig(ui_state, filename)
         return self._save_live_config(ui_state, filename)
+
+    def _save_audio_rig(self, ui_state, filename):
+        """Write the live rig under a name, and say so on the panel."""
+        from services.audio_rig_io import preset_path, save_rig
+
+        path = preset_path(filename)
+        ast = ui_state.audio
+        if save_rig(ast, path):
+            ast.preset_name = path.stem
+            ast.notice = f"Rig saved as {path.stem}"
+        else:
+            ast.warning = f"Could not write {path}"
+
+    def _handle_audio_preset(self, ui_state):
+        """Load a named rig over the live one. Cleared before the attempt, so
+        a preset that will not read cannot retry every frame."""
+        ast = ui_state.audio
+        if not ast.request_load_preset:
+            return
+        ast.request_load_preset = False
+        from services.audio_rig_io import load_rig, preset_path
+
+        name = ast.preset_name
+        if not name:
+            return
+        if load_rig(ast, preset_path(name)):
+            ast.notice = f"Rig loaded from {name}"
+        else:
+            ast.warning = f"Could not read the rig '{name}'"
 
     def _save_live_config(self, ui_state, filename):
         """Handle file save from menu, including field texture PNG."""

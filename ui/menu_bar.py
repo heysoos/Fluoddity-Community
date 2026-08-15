@@ -186,8 +186,8 @@ class MenuBarMixin:
                 imgui.end_menu()
 
             # Window toggle button (shows/hides Physics Settings, Preferences, Drawing Controls, Config Clipboard, Screen Recording)
-            if imgui.menu_item("Show/Hide Windows (X)", "", self.show_sidebar)[0]:
-                self.show_sidebar = not self.show_sidebar
+            if imgui.menu_item("Show/Hide Windows (X)", "", self.state.preferences.show_sidebar)[0]:
+                self.state.preferences.show_sidebar = not self.state.preferences.show_sidebar
 
             # Reset menu
             if imgui.begin_menu("Reset...", not self.force_close_main_menus):
@@ -309,16 +309,16 @@ class MenuBarMixin:
                                        extras_menu_min.y + extras_menu_size.y))
 
                 # Config Clipboard window
-                _, self.show_history_window = imgui.checkbox(
+                _, self.state.preferences.show_history_window = imgui.checkbox(
                     "Config Clipboard",
-                    self.show_history_window
+                    self.state.preferences.show_history_window
                 )
                 self._delayed_tooltip("Set restorable checkpoints with Ctrl-C")
 
                 # Screen Recording Controls
-                _, self.show_video_recording_window = imgui.checkbox(
+                _, self.state.preferences.show_video_recording_window = imgui.checkbox(
                     "Screen Recording Controls",
-                    self.show_video_recording_window
+                    self.state.preferences.show_video_recording_window
                 )
 
                 # Tournament mode (interactive evolution)

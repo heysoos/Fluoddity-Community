@@ -692,6 +692,22 @@ mechanics these caveats assume.
   `_base_brain_id` so a WIDTH change still forces a re-encode; the scales
   deliberately are not.
 
+- **The rig file is SHARED by every copy of Fluoddity, so a session writes it
+  only if it CHANGED it.** `Documents/Fluoddity/audio_rig.json` is one file for
+  every worktree and every instance another session launches, and the write at
+  exit used to be unconditional — so a second copy opened and closed without
+  going near audio put its empty rig over the one you had just built, which
+  reads as a save that only sometimes works. `App._rig_at_start` holds the dict
+  `load_rig` produced, and `_save_last_rig` compares `to_dict(audio)` against
+  it. Two consequences: a first-ever run that touches nothing never creates the
+  file, and two instances that BOTH edit still resolve last-writer-wins, which
+  is not fixable — two rigs cannot be merged. Polling was considered and
+  rejected: it costs almost nothing but guards only a hard kill, which is the
+  one thing that skips `cleanup()`. Named rigs are a separate thing entirely,
+  in `audio_rigs/` rather than the user configs folder, because everything
+  there appears in File > Load and a rig is not a physics config. Guarded by
+  `tests/test_rig_presets.py`.
+
 - **`imgui.ini` is shared between the app and the test suite, and the tests
   must not read or write it.** Dear ImGui persists every window's size in
   `create_context`/`destroy_context`, so the tests saved a layout and consumed
@@ -699,8 +715,28 @@ mechanics these caveats assume.
   eight entries no longer fit, and a test that had always passed began failing
   with no code change. Running the app writes the same file, so the suite's
   result depended on whether anyone had resized a panel. `tests/conftest.py`
-  wraps `create_context` to null the filename. Never read it back —
-  `get_ini_filename()` on the null segfaults.
+  wraps `create_context` to null the filename AND calls `ui.ini_path.suppress()`
+  — the app sets the filename during `UI.__init__`, which runs after
+  `create_context` and would otherwise put the suite back on the real file.
+  That is why the set lives in ONE function and nowhere else. Never read it
+  back — `get_ini_filename()` on the null segfaults.
+
+- **The layout file is USER data, and which windows were open is not in it.**
+  `imgui.ini` used to sit in `get_app_dir()`, which is the launched folder
+  running from source — so five worktrees kept five layouts — and is
+  potentially read-only in a packaged build under Program Files. It is now
+  `Documents/Fluoddity/imgui.ini`, seeded by `migrate_imgui_ini` from an
+  existing app-dir layout before `default_imgui.ini`, and never overwritten
+  once it exists. ImGui records each window's position and size but not
+  whether it was on screen at all, so the open/closed flags live in
+  `PreferencesState` — which round-trips through `asdict`, so a field there
+  persists for free. `show_demo_window` is deliberately excluded. The two
+  windows whose flag belongs to a feature (`state.audio.show_window`,
+  `state.archive.show_browser`) are MIRRORED rather than moved: `get_state()`
+  copies state to preference every frame and `_restore_open_windows` applies
+  it once at startup. Restoring the browser sets `open_browser_requested`,
+  which reloads the archive — `rescore_all()` is load-bearing there, so it
+  must be asked for exactly ONCE and never per frame.
 
 ### Recording
 
