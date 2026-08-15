@@ -247,6 +247,12 @@ class Archive:
     def stats(self) -> dict:
         return {
             "size": self._n,
+            # How much of it the RUNNING brain can decode. Novelty, admission
+            # and the map pool across every layout, but parents and seeds come
+            # from here alone - so an archive that looks full can still be
+            # bootstrapping, and nothing else on screen would say why.
+            "native": int(len(self.native_rows())),
+            "layouts": sorted({self.layout_at(i) for i in range(self._n)}),
             "capacity": self.capacity,
             "admission_rate": self.admission.rate,
             "n_nonfinite": self.n_nonfinite,

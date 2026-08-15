@@ -113,13 +113,26 @@ class ImgepDriver:
     # ---- state ---------------------------------------------------------
 
     @property
+    def _native_n(self) -> int:
+        """Entries the RUNNING brain can be seeded or bred from.
+
+        Every regime decision counts these rather than the archive, because an
+        archive pools layouts: switching brain inside a full one leaves the new
+        brain with nothing to expand FROM, and counting the whole thing put the
+        driver in expansion, where each expedition then declined for want of a
+        native seed and wasted its cadence interval. len(archive) still sizes
+        anything that pools - novelty, the refresh sweep, the map.
+        """
+        return int(len(self.archive.native_rows()))
+
+    @property
     def regime(self) -> str:
         if self._remaining > 0 and self._goal is not None:
             return "expedition"
-        # max(1, ...): an empty archive has nothing to expand FROM, so it stays
-        # in bootstrap whatever seed_n says. Without this, parent sampling
-        # raises on the first ask when seed_n is 0.
-        if len(self.archive) < max(1, self.seed_n):
+        # max(1, ...): nothing to expand FROM stays in bootstrap whatever
+        # seed_n says. Without this, parent sampling raises on the first ask
+        # when seed_n is 0.
+        if self._native_n < max(1, self.seed_n):
             return "bootstrap"
         return "expansion"
 
@@ -152,7 +165,7 @@ class ImgepDriver:
                     "note": f"{int(self._remaining)} left"}
         if r == "bootstrap":
             total = max(1, int(self.seed_n))
-            done = min(int(len(self.archive)), total)
+            done = min(self._native_n, total)
             return {"label": "bootstrap: scattering to fill the archive",
                     "done": done, "total": total, "unit": "entries",
                     "note": f"{total - done} more before expansion starts"}
@@ -248,7 +261,8 @@ class ImgepDriver:
         # crashing on the next tell.
         if self._optimizer is not None and self._optimizer.popsize != n:
             self.end_expedition()
-            return self._ask_expansion(n) if len(self.archive) else self._ask_bootstrap(n)
+            return (self._ask_expansion(n) if self._native_n
+                    else self._ask_bootstrap(n))
         return self._optimizer.ask(n)
 
     def _ask_bootstrap(self, n: int) -> np.ndarray:
@@ -554,7 +568,7 @@ class ImgepDriver:
         self._since_expedition += 1
         if (self.expansion_between > 0
                 and self._since_expedition >= self.expansion_between
-                and len(self.archive) >= self.seed_n):
+                and self._native_n >= self.seed_n):
             self.start_expedition()
 
         self._last_score_label = "novelty"

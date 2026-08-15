@@ -630,6 +630,7 @@ class ArchiveWindowMixin:
         imgui.text_wrapped(f"{st['size']} / {st['capacity']} entries   "
                            f"{st['n_pinned']} pinned   "
                            f"{st['n_evicted']} evicted")
+        self._render_mixed_note(arc, st)
         self._render_live_preview_toggle(ast)
         imgui.separator()
 
@@ -642,6 +643,30 @@ class ArchiveWindowMixin:
                 imgui.end_tab_item()
             imgui.end_tab_bar()
         imgui.end()
+
+    def _render_mixed_note(self, arc, st) -> None:
+        """How much of a MIXED archive the running brain can actually use.
+
+        Silent when there is only one layout, which is every archive that has
+        never had its brain changed. When there are several, the count that
+        matters is not the size: parents and seeds come from the running
+        brain's own entries, so a full-looking archive can still be
+        bootstrapping and nothing else on screen says why.
+        """
+        if len(st.get("layouts", ())) < 2:
+            return
+        native, size = int(st["native"]), int(st["size"])
+        imgui.text_colored(
+            imgui.ImVec4(*_DIM),
+            f"{len(st['layouts'])} brains here; {native} of {size} are "
+            f"{arc.signature} - the rest browse and rank but cannot be bred from")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Novelty, admission and the map pool across every brain.\n"
+                "Parents and seeds come from the running brain's entries only,\n"
+                "because another brain's genome is a different creature under\n"
+                "this one's decode. Switch brain to work on the others.\n\n"
+                + "\n".join(f"  {s}" for s in st["layouts"]))
 
     def _render_live_preview_toggle(self, ast):
         """Run the hovered entry in the live sim, like hovering File > Load.
@@ -752,8 +777,15 @@ class ArchiveWindowMixin:
             # The ENTRY's id, not the row: the row is how the app addresses it,
             # the id is what the archive calls it.
             imgui.text(f"Selected #{sel.id}")
-            if not arc.is_native(ast.selected_entry_id):
-                sig = arc.layout_at(ast.selected_entry_id)
+            # The brain this creature was AUTHORED under, named on every
+            # selection rather than only on a foreign one: an archive pools
+            # layouts, so "which brain is this?" is a question about any entry,
+            # and the gallery tile itself has nowhere to say it. Only on a
+            # click - the hover preview writes a row per pointer position.
+            sig = arc.layout_at(ast.selected_entry_id)
+            if arc.is_native(ast.selected_entry_id):
+                imgui.text_colored(imgui.ImVec4(*_DIM), f"{sig} brain")
+            else:
                 # Hovering borrows this brain; only a click keeps it, and with
                 # the toggle off nothing runs at all.
                 imgui.text_colored(

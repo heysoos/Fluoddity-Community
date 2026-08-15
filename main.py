@@ -599,6 +599,17 @@ class App:
             self._refresh_driver_specs(layout)
             return True
 
+        # Said out loud because it is the one change that silently redirects
+        # where a run's results are filed: the archive is keyed by signature,
+        # so entries admitted after this land in a different directory and the
+        # previous brain's stop being reachable as parents. Nothing else
+        # records that it happened - a run config names the layout it ran
+        # under, but only once a run starts.
+        running = (getattr(ui_state.archive, "running", False)
+                   or getattr(ui_state.auto_tournament, "running", False))
+        print(f"[brain] layout {current.signature()} -> {layout.signature()}"
+              + (" WHILE A SEARCH IS RUNNING" if running else ""))
+
         # Before the release, while the outgoing store is still open.
         self._save_archive_settings(ui_state)
         self._release_archive(ui_state)

@@ -270,6 +270,40 @@ def test_a_foreign_seed_index_is_refused_rather_than_encoded():
     assert not ok or arc.is_native(int(d._x0_index))
 
 
+def test_a_brain_with_no_entries_bootstraps_inside_a_full_archive():
+    """Switching brain mid-archive is the normal case, and the new brain owns
+    nothing. Counting the whole archive put the driver in expansion, where
+    every expedition then declined for want of a native seed - so it neither
+    bootstrapped nor expedition'd, and the progress readout said expansion."""
+    d, arc = _mixed(n_native=0, n_foreign=12)
+    d.seed_n = 4
+    assert len(arc) == 12, "precondition: the archive looks full"
+    assert not len(arc.native_rows()), "precondition: none of it is ours"
+
+    assert d.regime == "bootstrap"
+    assert d.phase()["done"] == 0, "progress must count what this brain can use"
+    z = d.ask(4)
+    assert z.shape == (4, d.spec.dim) and np.all(np.isfinite(z))
+
+
+def test_the_regime_follows_the_native_count_not_the_archive():
+    d, arc = _mixed(n_native=6, n_foreign=12)
+    d.seed_n = 4
+    assert d.regime == "expansion", "six native entries is past seed_n"
+    d.seed_n = 8
+    assert d.regime == "bootstrap", "six is not eight, whatever the other 12 are"
+
+
+def test_expansion_in_a_mixed_archive_only_breeds_native_parents():
+    """The whole point of the filter: a parent is re-encoded under the running
+    layout, so a foreign row is unreadable rather than merely worse."""
+    d, arc = _mixed(n_native=3, n_foreign=12)
+    d.seed_n = 1
+    assert d.regime == "expansion"
+    z = d.ask(8)
+    assert z.shape == (8, d.spec.dim) and np.all(np.isfinite(z))
+
+
 def test_the_novelty_fitness_is_the_archive_novelty():
     """Asserted as an identity rather than as a spread: over a small one-hot
     archive every tile can legitimately share a kNN distance, so 'the numbers

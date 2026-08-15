@@ -58,6 +58,8 @@ sliders step back and the grid stays with whatever is running it.
 
 **Explore (IMGEP)** — no prompt. It hunts for patterns *unlike* the ones it already has and files each keeper in an archive you can browse, sort and load from. Pick or create an archive, press **Start**; text goals are optional and steer it without confining it. The **New** button asks which encoder the archive should use, and that is the only time you can choose: everything in an archive is measured in one encoder's space, so the `Encoder` box on the tab afterwards just shows which. To use a different one, make a new archive. Full description in [docs/imgep.md](docs/imgep.md).
 
+One archive holds **every brain you use it with**, in a directory per layout. Novelty, admission, the map and the record book pool across all of them — they are about pictures — but the search can only breed from and seed on the brain that is running, because another brain's genome is a different creature under this one's decode. So changing brain mid-archive is fine and keeps everything you made: the browser tells you how many entries the current brain owns, and switching back picks up where you left off. Selecting an entry names the brain it was authored under, and clicking a foreign one switches to it. Changing brain also prints a line to the console, since it redirects where new results are filed.
+
 Auto and Explore need the optional packages in `requirements.txt` (`onnxruntime-directml`, `tokenizers`, `cmaes`), and offer a **Download CLIP model (~330 MB)** button the first time. Manual mode needs none of that. The archive browser — `Extras > Archive Browser` — opens without CLIP too.
 
 ## Brain Modality

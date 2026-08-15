@@ -1085,6 +1085,30 @@ mechanics these caveats assume.
   named neither the sampler nor the layouts. Guarded by
   `tests/test_novelty_goals.py`.
 
+- **Every REGIME decision counts NATIVE entries; everything that POOLS counts
+  the archive.** `regime`, the bootstrap progress readout, the
+  expedition-cadence gate and the popsize-change fallback all ask `_native_n`,
+  because switching brain inside a full archive leaves the new brain with
+  nothing to expand FROM. Counting the whole thing put the driver in
+  "expansion", where `_ask_expansion` privately fell back to bootstrap while
+  every expedition declined for want of a native seed — so it neither
+  bootstrapped nor expedition'd, and the progress bar named a regime it was
+  not in. `len(archive)` still sizes novelty, the refresh sweep, the map and
+  `seed_index`'s bounds check, all of which are about pictures rather than
+  genomes. The browser states the split whenever an archive holds more than
+  one layout, because a full-looking archive that is still bootstrapping has
+  no other explanation on screen.
+
+- **A layout change is PRINTED, because nothing else records that it
+  happened.** The archive is keyed by signature, so a switch silently
+  redirects where results are filed and strands the previous brain's entries
+  as un-breedable. A run config names the layout it ran under, but only once a
+  run starts, and `settings_history.jsonl` never sees it — reconstructing a
+  2.5-hour Fourier run inside a deep-MLP archive afterwards needed two
+  `runs/*.json` files and the per-directory entry counts.
+  `_apply_brain_layout` logs both signatures, and says so louder when a search
+  is running.
+
 ### The MLP layer stack
 
 - **`MAX_MLP_WIDTH` is COMPILED PER LAYOUT, and that is the only reason a deep

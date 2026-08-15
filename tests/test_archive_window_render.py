@@ -96,11 +96,21 @@ class _FakeArchive:
     def __len__(self):
         return len(self.entries)
 
+    def native_rows(self):
+        return np.array([i for i in range(len(self.entries))
+                         if self.is_native(i)], dtype=np.int64)
+
     def stats(self):
         return {"size": len(self.entries), "capacity": 20000,
                 "admission_rate": 0.98, "n_nonfinite": 0, "n_rejected": 0,
                 "n_evicted": 0, "n_pinned": 0, "blocked_by_pins": False,
-                "rejects_ring": 0}
+                "rejects_ring": 0,
+                # As the real one: the browser's mixed-archive note reads these,
+                # and a fake without them would exercise the .get() fallback
+                # rather than the path that ships.
+                "native": int(len(self.native_rows())),
+                "layouts": sorted({self.layout_at(i)
+                                   for i in range(len(self.entries))})}
 
 
 class _FakeDriver:
@@ -400,6 +410,80 @@ def test_every_entry_gets_a_placeholder_when_there_are_no_thumbnails(gui):
     # gallery needs one because two brains each hold an entry #0.
     labels = {x.split("##")[0] for x in _button_labels(h) if x.startswith("#")}
     assert labels == {f"#{i}" for i in range(8)}
+
+
+# ---- one archive, several brains ------------------------------------------
+
+def _texts(monkeypatch, draw):
+    """-> every string drawn by text/text_colored/text_wrapped while `draw` runs.
+
+    Asserted on rather than on where the call sits, because ImGui clips to the
+    WINDOW: a line inside a folded header or off the bottom edge is written in
+    the source and drawn nowhere.
+    """
+    seen = []
+    for name in ("text", "text_colored", "text_wrapped", "text_disabled"):
+        real = getattr(imgui, name)
+
+        def wrapper(*a, _real=real, **kw):
+            seen.extend(x for x in a if isinstance(x, str))
+            return _real(*a, **kw)
+
+        monkeypatch.setattr(imgui, name, wrapper)
+    frame(draw)
+    return seen
+
+
+def _two_brains(n=8, foreign_from=5):
+    arc = _populated(n=n)
+    for i in range(foreign_from, n):
+        arc.entries[i].layout = "mlp-n3.4.4-a0.0.0"
+    return arc
+
+
+def test_a_selected_entry_names_the_brain_it_was_authored_under(gui, monkeypatch):
+    """On the CLICK, not the hover: an archive pools layouts, so 'which brain
+    is this?' is a question about any entry, and the tile cannot say it."""
+    h = Harness(archive=_two_brains())
+    h.state.archive.show_browser = True
+
+    h.state.archive.selected_entry_id = 0            # a native one
+    assert any("fourier-n10 brain" in t
+               for t in _texts(monkeypatch, h.render_archive_window))
+
+    h.state.archive.selected_entry_id = 6            # a foreign one
+    assert any("mlp-n3.4.4-a0.0.0 brain" in t
+               for t in _texts(monkeypatch, h.render_archive_window))
+
+
+def test_nothing_selected_names_no_brain(gui, monkeypatch):
+    h = Harness(archive=_two_brains())
+    h.state.archive.show_browser = True
+    h.state.archive.selected_entry_id = -1
+    drawn = _texts(monkeypatch, h.render_archive_window)
+    assert not any(t.startswith(("fourier-n10 brain", "mlp-n3.4.4-a0.0.0 brain"))
+                   for t in drawn)
+
+
+def test_a_mixed_archive_says_how_much_of_it_this_brain_can_breed_from(gui,
+                                                                       monkeypatch):
+    """Parents and seeds come from the running brain's entries alone, so a
+    full-looking archive can still be bootstrapping with nothing on screen
+    saying why."""
+    h = Harness(archive=_two_brains(n=8, foreign_from=5))
+    h.state.archive.show_browser = True
+    drawn = " ".join(_texts(monkeypatch, h.render_archive_window))
+    assert "2 brains here" in drawn
+    assert "5 of 8" in drawn
+
+
+def test_a_single_brain_archive_says_nothing_about_brains(gui, monkeypatch):
+    """Which is every archive that has never had its brain changed. A note
+    that is always on is a note nobody reads."""
+    h = Harness(archive=_populated(n=8))
+    h.state.archive.show_browser = True
+    drawn = " ".join(_texts(monkeypatch, h.render_archive_window))
+    assert "brains here" not in drawn
 
 
 def test_sorting_orders_entries_as_labelled(gui):
