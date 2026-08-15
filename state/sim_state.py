@@ -123,3 +123,15 @@ class SimState:
         'TRAIL_DIFFUSION': 0.0,
         'HAZARD_RATE': 0.0,
     })
+
+
+# Undo classification. Every field is in exactly one of these; a new field
+# fails tests/test_undo_fields.py until it is named here.
+NOT_UNDOABLE: dict[str, str] = {
+    "going": "pause is a transport control, not a change to the creature",
+    "current_view_option": "which view is displayed, not what is simulated",
+    "sweep_preview_pending_restore": "one-shot bookkeeping for the sweep preview",
+}
+
+UNDOABLE_FIELDS: tuple[str, ...] = tuple(
+    f for f in SimState.__dataclass_fields__ if f not in NOT_UNDOABLE)

@@ -230,6 +230,102 @@ def test_reset_clears_the_logged_history(tmp_path):
     svc.logger.close()
 
 
+def _population(ts):
+    return np.array([np.asarray(b, dtype=np.float64).ravel()
+                     for b in ts.population])
+
+
+def test_reset_starts_a_DIFFERENT_run_not_the_same_one_again():
+    """The optimizer was cleared correctly and the run still replayed exactly.
+
+    base_seed fed both the CMA-ES seed and gen_seed, and generation went back
+    to 0, so Reset then Start handed back the identical population in the
+    identical tiles over the identical particle field. A new prompt only
+    reranked creatures the user had already watched, which reads as the search
+    never having reset at all.
+    """
+    svc, ts = make()
+    svc.start("coral")
+    first = _population(ts).copy()
+    for _ in range(3):
+        run_one_generation(svc)
+
+    svc.reset()
+    svc.start("a pepperoni pizza")
+    assert not np.array_equal(_population(ts), first)
+
+
+def test_reset_advances_past_the_generations_it_just_spent():
+    """gen_seed is base_seed + generation, so a stride smaller than the run
+    would hand the new run's early generations the old run's particle fields."""
+    svc, _ = make()
+    svc.start("coral")
+    for _ in range(3):
+        run_one_generation(svc)
+    spent = svc.generation
+    before = svc.base_seed
+
+    svc.reset()
+    assert svc.base_seed > before + spent
+
+
+def test_two_resets_in_a_row_still_move_the_seed():
+    """Resetting at generation 0 is the degenerate case of the stride."""
+    svc, _ = make()
+    seeds = []
+    for _ in range(3):
+        seeds.append(svc.base_seed)
+        svc.reset()
+    assert len(set(seeds)) == len(seeds)
+
+
+def test_reset_is_visible_without_pressing_start():
+    """Nothing rewrote the grid until _begin_generation, which only runs from
+    start(), so the abandoned search's creatures stayed on the GPU and Reset
+    read as a button that does nothing."""
+    svc, ts = make()
+    svc.start("coral")
+    run_one_generation(svc)
+    evolved = _population(ts).copy()
+
+    svc.reset()
+    assert svc.update() is Action.WRITE_RULES
+    assert not np.array_equal(_population(ts), evolved)
+
+
+def test_pausing_between_generations_still_holds_the_picture():
+    """The next generation's rules are queued the moment one is scored, so a
+    write honoured while paused would advance the grid instead of freezing it."""
+    svc, _ = make()
+    svc.start("coral")
+    run_one_generation(svc)
+    svc.pause()
+    assert svc.update() is Action.NONE
+    assert svc.update() is Action.NONE
+
+
+def test_the_queued_generation_still_runs_on_resume():
+    """Holding the write must not drop it."""
+    svc, _ = make()
+    svc.start("coral")
+    run_one_generation(svc)
+    svc.pause()
+    svc.update()
+    svc.start()
+    assert svc.update() is Action.WRITE_RULES
+
+
+def test_the_constructed_seed_still_fixes_the_first_run():
+    """tools/brain_search_bench.py passes base_seed for reproducibility, and a
+    fresh service must not have moved off it."""
+    ts = TournamentService(grid=2)
+    ts.init_population()
+    svc = AutoTournamentService(ts, scorer=FakeScorer(), logger=None,
+                                base_seed=7)
+    assert svc.base_seed == 7
+    assert svc.gen_seed == 7
+
+
 def test_sigma_is_logged_every_generation(tmp_path):
     """The sigma trace is plotted alongside fitness, so it must be recorded."""
     from services.run_logger import RunLogger

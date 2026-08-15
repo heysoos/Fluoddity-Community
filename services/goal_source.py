@@ -243,9 +243,16 @@ def novelty_goal(archive, rng, alpha: float = 4.0) -> Goal | None:
 
     Carries no embedding - there is nothing to point at - so the seed is drawn
     here, the same way expansion draws a parent.
+
+    NATIVE rows only, and for expansion's reason: the seed becomes the
+    optimizer's mean and is re-encoded under the running layout, so another
+    brain's genome is not a worse parent but an unreadable one. This is the one
+    goal that carries its own seed, so it is the one place a filter was missing
+    - and an archive pools every layout, so most of it may be foreign.
     """
-    if len(archive) == 0:
+    rows = archive.native_rows()
+    if not len(rows):
         return None
-    nov = np.array([e.novelty for e in archive.entries], dtype=np.float32)
-    i = int(sample_by_novelty(nov, 1, rng, alpha)[0])
+    nov = np.array([archive.entries[i].novelty for i in rows], dtype=np.float32)
+    i = int(rows[int(sample_by_novelty(nov, 1, rng, alpha)[0])])
     return Goal("novelty", "", None, seed_index=i)

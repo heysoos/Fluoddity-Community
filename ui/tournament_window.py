@@ -51,7 +51,7 @@ class TournamentWindowMixin:
                 self.state.archive.enabled = False
                 self._render_manual_tournament(state, selected)
                 imgui.end_tab_item()
-            if imgui.begin_tab_item("Auto (CLIP)")[0]:
+            if imgui.begin_tab_item("Auto (Prompt)")[0]:
                 self.state.archive.enabled = False
                 self.render_auto_tournament_tab()
                 imgui.end_tab_item()

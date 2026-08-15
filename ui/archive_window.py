@@ -25,7 +25,7 @@ ALPHA_TOOLTIP = "How strongly parent choice favours novel entries."
 
 EXPORT_TOOLTIP = "Saves this entry to your configs folder, under a name you pick."
 
-SEED_TOOLTIP = "Starts Auto (CLIP) mode's search from this genome."
+SEED_TOOLTIP = "Starts Auto (Prompt) mode's search from this genome."
 
 
 def archive_row_model(ast) -> dict:
@@ -97,7 +97,7 @@ class ArchiveWindowMixin:
         if self.archive_unavailable:
             imgui.text_colored(imgui.ImVec4(*_WARN), self.archive_unavailable)
             imgui.text_wrapped(
-                "Explore mode needs the same CLIP model and packages as Auto mode. "
+                "Explore mode needs the same encoder and packages as Auto mode. "
                 "Manual mode is unaffected.")
             return
 
@@ -125,6 +125,7 @@ class ArchiveWindowMixin:
             self._render_archive_settings(ast)
         if imgui.collapsing_header("Expeditions"):
             self._render_expedition_settings(ast)
+        self._render_config_history(ast)
         imgui.pop_item_width()
 
         imgui.separator()
@@ -176,6 +177,7 @@ class ArchiveWindowMixin:
         if imgui.button("Refresh##archive"):
             ast.refresh_archive_list_requested = True
 
+        self._render_encoder_combo(ast)
         if show_summary:
             layout.text_colored_wrapped(_DIM, m["summary"])
         self._render_archive_modals(ast)
@@ -191,6 +193,7 @@ class ArchiveWindowMixin:
             if st["hint"]:
                 colour = _WARN if st["taken"] else _DIM
                 imgui.text_colored(imgui.ImVec4(*colour), st["hint"])
+            self._render_new_archive_encoder(ast)
             imgui.separator()
             imgui.begin_disabled(not st["can_create"])
             if imgui.button("Create", imgui.ImVec2(120, 0)):
@@ -437,7 +440,7 @@ class ArchiveWindowMixin:
             ast.goal_order = order[idx]
 
     def _render_view_setting(self, ast):
-        _, ast.n_views = imgui.slider_int("CLIP Views", ast.n_views, 1, 8)
+        _, ast.n_views = imgui.slider_int("Encoder Views", ast.n_views, 1, 8)
         if imgui.is_item_hovered():
             imgui.set_tooltip("Sub-crops averaged into each tile's embedding.")
         if ast.n_views <= 1:
@@ -457,15 +460,90 @@ class ArchiveWindowMixin:
         _, ast.seed_n = imgui.slider_int("Seed Entries", ast.seed_n, 64, 2048)
         _, ast.sigma0 = imgui.slider_float("Bootstrap Sigma", ast.sigma0, 0.05, 1.5)
 
+    def _render_encoder_combo(self, ast):
+        """Which encoder this archive's vectors are in - a READOUT.
+
+        Beside the archive it names, because it is part of which archive this
+        is. Always disabled: the choice is made once, in the New Archive modal,
+        and after that the stored vectors are in that space and no other.
+        """
+        from ui.encoder_widgets import encoder_readout
+
+        layout.push_settings_width()
+        encoder_readout("Encoder", ast.encoder_key)
+        imgui.pop_item_width()
+
+    def _render_new_archive_encoder(self, ast):
+        """The one place an encoder is CHOSEN.
+
+        Here rather than in the settings panel because it cannot be changed
+        afterwards - offering it beside things that can would read as another
+        slider.
+        """
+        from services.vision_models import REGISTRY
+        from ui.encoder_widgets import encoder_combo
+
+        imgui.set_next_item_width(280)
+        _, ast.new_archive_encoder = encoder_combo("##new_archive_encoder",
+                                                   ast.new_archive_encoder)
+        model = REGISTRY[ast.new_archive_encoder]
+        layout.text_disabled_wrapped(
+            "Encoder, fixed for the life of this archive. Hover an option for "
+            "what it sees differently.")
+        layout.text_disabled_wrapped(model.blurb)
+
+    def _render_config_history(self, ast):
+        """When each setting changed, and what an entry was admitted under.
+
+        Read off disk when the section is opened, not per frame: the file grows
+        with the run and ImGui redraws this tab every frame.
+        """
+        opened = bool(imgui.collapsing_header("Config History"))
+        if opened and not ast.show_history:
+            ast.request_history_reload = True
+        ast.show_history = opened
+        if not opened:
+            return
+        if not ast.history_rows:
+            imgui.text_disabled("No settings change recorded yet.")
+            return
+        if imgui.begin_table("cfg_history", 4):
+            for name in ("Version", "Gen", "Entries", "Changed"):
+                imgui.table_setup_column(name)
+            imgui.table_headers_row()
+            for row in ast.history_rows:
+                imgui.table_next_row()
+                imgui.table_next_column()
+                imgui.text(str(row.get("v", 0)))
+                imgui.table_next_column()
+                imgui.text(str(row.get("gen", 0)))
+                imgui.table_next_column()
+                imgui.text(str(row.get("entries", 0)))
+                imgui.table_next_column()
+                imgui.text(", ".join(sorted(row.get("changed", {})))
+                           or "initial settings")
+            imgui.end_table()
+
     def _render_archive_settings(self, ast):
         """What the archive KEEPS: the admission gates and the retention cap."""
+        from services.vision_models import REGISTRY, get
+
         # The slider ranges are narrow on purpose; see CLAUDE.md.
         _, ast.liveness_min = imgui.slider_float(
             "Liveness Floor", ast.liveness_min, 0.0, 0.1, "%.4f")
+        # The track is PER ENCODER: one whose distances spread wider puts its
+        # own default at the top of a fixed track. See CLAUDE.md.
+        model = REGISTRY.get(ast.encoder_key) or get("clip-b32")
         _, ast.min_separation = imgui.slider_float(
-            "Min Separation", ast.min_separation, 0.0, 0.05, "%.4f")
+            "Min Separation", ast.min_separation, 0.0,
+            model.separation_slider_max, "%.4f")
         if imgui.is_item_hovered():
-            imgui.set_tooltip("Refuses anything this close to a stored entry.")
+            # Naming the calibrated value matters: 0.02 and 0.05 look wildly
+            # different and mean the same thing under different encoders.
+            imgui.set_tooltip(
+                f"Refuses anything this close to a stored entry. "
+                f"{model.label} calibrates at "
+                f"{model.default_min_separation:.4f}.")
         if ast.min_separation <= 0.0:
             layout.text_colored_wrapped(
                 _WARN,
@@ -552,6 +630,7 @@ class ArchiveWindowMixin:
         imgui.text_wrapped(f"{st['size']} / {st['capacity']} entries   "
                            f"{st['n_pinned']} pinned   "
                            f"{st['n_evicted']} evicted")
+        self._render_mixed_note(arc, st)
         self._render_live_preview_toggle(ast)
         imgui.separator()
 
@@ -564,6 +643,30 @@ class ArchiveWindowMixin:
                 imgui.end_tab_item()
             imgui.end_tab_bar()
         imgui.end()
+
+    def _render_mixed_note(self, arc, st) -> None:
+        """How much of a MIXED archive the running brain can actually use.
+
+        Silent when there is only one layout, which is every archive that has
+        never had its brain changed. When there are several, the count that
+        matters is not the size: parents and seeds come from the running
+        brain's own entries, so a full-looking archive can still be
+        bootstrapping and nothing else on screen says why.
+        """
+        if len(st.get("layouts", ())) < 2:
+            return
+        native, size = int(st["native"]), int(st["size"])
+        imgui.text_colored(
+            imgui.ImVec4(*_DIM),
+            f"{len(st['layouts'])} brains here; {native} of {size} are "
+            f"{arc.signature} - the rest browse and rank but cannot be bred from")
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "Novelty, admission and the map pool across every brain.\n"
+                "Parents and seeds come from the running brain's entries only,\n"
+                "because another brain's genome is a different creature under\n"
+                "this one's decode. Switch brain to work on the others.\n\n"
+                + "\n".join(f"  {s}" for s in st["layouts"]))
 
     def _render_live_preview_toggle(self, ast):
         """Run the hovered entry in the live sim, like hovering File > Load.
@@ -674,8 +777,15 @@ class ArchiveWindowMixin:
             # The ENTRY's id, not the row: the row is how the app addresses it,
             # the id is what the archive calls it.
             imgui.text(f"Selected #{sel.id}")
-            if not arc.is_native(ast.selected_entry_id):
-                sig = arc.layout_at(ast.selected_entry_id)
+            # The brain this creature was AUTHORED under, named on every
+            # selection rather than only on a foreign one: an archive pools
+            # layouts, so "which brain is this?" is a question about any entry,
+            # and the gallery tile itself has nowhere to say it. Only on a
+            # click - the hover preview writes a row per pointer position.
+            sig = arc.layout_at(ast.selected_entry_id)
+            if arc.is_native(ast.selected_entry_id):
+                imgui.text_colored(imgui.ImVec4(*_DIM), f"{sig} brain")
+            else:
                 # Hovering borrows this brain; only a click keeps it, and with
                 # the toggle off nothing runs at all.
                 imgui.text_colored(

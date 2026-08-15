@@ -29,14 +29,27 @@ def test_the_header_mirrors_the_python_slot_constants():
 
 
 def test_mlp_glsl_mirrors_its_python_limits():
-    """MAX_MLP_WIDTH sizes the deep path's locals and MAX_MLP_DEPTH sizes the
-    BRAIN_LAYERS uniform, and both bound what layout_from_settings will build.
-    A shader narrower than Python indexes past the end of an array."""
-    from services.brains.mlp import MAX_DEEP_WIDTH, MAX_DEPTH
+    """MAX_MLP_DEPTH sizes the BRAIN_LAYERS uniform and bounds what
+    layout_from_settings will build. A shader shallower than Python indexes
+    past the end of an array."""
+    from services.brains.mlp import MAX_DEPTH
 
     src = read("shaders/brains/mlp.glsl")
-    assert f"#define MAX_MLP_WIDTH {MAX_DEEP_WIDTH}\n" in src
     assert f"#define MAX_MLP_DEPTH {MAX_DEPTH}\n" in src
+
+
+def test_the_scratch_width_is_overridable_and_defaults_to_the_widest():
+    """sim.py prepends the width the live stack needs, so this default only
+    covers a build that does not - the Inspector, the compile check, the GPU
+    tests - and must therefore carry ANY layout the modality will build."""
+    from services.brains.mlp import MAX_WIDTH, SCRATCH_BUCKETS
+
+    src = read("shaders/brains/mlp.glsl")
+    assert "#ifndef MAX_MLP_WIDTH" in src, (
+        "a bare #define cannot be overridden by a prepended one")
+    assert f"#define MAX_MLP_WIDTH {MAX_WIDTH}\n" in src
+    assert max(SCRATCH_BUCKETS) == MAX_WIDTH
+    assert min(SCRATCH_BUCKETS) >= 4, "mlp_hidden seeds cur[0..3] unconditionally"
 
 
 def test_the_depth_one_path_is_still_there():

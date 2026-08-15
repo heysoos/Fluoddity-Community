@@ -83,10 +83,9 @@ def main(argv: list[str]) -> int:
     # tests/conftest.py does.
     import ui  # noqa: F401
 
-    from services.clip_scorer import CLIPScorer
-    from tools.fetch_clip_onnx import MODEL_DIR
-
-    scorer = CLIPScorer(MODEL_DIR)
+    from services.vision_scorer import VisionScorer
+    
+    scorer = VisionScorer()
     emb = scorer.embed(_load_crops(paths), n_views=1)
     r = spread_report(emb)
 

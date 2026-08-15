@@ -7,6 +7,8 @@
   "camera_out": "Q",
   "copy_config_with_ctrl": "C",
   "paste_config_with_ctrl": "V",
+  "undo_with_ctrl": "Z",
+  "redo_with_ctrl": "Y",
   "toggle_watercolor": "V",
   "reload_shaders": "U",
   "toggle_help": "H",

@@ -23,13 +23,26 @@ class ArchiveState:
     # it stats every thumbnail, and ImGui re-renders this tab every frame.
     archive_list: list = field(default_factory=list)
 
+    # Which encoder this archive's vectors are in. Read back from encoder.json,
+    # never chosen here: the choice is made once, in the New Archive modal.
+    # See CLAUDE.md.
+    encoder_key: str = "clip-b32"
+    # View buffers, deliberately NOT persisted: the count is what the browser
+    # prints, and the rows are read off disk when the history section is
+    # opened.
+    archive_entry_count: int = 0
+    history_rows: list = field(default_factory=list)
+    show_history: bool = False
+    # One-shot: the orchestrator reads the log and fills history_rows.
+    request_history_reload: bool = False
+
     # rollout (shared with Auto mode's widgets, own defaults)
     grid: int = 4
     steps_per_gen: int = 2000
     sim_steps_per_frame: int = 10
     snapshots_per_gen: int = 6
     # Sub-crops averaged into each tile's embedding; 1 is the raw frame and is
-    # fully position-dependent. See CLIPScorer.embed_mean.
+    # fully position-dependent. See VisionScorer.embed_mean.
     n_views: int = 3
     physics_enabled: bool = False
     tile_mutation_enabled: bool = False
@@ -112,8 +125,10 @@ class ArchiveState:
     # editing buffer for the goal list
     new_goal_text: str = ""
 
-    # modal text buffers
+    # modal buffers. The encoder rides with the name because both are the new
+    # archive's identity, fixed at creation.
     new_archive_name: str = ""
+    new_archive_encoder: str = "clip-b32"
     confirm_delete_text: str = ""
 
     # one-shot request flags, cleared by CommandHandler
@@ -197,6 +212,8 @@ class ArchiveState:
 # lives in preferences and identifies which of these files to read in the first
 # place.
 PERSISTED_FIELDS = (
+    # the encoder this archive's vectors are in
+    "encoder_key", "show_history",
     # rollout
     "grid", "steps_per_gen", "sim_steps_per_frame", "snapshots_per_gen",
     "n_views", "physics_enabled", "tile_mutation_enabled",

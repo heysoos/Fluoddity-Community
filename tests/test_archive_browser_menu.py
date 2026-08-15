@@ -19,7 +19,7 @@ class _Bag:
 class _FakeApp:
     """Only what _open_archive reaches for.
 
-    Deliberately has NO _ensure_auto_service and NO clip_scorer: touching CLIP
+    Deliberately has NO _ensure_auto_service and NO vision_scorer: touching CLIP
     from this path would raise here, which is the point.
     """
 
@@ -187,15 +187,22 @@ class _ExploreApp(_FakeApp):
 
     def __init__(self):
         super().__init__()
-        self.clip_scorer = object()
+        self.vision_scorer = object()
         self.tournament_service = object()
         self.auto_service = _Bag()
         self.auto_service.driver = object()
         self.prompt_driver = None
         self.ensure_auto_calls = 0
+        self.ensure_scorer_keys = []
 
     def _ensure_auto_service(self):
         self.ensure_auto_calls += 1
+        return True
+
+    def _ensure_scorer(self, model_key):
+        """Stubbed for the same reason as _ensure_auto_service: building a real
+        encoder from this path is what these tests exist to prevent."""
+        self.ensure_scorer_keys.append(model_key)
         return True
 
 
@@ -214,6 +221,8 @@ def test_starting_explore_after_browsing_reuses_the_loaded_archive(root):
 
     assert ensure_service(app, ui) is True
     assert app.archive is loaded
+    # Searching adopts the archive's own encoder; browsing did not.
+    assert app.ensure_scorer_keys == ["clip-b32"]
     assert app.thumb_cache is cache
     assert app.imgep_driver is not None
     assert app.imgep_driver.archive is loaded

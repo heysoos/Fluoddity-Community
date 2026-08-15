@@ -98,13 +98,12 @@ class Bench:
         from camera import Camera
         from services.capture_blit import CaptureBlit
         from services.capture_view import CaptureView
-        from services.clip_scorer import CLIPScorer
+        from services.vision_scorer import VisionScorer
         from services.config_saver import ConfigSaver
         from services.tile_capture import TileCapture
         from sim import Sim
         from state import SimState
         from state.ui_state import UIState
-        from tools.fetch_clip_onnx import MODEL_DIR
         from utilities.paths import get_app_physics_configs_dir
 
         # A hidden window, not a standalone context: Camera calls
@@ -139,7 +138,7 @@ class Bench:
         self.capture_view = CaptureView(self.ctx, self.sim, self.camera)
         self.blit = CaptureBlit(self.ctx)
         self.tile_capture = None
-        self.scorer = CLIPScorer(MODEL_DIR)
+        self.scorer = VisionScorer()
 
         self._saver = ConfigSaver()
         self._presets_root = get_app_physics_configs_dir()

@@ -1,4 +1,4 @@
-"""Auto (CLIP) tab of the tournament window.
+"""Auto (Prompt) tab of the tournament window.
 
 Passive: renders widgets and sets state, runs no logic.
 """
@@ -78,6 +78,10 @@ class AutoTournamentWindowMixin:
         if ch:
             ats.algorithm = ALGORITHM_NAMES[idx]
 
+        # Beside the goal it scores. Free to move, unlike Explore's: a prompt
+        # run stores nothing, so there are no vectors a change invalidates.
+        self._render_encoder_picker(ats)
+
         self._render_rollout_controls(ats)
 
         imgui.separator()
@@ -123,10 +127,18 @@ class AutoTournamentWindowMixin:
                 "These sweep across tiles, so fitness is confounded by "
                 "position until they are cleared.")
 
+    def _render_encoder_picker(self, ats):
+        """Which encoder scores this prompt. Each option explains itself on
+        hover, which is why this is not a plain combo."""
+        from ui.encoder_widgets import encoder_combo
+
+        _, ats.model_key = encoder_combo("Encoder", ats.model_key)
+
     def _render_auto_unavailable(self, ats):
         if self.auto_unavailable == "model_missing":
-            imgui.text_wrapped("CLIP model weights are not downloaded.")
-            if imgui.button("Download CLIP model (~330 MB)"):
+            self._render_encoder_picker(ats)
+            imgui.text_wrapped("Encoder weights are not downloaded.")
+            if imgui.button(f"Download {ats.model_key}"):
                 ats.download_model_requested = True
         else:
             imgui.text_wrapped(f"Auto mode unavailable: {self.auto_unavailable}")
@@ -198,7 +210,7 @@ class AutoTournamentWindowMixin:
             f"population {tiles}   source {src_px}px/tile")
         if src_px < 224:
             layout.text_disabled_wrapped(
-                "  upscaled to 224 for CLIP - consider a larger canvas")
+                "  upscaled to 224 for the encoder - consider a larger canvas")
         if ats.grid == 2:
             layout.text_disabled_wrapped("  popsize 4 is small for CMA-ES")
         layout.text_disabled_wrapped(

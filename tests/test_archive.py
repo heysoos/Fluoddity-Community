@@ -512,6 +512,161 @@ def test_an_archive_saved_before_novelty_was_persisted_still_loads(tmp_path):
     assert not any(e.novelty >= 0.999 for e in b.entries)
 
 
+# ---- the column is exact on disk, so a browse-only reopen is free --------
+#
+# rescore_all is O(n^2) in the entry count: a quarter second at 3792 entries
+# and seconds at the 20000 capacity. It used to run on EVERY open, which is
+# work a browser does not need - only the search reads novelty for anything
+# but a sort order. So the closing flush pays it and stamps the count it was
+# scored against, and an open that can prove nothing has changed skips it.
+
+
+def _count_rescores(archive):
+    """-> a list that gains an item per rescore_all() on this instance."""
+    calls: list[int] = []
+    real = archive.rescore_all
+
+    def counted():
+        calls.append(1)
+        return real()
+
+    archive.rescore_all = counted
+    return calls
+
+
+def _reopen(tmp_path, dim=8):
+    b = Archive(store=ArchiveStore(tmp_path), dim=dim)
+    calls = _count_rescores(b)
+    b.load_from_store()
+    return b, calls
+
+
+def test_a_closing_flush_rescores_so_the_stored_column_is_exact(tmp_path):
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    assert all(e.novelty == 1.0 for e in a.entries), "precondition: all stamped"
+    a.maybe_flush(force=True, closing=True)
+    store.close()
+
+    with np.load(store.vectors_path, allow_pickle=False) as z:
+        assert not (z["novelty"] >= 0.999).any(), (
+            "closing must leave the real kNN novelty on disk, not the stamp")
+        assert int(z["novelty_n"]) == 20
+
+
+def test_a_periodic_flush_does_not_rescore(tmp_path):
+    """It runs mid-generation, where the cost would be a stall every 200
+    admissions and the column would be dirty again on the next candidate."""
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    calls = _count_rescores(a)
+    assert a.maybe_flush(every=1) is True
+    assert calls == []
+    store.close()
+
+    with np.load(store.vectors_path, allow_pickle=False) as z:
+        assert int(z["novelty_n"]) == -1, "a dirty column must say so"
+
+
+def test_a_forced_flush_that_is_not_closing_does_not_rescore(tmp_path):
+    """Deleting one entry from the browser forces a write while the archive
+    stays open, and it happens per click."""
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    a.maybe_flush(force=True, closing=True)
+    calls = _count_rescores(a)
+    a._remove(0)
+    assert a.maybe_flush(force=True) is True
+    assert calls == []
+    store.close()
+
+    with np.load(store.vectors_path, allow_pickle=False) as z:
+        assert len(z["ids"]) == 19
+        assert int(z["novelty_n"]) == -1, (
+            "removing an entry changed what the column was scored against")
+
+
+def test_reopening_an_untouched_archive_skips_the_rescore(tmp_path):
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    a.maybe_flush(force=True, closing=True)
+    store.close()
+    written = [e.novelty for e in a.entries]
+
+    b, calls = _reopen(tmp_path)
+    assert calls == [], "nothing changed, so there is nothing to recompute"
+    assert len(b) == 20
+    # fp16 on disk, so the values are close rather than identical.
+    assert [e.novelty for e in b.entries] == pytest.approx(written, abs=2e-3)
+
+
+def test_a_skipped_rescore_still_beats_the_at_admission_stamp(tmp_path):
+    """The guard against skipping into the old defect. Whether or not the open
+    rescores, generation 0's 1.0 must not own the parent weight."""
+    store, a = _scattered_store(tmp_path, stamped=6)
+    a.maybe_flush(force=True, closing=True)
+    store.close()
+
+    b, calls = _reopen(tmp_path)
+    assert calls == []
+    assert not any(e.novelty >= 0.999 for e in b.entries)
+    assert _parent_weights(b)[:6].sum() < 0.6
+
+
+def test_admitting_after_the_close_dirties_the_column_again(tmp_path):
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    a.maybe_flush(force=True, closing=True)
+    a.consider(cand(_cone(np.random.default_rng(9), 1, 8)[0].tolist(), dim=8),
+               novelty=1.0)
+    a.maybe_flush(every=1)          # a periodic flush, as a run would do
+    store.close()
+
+    _, calls = _reopen(tmp_path)
+    assert calls == [1], "21 entries scored as 20 is not a comparable scale"
+
+
+def test_a_dropped_entry_forces_a_rescore(tmp_path):
+    """Reconciliation removed a row, so the stored column was scored against a
+    set the archive no longer holds - whatever count the file claims."""
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    a.maybe_flush(force=True, closing=True)
+    # one more reaches the append-only index but not the vectors, as an
+    # unclean exit leaves it
+    a.consider(cand([0, 0, 0, 0, 0, 0, 0, 1], dim=8), novelty=1.0)
+    store.close()
+
+    _, calls = _reopen(tmp_path)
+    assert calls == [1]
+
+
+def test_a_count_that_does_not_match_forces_a_rescore(tmp_path):
+    """The stamp is a claim about the whole archive, so it is checked against
+    what actually loaded rather than believed."""
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    a.maybe_flush(force=True, closing=True)
+    store.close()
+
+    with np.load(store.vectors_path, allow_pickle=False) as z:
+        arrays = {k: z[k] for k in z.files}
+    arrays["novelty_n"] = np.array(19, dtype=np.int64)
+    np.savez(store.vectors_path, **arrays)
+
+    _, calls = _reopen(tmp_path)
+    assert calls == [1]
+
+
+def test_an_archive_saved_before_the_count_existed_still_rescores(tmp_path):
+    """vectors.npz gained novelty_n after novelty itself. A file without it
+    opens exactly as it always did."""
+    store, a = _scattered_store(tmp_path, n=12, stamped=12)
+    a.maybe_flush(force=True, closing=True)
+    store.close()
+
+    with np.load(store.vectors_path, allow_pickle=False) as z:
+        old = {k: z[k] for k in z.files if k != "novelty_n"}
+    np.savez(store.vectors_path, **old)
+
+    b, calls = _reopen(tmp_path)
+    assert calls == [1]
+    assert len(b) == 12
+
+
 # ---- revision ------------------------------------------------------------
 #
 # The browser derives a PCA projection and a sort order from the archive, both

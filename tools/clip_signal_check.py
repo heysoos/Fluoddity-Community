@@ -19,8 +19,7 @@ import numpy as np
 from PIL import Image
 
 import ui  # noqa: F401  primes a pre-existing circular import (services -> ui -> services)
-from services.clip_scorer import CLIPScorer
-from tools.fetch_clip_onnx import MODEL_DIR
+from services.vision_scorer import VisionScorer
 
 PROMPTS = [
     "glowing coral",
@@ -50,7 +49,7 @@ def load_tiles(d: Path) -> tuple[np.ndarray, list[str]]:
 
 def main() -> int:
     tiles, names = load_tiles(Path(sys.argv[1]))
-    scorer = CLIPScorer(MODEL_DIR)
+    scorer = VisionScorer()
     print(f"{len(tiles)} tiles, {len(PROMPTS)} prompts\n")
 
     passes = 0

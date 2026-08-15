@@ -15,9 +15,9 @@ import pytest
 
 from services.brains import (MAX_BRAIN_FLOATS, layout_from_signature,
                              settings_of, unit_count)
-from services.brains.mlp import (ACTIVATIONS, B_SCALE, MAX_DEEP_WIDTH,
-                                 MAX_DEPTH, MAX_WIDTH, W_SCALE, MLPModality,
-                                 _weight_mask, layer_spans)
+from services.brains.mlp import (ACTIVATIONS, B_SCALE, MAX_DEPTH, MAX_WIDTH,
+                                 SCRATCH_BUCKETS, W_SCALE, MLPModality,
+                                 _weight_mask, layer_spans, scratch_width)
 
 M = MLPModality()
 
@@ -263,30 +263,70 @@ def test_the_stack_is_clamped_rather_than_raising():
     assert layout_from_signature("mlp-n999-a0") is None
 
 
-def test_the_deep_width_cap_stays_small():
-    """Not a style rule. MAX_DEEP_WIDTH sizes mlp.glsl's ping-pong locals, which
-    are allocated per invocation whatever BRAIN_DEPTH says - so raising it
-    slows down every ordinary one-layer MLP, and the numbers are steep. Re-run
-    `python -m tools.measure_brain_depth` before changing this, and read the
-    caveat in CLAUDE.md first."""
-    assert MAX_DEEP_WIDTH <= 8 < MAX_WIDTH
-
-
-def test_only_a_lone_layer_may_be_wide():
-    """A stack deeper than one is capped far below a single layer, because its
-    width sizes the ping-pong locals mlp.glsl allocates for EVERY invocation -
-    including the depth-1 brains that never use them. Adding a second layer
-    therefore narrows the first, which the Brain window says out loud."""
+def test_a_deep_layer_may_be_as_wide_as_a_lone_one():
+    """Every layer reaches MAX_WIDTH. The old cap of 8 existed because ONE
+    shader served every layout and its scratch arrays were sized for the widest
+    stack anyone might build; the shader is compiled per layout now, so a wide
+    stack costs only itself."""
     assert layout([[48, 0]]).shape == (48, 0)
-    assert layout([[48, 0], [48, 0]]).shape == (MAX_DEEP_WIDTH, 0,
-                                                MAX_DEEP_WIDTH, 0)
-    assert layout_from_signature(f"mlp-n48.{MAX_DEEP_WIDTH}-a0.0") is None
+    assert layout([[48, 0], [8, 0]]).shape == (48, 0, 8, 0)
+    assert layout_from_signature("mlp-n48.8-a0.0") is not None
+
+
+def test_the_float_budget_is_what_stops_a_stack_growing():
+    """And it CLAMPS rather than raises, because the input may be a config from
+    a build with different limits. One cap across the stack, so a layer already
+    below it is left where it is."""
+    assert layout([[48, 0], [48, 0]]).length <= MAX_BRAIN_FLOATS
+    # [48, 48] is over budget, so both come down; [48, 2] is not, so neither moves.
+    assert max(layout([[48, 0], [48, 0]]).shape[0::2]) < 48
+    assert layout([[48, 0], [2, 0]]).shape == (48, 0, 2, 0)
+
+
+def test_a_depth_one_stack_asks_for_the_smallest_scratch():
+    """It never enters the deep path, and the arrays it does not use are
+    exactly what used to tax it - the whole reason the cap existed."""
+    assert scratch_width(layout([[48, 0]]).shape) == min(SCRATCH_BUCKETS)
+    assert scratch_width(layout([[1, 0]]).shape) == min(SCRATCH_BUCKETS)
+
+
+def test_a_deep_stack_asks_for_the_bucket_its_widest_layer_needs():
+    assert scratch_width(layout([[8, 0], [8, 0]]).shape) == 8
+    assert scratch_width(layout([[8, 0], [9, 0]]).shape) == 16
+    assert scratch_width(layout([[2, 0], [2, 0]]).shape) == min(SCRATCH_BUCKETS)
+
+
+def test_the_scratch_bucket_is_never_narrower_than_the_stack():
+    """A shader narrower than the layout indexes past the end of an array."""
+    rng = np.random.default_rng(3)
+    for _ in range(200):
+        depth = int(rng.integers(1, MAX_DEPTH + 1))
+        widths = rng.integers(1, MAX_WIDTH + 1, depth)
+        shape = layout([[int(w), 0] for w in widths]).shape
+        if len(shape) > 2:
+            assert scratch_width(shape) >= max(shape[0::2])
+
+
+def test_the_defines_are_what_the_program_cache_keys_on():
+    """Every layout that needs no scratch must produce the SAME key, or the
+    cache holds one identical program per layout the user ever touches."""
+    from services.brains import default_layout, layout_defines
+
+    flat = layout_defines(layout([[16, 0]]))
+    assert flat == {"MAX_MLP_WIDTH": min(SCRATCH_BUCKETS)}
+    assert layout_defines(layout([[48, 0]])) == flat, (
+        "every depth-1 stack shares one program")
+    # A Fourier brain pays for mlp.glsl's arrays too - one program holds all
+    # four shaders - so it must ask for the floor rather than fall through to
+    # the shader's own default, which has to cover the widest stack.
+    assert layout_defines(default_layout()) == flat
+    assert layout_defines(layout([[16, 0], [16, 0]])) != flat
 
 
 def test_every_reachable_stack_fits_the_buffer():
     """Nothing the UI can build may exceed the stride the flat buffer is packed
-    at. With the deep width capped this now has slack, which is the right
-    direction for it to be wrong in."""
+    at, and nothing may RAISE on the way - a config written by another build
+    has to open."""
     rng = np.random.default_rng(0)
     worst = 0
     for _ in range(400):
@@ -295,7 +335,7 @@ def test_every_reachable_stack_fits_the_buffer():
         lay = layout([[int(w), 0] for w in widths])
         worst = max(worst, lay.length)
         assert lay.length <= MAX_BRAIN_FLOATS
-    assert layout([[MAX_DEEP_WIDTH, 0]] * MAX_DEPTH).length <= MAX_BRAIN_FLOATS
+    assert layout([[MAX_WIDTH, 0]] * MAX_DEPTH).length <= MAX_BRAIN_FLOATS
     assert worst > 512, "the budget raise is doing nothing"
 
 

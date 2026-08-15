@@ -100,7 +100,7 @@ def measure_liveness(preset_names, steps, snapshots, seed=12345, limit=0):
     import moderngl
 
     from camera import Camera
-    from services.clip_scorer import CLIPScorer
+    from services.vision_scorer import VisionScorer
     from services.config_saver import ConfigSaver
     from services.capture_blit import CaptureBlit
     from services.descriptor import liveness, stack_snapshots
@@ -108,7 +108,6 @@ def measure_liveness(preset_names, steps, snapshots, seed=12345, limit=0):
     from sim import Sim
     from state import SimState
     from state.preferences_state import PreferencesState
-    from tools.fetch_clip_onnx import MODEL_DIR
     from utilities.paths import get_app_physics_configs_dir
 
     root = get_app_physics_configs_dir()
@@ -143,7 +142,7 @@ def measure_liveness(preset_names, steps, snapshots, seed=12345, limit=0):
     cap = TileCapture(ctx, grid=1)
     blit = CaptureBlit(ctx)
     saver = ConfigSaver()
-    scorer = CLIPScorer(MODEL_DIR)
+    scorer = VisionScorer()
 
     every = max(1, steps // snapshots)
     out = []

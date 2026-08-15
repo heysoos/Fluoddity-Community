@@ -235,7 +235,52 @@ mechanics these caveats assume.
   tile's worth of neighbouring glow into every crop. `CaptureView.draw_grid`
   splits first and blooms each tile alone.
 
-### CLIP and the capture
+### The encoder and the capture
+
+- **The encoder is a REGISTRY entry, and its key is written to disk.**
+  `services/vision_models.py` is the one home for everything that differs
+  between encoders — paths, preprocessing, tokenizer context, both logit scales
+  and the separation bar. A key (`clip-b32`, `siglip2-b16`, …) names an
+  archive's embedding space in `encoder.json` and can never be renamed, the
+  same class of fact as `BrainLayout.signature()`.
+
+- **Each encoder's scales and separation bar are MEASURED against `clip-b32`'s
+  BEHAVIOUR, never scaled off a summary statistic.**
+  `python -m tools.calibrate_encoder --entries 700`, over the three most
+  recently worked archives:
+
+  | key | image scale | text scale | min sep | ms/image | dim |
+  |---|---|---|---|---|---|
+  | `clip-b32` | 30.0 | 100 | 0.0200 | 4.3 | 512 |
+  | `clip-b16` | 33.1 | 170.3 | 0.0195 | 8.0 | 512 |
+  | `siglip2-b16` | 32.5 | 150.8 | 0.0195 | 11.0 | 768 |
+  | `clip-l14` | 17.7 | 129.0 | 0.0519 | 33.0 | 768 |
+
+  `clip-b32` keeps its historical values, which the calibration reproduces to
+  4.7% and 0.5% — that agreement is the harness's own gate, and a run that
+  misses it means the harness is wrong, not the registry. Two criteria carry
+  the weight: the image scale is the one whose FLOORED FRACTION under a +3sd
+  latent goal matches `clip-b32`'s, and the bar is the threshold that ADMITS
+  the same fraction of a real archive. The text scale is the WEAKEST of the
+  three — nothing floors at `clip-b32`'s trained 100, so it reads the onset of
+  flooring and keeps the same margin below it.
+
+  **The median is a bad predictor, which is why this is measured.** SigLIP 2's
+  median nearest-neighbour distance is 19% above `clip-b32`'s, but its
+  separation bar came out **0.0195** against the 0.024 that scaling predicted:
+  admission sees the LOWER TAIL, not the middle. **And the bar must be read off
+  a real sample size** — at a few dozen entries every stored entry clears it,
+  retention saturates at 1.0 and the criterion returns the sample minimum.
+  These ms/image figures include preprocessing; `tools/hue_nuisance` times
+  `session.run` alone and reports lower ones.
+
+- **A pooled embedding is chosen BY NAME, on BOTH towers.** SigLIP's exports
+  put `last_hidden_state` first on the vision *and* text sessions, so
+  `get_outputs()[0]` is an `(N, tokens, dim)` tensor. Nothing checks it: the
+  mismatch surfaces as a matmul error deep inside `contrastive()`, far from the
+  session that chose the wrong output. `pick_embedding_output` is one function
+  used by both towers and by the measurement tools, because fixing the vision
+  side alone is exactly the bug that shipped once already.
 
 - **CLIP is strongly POSITION-dependent — use `embed_mean()`, never `embed()`.**
   Rolling a tile 16px on the torus moves its embedding 2.5–2.7x further than
@@ -298,6 +343,53 @@ mechanics these caveats assume.
 
 ### The archive and admission
 
+- **An archive is pinned to ONE encoder AT CREATION, and every control over it
+  afterwards is a readout.** `archive_library.create()` writes
+  `<archive>/encoder.json`, which sits at the archive ROOT beside `goals.json`,
+  not under the layout signature — one archive holds every brain and switching
+  brain must not switch embedding space. Creation is the only moment the
+  archive holds nothing; pinning any later leaves a live-looking combo over an
+  archive whose vectors are already committed, and a control that cannot do
+  what it offers is worse than no control. So the CHOICE is in the New Archive
+  modal, and the Explore tab's Encoder combo is permanently disabled and
+  follows `archive.encoder`. `pin_encoder` refuses to overwrite, the same
+  discipline as `save_run_config`. **A missing file means `clip-b32`**, so
+  every archive written before the choice existed opens untouched and no
+  migration runs. `Archive.load_from_store` refuses a store whose encoder
+  differs and sets `encoder_mismatch`, because at equal width a foreign vector
+  is silently wrong rather than an error — `clip-b32` and `clip-b16` are both
+  512-d. Migrating an archive between encoders is deliberately NOT implemented;
+  the thumbnails are 160px against a 224px capture, so re-embedding would mix
+  fidelities against entries admitted afterwards. A new archive also reseeds
+  `min_separation` from its encoder, because `load_settings` returns `{}` for
+  one — "keep what is on screen" would otherwise inherit the outgoing
+  archive's bar, which is a distance in a different space.
+
+- **Auto's encoder picker is read EVERY FRAME; Explore's is read once.**
+  `_ensure_auto_service` returns early once the service exists, so the combo
+  beside the prompt reached the scorer exactly once and then changed nothing —
+  it sits in a tab that is already open by the time it can be touched.
+  `_follow_auto_encoder` runs per frame, stands down whenever Explore owns the
+  driver, re-embeds the goal (the old prompt embedding is in the outgoing
+  space, and 512 against 768 is not a shape error until the first tile
+  arrives) and aborts the generation in flight. Guarded by
+  `tests/test_scorer_lifecycle.py`.
+
+- **The settings a run was carried out under are a LOG, not a field.**
+  `settings.json` is rewritten wholesale, so the `min_separation` that admitted
+  entry #4000 is gone the moment the slider moves.
+  `<archive>/settings_history.jsonl` is append-only: version 0 carries the
+  whole block, every later row is a diff, and each `index.jsonl` row carries
+  the `cfg` version in force when it was admitted. A row without one reads as
+  version 0, which is every entry admitted before this. Written once per
+  generation and once more when the archive is let go — a change made after the
+  last generation reaches the log nowhere else, which is why `record_settings`
+  rides with `save_settings` in the switch order rather than after it. The
+  version in force is read from the LOG rather than from what this session
+  wrote, or reopening an archive rewrites version 0. A field vanishing from
+  `PERSISTED_FIELDS` is NOT a change: recording it would put a phantom row in
+  every archive on the first run after a code change.
+
 - **An entry's physics is TWO layers, and the base is per RUN, not per entry.**
   `<archive>/runs/<run_id>.json` holds the whole `PhysicsConfig` the run was
   carried out under; the entry's `_phys` vector overrides it for the parameters
@@ -334,8 +426,10 @@ mechanics these caveats assume.
   or one CMA-ES population, so they clear or miss any bar together.
 
 - **Admission gates on SEPARATION, and that is not the threshold coming back.**
-  `min_separation` (0.02, measured) refuses anything within that cosine
-  distance of a stored entry — the unstructured-archive rule from
+  `min_separation` refuses anything within that cosine distance of a stored
+  entry. **The number is PER ENCODER** — 0.02 is `clip-b32`'s, and the
+  registry holds the rest; see the encoder section. The unstructured-archive
+  rule from
   quality-diversity, with no controller and no gain, and correlated tiles
   landing on top of each other is the case it is *meant* to reject. Without it
   a converging expedition stored its own endpoint 64 times a generation: one
@@ -399,13 +493,34 @@ mechanics these caveats assume.
   is append-only, so its `novelty` is forever the at-admission value: entry #50
   was scored against 49 neighbours and #4000 against 3999, and the stored column
   correlates **0.075** with a correct rescore. It lives in `vectors.npz`
-  (rewritten wholesale, an OPTIONAL key so older archives still open), and
-  `load_from_store` calls `rescore_all()` unconditionally — 0.42 s at 4808
-  entries, 4.3 s at capacity. Skipping it hands generation 0 — every tile
-  stamped 1.0 by the no-reference convention — 100% of the `p ~ novelty^4`
-  parent weight, and one of those entries is a black frame. Four things read
-  this column: expansion parents, `latent_goal`'s anchor, `prune_to_capacity`,
-  and the browser sort.
+  (rewritten wholesale, an OPTIONAL key so older archives still open). Trusting
+  it as written hands generation 0 — every tile stamped 1.0 by the no-reference
+  convention — 100% of the `p ~ novelty^4` parent weight, and one of those
+  entries is a black frame. Four things read this column: expansion parents,
+  `latent_goal`'s anchor, `prune_to_capacity`, and the browser sort.
+
+- **`rescore_all()` is paid by the CLOSING flush, not by every open, and
+  `novelty_n` is what makes that safe.** It is O(n²) — 0.23 s at 3792 entries,
+  4.3 s at capacity — and it used to run on every `load_from_store`, so
+  switching brain layouts to browse a different archive stalled for a quarter
+  second on work only the *search* needs. `maybe_flush(closing=True)` therefore
+  rescores when the column is dirty and stamps `novelty_n`, the ARCHIVE-wide
+  count it was scored against. **`force` is NOT the trigger**: it also covers
+  writes made while the archive stays open — deleting one entry from the
+  browser — where a rescore per click is the same stall back again. A periodic
+  flush stamps nothing either, since it runs mid-generation and the column
+  would be dirty on the next candidate. An open trusts the column only when
+  **every** layout directory claims the same count, it matches what actually
+  loaded, and reconciliation dropped nothing — otherwise it rescores exactly as
+  before, which is also what a new close path that forgets `closing` costs. On
+  a reopened archive the trusted column is bit-identical to the rescore it
+  replaces, both sides reading the same fp16 vectors; entries admitted in
+  memory were scored at fp32 and differ by under 2e-3, two orders below
+  `min_separation`. Browse-only reopen measured 230 → 60 ms at 3792 entries.
+  Only `rescore_all()` may set `_novelty_clean`; `_add` and `_remove` clear it,
+  and `refresh()` leaves it alone — a partial sweep does not make a dirty
+  column comparable. A file with no `novelty_n` reads as dirty, so every
+  archive written before this opens untouched and pays once.
 
 - **Novelty is measured against archive ∪ rejects ring.** The archive is gated,
   so without the ring the search has no memory of the regions it just rejected
@@ -481,7 +596,7 @@ mechanics these caveats assume.
   1857 → 68 ms, generation 1.86 → 1.99 s. Three things this deliberately does
   NOT do: it does not move the rest of `tell()` (which mutates the archive the
   UI reads every frame, so it would need a lock around every one of those reads
-  to buy ~5% more); it takes no locks in `CLIPScorer` (ORT `run` is
+  to buy ~5% more); it takes no locks in `VisionScorer` (ORT `run` is
   thread-safe, and a lock held for a 4 s vision pass would freeze `set_prompt`);
   and it passes a **copy** of the frame buffer, because `abort_generation()`
   clears the list.
@@ -579,6 +694,40 @@ mechanics these caveats assume.
   grid — `sigma_expand`, `alpha`, `k` and the refresh budget are all
   grid-independent. Expeditions are the exception: CMA-ES takes
   `popsize = tournament.tiles`.
+
+- **`reset()` must ADVANCE `base_seed`, or Reset replays the last run exactly.**
+  `base_seed` feeds two things — the optimizer's seed and `gen_seed =
+  base_seed + generation`, which is the sim's particle seed — and `generation`
+  goes back to 0. Fixed at 1000 it made Reset then Start hand back a
+  bit-identical population, in identical tiles, over an identical particle
+  field: the optimizer WAS being cleared correctly and the run replayed
+  regardless, so a new prompt only reranked creatures already watched. The
+  stride is `generation + 1`, read before the counter is cleared, so the two
+  runs' `gen_seed` ranges cannot overlap either. The constructor argument still
+  fixes the first run — `tools/brain_search_bench.py` passes one — and
+  `load_checkpoint` restores it verbatim, because a resume must replay.
+  Guarded by `tests/test_auto_tournament_service.py`.
+
+- **A RESET's rule write outranks the phase gate; a GENERATION's does not.**
+  Nothing rewrote the grid outside `_begin_generation`, which only runs from
+  `start()`, so after Reset the abandoned search's creatures stayed on screen
+  and on the GPU until Start — a button that appeared to do nothing. `reset()`
+  therefore re-randomises `tournament` and sets `_force_write`, which `update()`
+  answers whatever the phase. `_needs_write` stays BELOW the gate: the next
+  generation's rules are queued the moment one is scored, so honouring that one
+  while paused advances the picture to the next generation instead of freezing
+  it. Guarded by `tests/test_auto_tournament_service.py`.
+
+- **Z and G are SINGLE-BRAIN keys, and under a tournament they belong to the
+  grid's owner.** Both went through `sim.apply_rule`, which writes SLOT 0 —
+  tile 0, overwritten by the next generation — so under a grid they changed one
+  square in the bottom-left corner and nothing else. `_grid_owner()` routes them
+  by `tournament.enabled`, never by the sub-mode flags, because a closed
+  Tournament window clears those; under Auto or Explore the owner is the
+  optimizer, since re-randomising the tiles alone would be undone by the next
+  generation. G keeps setting `rule_seed` in every mode — that IS the fresh crop
+  of mutations — and only the slot-0 write is dropped. Guarded by
+  `tests/test_grid_reset_keys.py`.
 
 - **Explore mode reuses Auto mode's `AutoTournamentService` instance**, swapping
   only `.driver`. Both `_handle_auto_tournament` and `_handle_explore` would
@@ -987,6 +1136,18 @@ mechanics these caveats assume.
   only the latter, ImGui walks up to the parent and scrolls that instead.
   Guarded by `tests/test_archive_window_render.py::test_the_map_canvas_is_a_child`.
 
+- **A control the user has to FIND cannot live in a folded section, and a
+  render test cannot see one either.** ImGui clips a window's contents to the
+  WINDOW, not to the display, so `frame()`'s host in
+  `tests/test_archive_window_render.py` must be sized taller than the tab — at
+  the default size the whole settings column falls outside it and draws no
+  vertices, which turned "opening the sections drew more" into a coin flip on
+  two vertices of header arrow. The encoder combo shipped inside the
+  default-closed `Admission` header and Auto's inside the weights-missing
+  branch: both rendered, neither was reachable, and every source-level reading
+  of the tab said they were. Assert on the labels a real frame DRAWS
+  (`_combo_labels`), not on where the call sits.
+
 - **A widget's label is drawn to its RIGHT and is CLIPPED, not scrolled.**
   ImGui's default item width is 65% of the window, so at any narrow width the
   label runs past the edge and simply vanishes — there is no horizontal
@@ -1048,9 +1209,81 @@ mechanics these caveats assume.
   biggest was a directory walk: `list_archives` spent 3418 ms, essentially all
   of it `_size_mb` walking every thumbnail with `Path.rglob` to print one number
   — `os.scandir` is 69.6x faster and byte-identical. What remains is real and
-  must not be "fixed" by caching: `CLIPScorer()` 1207 ms is the ONNX sessions
-  the mode runs on, and archive open (0–2439 ms) is `load_from_store`'s
-  load-bearing `rescore_all()`.
+  must not be "fixed" by caching: `VisionScorer()` 1207 ms is the ONNX sessions
+  the mode runs on, and archive open (0–2439 ms) is `load_from_store`, which
+  pays `rescore_all()` on the first open after the closing flush learned to
+  stamp `novelty_n` and once per unclean exit thereafter.
+
+- **Undo detects a change by DIFFING declared state, and a field nobody
+  classified is the defect that guards against.** Every field of `SimState` and
+  `PreferencesState` is in `UNDOABLE_FIELDS` or in `NOT_UNDOABLE` with a
+  reason, and `tests/test_undo_fields.py` derives its cases from
+  `__dataclass_fields__` so a new field fails until someone says which. An
+  explicit `push_undo()` at each mutation site was rejected for exactly this:
+  it fails nothing when forgotten. A call site may `tag()` a step to name it,
+  which is advisory — a forgotten tag costs a name, never coverage. The diff is
+  only viable because nothing writes the authoritative state per frame: sweeps
+  and jitter are computed in the shader, and audio modulation hands
+  `sim.apply_state` a `replace()`d copy rather than touching `ui_state.sim`.
+
+- **Applying an undo step must REBASE the journal, and a HOVER PREVIEW must be
+  refused a recording outright.** Both write the state the diff watches.
+  Without `rebase()` the next frame reads an undo as a fresh change and commits
+  it — the history growing in the direction it was asked to shrink. The
+  preview is worse and ORDERING DOES NOT FIX IT: capturing before the preview
+  only defers its write to the NEXT frame's capture, which commits, which
+  shifts the rows under the pointer, so a different row previews and commits in
+  turn — the history fills in seconds. `_record_undo_step` therefore returns
+  early while `_undo_preview_base` is set, which also covers the frame the
+  preview is handed back on. Applying a step CLEARS that base, or the pointer
+  leaving afterwards restores the pre-hover state and silently undoes the
+  click.
+
+  **THE UNDO PANEL IS NOT THE ONLY THING THAT HOVERS**, and covering only its
+  own preview is the shape this bug came back in. File > Load, the archive
+  browser and the clipboard each put a borrowed rule and its run physics on
+  screen the same way, and each recorded twice per row — once hovering, once
+  restoring. `CommandHandler.preview_active` is the one predicate over all
+  three flags, so a fourth preview is covered by naming its flag there rather
+  than by remembering a check at a fourth site. It reads the flags rather than
+  the borrow, because a same-brain preview borrows nothing. Suppression ends
+  on the CLICK, which clears the flag in the frame it commits, so a preset the
+  user actually loads still records.
+
+  Guarded by `tests/test_undo_preview_loop.py`, which drives the real `App`
+  methods — the frame-loop tests that modelled the sequence with a local helper
+  all passed while this was live.
+  The capture is separately deferred while `any_widget_active`, which is read
+  inside `ui.render()`: `orchestrate_frame` runs BETWEEN frames. That deferral
+  is the whole of gesture coalescing.
+
+- **Restoring a brain must move the WINDOW, not just the sim.**
+  `_handle_brain_layout` applies `ui_state.brain` every frame — that is how a
+  count slider reaches the decode with no one-shot flag — so a restore that
+  writes only `sim.brain_layout` is undone by the very next frame, which reads
+  as an undo that works and then keeps the new brain on top.
+  `_restore_snapshot_brain` therefore calls `_put_brain_window` as well, and
+  still calls `apply_brain_layout` itself rather than leaving it to that frame,
+  because the rule it pushes immediately afterwards is measured against the
+  LIVE layout and silently refused on a mismatch. Both directions go through
+  it, so redo has the same requirement. `_apply_brain_layout` early-returns on
+  an unchanged layout, which is what stops the following frame paying for a
+  second archive rebuild.
+
+- **Undo covers the recipe, never the picture.** The canvas and entity buffers
+  are out, so Clear Canvas, Reset and Fill have nothing to restore, and
+  deleting a preset or an archive entry stays outside. Under a tournament the
+  brain half is skipped and the settings still apply, the same split
+  `_grid_owner()` already makes for Z and G. Costs and the `Mapping.uid`
+  prerequisite for audio are in
+  `docs/superpowers/specs/2026-08-14-undo-redo-design.md`.
+
+- **A render test must not read `imgui.ini`.** ImGui restores each window's
+  saved size, position and scroll from it, and the file is gitignored — so a
+  test that draws a window passes on a fresh clone and fails on a machine that
+  has run the app. `tests/test_undo_window_render.py` sets
+  `io.set_ini_filename("")` in its fixture. Sizing the HOST window is not
+  enough; the window under test picks up its own saved geometry.
 
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own
   hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.
@@ -1187,32 +1420,95 @@ mechanics these caveats assume.
   is refused — which breaks the ordinary same-brain preview, not just the
   cross-brain one.
 
+- **EVERY sampler that picks a PARENT OR A SEED must filter through
+  `native_rows()`, and `novelty_goal` is where that was missed.** An archive
+  pools every layout, so most of what it holds may be another brain's — and a
+  seed becomes the optimizer's mean, re-encoded under the running layout, so a
+  foreign row is not a worse start but an unreadable one. `_ask_expansion` and
+  `_seed_index` both filtered; `novelty_goal` sampled `archive.entries` whole
+  and is the ONE goal kind that carries its own `seed_index`, which
+  `start_expedition_with` then bounds-checked but did not test for nativeness.
+  It killed a 2.5-hour overnight run inside Fourier's `encode` — "cannot
+  reshape array of size 71 into shape (10,8)", 71 being an `mlp-n3.4.4`
+  genome — and it is inherently **probabilistic**: the foreign entries were 5%
+  of the archive, so it took 2.5 hours to draw one. A mixed archive is the
+  normal case, not the exotic one, because changing brain mid-run leaves the
+  previous layout's entries in place. `_parent_z` now RAISES on a foreign row
+  rather than letting it reach a modality's reshape, since the old message
+  named neither the sampler nor the layouts. Guarded by
+  `tests/test_novelty_goals.py`.
+
+- **Every REGIME decision counts NATIVE entries; everything that POOLS counts
+  the archive.** `regime`, the bootstrap progress readout, the
+  expedition-cadence gate and the popsize-change fallback all ask `_native_n`,
+  because switching brain inside a full archive leaves the new brain with
+  nothing to expand FROM. Counting the whole thing put the driver in
+  "expansion", where `_ask_expansion` privately fell back to bootstrap while
+  every expedition declined for want of a native seed — so it neither
+  bootstrapped nor expedition'd, and the progress bar named a regime it was
+  not in. `len(archive)` still sizes novelty, the refresh sweep, the map and
+  `seed_index`'s bounds check, all of which are about pictures rather than
+  genomes. The browser states the split whenever an archive holds more than
+  one layout, because a full-looking archive that is still bootstrapping has
+  no other explanation on screen.
+
+- **A layout change is PRINTED, because nothing else records that it
+  happened.** The archive is keyed by signature, so a switch silently
+  redirects where results are filed and strands the previous brain's entries
+  as un-breedable. A run config names the layout it ran under, but only once a
+  run starts, and `settings_history.jsonl` never sees it — reconstructing a
+  2.5-hour Fourier run inside a deep-MLP archive afterwards needed two
+  `runs/*.json` files and the per-directory entry counts.
+  `_apply_brain_layout` logs both signatures, and says so louder when a search
+  is running.
+
 ### The MLP layer stack
 
-- **A DEEP stack's width cap is paid by every MLP, including the one-layer
-  ones.** Any depth above 1 must materialise a layer's activations, so
-  `mlp.glsl` ping-pongs two `float[MAX_MLP_WIDTH]` locals — and the driver
-  allocates those per invocation whatever the `BRAIN_DEPTH <= 1` branch does.
-  Against the pre-stack shader, at 300k particles, a depth-1 `mlp-n16-a0` step
-  costs **1.02x at cap 8, 1.22x at 12, 1.41x at 16 and 4.09x at 48**. So a LONE
-  layer keeps its historical 48 (`MAX_WIDTH`) and every layer of a deeper stack
-  is capped at 8 (`MAX_DEEP_WIDTH`) — which is why adding a second layer
-  NARROWS the first, and the Brain window says so before you click. Depth costs
-  roughly what its float count costs: against depth-1 `[16]`, `[8,8]` is 1.07x,
-  `[8]x8` 2.16x, and the historical `[48]` 1.47x. The Inspector's redraw stays
-  under 0.26 ms throughout. `python -m tools.measure_brain_depth`; the trap when
-  re-measuring is that the shader must be swapped inside ONE process against ONE
-  entity snapshot, or what is timed is the laptop's thermal state.
+- **`MAX_MLP_WIDTH` is COMPILED PER LAYOUT, and that is the only reason a deep
+  layer may be wide.** Any depth above 1 must materialise a layer's
+  activations, so `mlp.glsl` ping-pongs two `float[MAX_MLP_WIDTH]` locals — and
+  the driver allocates those per invocation whatever the `BRAIN_DEPTH <= 1`
+  branch does, in a program that also holds Fourier, Gabor and Lenia. So the
+  cap is not a cost the wide stack pays, it is one **every brain in the build**
+  pays. At 300k particles, the SAME layout under different caps: Fourier
+  0.92 ms at cap 8 and **1.79x** at 48; depth-1 `mlp-n16-a0` 1.18 ms at 8 and
+  **2.95x** at 48. That is what a raised constant would have cost, and it is
+  why the old shared cap was 8. Caps 4 and 8 measure the same (±4%), so the
+  floor is free — `SCRATCH_BUCKETS` starts at 4 because `mlp_hidden` seeds
+  `cur[0..3]` before it looks at any width, not for speed.
 
-- **The float budget is slack now, and the WIDTH cap is the only limit that
-  bites.** The deepest reachable stack is `[8]x8` = 580 floats against
-  `MAX_BRAIN_FLOATS` 1024 — still past 512, so the raise is load-bearing, but
-  nothing the UI can build goes over. `+ Add layer` is stopped by `MAX_DEPTH`
-  alone: a width-1 layer makes a brain SMALLER, because it narrows the output
-  layer's fan-in from `w_k` to 1. The UI derives both limits by asking whether
-  the layout BUILDS and comes back unclamped, never by repeating the packing
-  formula — which already has two homes, `layer_spans()` and `mlp.glsl`, guarded
-  by the GPU-versus-NumPy parity test.
+  `shader_defines(layout)` is asked of **every** modality, not the running one,
+  precisely because one program carries all four shaders; a modality answering
+  for someone else's layout returns its floor. `sim.py` keeps one compiled
+  entity-update program per distinct set of defines — Fourier, Gabor, Lenia and
+  every depth-1 MLP share one — so a hover borrow is a dict lookup and never a
+  recompile. Widths are BUCKETED so a slider drag lands on a handful of
+  variants. The shader's own `#ifndef` default is `MAX_WIDTH`, because the
+  builds that do not prepend (the Inspector, `tools/shader_compile_check.py`,
+  the GPU tests) must carry any stack; never lower it to save time there.
+
+  What a bucket costs, against depth-1 `[16]`: `[8,8]` 1.06x, `[8]x8` 2.31x,
+  `[48]` 1.46x, `[16,16]` **2.62x**, `[24,24]` **5.42x**, `[32,16]` 6.15x,
+  `[48,8]` **8.85x**. Cost tracks the BUCKET, not the float count — `[48,8]` is
+  668 floats against `[24,24]`'s 820 and costs 1.6x more — which is why the
+  Brain window names the bucket rather than reporting a slope. The Inspector's
+  redraw stays under 0.74 ms throughout. `python -m tools.measure_brain_depth`;
+  the trap when re-measuring is that the shader must be swapped inside ONE
+  process against ONE entity snapshot, or what is timed is the laptop's
+  thermal state.
+
+- **The float budget is the only limit that bites, and `_shape_from_layers`
+  CLAMPS to it.** Nothing else stops `[48]x8`, which is sixteen times over
+  `MAX_BRAIN_FLOATS`; and clamping rather than raising is load-bearing, because
+  the input may be a config written by a build with different limits. It is
+  applied as ONE cap across the stack, largest that fits, so a layer already
+  below it is left alone; it always terminates, since every layer at
+  `MIN_WIDTH` is 27 floats at the deepest. `+ Add layer` is stopped by
+  `MAX_DEPTH` or by the budget: a width-1 layer makes a brain SMALLER, because
+  it narrows the output layer's fan-in from `w_k` to 1. The UI derives every
+  limit by asking whether the layout BUILDS and comes back **unchanged in every
+  row** — not just the row being dragged, since the budget is shared and a
+  looser test lets one slider quietly narrow the row above it.
 
 - **Depth 1 is bit-identical, and that is what makes the rest safe.** `shape` is
   `(w1, a1, w2, a2, …)`, so a one-layer stack is `(16, 0)` — the same length

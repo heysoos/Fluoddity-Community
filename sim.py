@@ -165,6 +165,37 @@ class Sim:
         #reestablish view options for canvas/brush view modes
         # Note: view_options[0] will be updated dynamically to point to current read buffer
         self.view_options = [self.can_textures[self.can_read_index], self.brush_tex]
+    def _entity_program_for(self, layout):
+        """The entity-update program compiled for `layout`, built once and kept.
+
+        Keyed by the layout's DEFINES, not by the layout: every Fourier, Gabor
+        and Lenia brain, and every depth-1 MLP, needs nothing baked in and so
+        shares one program. Only a deep MLP stack widens the scratch arrays,
+        and only up to the next bucket.
+        """
+        from services.brains import layout_defines
+
+        defines = layout_defines(layout)
+        key = tuple(sorted(defines.items()))
+        prog = self._entity_programs.get(key)
+        if prog is not None:
+            return prog
+        src = self.entity_update_source
+        for name, value in defines.items():
+            src = shader_prepend(src, f"#define {name} {int(value)}\n")
+        try:
+            prog = self.ctx.compute_shader(src)
+        except Exception as e:
+            print('Entity Update Compilation Failed:')
+            print(e)
+            # Whatever is already running beats no shader at all.
+            return getattr(self, 'entity_update_program', None)
+        tryset(prog, 'canvas_resolution', self._entity_canvas_shape)
+        tryset(prog, 'canvas', 1)
+        tryset(prog, 'field_texture', 5)
+        self._entity_programs[key] = prog
+        return prog
+
     def setup_shaders(self):
         canvas_dim_x,canvas_dim_y = self.get_canvas_dimensions()
         canvas_shape = (canvas_dim_x, canvas_dim_y)
@@ -186,15 +217,16 @@ class Sim:
         self.entity_update_source = shader_prepend(self.entity_update_source, read_shader('shaders/fourier4_4.glsl'))
         self.entity_update_source = prepend_defines(self.entity_update_source, self.entity_count)
 
-        try:
-            self.entity_update_program = self.ctx.compute_shader(self.entity_update_source)
-        except Exception as e:
-            print('Entity Update Compilation Failed:')
-            print(e)
-
-        tryset(self.entity_update_program, 'canvas_resolution', canvas_shape)
-        tryset(self.entity_update_program, 'canvas', 1)
-        tryset(self.entity_update_program, 'field_texture', 5)
+        # A brain layout can need a compile-time constant no uniform can carry -
+        # MLP's scratch width. So this is one program PER SET OF THOSE, built on
+        # demand and kept: a hover preview borrows a layout for as long as the
+        # pointer is over it, and recompiling on the way in and out would make
+        # sliding down the Load menu unusable.
+        self._entity_canvas_shape = canvas_shape
+        for _p in getattr(self, '_entity_programs', {}).values():
+            _p.release()
+        self._entity_programs = {}
+        self.entity_update_program = self._entity_program_for(self._brain_layout)
 
         # 2. Brush update shaders (instanced rendering)
         self.brush_vertex_source = read_shader('shaders/brush.vert')
@@ -1133,8 +1165,14 @@ class Sim:
 
         Called on every layout change, which already resets the optimizer and
         switches archive, so the reallocation cost is invisible.
+
+        Also swaps in the program compiled for this layout - a deep MLP stack
+        needs a scratch width no uniform can carry. The first stack of a given
+        width compiles here; every layout after that is a dict lookup, which is
+        what keeps a hover preview free.
         """
         self._brain_layout = layout
+        self.entity_update_program = self._entity_program_for(layout)
         self.rule_buffer.release()
         self.rule_buffer = self.ctx.buffer(reserve=layout.length * 4)
         self.rule_buffer.bind_to_storage_buffer(2)

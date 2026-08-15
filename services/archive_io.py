@@ -27,11 +27,18 @@ THUMB_PX = 160
 THUMB_QUALITY = 85
 
 _ARRAY_KEYS = ("ids", "embeddings", "brains", "physics")
-# Newer field, absent from older archives. NOT in _ARRAY_KEYS and NOT a
+# Newer fields, absent from older archives. NOT in _ARRAY_KEYS and NOT a
 # format_version bump on purpose: both would quarantine every existing archive
-# on first open. A file without it simply loads without it, and
+# on first open. A file without them simply loads without them, and
 # Archive.load_from_store rescores from the embeddings anyway.
-_OPTIONAL_ARRAY_KEYS = ("novelty",)
+_OPTIONAL_ARRAY_KEYS = ("novelty", "novelty_n")
+
+
+def encoder_file(archive_dir) -> Path:
+    """Where an archive records its embedding space. At the archive ROOT, not
+    under a layout: one archive holds every brain, and switching brain must not
+    switch encoder."""
+    return Path(archive_dir) / "encoder.json"
 
 
 class ArchiveStore:
@@ -98,6 +105,14 @@ class ArchiveStore:
     def settings_path(self) -> Path:
         return self.base / "settings.json"
 
+    @property
+    def encoder_path(self) -> Path:
+        return encoder_file(self.base)
+
+    @property
+    def history_path(self) -> Path:
+        return self.base / "settings_history.jsonl"
+
     def run_config_path(self, run_id: str) -> Path:
         return self.base / "runs" / f"{safe_stem(run_id)}.json"
 
@@ -114,14 +129,19 @@ class ArchiveStore:
             print(f"[Archive] index write failed ({exc}); persistence disabled")
 
     def flush_vectors(self, ids, embeddings, brains, physics,
-                      novelty=None) -> None:
+                      novelty=None, novelty_n: int = -1) -> None:
         """Rewrite vectors.npz atomically. Embeddings go to disk as fp16 - half
         the bytes, well below the precision any novelty decision needs.
 
         novelty belongs HERE rather than in index.jsonl because it is the one
         stored field that CHANGES after admission: refresh() re-scores entries
         against the grown archive, and index.jsonl is append-only so it can
-        only ever hold the at-admission value. See CLAUDE.md."""
+        only ever hold the at-admission value. See CLAUDE.md.
+
+        novelty_n is how many entries the whole archive held when the column
+        was scored, or -1 for "scored against something else". A reload may
+        trust the column only when every layout agrees on it and it matches
+        what actually loaded."""
         if not self.enabled:
             return
         tmp = self.vectors_path.with_suffix(self.vectors_path.suffix + ".tmp")
@@ -141,6 +161,7 @@ class ArchiveStore:
                         np.zeros(len(np.asarray(ids)))
                         if novelty is None else novelty,
                         dtype=np.float32),
+                    novelty_n=np.array(int(novelty_n), dtype=np.int64),
                 )
             os.replace(tmp, self.vectors_path)
         except (OSError, ValueError) as exc:
@@ -214,6 +235,61 @@ class ArchiveStore:
             os.replace(tmp, self.settings_path)
         except (OSError, TypeError) as exc:
             print(f"[Archive] settings not saved ({exc})")
+
+    def append_history(self, row: dict) -> None:
+        """One settings version. Append-only, like index.jsonl."""
+        if not self.enabled:
+            return
+        try:
+            self.history_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.history_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except (OSError, TypeError) as exc:
+            print(f"[Archive] settings history not written ({exc})")
+
+    def load_history(self) -> list[dict]:
+        """-> every version row, oldest first. Empty for an archive with none."""
+        rows: list[dict] = []
+        try:
+            text = self.history_path.read_text(encoding="utf-8")
+        except OSError:
+            return rows
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue        # a torn trailing line is one lost row
+        return rows
+
+    def latest_version(self) -> int:
+        """-> the highest version on disk, or -1 for an archive with none, so
+        the next row is always latest_version() + 1."""
+        return max((int(r.get("v", -1)) for r in self.load_history()),
+                   default=-1)
+
+    def save_encoder(self, model_key: str) -> bool:
+        """Pin this archive's encoder. -> whether a file is now on disk for it."""
+        return self.enabled and pin_encoder(self.base, model_key)
+
+    @property
+    def encoder(self) -> str:
+        """-> the pinned encoder key.
+
+        A missing file means the encoder every archive written before the
+        choice existed used. An unreadable or unknown one means the same: a
+        disk problem must never stop the search.
+        """
+        from services.vision_models import DEFAULT_KEY, REGISTRY
+
+        try:
+            data = json.loads(self.encoder_path.read_text(encoding="utf-8"))
+            key = str(data["encoder"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return DEFAULT_KEY
+        return key if key in REGISTRY else DEFAULT_KEY
 
     def save_run_config(self, run_id: str, config_json: str) -> bool:
         """Record the physics a run is about to be carried out under.
@@ -326,6 +402,34 @@ class ArchiveStore:
         if self._fh is not None:
             self._fh.close()
             self._fh = None
+
+
+def pin_encoder(archive_dir, model_key: str) -> bool:
+    """Write <archive>/encoder.json. -> whether a file is now there for it.
+
+    Never overwrites, the same discipline as save_run_config: an archive name
+    identifies ONE embedding space, and a second write would reinterpret every
+    entry already filed under it. Module-level because an archive is pinned
+    when it is CREATED, before any store or layout exists for it.
+    """
+    from services.vision_models import REGISTRY
+
+    if model_key not in REGISTRY:
+        return False
+    path = encoder_file(archive_dir)
+    if path.exists():
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps({"encoder": str(model_key), "created": time.time()}),
+            encoding="utf-8")
+        os.replace(tmp, path)
+        return True
+    except OSError as exc:
+        print(f"[Archive] encoder not pinned ({exc})")
+        return False
 
 
 # What belongs to a LAYOUT: the entries and their pictures. These move DOWN.

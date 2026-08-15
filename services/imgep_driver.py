@@ -14,11 +14,7 @@ from services.archive import Candidate
 from services.archive_projection import Projection
 from services.capture_health import is_viable_tile, structure
 from services.descriptor import descriptor, liveness, stack_snapshots
-from services.expedition_fitness import (
-    IMAGE_LOGIT_SCALE,
-    TEXT_LOGIT_SCALE,
-    contrastive,
-)
+from services.expedition_fitness import contrastive
 from services.genome_spec import encode, layout_of, spec_for
 from services.goal_source import (
     LATENT_DIMS,
@@ -68,7 +64,7 @@ class ImgepDriver:
         self.k = 10
         self.seed_n = 256
         self.liveness_min = 0.002    # see CLAUDE.md
-        self.n_views = 3             # see CLIPScorer.embed_mean
+        self.n_views = 3             # see VisionScorer.embed_mean
         self.refresh_sweep_gens = 10
         self.flush_every = 200
 
@@ -117,13 +113,26 @@ class ImgepDriver:
     # ---- state ---------------------------------------------------------
 
     @property
+    def _native_n(self) -> int:
+        """Entries the RUNNING brain can be seeded or bred from.
+
+        Every regime decision counts these rather than the archive, because an
+        archive pools layouts: switching brain inside a full one leaves the new
+        brain with nothing to expand FROM, and counting the whole thing put the
+        driver in expansion, where each expedition then declined for want of a
+        native seed and wasted its cadence interval. len(archive) still sizes
+        anything that pools - novelty, the refresh sweep, the map.
+        """
+        return int(len(self.archive.native_rows()))
+
+    @property
     def regime(self) -> str:
         if self._remaining > 0 and self._goal is not None:
             return "expedition"
-        # max(1, ...): an empty archive has nothing to expand FROM, so it stays
-        # in bootstrap whatever seed_n says. Without this, parent sampling
-        # raises on the first ask when seed_n is 0.
-        if len(self.archive) < max(1, self.seed_n):
+        # max(1, ...): nothing to expand FROM stays in bootstrap whatever
+        # seed_n says. Without this, parent sampling raises on the first ask
+        # when seed_n is 0.
+        if self._native_n < max(1, self.seed_n):
             return "bootstrap"
         return "expansion"
 
@@ -156,7 +165,7 @@ class ImgepDriver:
                     "note": f"{int(self._remaining)} left"}
         if r == "bootstrap":
             total = max(1, int(self.seed_n))
-            done = min(int(len(self.archive)), total)
+            done = min(self._native_n, total)
             return {"label": "bootstrap: scattering to fill the archive",
                     "done": done, "total": total, "unit": "entries",
                     "note": f"{total - done} more before expansion starts"}
@@ -252,7 +261,8 @@ class ImgepDriver:
         # crashing on the next tell.
         if self._optimizer is not None and self._optimizer.popsize != n:
             self.end_expedition()
-            return self._ask_expansion(n) if len(self.archive) else self._ask_bootstrap(n)
+            return (self._ask_expansion(n) if self._native_n
+                    else self._ask_bootstrap(n))
         return self._optimizer.ask(n)
 
     def _ask_bootstrap(self, n: int) -> np.ndarray:
@@ -284,7 +294,18 @@ class ImgepDriver:
 
         Encoded under the SPEC's layout - the brain that is running - and only
         ever called on a native row, because that is the only kind of genome
-        this z is going to be mutated as."""
+        this z is going to be mutated as.
+
+        Stated as a check because it used to be stated only as a comment: a
+        foreign row reached this and surfaced as a reshape error inside
+        whichever modality happened to be running, several frames of stack away
+        from the sampler that chose it.
+        """
+        if not self.archive.is_native(i):
+            raise ValueError(
+                f"seed row {i} is a {self.archive.layout_at(i)} genome, but "
+                f"{self.spec.layout.signature()} is running; the sampler that "
+                f"chose it must filter through Archive.native_rows()")
         zb, _clamped = encode(self.archive.brain_at(i), self.spec.layout)
         if self.spec.dim <= len(zb):
             return zb[: self.spec.dim].astype(np.float32)
@@ -321,7 +342,13 @@ class ImgepDriver:
         """
         emb = (None if embedding is None
                else np.asarray(embedding, dtype=np.float32))
-        if seed_index is not None and 0 <= int(seed_index) < len(self.archive):
+        # NATIVE as well as in range. A seed becomes the optimizer's mean and is
+        # re-encoded under the running layout, so a row belonging to another
+        # brain is not a worse start but an unreadable one - and an archive
+        # pools every layout. A goal that names one falls through to
+        # _seed_index, which filters, exactly as an out-of-range index does.
+        if (seed_index is not None and 0 <= int(seed_index) < len(self.archive)
+                and self.archive.is_native(int(seed_index))):
             i = int(seed_index)
         elif emb is None:
             return False            # nothing to point at and nowhere to start
@@ -541,7 +568,7 @@ class ImgepDriver:
         self._since_expedition += 1
         if (self.expansion_between > 0
                 and self._since_expedition >= self.expansion_between
-                and len(self.archive) >= self.seed_n):
+                and self._native_n >= self.seed_n):
             self.start_expedition()
 
         self._last_score_label = "novelty"
@@ -576,9 +603,9 @@ class ImgepDriver:
         out: dict[int, tuple[str, float]] = {}
         for g in live:
             held = float(contrastive(arc, g.embedding, refs,
-                                     logit_scale=TEXT_LOGIT_SCALE).max())
+                                     logit_scale=self._text_scale).max())
             cand = contrastive(tiles, g.embedding, refs,
-                               logit_scale=TEXT_LOGIT_SCALE).astype(np.float64)
+                               logit_scale=self._text_scale).astype(np.float64)
             cand = np.where(shows_something, cand, -np.inf)
             i = int(np.argmax(cand))
             margin = float(cand[i]) - held
@@ -750,9 +777,17 @@ class ImgepDriver:
         if kind is None:
             kind = self._goal.kind if self._goal is not None else ""
         if kind == "text":
-            return self._distractor_embeddings(), TEXT_LOGIT_SCALE
+            return self._distractor_embeddings(), self._text_scale
         c = self.archive.centroid()
-        return (None if c is None else c[None, :]), IMAGE_LOGIT_SCALE
+        return (None if c is None else c[None, :]), self._image_scale
+
+    @property
+    def _text_scale(self) -> float:
+        return self.scorer.model.text_logit_scale
+
+    @property
+    def _image_scale(self) -> float:
+        return self.scorer.model.image_logit_scale
 
     def _distractor_embeddings(self):
         """The Auto tab's distractor set, embedded once for the whole run.
@@ -761,7 +796,7 @@ class ImgepDriver:
         which the Auto tab owns, and the two modes must not clobber each other.
         """
         if self._distractors is None and self.scorer is not None:
-            from services.clip_scorer import DEFAULT_DISTRACTORS
+            from services.vision_scorer import DEFAULT_DISTRACTORS
 
             self._distractors = np.asarray(
                 self.scorer.embed_text(list(DEFAULT_DISTRACTORS)),

@@ -198,7 +198,16 @@ def _mtime(path: Path) -> float:
 
 # ---- operations that change the disk ------------------------------------
 
-def create(root, name: str) -> Result:
+def create(root, name: str, encoder: str | None = None) -> Result:
+    """Make an empty archive. `encoder` names its embedding space FOREVER.
+
+    Pinned here, at the one moment an archive holds nothing: after this the
+    vectors are in that space and no other, so every later control over it is
+    a readout rather than a choice.
+    """
+    from services.archive_io import pin_encoder
+    from services.vision_models import DEFAULT_KEY
+
     base = Path(root)
     safe = safe_name(name)
     if not safe:
@@ -210,6 +219,7 @@ def create(root, name: str) -> Result:
         (path / "thumbs").mkdir(parents=True)
     except OSError as exc:
         return Result(False, safe, f"Could not create '{safe}': {exc}")
+    pin_encoder(path, encoder or DEFAULT_KEY)
     return Result(True, safe)
 
 

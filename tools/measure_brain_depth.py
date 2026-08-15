@@ -35,7 +35,9 @@ STEPS = int(sys.argv[1]) if len(sys.argv) > 1 else 120
 REPS = int(sys.argv[2]) if len(sys.argv) > 2 else 5
 
 # Depth 1 at the shipped default first: it is the baseline every other row is
-# read against, and the path that must not regress.
+# read against, and the path that must not regress. The wide deep stacks at the
+# bottom are what the scratch bucket costs - they are reachable now, and they
+# are the reason the Brain window names the bucket.
 STACKS = [
     [[16, 0]],
     [[48, 0]],
@@ -44,6 +46,10 @@ STACKS = [
     [[8, 0]] * 4,
     [[8, 0]] * 6,
     [[8, 0]] * 8,
+    [[16, 0], [16, 0]],
+    [[24, 0], [24, 0]],
+    [[32, 0], [16, 0]],
+    [[48, 0], [8, 0]],
 ]
 
 

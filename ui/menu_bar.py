@@ -348,6 +348,15 @@ class MenuBarMixin:
                     self.state.audio.show_window = want
                 self._delayed_tooltip("Bind live audio bands to physics and brain parameters.")
 
+                # Every change you have made this session, newest first.
+                changed, want = imgui.checkbox(
+                    "Undo History",
+                    self.state.preferences.show_undo_window
+                )
+                if changed:
+                    self.state.preferences.show_undo_window = want
+                self._delayed_tooltip("Browse every change you have made, and step back to one.")
+
                 # Which function the particles' brains actually compute
                 _, self.state.brain.enabled = imgui.checkbox(
                     "Brain Modality",

@@ -172,7 +172,7 @@ def test_seeding_is_refused_for_a_driver_with_no_x0(tmp_path):
     ch = handler(tmp_path, arc, auto_service=_Service(_NoX0Driver()))
     ast = _ast(arc.entries[0].id)
     ch._seed_from_archive(ast)
-    assert "Auto (CLIP)" in ast.warning
+    assert "Auto (Prompt)" in ast.warning
     assert not ast.notice
 
 

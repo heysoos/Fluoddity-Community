@@ -88,8 +88,11 @@ Stateless or near-stateless helpers owned by the orchestrator.
 | `video_recorder.py` | 45 | Thin facade over VidSaver for video recording |
 
 ### Search and exploration (`services/`)
-Auto (CLIP) mode and Explore (IMGEP) mode share one rollout machine
-(`AutoTournamentService`) and differ only in their `SearchDriver`.
+Auto (Prompt) mode and Explore (IMGEP) mode share one rollout machine
+(`AutoTournamentService`) and differ only in their `SearchDriver`. Both score
+through a `VisionScorer`, built from a `services/vision_models.py` registry
+entry; Auto picks its encoder freely, Explore takes the one its archive is
+pinned to.
 
 **`docs/imgep.md` is the reference for how Explore works** — the regime loop,
 every fitness and admission equation, and what each setting does.
@@ -98,7 +101,7 @@ every fitness and admission equation, and what each setting does.
 |------|-------|-------------|
 | `imgep_driver.py` | 831 | Bootstrap / expansion / expedition regimes; the archive admission call site |
 | `auto_tournament_service.py` | 410 | The rollout machine both modes share; scoring runs off the frame loop |
-| `clip_scorer.py` | 326 | CLIP ViT-B/32 via ONNX Runtime + DirectML; `embed_mean` multi-view averaging |
+| `vision_scorer.py` | 330 | Any registered encoder via ONNX Runtime + DirectML; `embed_mean` multi-view averaging |
 | `capture_health.py` | 128 | Viability, spatial coherence, confounded-sweep detection |
 | `capture_view.py` | 243 | Re-renders the canvas at `grid*224` with an identity camera, blooming per tile |
 | `tile_geometry.py` | 43 | Integer tile-to-texel arithmetic, shared with the shaders |
@@ -109,7 +112,9 @@ every fitness and admission equation, and what each setting does.
 | `archive_library.py` | 253 | Named archive directories: safe names, listing, create / clear / delete |
 | `goal_source.py` | 271 | `Goal`, the user's text `GoalList`, and `latent_goal()` whitened frontier extrapolation |
 | `expedition_fitness.py` | 92 | Contrastive expedition objective; per-modality logit scales |
-| `prompt_driver.py` | 153 | Auto mode's driver: CMA-ES climbing a CLIP text prompt |
+| `prompt_driver.py` | 153 | Auto mode's driver: CMA-ES climbing a text prompt |
+| `vision_models.py` | 96 | The encoder registry: paths, preprocessing, logit scales, separation defaults |
+| `settings_history.py` | 47 | Diff and replay for an archive's settings change log |
 | `novelty.py` | 273 | k-NN novelty, `NOV^alpha` parent sampling, the rejects ring |
 | `thumb_cache.py` | 79 | LRU of GL textures for gallery thumbnails, with explicit release |
 | `descriptor.py` | 63 | Trajectory-centroid behaviour descriptor and ASAL liveness |

@@ -182,6 +182,128 @@ def test_a_novelty_expedition_without_a_seed_cannot_start():
     assert d.start_expedition_with(None, "novelty", "") is False
 
 
+# ---- a seed has to be a genome THIS brain can decode ----------------------
+#
+# An archive pools every layout, so most of what it holds may be another
+# brain's. Expansion and _seed_index both filter through native_rows(); a
+# novelty goal carries its seed instead, and that was the one path that did
+# not. It crashed a 2.5-hour run inside Fourier's encode() with "cannot
+# reshape array of size 71 into shape (10,8)" - 71 being an mlp-n3.4.4 genome.
+
+def _mixed(n_native, n_foreign):
+    """A driver on FOURIER whose archive also holds wider, foreign entries."""
+    from services.archive import Candidate
+    from services.brains import BrainLayout
+
+    d, arc, _ = make(seed_n=1)
+    other = BrainLayout("gabor", (12,), 168)
+    # As a load does: the pooled column widens to the widest layout present,
+    # and brain_at() trims each row back to its own.
+    arc._widen(other.length)
+    arc._widths[other.signature()] = other.length
+    # A store-backed archive registers its own width at construction and a load
+    # setdefaults every sibling's; this fake has no store, so brain_at() would
+    # hand back the widened row for a NATIVE entry too.
+    arc._widths[arc.signature] = arc.layout.length
+
+    def add(k, layout, foreign):
+        v = np.zeros(DIM, np.float32)
+        v[k % DIM] = 1.0
+        v[(k + 1) % DIM] = 0.5 if foreign else -0.5
+        cand = Candidate(
+            embedding=(v / np.linalg.norm(v)).astype(np.float32),
+            brain=np.arange(layout.length, dtype=np.float32),
+            physics=np.zeros(8, np.float32), liveness=0.5, spec="brain",
+            viable=True)
+        e = arc.consider(cand, novelty=1.0, force=True)
+        if e is not None and foreign:
+            e.layout = layout.signature()
+
+    for j in range(n_native):
+        add(j, arc.layout, False)
+    for j in range(n_foreign):
+        add(j, other, True)
+    return d, arc
+
+
+def test_a_novelty_goal_seeds_on_a_row_this_brain_can_decode():
+    """The root cause. sample_by_novelty ran over every entry, so in a mixed
+    archive it returned another brain's row and the expedition encoded that
+    genome under the running layout."""
+    d, arc = _mixed(n_native=2, n_foreign=8)
+    native = set(int(i) for i in arc.native_rows())
+    assert native and len(native) < len(arc), "precondition: the archive is mixed"
+
+    rng = np.random.default_rng(0)
+    for _ in range(60):
+        g = novelty_goal(arc, rng)
+        assert g is not None
+        assert int(g.seed_index) in native, (
+            f"row {g.seed_index} belongs to {arc.layout_at(int(g.seed_index))}")
+
+
+def test_a_novelty_goal_declines_when_no_row_is_decodable():
+    """Every entry belongs to another brain. Nothing to seed from, so the
+    expedition must not start rather than encode a foreign genome."""
+    d, arc = _mixed(n_native=0, n_foreign=6)
+    for e in arc.entries:
+        e.layout = "gabor-n12"
+    assert not len(arc.native_rows()), "precondition: nothing native"
+    assert novelty_goal(arc, np.random.default_rng(0)) is None
+
+
+def test_a_foreign_seed_index_is_refused_rather_than_encoded():
+    """The backstop. Whatever a goal claims, the seed becomes the optimizer's
+    mean and gets re-encoded under the running layout - so a row this brain
+    cannot decode has to be turned away at the boundary, not deep inside a
+    modality's reshape."""
+    d, arc = _mixed(n_native=2, n_foreign=6)
+    foreign = [i for i in range(len(arc)) if not arc.is_native(i)]
+    assert foreign, "precondition: there is a foreign row"
+
+    # No embedding, as a novelty goal: there is no _seed_index to fall back on.
+    assert d.start_expedition_with(None, "novelty", "",
+                                   seed_index=foreign[0]) is False
+    # With an embedding it falls through to _seed_index, which filters.
+    ok = d.start_expedition_with(arc.embeddings[0].copy(), "latent", "",
+                                 seed_index=foreign[0])
+    assert not ok or arc.is_native(int(d._x0_index))
+
+
+def test_a_brain_with_no_entries_bootstraps_inside_a_full_archive():
+    """Switching brain mid-archive is the normal case, and the new brain owns
+    nothing. Counting the whole archive put the driver in expansion, where
+    every expedition then declined for want of a native seed - so it neither
+    bootstrapped nor expedition'd, and the progress readout said expansion."""
+    d, arc = _mixed(n_native=0, n_foreign=12)
+    d.seed_n = 4
+    assert len(arc) == 12, "precondition: the archive looks full"
+    assert not len(arc.native_rows()), "precondition: none of it is ours"
+
+    assert d.regime == "bootstrap"
+    assert d.phase()["done"] == 0, "progress must count what this brain can use"
+    z = d.ask(4)
+    assert z.shape == (4, d.spec.dim) and np.all(np.isfinite(z))
+
+
+def test_the_regime_follows_the_native_count_not_the_archive():
+    d, arc = _mixed(n_native=6, n_foreign=12)
+    d.seed_n = 4
+    assert d.regime == "expansion", "six native entries is past seed_n"
+    d.seed_n = 8
+    assert d.regime == "bootstrap", "six is not eight, whatever the other 12 are"
+
+
+def test_expansion_in_a_mixed_archive_only_breeds_native_parents():
+    """The whole point of the filter: a parent is re-encoded under the running
+    layout, so a foreign row is unreadable rather than merely worse."""
+    d, arc = _mixed(n_native=3, n_foreign=12)
+    d.seed_n = 1
+    assert d.regime == "expansion"
+    z = d.ask(8)
+    assert z.shape == (8, d.spec.dim) and np.all(np.isfinite(z))
+
+
 def test_the_novelty_fitness_is_the_archive_novelty():
     """Asserted as an identity rather than as a spread: over a small one-hot
     archive every tile can legitimately share a kNN distance, so 'the numbers

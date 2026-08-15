@@ -31,6 +31,22 @@ Any advice or criticism is welcome. This is a toy I made for myself and I am mor
  - Experimental system for mixing different saved configs.
  - Tournament mode: run a grid of creatures side by side and breed from the ones you like, by hand or by CLIP.
  - Swappable particle brains: Fourier, Gabor, Lenia or MLP.
+ - Undo and redo for every setting, with a browsable history.
+
+## Undo
+
+`Ctrl+Z` takes back the last change; `Ctrl+Shift+Z` or `Ctrl+Y` puts it back. A
+whole slider drag counts as one step, however long you spent on it, and so does
+loading a preset or pressing `Z` or `G`.
+
+`Extras > Undo History` lists the steps, newest first. Hover one to see it live,
+click to go back to it. Steps ahead of where you are sit greyed out, and making
+a new change discards them.
+
+It covers the settings and the brain, not the picture: the pattern regrows from
+the restored settings rather than rewinding the screen, so Clear Canvas, Reset
+and Fill are outside it, as is deleting a saved preset. Under a tournament the
+sliders step back and the grid stays with whatever is running it.
 
 ## Tournament Mode
 
@@ -38,9 +54,11 @@ Any advice or criticism is welcome. This is a toy I made for myself and I am mor
 
 **Manual** — click the tiles you like, on the canvas or on the numbered buttons, then **Next Generation** to breed from them. `Mutation strength` sets how far the children stray, `Inject randoms` adds fresh creatures each round, `Crossover` mixes selected parents. **Undo** steps back a generation, **Save Selected...** writes the tiles you picked to your configs folder.
 
-**Auto (CLIP)** — type a prompt, press **Set**, then **Start**. CMA-ES climbs the grid toward whatever CLIP scores as the closest match. `Grid` is tiles per side (2–8), `Steps per Gen` is how long each generation runs before it is scored. Tick `Search Physics Too` to let it move the physics sliders as well as the brain.
+**Auto (Prompt)** — type a prompt, press **Set**, then **Start**. CMA-ES climbs the grid toward whatever the encoder scores as the closest match. `Grid` is tiles per side (2–8), `Steps per Gen` is how long each generation runs before it is scored. Tick `Search Physics Too` to let it move the physics sliders as well as the brain. `Encoder` picks which vision model does the scoring — CLIP B/32 is the default and by far the fastest; the larger ones see finer detail and cost proportionally more per generation.
 
-**Explore (IMGEP)** — no prompt. It hunts for patterns *unlike* the ones it already has and files each keeper in an archive you can browse, sort and load from. Pick or create an archive, press **Start**; text goals are optional and steer it without confining it. Full description in [docs/imgep.md](docs/imgep.md).
+**Explore (IMGEP)** — no prompt. It hunts for patterns *unlike* the ones it already has and files each keeper in an archive you can browse, sort and load from. Pick or create an archive, press **Start**; text goals are optional and steer it without confining it. The **New** button asks which encoder the archive should use, and that is the only time you can choose: everything in an archive is measured in one encoder's space, so the `Encoder` box on the tab afterwards just shows which. To use a different one, make a new archive. Full description in [docs/imgep.md](docs/imgep.md).
+
+One archive holds **every brain you use it with**, in a directory per layout. Novelty, admission, the map and the record book pool across all of them — they are about pictures — but the search can only breed from and seed on the brain that is running, because another brain's genome is a different creature under this one's decode. So changing brain mid-archive is fine and keeps everything you made: the browser tells you how many entries the current brain owns, and switching back picks up where you left off. Selecting an entry names the brain it was authored under, and clicking a foreign one switches to it. Changing brain also prints a line to the console, since it redirects where new results are filed.
 
 Auto and Explore need the optional packages in `requirements.txt` (`onnxruntime-directml`, `tokenizers`, `cmaes`), and offer a **Download CLIP model (~330 MB)** button the first time. Manual mode needs none of that. The archive browser — `Extras > Archive Browser` — opens without CLIP too.
 
@@ -57,7 +75,9 @@ Auto and Explore need the optional packages in `requirements.txt` (`onnxruntime-
 
 Fourier, Gabor and Lenia each have one size setting (Centers, Filters, Bumps). MLP instead has a **layer stack**: one row per hidden layer, with its own width slider and activation, an `x` to remove it and **+ Add layer** at the bottom. A readout underneath shows how much of the parameter budget the stack uses.
 
-A single layer can be up to 48 units wide. A stack of two or more is capped at 8 units per layer, so adding a second layer narrows the first — the window says so before you do it. `+ Add layer` greys out at 8 layers.
+Every layer can be up to 48 units wide, at any depth. What stops a stack growing is the parameter budget in the readout — the sliders stop where the next unit would not fit, and `+ Add layer` greys out at 8 layers or when there is no room for one.
+
+Width is not free past one layer. A deep stack needs scratch space the shader is built for, so the readout names the size it was built for and stepping over it costs speed — sharply, and in steps rather than smoothly. Two 16-wide layers run a few times slower than one; two 24-wide layers, several times. A single layer of any width is unaffected, as are the other three modalities.
 
 **Right-click a layer** to work on its weights without changing its shape: pick a distribution (`normal`, `uniform`, `sparse`, `heavy-tail`), scale the layer up or down, reroll its weights or its biases, or reset it to how it was when the menu opened. These are ordinary rule edits — `Z` undoes them, and `Scale` records one undo step per drag, not one per frame. They are unavailable while the tournament grid is running, or while a hover preview is borrowing the brain.
 

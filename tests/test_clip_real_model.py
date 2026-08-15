@@ -1,19 +1,20 @@
-"""Requires the downloaded CLIP model. Run with: pytest -m gpu"""
+"""Requires a downloaded encoder. Run with: pytest -m gpu"""
 import numpy as np
 import pytest
 
-from tools.fetch_clip_onnx import MODEL_DIR, is_present
+from services.vision_models import DEFAULT_KEY
+from tools.fetch_models import is_present
 
 pytestmark = pytest.mark.gpu
 
 
 @pytest.fixture(scope="module")
 def scorer():
-    if not is_present(MODEL_DIR):
-        pytest.skip("CLIP model not downloaded")
-    from services.clip_scorer import CLIPScorer
+    if not is_present(DEFAULT_KEY):
+        pytest.skip("encoder not downloaded")
+    from services.vision_scorer import VisionScorer
 
-    return CLIPScorer(MODEL_DIR)
+    return VisionScorer()
 
 
 def _square(color):
@@ -41,9 +42,9 @@ def test_blank_image_scores_lower_than_content(scorer):
 def test_cpu_provider_loads(scorer):
     """Spec 11.1 requires a working CPU fallback when DirectML is absent.
     The default ORT_ENABLE_ALL crashes here, which is why sessions pin BASIC."""
-    from services.clip_scorer import CLIPScorer
+    from services.vision_scorer import VisionScorer
 
-    cpu = CLIPScorer(MODEL_DIR, providers=["CPUExecutionProvider"])
+    cpu = VisionScorer(providers=["CPUExecutionProvider"])
     cpu.set_prompt("a red square")
     assert np.isfinite(cpu.score(_square((220, 30, 30))[None])[0])
 

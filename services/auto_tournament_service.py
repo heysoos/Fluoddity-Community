@@ -1,7 +1,7 @@
 """The automatic tournament generation state machine.
 
 Owns the ROLLOUT ONLY. Which genomes to run, and what the resulting images
-mean, both belong to an injected SearchDriver - PromptDriver for Auto (CLIP),
+mean, both belong to an injected SearchDriver - PromptDriver for Auto (Prompt),
 ImgepDriver for Explore. The split exists because the rollout machine is
 identical for every search while the optimizer and scoring are not.
 
@@ -101,6 +101,8 @@ class AutoTournamentService:
         self._next_snap = 0
         self._buffer: list[np.ndarray] = []
         self._needs_write = False
+        # A reset's write, which is honoured whatever the phase. See update().
+        self._force_write = False
 
         # Scoring runs off the frame loop. See _precomputed().
         self.async_scoring = True
@@ -228,6 +230,14 @@ class AutoTournamentService:
         # search's curve in front of the new one.
         if self.logger is not None:
             self.logger.start_new_run()
+        # A run that replays the last one is not a reset. base_seed feeds BOTH
+        # the optimizer and gen_seed, and generation goes back to 0 below, so
+        # leaving it fixed handed back the identical population in the identical
+        # tiles over the identical particle field - a new prompt only reranked
+        # creatures the user had already watched. Advanced PAST the generations
+        # just spent, so the two runs' gen_seeds cannot overlap either, and read
+        # before the counter is cleared.
+        self.base_seed += self.generation + 1
         self.driver.reset()
         self.generation = 0
         self.step_in_gen = 0
@@ -236,7 +246,15 @@ class AutoTournamentService:
         self.tile_physics = []
         self._buffer.clear()
         self._drop_score()
+        # Reset has to be VISIBLE. Nothing rewrote the grid until
+        # _begin_generation, which only runs from start(), so the abandoned
+        # search's creatures stayed on screen - and on the GPU - until Start:
+        # a button that appeared to do nothing. A fresh random grid is what
+        # "the search is abandoned" looks like, and Start then replaces it with
+        # the optimizer's first generation.
+        self.tournament.reset()
         self._needs_write = False
+        self._force_write = True
         self.phase = Phase.IDLE
 
     def abort_generation(self) -> None:
@@ -272,6 +290,15 @@ class AutoTournamentService:
     # ---- per-frame driver ----------------------------------------------
 
     def update(self) -> Action:
+        # A RESET's write outranks the phase gate: what the GPU is holding
+        # belongs to a search that has been abandoned, and the user must see
+        # that without pressing Start. A GENERATION's write does not - it is
+        # queued behind the pause, or pausing between generations would
+        # advance the picture to the next one instead of holding it.
+        if self._force_write:
+            self._force_write = False
+            return Action.WRITE_RULES
+
         if self.phase in (Phase.IDLE, Phase.PAUSED):
             return Action.NONE
 

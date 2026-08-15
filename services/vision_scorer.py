@@ -1,18 +1,21 @@
-"""CLIP text-image scoring for the automatic tournament.
+"""Text-image scoring for the automatic tournament.
 
 Depends only on onnxruntime, tokenizers, numpy and PIL. Knows nothing about
-tournaments, tiles or OpenGL.
+tournaments, tiles or OpenGL. Everything model-specific - paths, preprocessing,
+tokenizer context, logit scale - comes from services/vision_models.py.
 
 ONNX tensor names, verified against Xenova/clip-vit-base-patch32:
   vision: in 'pixel_values' (N,3,224,224) tensor(float) -> out 'image_embeds'
   text:   in 'input_ids'    (N,77) int64               -> out 'text_embeds'
 
-Two non-obvious facts about these exports:
+Three non-obvious facts about these exports:
   - the fp16 files have fp16 WEIGHTS but float32 I/O, so the input dtype is read
     from the session descriptor rather than assumed
   - loading them with the default ORT_ENABLE_ALL crashes on the CPU provider
     (SimplifiedLayerNormFusion), which would break the required CPU fallback,
     so both sessions pin ORT_ENABLE_BASIC
+  - the pooled image embedding is not always output 0: SigLIP's export puts
+    last_hidden_state first, so the output is chosen by name
 """
 from __future__ import annotations
 
@@ -21,14 +24,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-# CLIP preprocessing constants, from preprocessor_config.json
-CLIP_MEAN = np.array([0.48145466, 0.45782750, 0.40821073], dtype=np.float32)
-CLIP_STD = np.array([0.26862954, 0.26130258, 0.27577711], dtype=np.float32)
+from services.vision_models import DEFAULT_KEY, get
 
-# CLIP's learned logit_scale.exp()
-LOGIT_SCALE = 100.0
-
-CONTEXT_LENGTH = 77
+MODELS_ROOT = "models"
 
 _ORT_DTYPES = {
     "tensor(float)": np.float32,
@@ -55,17 +53,21 @@ DEFAULT_DISTRACTORS = [
 ]
 
 
-# The normalisation folded into one multiply-add, in NCHW, so it can be applied
-# in place after the transpose instead of as three whole-array passes.
-_SCALE_CHW = (1.0 / 255.0 / CLIP_STD).reshape(1, 3, 1, 1).astype(np.float32)
-_OFFSET_CHW = (-CLIP_MEAN / CLIP_STD).reshape(1, 3, 1, 1).astype(np.float32)
+def _scale_offset(model):
+    """The normalisation folded into one multiply-add, in NCHW, so it can be
+    applied in place after the transpose instead of as three whole-array
+    passes."""
+    mean = np.asarray(model.mean, dtype=np.float32)
+    std = np.asarray(model.std, dtype=np.float32)
+    return ((1.0 / 255.0 / std).reshape(1, 3, 1, 1).astype(np.float32),
+            (-mean / std).reshape(1, 3, 1, 1).astype(np.float32))
 
 
-def preprocess(crops: np.ndarray, dtype=np.float32) -> np.ndarray:
-    """uint8 (B,224,224,3) -> (B,3,224,224) in `dtype`, C-contiguous.
+def preprocess(crops: np.ndarray, model, dtype=np.float32) -> np.ndarray:
+    """uint8 (B,px,px,3) -> (B,3,px,px) in `dtype`, C-contiguous.
 
     TRANSPOSE FIRST, while the data is still uint8 - this was the single
-    largest cost in the CLIP path. Folds normalisation into one in-place
+    largest cost in the scoring path. Folds normalisation into one in-place
     multiply-add rather than three full-array passes.
 
     In float32 this differs from the old per-channel formula by at most one
@@ -76,9 +78,10 @@ def preprocess(crops: np.ndarray, dtype=np.float32) -> np.ndarray:
     ascontiguousarray is required, not cosmetic: a non-contiguous array either
     forces a silent copy inside ONNX Runtime or errors, depending on provider.
     """
+    scale, offset = _scale_offset(model)
     x = np.ascontiguousarray(crops.transpose(0, 3, 1, 2)).astype(np.float32)
-    x *= _SCALE_CHW
-    x += _OFFSET_CHW
+    x *= scale
+    x += offset
     return x.astype(dtype)
 
 
@@ -113,13 +116,32 @@ def _l2(a: np.ndarray) -> np.ndarray:
     return a / np.maximum(np.linalg.norm(a, axis=-1, keepdims=True), 1e-8)
 
 
-class CLIPScorer:
+def pick_embedding_output(outputs, preferred) -> str:
+    """The POOLED embedding among an ONNX session's outputs.
+
+    Never output 0 by position: SigLIP's exports put last_hidden_state first on
+    both towers, which is a (N, tokens, dim) tensor, and the mismatch only
+    surfaces as a matmul error much further downstream.
+    """
+    names = {o.name for o in outputs}
+    for pref in preferred:
+        if pref in names:
+            return pref
+    for o in outputs:
+        if len(o.shape) == 2:
+            return o.name
+    return outputs[0].name
+
+
+class VisionScorer:
     """Turns a text prompt into a per-image fitness in [0, 1]."""
 
     MAX_CHUNK = 64  # images per session.run; 64 fp32 NCHW inputs ~= 38 MB
 
-    def __init__(self, model_dir, providers=None, n_views: int = 3, seed: int = 0):
+    def __init__(self, model_key: str = DEFAULT_KEY, providers=None,
+                 n_views: int = 3, seed: int = 0):
         self._available = False
+        self._model = get(model_key)
         self._text_emb = None
         self._prompt = ""
         self._n_views = n_views
@@ -129,7 +151,7 @@ class CLIPScorer:
         import onnxruntime as ort
         from tokenizers import Tokenizer
 
-        d = Path(model_dir)
+        d = Path(MODELS_ROOT) / self._model.subdir
         if providers is None:
             providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
         have = set(ort.get_available_providers())
@@ -151,13 +173,15 @@ class CLIPScorer:
         vin = self._vision.get_inputs()[0]
         self._vision_in = vin.name
         self._vision_dtype = _ORT_DTYPES.get(vin.type, np.float32)
-        self._vision_out = self._vision.get_outputs()[0].name
+        self._outputs = self._vision.get_outputs()
+        self._vision_out = self._pick_output()
         self._text_in = self._text.get_inputs()[0].name
-        self._text_out = self._text.get_outputs()[0].name
+        self._text_out = pick_embedding_output(
+            self._text.get_outputs(), ("text_embeds", "pooler_output"))
 
         self._tokenizer = Tokenizer.from_file(str(d / "tokenizer.json"))
-        self._tokenizer.enable_truncation(CONTEXT_LENGTH)
-        self._tokenizer.enable_padding(length=CONTEXT_LENGTH)
+        self._tokenizer.enable_truncation(self._model.context)
+        self._tokenizer.enable_padding(length=self._model.context)
 
         self._available = True
 
@@ -166,8 +190,17 @@ class CLIPScorer:
         return self._available
 
     @property
+    def model(self):
+        return self._model
+
+    @property
     def prompt(self) -> str:
         return self._prompt
+
+    def _pick_output(self) -> str:
+        """The pooled IMAGE embedding."""
+        return pick_embedding_output(self._outputs,
+                                     ("image_embeds", "pooler_output"))
 
     def set_prompt(self, text: str, distractors: list[str] | None = None) -> None:
         """Embed the target prompt (index 0) plus distractors. Cached until the
@@ -179,7 +212,7 @@ class CLIPScorer:
         self._prompt = text
 
     def embed_text(self, prompts: list[str]) -> np.ndarray:
-        """(P,) strings -> float32 (P, 512), L2-normalised.
+        """(P,) strings -> float32 (P, dim), L2-normalised.
 
         Deliberately does NOT write self._text_emb: the exploration archive's
         goal embeddings and score()'s prompt+distractor cache are different
@@ -221,7 +254,7 @@ class CLIPScorer:
         """
         starts = list(range(0, len(crops), self.MAX_CHUNK))
         if len(starts) <= 1:
-            batch = preprocess(crops, self._vision_dtype)
+            batch = preprocess(crops, self._model, self._vision_dtype)
             out = self._vision.run([self._vision_out], {self._vision_in: batch})[0]
             return _l2(out.astype(np.float32))
 
@@ -229,7 +262,8 @@ class CLIPScorer:
         c = self.MAX_CHUNK
 
         def prep(s):
-            return ex.submit(preprocess, crops[s:s + c], self._vision_dtype)
+            return ex.submit(preprocess, crops[s:s + c], self._model,
+                             self._vision_dtype)
 
         pending = prep(starts[0])
         chunks = []
@@ -241,7 +275,7 @@ class CLIPScorer:
         return _l2(np.concatenate(chunks, axis=0))
 
     def embed(self, images: np.ndarray, n_views: int | None = None) -> np.ndarray:
-        """uint8 (B,224,224,3) -> float32 (B*n_views, 512), L2-normalised.
+        """uint8 (B,px,px,3) -> float32 (B*n_views, dim), L2-normalised.
 
         Output is image-major: [img0 v0, img0 v1, ..., img1 v0, ...].
         n_views=None uses the instance default.
@@ -255,12 +289,12 @@ class CLIPScorer:
         return self._embed_images(augment(images, v, self._rng))
 
     def embed_mean(self, images: np.ndarray, n_views: int = 3) -> np.ndarray:
-        """uint8 (B,224,224,3) -> float32 (B, 512): ONE embedding per image,
+        """uint8 (B,px,px,3) -> float32 (B, dim): ONE embedding per image,
         averaged over n_views and renormalised.
 
         The averaging is the point: embed() returns views un-reduced, which
         would make sub-crops of one tile into competing archive descriptors.
-        CLIP ViT-B/32 is strongly position-dependent (a roll on the torus
+        These encoders are strongly position-dependent (a roll on the torus
         moves the embedding well past the separation bar), and averaging over
         random sub-crops buys back most of that invariance. See CLAUDE.md.
         """
@@ -272,14 +306,14 @@ class CLIPScorer:
         return _l2(e.reshape(len(b), v, -1).mean(axis=1))
 
     def score(self, images: np.ndarray) -> np.ndarray:
-        """uint8 (B,224,224,3) -> float32 (B,). Softmax probability of the
+        """uint8 (B,px,px,3) -> float32 (B,). Softmax probability of the
         target prompt against the distractor set, averaged over augmented views.
         """
         if self._text_emb is None:
             raise RuntimeError("set_prompt() must be called before score()")
         b = len(images)
         emb = self.embed(images, self._n_views)
-        logits = LOGIT_SCALE * (emb @ self._text_emb.T)
+        logits = self._model.text_logit_scale * (emb @ self._text_emb.T)
         logits -= logits.max(axis=1, keepdims=True)
         probs = np.exp(logits)
         probs /= probs.sum(axis=1, keepdims=True)

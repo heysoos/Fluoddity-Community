@@ -19,8 +19,13 @@ class FakeScorer:
     prompts often enough to make a goal test fail for unrelated reasons.
     """
 
-    def __init__(self, dim=DIM):
+    def __init__(self, dim=DIM, model_key="clip-b32"):
+        from services.vision_models import get
+
         self.dim = dim
+        # The driver reads its logit scales off the scorer's model, so a stub
+        # needs one. clip-b32's are the module constants these tests assert on.
+        self.model = get(model_key)
         self._axis: dict[str, int] = {}
         self.calls = 0
         self.prompt_set_calls = 0
@@ -34,7 +39,7 @@ class FakeScorer:
 
     def set_prompt(self, text, distractors=None):
         """Explore must NEVER call this - it writes _text_emb, which the Auto
-        (CLIP) tab owns. Counted so a test can prove it stays untouched."""
+        (Prompt) tab owns. Counted so a test can prove it stays untouched."""
         self.prompt_set_calls += 1
 
     def embed_text(self, prompts):
@@ -61,7 +66,8 @@ def make(grid=2, **kw):
     arc = Archive(store=None, dim=DIM,
                   liveness_min=liveness_min, capacity=100,
                   min_separation=min_separation)
-    d = ImgepDriver(ts, FakeScorer(), arc, rng=np.random.default_rng(0))
+    scorer = kw.pop("scorer", None) or FakeScorer()
+    d = ImgepDriver(ts, scorer, arc, rng=np.random.default_rng(0))
     # The DRIVER owns these two: tell() pushes them onto the archive every
     # generation, so setting them only on the archive is silently undone on the
     # first tell and the test would be measuring the defaults.
@@ -455,8 +461,20 @@ def test_the_distractors_are_embedded_once_for_the_whole_run():
     assert scorer.calls == before, "cached, not re-embedded"
 
 
+def test_the_driver_reads_its_scales_off_the_scorers_model():
+    """Every encoder has its own pair, and a wrong scale saturates the
+    landscape without raising - so the driver must never fall back to a module
+    constant."""
+    scorer = FakeScorer()
+    scorer.model = type("M", (), {"text_logit_scale": 7.0,
+                                  "image_logit_scale": 3.0})()
+    d, _arc, _ts = make(scorer=scorer)
+    assert d._references(kind="text")[1] == 7.0
+    assert d._references(kind="latent")[1] == 3.0
+
+
 def test_the_scorers_prompt_cache_is_never_touched():
-    """set_prompt() writes scorer._text_emb, which the Auto (CLIP) tab owns.
+    """set_prompt() writes scorer._text_emb, which the Auto (Prompt) tab owns.
     Explore must not clobber the other mode's prompt."""
     g = GoalList()
     g.add("coral")

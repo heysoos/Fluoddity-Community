@@ -99,6 +99,11 @@ class App:
 
         # Create services (Orchestrator owns these)
         self.rule_manager = RuleManager()
+        from services.undo_history import UndoHistory
+
+        self.undo_history = UndoHistory()
+        self._undo_preview_base = None
+        self._undo_preview_showing = -1
         entity_stride = SIZE_OF_ENTITY_STRUCT // 4
         self.entity_picker = EntityPicker(self.sim.get_entity_buffer(), entity_stride)
         self.video_service = VideoRecorderService()
@@ -121,7 +126,7 @@ class App:
         self.tile_capture = None
         self.capture_blit = None
         self.capture_view = None
-        self.clip_scorer = None
+        self.vision_scorer = None
         self._auto_prev_aspect = None
         self._auto_prev_speedmult = None
         self._auto_prev_motion_blur = None
@@ -237,22 +242,22 @@ class App:
             from services.auto_tournament_service import AutoTournamentService
             from services.capture_blit import CaptureBlit
             from services.capture_view import CaptureView
-            from services.clip_scorer import CLIPScorer
             from services.run_logger import RunLogger
             from services.tile_capture import TileCapture
-            from tools.fetch_clip_onnx import MODEL_DIR, is_present
+            from services.vision_models import DEFAULT_KEY
+            from services.vision_scorer import VisionScorer
+            from tools.fetch_models import is_present
         except ImportError as exc:
             self.ui.auto_unavailable = f"missing package: {exc.name}"
             return False
 
-        if not is_present(MODEL_DIR):
+        key = getattr(self.ui.get_state().auto_tournament, "model_key",
+                      DEFAULT_KEY)
+        if not is_present(key):
             self.ui.auto_unavailable = "model_missing"
             return False
 
-        try:
-            self.clip_scorer = CLIPScorer(MODEL_DIR)
-        except Exception as exc:
-            self.ui.auto_unavailable = f"could not load CLIP: {exc}"
+        if not self._ensure_scorer(key):
             return False
 
         self.tile_capture = TileCapture(self.ctx, self.tournament_service.grid)
@@ -260,12 +265,81 @@ class App:
         self.capture_view = CaptureView(self.ctx, self.sim, self.camera)
         self.auto_service = AutoTournamentService(
             self.tournament_service,
-            scorer=self.clip_scorer,
+            scorer=self.vision_scorer,
             logger=RunLogger(config={"grid": self.tournament_service.grid}),
         )
         self.command_handler.auto_service = self.auto_service
         self.ui.auto_service = self.auto_service
         self.ui.auto_unavailable = ""
+        return True
+
+    def _follow_auto_encoder(self, ui_state):
+        """Make Auto's Encoder combo take effect while its tab is open.
+
+        Per frame rather than on the enable edge, because the combo sits in a
+        tab that is already open by the time it can be touched - read once, it
+        is a control that does nothing. Costs one string compare until the key
+        actually moves.
+
+        Explore's encoder belongs to its archive and is a readout, so this
+        stands down whenever Explore owns the driver.
+        """
+        svc = self.auto_service
+        if svc is None or not ui_state.auto_tournament.enabled:
+            return
+        if self.imgep_driver is not None and svc.driver is self.imgep_driver:
+            return
+        want = ui_state.auto_tournament.model_key
+        current = getattr(self.vision_scorer, "model", None)
+        if current is not None and current.key == want:
+            return
+
+        from tools.fetch_models import is_present
+
+        if not is_present(want):
+            self.ui.auto_unavailable = "model_missing"
+            return
+        if not self._ensure_scorer(want):
+            return
+        self.ui.auto_unavailable = ""
+        # The goal was embedded by the outgoing encoder, and the two spaces are
+        # not comparable - at 512 against 768 the score is not even a shape
+        # error until the first tile arrives.
+        prompt = ui_state.auto_tournament.prompt.strip()
+        if prompt:
+            svc.set_prompt(prompt)
+        # A generation half-scored in one space and half in another ranks
+        # nothing, so the one in flight is thrown away rather than finished.
+        svc.abort_generation()
+
+    def _ensure_scorer(self, model_key: str) -> bool:
+        """Make `model_key` the resident encoder. -> is it loaded?
+
+        One at a time, replaced rather than stacked: keeping every encoder
+        loaded would cost about a gigabyte of weights for a switch that happens
+        once per archive. Auto and Explore are mutually exclusive, so the
+        resident one follows whichever is scoring.
+
+        Built before anything is reassigned, so a failure leaves the previous
+        encoder in place rather than the app scoring with nothing.
+        """
+        import services.vision_scorer as vs
+
+        current = getattr(self, "vision_scorer", None)
+        if current is not None and current.model.key == model_key:
+            return True
+        try:
+            built = vs.VisionScorer(model_key)
+        except Exception as exc:
+            self.ui.auto_unavailable = f"could not load encoder: {exc}"
+            return False
+        self.vision_scorer = built
+        # Both holders keep their own reference; a stale one keeps scoring with
+        # the encoder that was just replaced.
+        if getattr(self, "auto_service", None) is not None:
+            self.auto_service.scorer = built
+        if getattr(self, "imgep_driver", None) is not None:
+            self.imgep_driver.scorer = built
         return True
 
     def _build_archive_set(self, path):
@@ -292,9 +366,11 @@ class App:
         layout = (getattr(getattr(self, "sim", None), "brain_layout", None)
                   or default_layout())
         store = ArchiveStore(path, layout)
-        archive = Archive(store=store, layout=layout)
+        # The archive's own encoder, not whatever happens to be resident: its
+        # stored vectors are only comparable to that one.
+        archive = Archive(store=store, layout=layout, encoder=store.encoder)
         loaded, dropped = archive.load_from_store()
-        print(f"[archive] {path.name}/{layout.signature()}: "
+        print(f"[archive] {path.name}/{layout.signature()} [{store.encoder}]: "
               f"loaded {loaded} entries ({dropped} dropped)")
 
         goals = GoalList(store=store)
@@ -355,7 +431,7 @@ class App:
             # The CMA-ES mean was seeded from a parent in the OUTGOING archive.
             self.imgep_driver.end_expedition()
         if self.archive is not None:
-            self.archive.maybe_flush(force=True)
+            self.archive.maybe_flush(force=True, closing=True)
         if self.goal_list is not None:
             self.goal_list.save()
         if self.archive_store is not None:
@@ -370,7 +446,13 @@ class App:
         """
         if self.archive_store is None:
             return
-        self.archive_store.save_settings(ui_state.archive.to_settings())
+        settings = ui_state.archive.to_settings()
+        self.archive_store.save_settings(settings)
+        # A change made after the last generation would otherwise never reach
+        # the log, since the per-generation hook has stopped firing.
+        if self.archive is not None:
+            gen = int(getattr(self.imgep_driver, "gen", 0) or 0)
+            self.archive.record_settings(settings, gen)
 
     def _load_archive_settings(self, ui_state):
         """Restore an archive's settings, and make a restored grid take effect.
@@ -541,6 +623,17 @@ class App:
             self._refresh_driver_specs(layout)
             return True
 
+        # Said out loud because it is the one change that silently redirects
+        # where a run's results are filed: the archive is keyed by signature,
+        # so entries admitted after this land in a different directory and the
+        # previous brain's stop being reachable as parents. Nothing else
+        # records that it happened - a run config names the layout it ran
+        # under, but only once a run starts.
+        running = (getattr(ui_state.archive, "running", False)
+                   or getattr(ui_state.auto_tournament, "running", False))
+        print(f"[brain] layout {current.signature()} -> {layout.signature()}"
+              + (" WHILE A SEARCH IS RUNNING" if running else ""))
+
         # Before the release, while the outgoing store is still open.
         self._save_archive_settings(ui_state)
         self._release_archive(ui_state)
@@ -633,6 +726,16 @@ class App:
         # Idempotent, and it may already have happened: the browser opens the
         # archive on its own, without ever building a driver.
         self._open_archive(ui_state)
+        # The archive's stored vectors are only comparable to the encoder that
+        # made them, so the search adopts it. Every call, not just the first:
+        # switching archive can switch encoder. Deliberately NOT in
+        # _build_archive_set, which the browser also reaches - opening the
+        # gallery must not pay for an ONNX session. See CLAUDE.md.
+        if self.archive_store is not None:
+            ui_state.archive.encoder_key = self.archive_store.encoder
+            if not self._ensure_scorer(self.archive_store.encoder):
+                self.ui.archive_unavailable = self.ui.auto_unavailable
+                return False
         if self.imgep_driver is not None:
             return True
 
@@ -640,7 +743,7 @@ class App:
 
         # The archive, its name and the settings are _open_archive's job.
         self.imgep_driver = ImgepDriver(
-            self.tournament_service, self.clip_scorer,
+            self.tournament_service, self.vision_scorer,
             self.archive, self.goal_list)
         self.prompt_driver = self.auto_service.driver
 
@@ -706,10 +809,22 @@ class App:
             # None while the CLIP pass runs off-thread; retry next frame.
             if fit is not None:
                 self._after_generation(fit)
+                self._record_settings_version(ui_state)
             return 0
         if action is Action.STEP:
             return max(1, int(svc.sim_steps_per_frame))
         return 1
+
+    def _record_settings_version(self, ui_state):
+        """One settings version per generation, and only if something moved.
+
+        Per generation rather than per frame: the diff is cheap but a row per
+        frame would bury the timeline it exists to make readable.
+        """
+        if self.archive is None:
+            return
+        gen = int(getattr(self.imgep_driver, "gen", 0) or 0)
+        self.archive.record_settings(ui_state.archive.to_settings(), gen)
 
     def _after_generation(self, fit):
         """Periodic best-tile frame dump and checkpoint autosave."""
@@ -822,6 +937,7 @@ class App:
             if self.auto_service is not None:
                 self.auto_service.pause()
         self._auto_was_enabled = auto.enabled
+        self._follow_auto_encoder(ui_state)
 
         # Extras > Archive Browser. Before process_commands, which is where the
         # browser's own flags are read, and cleared first so a failure to open
@@ -843,9 +959,27 @@ class App:
                 self.auto_service.pause()
                 self.auto_service.driver = self.prompt_driver
             if self.archive is not None:
-                self.archive.maybe_flush(force=True)
+                self.archive.maybe_flush(force=True, closing=True)
             self._undo_auto_overrides(ui_state)
         self._explore_was_enabled = expl.enabled
+
+        # The encoder readout follows the archive, never the other way round.
+        # Archive-level, so the count is every layout under it - which is what
+        # load_from_store already loaded.
+        if self.archive is not None:
+            expl.archive_entry_count = len(self.archive)
+            expl.encoder_key = self.archive.encoder
+        # Read on the open edge only: the log grows with the run and this tab
+        # redraws every frame.
+        if expl.request_history_reload:
+            expl.request_history_reload = False
+            expl.history_rows = (self.archive_store.load_history()
+                                 if self.archive_store is not None else [])
+
+        # Undo/redo, before the commands: a restored preset must be applied in
+        # the same frame the key was pressed. Before the soundtrack push too,
+        # so a restored recording preference takes effect in its own frame.
+        self._handle_undo(ui_state)
 
         # 1.9. The soundtrack choice, pushed BEFORE process_commands, which is
         # where the record toggle starts a take. Recording also starts from the
@@ -948,6 +1082,11 @@ class App:
         self.sim.apply_camera_state(ui_state.camera)
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)
+        # The step reflects the state the frame actually ran under. BEFORE the
+        # preview, whose writes would otherwise commit as steps of their own.
+        self._record_undo_step(ui_state)
+        self._handle_undo_preview(ui_state)
+        self._push_undo_rows(ui_state)
         _auto_svc = self.auto_service
         # Auto and Explore are mutually exclusive; either counts as "running".
         _auto_on = ui_state.auto_tournament.enabled or ui_state.archive.enabled
@@ -1243,6 +1382,99 @@ class App:
         print(f"[cleanup] the audio rig could not be written to {rig_path()}")
         return False
 
+    def _handle_undo(self, ui_state):
+        """Ctrl+Z / Ctrl+Shift+Z, and a click in the history panel."""
+        from services import undo_history as uh
+
+        target = None
+        if ui_state.request_undo:
+            target = self.undo_history.undo()
+            if target is None:
+                ui_state.undo_notice = "Nothing to undo"
+        elif ui_state.request_redo:
+            target = self.undo_history.redo()
+            if target is None:
+                ui_state.undo_notice = "Nothing to redo"
+        elif ui_state.undo_jump_index >= 0:
+            target = self.undo_history.jump(ui_state.undo_jump_index)
+        ui_state.undo_jump_index = -1
+        if target is None:
+            return
+
+        skipped = self.command_handler.apply_undo_snapshot(target, ui_state)
+        ui_state.undo_notice = (
+            f"{target.label} - settings only, the grid's owner keeps the brain"
+            if skipped else target.label)
+        # Applying a step ENDS any preview: the state is now deliberately this
+        # one, so there is nothing to hand back, and restoring what was on
+        # screen before the hover would silently undo the click.
+        self._undo_preview_base = None
+        self._undo_preview_showing = ui_state.undo_preview_index
+        # Re-baseline, or the next frame reads this restore as a fresh change.
+        self.undo_history.rebase(
+            uh.capture(ui_state, self.rule_manager.get_current_rule(),
+                       self.sim.brain_layout))
+
+    def _record_undo_step(self, ui_state):
+        """Commit a step if anything declared changed and no widget is active."""
+        from services import undo_history as uh
+
+        if ui_state.any_widget_active:
+            return
+        # A preview BORROWS a step; it is not a change, and recording it is a
+        # runaway - the commit shifts the rows under the pointer, so the next
+        # row previews and commits in turn. Covers the frame the preview is
+        # handed back too, which is the one that clears the base.
+        if self._undo_preview_base is not None:
+            return
+        # The undo panel is not the only thing that hovers. File > Load, the
+        # archive browser and the clipboard all put a borrowed rule and its
+        # physics on screen the same way.
+        if self.command_handler.preview_active:
+            return
+        snap = uh.capture(ui_state, self.rule_manager.get_current_rule(),
+                          self.sim.brain_layout)
+        held = self.undo_history.current()
+        if held is not None and uh.same(held, snap):
+            return
+        self.undo_history.commit(snap)
+
+    def _handle_undo_preview(self, ui_state):
+        """Apply the hovered step, and put the live state back on un-hover.
+
+        The state before the FIRST hover is what a restore returns to;
+        re-hovering another row keeps it, because sliding down the list hovers
+        several rows with no gap in between.
+        """
+        from services import undo_history as uh
+
+        wanted = ui_state.undo_preview_index
+        if wanted == self._undo_preview_showing:
+            return
+        if self._undo_preview_base is None and wanted >= 0:
+            self._undo_preview_base = uh.capture(
+                ui_state, self.rule_manager.get_current_rule(),
+                self.sim.brain_layout)
+
+        step = (self.undo_history.steps[wanted]
+                if 0 <= wanted < len(self.undo_history.steps) else None)
+        if step is None:
+            if self._undo_preview_base is not None:
+                self.command_handler.apply_undo_snapshot(
+                    self._undo_preview_base, ui_state)
+                self._undo_preview_base = None
+        else:
+            self.command_handler.apply_undo_snapshot(step, ui_state)
+        self._undo_preview_showing = wanted
+
+    def _push_undo_rows(self, ui_state):
+        """Hand the panel its rows. The UI is passive and owns no journal."""
+        history = self.undo_history
+        self.ui.undo_steps = [
+            (i, s.label, i > history.cursor)
+            for i, s in enumerate(history.steps)]
+        self.ui.undo_cursor = history.cursor
+
     @staticmethod
     def _step(label, fn, *args, **kwargs):
         """Run one shutdown step; log and continue if it raises, so a failing
@@ -1260,7 +1492,8 @@ class App:
         ui_state = self._step("read ui state", self.ui.get_state)
 
         if self.archive is not None:
-            self._step("flush archive", self.archive.maybe_flush, force=True)
+            self._step("flush archive", self.archive.maybe_flush,
+                       force=True, closing=True)
         if self.goal_list is not None:
             self._step("save goals", self.goal_list.save)
         if ui_state is not None:
