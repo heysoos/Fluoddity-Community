@@ -73,6 +73,10 @@ class UIState:
     # Which step the pointer is over, or -1. CONTINUOUS, not a one-shot: a
     # panel that stops being drawn would otherwise strand the preview.
     undo_preview_index: int = -1
+    # What to call the step this frame commits, set by whatever caused the
+    # change. Advisory, and cleared by the commit it names - the diff is what
+    # triggers a step, so a forgotten tag costs a name and never coverage.
+    undo_tag: str = ""
 
     # Config save/load (Ctrl+C/Ctrl+V)
     request_save_config: bool = False

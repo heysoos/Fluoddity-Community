@@ -1,6 +1,8 @@
 """Command handler: processes one-shot UI commands each frame."""
 import copy
 import random
+from pathlib import Path
+
 import numpy as np
 from utilities.gl_helpers import readback_rule
 
@@ -1278,6 +1280,7 @@ class CommandHandler:
             self._archive_preview_physics = None
             self._archive_preview_pushed = False
             ast.notice = f"Loaded #{entry_id}."
+            ui_state.undo_tag = f"Load entry #{entry_id}"
             return
 
         want = int(ast.preview_entry_id) if ast.live_preview else -1
@@ -1652,6 +1655,7 @@ class CommandHandler:
                     self._push_and_apply_rule(rule, ui_state)
                     if fh:
                         fh.apply_last_copied(ui_state)
+                    ui_state.undo_tag = "Paste config"
                     print("Config loaded from clipboard")
                 else:
                     print("Failed to load config from clipboard")
@@ -1800,6 +1804,7 @@ class CommandHandler:
             if ui_state.load_watercolor_override is not None:
                 ui_state.sim.watercolor_mode = ui_state.load_watercolor_override
             print(f"Config loaded (from preview): {filename}")
+            ui_state.undo_tag = f"Load {Path(filename).stem}"
             self.ui.update_physics_defaults(filename)
         else:
             # No preview active - load fresh from file
@@ -1814,6 +1819,7 @@ class CommandHandler:
                 if fh:
                     fh.apply_for_config(config, filepath, ui_state)
                 print(f"Config loaded from {filepath}")
+                ui_state.undo_tag = f"Load {Path(filename).stem}"
                 self.ui.update_physics_defaults(filename)
             else:
                 print(f"Failed to load config from {filepath}")
@@ -1955,6 +1961,7 @@ class CommandHandler:
             # Extract original filename from label (everything before the *)
             original_filename = label.rsplit("*", 1)[0]
             self.ui.update_physics_defaults(original_filename)
+            ui_state.undo_tag = f"Load {label}"
             print(f"Config loaded from clipboard: {label}")
 
     def _delete_clipboard_config(self, ui_state):

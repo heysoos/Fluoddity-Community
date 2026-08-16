@@ -375,6 +375,19 @@ mechanics these caveats assume.
   arrives) and aborts the generation in flight. Guarded by
   `tests/test_scorer_lifecycle.py`.
 
+- **`_ensure_scorer` names EVERY DRIVER, because the service holds no scorer
+  of its own.** `AutoTournamentService.scorer` is a PROPERTY forwarding to
+  `self.driver`, and the two drivers are swapped in and out by mode — so
+  assigning through the service reached whichever was installed and left the
+  other on the encoder that had just been replaced. Which one missed depended
+  on the mode that happened to be running when the archive's encoder was
+  adopted, and `_follow_auto_encoder` heals it only when Auto's chosen key
+  differs from the resident one. At equal width a foreign vector is silently
+  wrong rather than an error — `clip-b32` and `clip-b16` are both 512 — so
+  this fails quietly. The build happens before any reassignment, so a failure
+  leaves every holder on the outgoing encoder rather than half-swapping the
+  app. Guarded by `tests/test_scorer_holders.py`.
+
 - **The settings a run was carried out under are a LOG, not a field.**
   `settings.json` is rewritten wholesale, so the `min_separation` that admitted
   entry #4000 is gone the moment the slider moves.
@@ -1303,6 +1316,18 @@ mechanics these caveats assume.
   the orchestrator with a borrow outstanding. `_handle_undo` therefore returns
   early on `preview_active` with a notice, which is the same predicate
   `_record_undo_step` already uses.
+
+- **A step's NAME travels as a one-shot on `ui_state`, never through the
+  journal.** `UndoHistory.tag()` existed from the start and nothing called it,
+  so every row was `describe()`'s guess — and a preset load moves a dozen
+  fields at once, so every preset in the library produced a row saying
+  "Settings". `CommandHandler` holds no journal (it sets `ui_state.undo_tag`
+  and the orchestrator forwards it, the pattern every other command follows),
+  and the tag is cleared by the frame that USES it: a load deferred behind a
+  live widget keeps its name, while a load that changed nothing drops it
+  rather than naming whatever moves next. Still advisory — the DIFF is what
+  commits a step, so a call site that forgets to tag costs a name and never
+  coverage. Guarded by `tests/test_undo_labels.py`.
 
 - **Undo covers the recipe, never the picture.** The canvas and entity buffers
   are out, so Clear Canvas, Reset and Fill have nothing to restore, and

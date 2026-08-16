@@ -334,12 +334,19 @@ class App:
             self.ui.auto_unavailable = f"could not load encoder: {exc}"
             return False
         self.vision_scorer = built
-        # Both holders keep their own reference; a stale one keeps scoring with
-        # the encoder that was just replaced.
+        # EVERY driver by name. AutoTournamentService owns no scorer - its
+        # `scorer` is a property forwarding to whichever driver is installed -
+        # so assigning through the service reaches one of the two and leaves
+        # the other holding the encoder that was just replaced. Which one
+        # misses depends on the mode that happened to be running, and at equal
+        # width (clip-b32 and clip-b16 are both 512) a foreign vector is
+        # silently wrong rather than an error.
+        for holder in (getattr(self, "prompt_driver", None),
+                       getattr(self, "imgep_driver", None)):
+            if holder is not None:
+                holder.scorer = built
         if getattr(self, "auto_service", None) is not None:
             self.auto_service.scorer = built
-        if getattr(self, "imgep_driver", None) is not None:
-            self.imgep_driver.scorer = built
         return True
 
     def _build_archive_set(self, path):
@@ -1467,8 +1474,17 @@ class App:
         snap = uh.capture(ui_state, self.rule_manager.get_current_rule(),
                           self.sim.brain_layout)
         held = self.undo_history.current()
+        # Cleared either way past this point, and only past it: a frame that
+        # commits nothing has not USED the tag, so a load deferred behind a
+        # live widget keeps its name - while a load that moved nothing drops
+        # it rather than naming whatever changes next.
+        tag = ui_state.undo_tag
         if held is not None and uh.same(held, snap):
+            ui_state.undo_tag = ""
             return
+        ui_state.undo_tag = ""
+        if tag:
+            self.undo_history.tag(tag)
         self.undo_history.commit(snap)
 
     def _handle_undo_preview(self, ui_state):
