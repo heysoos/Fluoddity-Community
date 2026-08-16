@@ -159,6 +159,9 @@ class ArchiveState:
     # because opening from the menu may need the archive LOADED first and that
     # is the orchestrator's job, not the UI's.
     open_browser_requested: bool = False
+    # Fetch this archive's own encoder. Its own flag rather than Auto's,
+    # because the key comes from encoder.json and no combo here can change it.
+    download_model_requested: bool = False
 
     def to_settings(self) -> dict:
         """The tuning knobs, for `settings.json` in the archive's own folder."""

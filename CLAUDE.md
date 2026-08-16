@@ -397,6 +397,23 @@ mechanics these caveats assume.
   one — "keep what is on screen" would otherwise inherit the outgoing
   archive's bar, which is a distance in a different space.
 
+- **The encoder NOBODY CHOSE is the one that must offer to download itself.**
+  Auto's key comes from a combo and `_ensure_auto_service` gates it on
+  `is_present`, which is what draws the Download button; Explore's comes off
+  `encoder.json` and was handed straight to `VisionScorer`, so a missing model
+  surfaced as a raw `ONNXRuntimeError: NO_SUCHFILE` — inside a tab that
+  returns before it draws anything else, leaving no control on screen at all.
+  `_ensure_archive_service` gates the same way and the `model_missing` branch
+  draws the archive ROW as well as the button: the other way out is an archive
+  whose space IS on disk, and nothing else in that tab can be drawn.
+  `archive_unavailable` is cleared where the driver is REUSED, not only where
+  it is built, or the banner outlives the archive that raised it. The request
+  is `ArchiveState.download_model_requested` rather than Auto's, handled ABOVE
+  `_handle_explore`'s early return — a missing encoder is exactly why the
+  driver does not exist. `MODELS_ROOT` is relative to the CWD, so a worktree
+  has its own `models/` and a junction is what shares one. Guarded by
+  `tests/test_missing_archive_encoder.py`.
+
 - **Auto's encoder picker is read EVERY FRAME; Explore's is read once.**
   `_ensure_auto_service` returns early once the service exists, so the combo
   beside the prompt reached the scorer exactly once and then changed nothing —

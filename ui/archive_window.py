@@ -94,6 +94,9 @@ class ArchiveWindowMixin:
         self._render_banner(ast, "warning", _BAD)
         self._render_banner(ast, "notice", _OK)
 
+        if self.archive_unavailable == "model_missing":
+            self._render_missing_encoder(ast)
+            return
         if self.archive_unavailable:
             imgui.text_colored(imgui.ImVec4(*_WARN), self.archive_unavailable)
             imgui.text_wrapped(
@@ -139,6 +142,28 @@ class ArchiveWindowMixin:
         once, and two Dismiss buttons sharing an ImGui id kills one of them.
         """
         render_banner(ast, field, colour, scope=scope)
+
+    def _render_missing_encoder(self, ast):
+        """This archive's vectors are in an encoder that is not downloaded.
+
+        The archive row comes too, because the other way out is an archive in
+        a space that IS on disk, and the rest of the tab cannot be drawn.
+        """
+        from services.vision_models import get
+
+        try:
+            label = get(ast.encoder_key).label
+        except KeyError:
+            label = ast.encoder_key
+        imgui.text_colored(imgui.ImVec4(*_WARN),
+                           f"{label} is not downloaded.")
+        imgui.text_wrapped(
+            "This archive's entries were embedded by it, and no other encoder "
+            "can read them. Manual mode is unaffected.")
+        if imgui.button(f"Download {ast.encoder_key}"):
+            ast.download_model_requested = True
+        imgui.separator()
+        self._render_archive_row(ast)
 
     def _render_archive_row(self, ast, show_summary=True):
         """Which archive is active is an experimental variable, so it sits at

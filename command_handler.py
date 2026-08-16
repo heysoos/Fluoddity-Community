@@ -927,6 +927,7 @@ class CommandHandler:
         ast.seed_entry_id = -1
         ast.delete_entry_id = -1
         ast.refit_projection_requested = False
+        ast.download_model_requested = False
 
     @staticmethod
     def _clear_archive_flags(ast):
@@ -1007,6 +1008,12 @@ class CommandHandler:
 
     def _handle_explore(self, ui_state):
         ast = ui_state.archive
+        # Above the early return: a missing encoder is exactly why the driver
+        # was never built, so a download honoured only once it exists could
+        # never be asked for.
+        if ast.download_model_requested:
+            self._start_model_download(ast.encoder_key)
+
         svc, drv = self.auto_service, self.imgep_driver
         if drv is None or svc is None or svc.driver is not drv:
             self._clear_explore_flags(ast)

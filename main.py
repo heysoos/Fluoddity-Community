@@ -738,10 +738,23 @@ class App:
         # _build_archive_set, which the browser also reaches - opening the
         # gallery must not pay for an ONNX session. See CLAUDE.md.
         if self.archive_store is not None:
+            from tools.fetch_models import is_present
+
             ui_state.archive.encoder_key = self.archive_store.encoder
+            # Gated the same way Auto's combo is. Without it the ONE encoder
+            # nobody chose - it comes off encoder.json - is the ONE that
+            # answers a missing download with a raw ONNX error and no way out
+            # of the tab.
+            if not is_present(self.archive_store.encoder):
+                self.ui.archive_unavailable = "model_missing"
+                return False
             if not self._ensure_scorer(self.archive_store.encoder):
                 self.ui.archive_unavailable = self.ui.auto_unavailable
                 return False
+        # Cleared HERE and not only where the driver is built, or an archive
+        # whose encoder was missing leaves the banner - and so the dead tab -
+        # standing after a switch to one whose encoder is on disk.
+        self.ui.archive_unavailable = ""
         if self.imgep_driver is not None:
             return True
 

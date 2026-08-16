@@ -186,6 +186,17 @@ def test_explore_tab_renders_when_clip_is_unavailable(gui):
     assert frame(h.render_explore_tab) > host_only()
 
 
+def test_a_missing_encoder_draws_a_way_out_rather_than_a_dead_tab(gui):
+    """The Explore tab returns before it draws anything else, so this branch
+    IS the whole screen: it has to carry both exits - fetch the encoder this
+    archive needs, or switch to an archive in a space that is on disk."""
+    h = Harness(unavailable="model_missing")
+    h.state.archive.encoder_key = "clip-b16"
+    labels = set(button_labels(h.render_explore_tab))
+    assert "Download clip-b16" in labels
+    assert "Refresh##archive" in labels, "no archive row, so no other way out"
+
+
 def test_explore_tab_renders_with_a_live_driver(gui):
     goals = GoalList()
     goals.add("coral reef")
