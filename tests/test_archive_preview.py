@@ -310,6 +310,27 @@ def test_a_commit_reports_itself():
     assert "#0" in ui.archive.notice
 
 
+def test_a_commit_says_so_when_the_entry_stored_no_physics():
+    """An archive written before run configs existed, or one whose run had
+    physics search off, recorded nothing but the brain - so a click moves no
+    sliders. Said plainly, that is a limit of what was stored; unsaid, it
+    reads as a control that only half works."""
+    h, ui = _handler(), _UI()               # default spec is brain-only
+    h._run_config_cache = {"run-a": None}   # and no run config either
+    ui.archive.live_preview = True
+    ui.archive.load_entry_id = 0
+    h._handle_archive_preview(ui)
+    assert "brain only" in ui.archive.notice
+
+
+def test_a_commit_stays_quiet_when_the_entry_did_store_physics():
+    h, ui = _handler(_FakeArchive(spec="brain:80+physics:8")), _UI()
+    ui.archive.live_preview = True
+    ui.archive.load_entry_id = 0
+    h._handle_archive_preview(ui)
+    assert "brain only" not in ui.archive.notice
+
+
 # ---- the mode guard --------------------------------------------------------
 
 @pytest.mark.parametrize("mode", ["archive", "auto_tournament"])

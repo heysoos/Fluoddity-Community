@@ -1279,7 +1279,15 @@ class CommandHandler:
             self._archive_preview_id = -1
             self._archive_preview_physics = None
             self._archive_preview_pushed = False
-            ast.notice = f"Loaded #{entry_id}."
+            # Say WHICH HALVES arrived. An archive written before run configs
+            # existed, or one whose run had physics search off, stored no
+            # physics for any entry - so a click loads the brain and leaves
+            # the sliders alone, and "Loaded #N" reads as a control that only
+            # half works rather than as a limit of what was recorded.
+            ast.notice = (f"Loaded #{entry_id}."
+                          if self._entry_has_physics(entry_id)
+                          else f"Loaded #{entry_id} - brain only, this entry "
+                               f"stored no physics.")
             ui_state.undo_tag = f"Load entry #{entry_id}"
             return
 
@@ -1289,6 +1297,20 @@ class CommandHandler:
         self._end_archive_preview(ui_state)
         if want >= 0:
             self._show_archive_preview(ui_state, want)
+
+    def _entry_has_physics(self, entry_id) -> bool:
+        """Did this entry record any physics of its own?
+
+        The two layers _show_archive_preview applies: the RUN's config, and
+        the entry's own vector for the parameters the optimizer searched. With
+        neither, loading the entry writes the brain and nothing else.
+        """
+        i = self._archive_index(entry_id)
+        if i is None:
+            return False
+        entry = self.archive.entries[i]
+        return ("physics" in entry.spec
+                or self._run_config_for(entry) is not None)
 
     def _run_config_for(self, entry):
         """-> the PhysicsConfig this entry's RUN was carried out under, or None
