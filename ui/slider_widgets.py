@@ -503,8 +503,10 @@ class SliderWidgetsMixin:
         # Build display label: "[L]Sensor Gain##Sensor Gain" when locked
         display_label = pls.get_display_label(pdef.name, pdef.label) if pls else pdef.label
 
-        # Sweep buttons + range adjust (only when sweeps enabled)
-        if self.state.sim.parameter_sweeps_enabled:
+        # Sweep buttons + range adjust (only when sweeps enabled). A plain
+        # uniform has no sweep to offer: it is one float for the whole canvas,
+        # so a control that varied it by position would read nothing back.
+        if self.state.sim.parameter_sweeps_enabled and not pdef.plain_uniform:
             self.render_sweep_buttons(pdef.name)
             imgui.same_line(spacing=2)
             self.render_range_adjust_buttons(
@@ -530,6 +532,21 @@ class SliderWidgetsMixin:
                 new_value = pdef.default_max * (new_pos ** pdef.power_exponent)
                 setattr(self.state.sim, pdef.name, new_value)
             # Context menu without jitter (power-scaled params hide jitter)
+            _, _, reset_requested, _ = self.add_slider_context_menu(
+                pdef.label, pdef.default_min, pdef.default_max)
+            if reset_requested:
+                setattr(self.state.sim, pdef.name,
+                        self.current_physics_defaults.values.get(pdef.name, value))
+        elif pdef.plain_uniform:
+            # No sweeps and no jitter, so the range menu has nothing to offer
+            # but its reset - which a plain context menu still gives.
+            flags = (imgui.SliderFlags_.logarithmic if pdef.is_log_scaled
+                     else imgui.SliderFlags_.none)
+            changed, new_value = imgui.slider_float(
+                display_label, value, pdef.default_min, pdef.default_max,
+                "%.3f", flags)
+            if not (pls and pls.handle_alt_click(pdef.name)) and changed:
+                setattr(self.state.sim, pdef.name, float(new_value))
             _, _, reset_requested, _ = self.add_slider_context_menu(
                 pdef.label, pdef.default_min, pdef.default_max)
             if reset_requested:

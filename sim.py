@@ -335,6 +335,9 @@ class Sim:
         # Appearance settings from sim state (now part of physics config)
         tryset(self.entity_update_program, 'HUE_SENSITIVITY', self._state.hue_sensitivity)
         tryset(self.entity_update_program, 'COLOR_BY_COHORT', self._state.color_by_cohort)
+        # The canvas gets the same number in canvas_update; the particles and
+        # their trail must keep one clock.
+        tryset(self.entity_update_program, 'TIME_SCALE', self._state.TIME_SCALE)
 
 
 
@@ -395,6 +398,8 @@ class Sim:
         # Boundary conditions mode for wrap behavior
         tryset(self.canvas_update_program, 'BOUNDARY_CONDITIONS_MODE', self._state.boundary_conditions)
         tryset(self.canvas_update_program, 'tiling_mode', tiling_mode)
+        # The same clock entity_update runs on.
+        tryset(self.canvas_update_program, 'TIME_SCALE', self._state.TIME_SCALE)
 
         # Multi-load mode: calculate weighted average trail settings
         if multi_load_service and multi_load_service.is_active() and not is_preview_active:

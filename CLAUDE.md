@@ -180,6 +180,38 @@ mechanics these caveats assume.
   than a step and the range must be set off a percentile.
   `python -m tools.measure_speed`.
 
+- **`TIME_SCALE` is compensated in TWO moving averages, and that is what makes
+  it a slower creature rather than a different one.** Scaling the position
+  alone gives a particle that turns as sharply per step while covering less
+  ground, and a trail that takes in a whole step's deposit for half a step's
+  travel — tighter and thicker, not slower. Both corrections are one line
+  each, because both quantities are EMAs. The momentum filter `vel = vel*d + f`
+  settles at `f/(1-d)`, so a step covering `ts` retains `d^ts` and takes in
+  `(1-d^ts)/(1-d)` of the force, which holds that steady state exactly. The
+  trail's decay and deposit are two halves of ONE average — it keeps `P` and
+  takes in `1-P` — so `pow(P, ts)` corrects both at once, and two steps at
+  half time land exactly where one step at full time did. The step is scaled
+  AFTER the `V_MAX` clamp, or the cap would stop being a distance per unit
+  time. **Every `pow` is guarded on `ts == 1.0`**, because GLSL does not
+  promise a correctly rounded `pow` and an unguarded `pow(x, 1.0)` would
+  perturb the whole preset library by a bit or two; multiplying by exactly 1.0
+  needs no guard. `TRAIL_DIFFUSION` is deliberately NOT compensated — it is
+  off in almost every preset, and a Gaussian's variance adds rather than its
+  radius, so the slider's own nonlinear mapping would have to be inverted.
+  Guarded by `tests/test_time_scale.py`.
+
+- **A `plain_uniform` parameter is in `PHYSICS_PARAMS` but not in
+  `PHYSICS_PARAM_NAMES`.** It is one float for the whole canvas, so there is
+  no sweep or jitter to offer and no entry in those dicts — declaring one
+  would be the "declared but never read" defect the registry exists to stop.
+  It stays in the table regardless, because the slider, the label, the range
+  menu and the audio target must all come from one place: a second list of
+  modulatable parameters is exactly what
+  `tests/test_audio_mapping.py::test_physics_targets_come_from_the_registry_not_a_second_list`
+  forbids, and it caught the first attempt at this. `TIME_SCALE` is also
+  absent from `PhysicsConfig`, so loading someone else's preset leaves your
+  tempo where you set it.
+
 - **The `MultiLoadConfig` struct is written by OFFSET, and a physics
   parameter's label must be `title()` of its field name.** Two raw std430
   writers pack it in declaration order — `_write_multi_load_ssbo` and
@@ -890,6 +922,14 @@ mechanics these caveats assume.
   render moves the wave less per second of music than a fast one; and `_wave`
   starts at ZERO for all three shapes, so a phase still at 0 — a rig that has
   heard nothing — contributes nothing.
+
+- **`rate_scale` multiplies the RATE, never `dt`.** One knob slides a whole
+  rig onto another tempo, which is what matching a beat needs; scaling `dt`
+  instead would reach every attack, release and hold as well, and those are
+  durations. So `phase` is the only kind that notices it, and the guard
+  against generating motion from silence still holds at any setting — the
+  band is still a factor in the advance. The traces need nothing of their
+  own: the drawer plots `shaped`, which IS the shaper's output.
 
 - **Auto-gain divides each band by a peak the signal REACHES, so any steady
   input normalises to its own top — it ships OFF.** `np.maximum(peaks, raw)`

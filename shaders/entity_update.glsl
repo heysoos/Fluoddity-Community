@@ -49,6 +49,9 @@ uniform PhysicsSetting HAZARD_RATE_SETTING;
 uniform PhysicsSetting V_MAX_SETTING;
 uniform float HUE_SENSITIVITY;
 uniform bool COLOR_BY_COHORT;
+//How much simulated time one step covers. 1.0 leaves every arithmetic path
+//below untouched, bit for bit.
+uniform float TIME_SCALE = 1.0;
 uniform bool DISABLE_SYMMETRY;
 uniform int ABSOLUTE_ORIENTATION; // 0=Off, 1=Y axis, 2=Radial
 uniform float ORIENTATION_MIX; // Blend factor for orientation calculations
@@ -715,7 +718,20 @@ void main() {
     e.color.w=0.045; //low alpha
 
     //Accelerate: Apply drag and add force to e.vel,
-    e.vel = e.vel*calculate_setting(get_particle_drag(),e.pos,cohort) + force;
+    //
+    //TIME_SCALE runs this filter at its own rate. `vel = vel*d + f` is an
+    //exponential moving average, so a step covering ts of the time retains
+    //d^ts and must take in the matching share of f - which keeps the STEADY
+    //STATE f/(1-d) exactly where it was. Scaling the position alone would let
+    //a particle turn as sharply per step as before while covering less
+    //ground, which is a tighter creature rather than a slower one.
+    float drag = calculate_setting(get_particle_drag(),e.pos,cohort);
+    float drag_ts = TIME_SCALE == 1.0 ? drag : pow(abs(drag), TIME_SCALE)*sign(drag);
+    //d == 1 is a frictionless particle: the average never settles, and the
+    //share of force a step takes in is just its length.
+    float force_gain = abs(1.0 - drag) < 1e-6
+        ? TIME_SCALE : (1.0 - drag_ts)/(1.0 - drag);
+    e.vel = e.vel*drag_ts + force*force_gain;
     //Move: add e.vel and strafe to e.pos. Strafe is sampled at the position
     //e.vel alone would have reached, which is where a sweep used to read it.
     vec2 hop = strafe*calculate_setting(get_particle_strafe_power(),e.pos+e.vel,cohort);
@@ -742,7 +758,9 @@ void main() {
         step_delta *= k;
         e.vel *= k;   //or velocity piles up behind the cap and lurches on release
     }
-    e.pos += step_delta;
+    //AFTER the clamp, so V_MAX stays a distance per unit TIME rather than per
+    //step: at half speed a step may cover half as far, which is the same cap.
+    e.pos += step_delta*TIME_SCALE;
 
     //BOUNDARY_CONDITIONS_MODE:  0-1-2 == BOUNCE-RESET-WRAP
     //

@@ -24,6 +24,11 @@ class SimState:
     TRAIL_PERSISTENCE: float = 0.938
     TRAIL_DIFFUSION: float = 1.0
     HAZARD_RATE: float = 0.0
+    # How much simulated time one physics step covers. 1.0 is every preset
+    # ever saved, bit for bit. A plain uniform rather than a PhysicsSetting:
+    # a clock that ran at different rates in different corners of the canvas
+    # is not a clock. See the time scale caveat in CLAUDE.md.
+    TIME_SCALE: float = 1.0
 
     # Extra options
     DISABLE_SYMMETRY: bool = False

@@ -49,6 +49,9 @@ struct PhysicsSetting {
 
 uniform PhysicsSetting TRAIL_PERSISTENCE_SETTING;
 uniform PhysicsSetting TRAIL_DIFFUSION_SETTING;
+//Must match entity_update.glsl's, or the trail and the particles keep
+//different clocks. 1.0 leaves the arithmetic below untouched.
+uniform float TIME_SCALE = 1.0;
 
 uniform int frame_count;
 
@@ -291,6 +294,14 @@ void main() {
     // Use entity space position for position-based sweeps
     float trail_persistence = calculate_setting(TRAIL_PERSISTENCE_SETTING, entity_space_pos, 0.0);
     trail_persistence = clamp(trail_persistence,0.0,0.999);
+    //ONE pow compensates the whole clock, because the decay and the deposit
+    //are two halves of one moving average: what the trail keeps is P and what
+    //it takes in is 1-P. Raising P to the step's length makes two steps at
+    //half time exactly one step at full time, so a slower sim is the same
+    //creature rather than one drawing thicker.
+    if (TIME_SCALE != 1.0) {
+        trail_persistence = pow(trail_persistence, TIME_SCALE);
+    }
     can_out = can_color * trail_persistence + (1 - trail_persistence) * brush_color;
 
     // Draw trail mode: add velocity based on mouse drag

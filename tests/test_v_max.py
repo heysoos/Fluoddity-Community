@@ -104,11 +104,11 @@ def test_v_max_reaches_the_shader():
 def test_the_limit_covers_strafe_and_not_just_velocity():
     """Strafe is added STRAIGHT TO POSITION. Capping e.vel alone caps nothing a
     strafing preset does - with V Max at zero its particles keep flying."""
-    accelerate = SHADER.index("e.vel = e.vel*calculate_setting(get_particle_drag()")
+    accelerate = SHADER.index("e.vel = e.vel*drag_ts + force*force_gain;")
     hop = SHADER.index("vec2 hop = strafe*calculate_setting(get_particle_strafe_power(")
     delta = SHADER.index("vec2 step_delta = e.vel + hop;")
     clamp = SHADER.index("if(vraw < vm.max_value && smag > vlim)")
-    move = SHADER.index("e.pos += step_delta;")
+    move = SHADER.index("e.pos += step_delta*TIME_SCALE;")
     assert accelerate < hop < delta < clamp < move
     assert "e.pos += e.vel;" not in SHADER, "the unclamped move is back"
 
@@ -127,8 +127,17 @@ def test_the_limit_covers_the_advanced_drawing_field():
 def test_the_limit_also_scales_the_stored_velocity():
     """Otherwise speed piles up behind the cap and lurches when it is raised."""
     body = SHADER[SHADER.index("if(vraw < vm.max_value && smag > vlim)"):]
-    body = body[:body.index("e.pos += step_delta;")]
+    body = body[:body.index("e.pos += step_delta*TIME_SCALE;")]
     assert "step_delta *= k;" in body and "e.vel *= k;" in body
+
+
+def test_the_clock_scales_the_step_AFTER_the_cap():
+    """V Max is a distance per unit TIME, not per step. Scaled before the
+    clamp, halving the clock would halve the speed a preset is allowed."""
+    clamp = SHADER.index("if(vraw < vm.max_value && smag > vlim)")
+    move = SHADER.index("e.pos += step_delta*TIME_SCALE;")
+    assert clamp < move
+    assert "float smag = length(step_delta*TIME_SCALE)" not in SHADER
 
 
 # --- the naming rule the SSBO writers depend on ------------------------
