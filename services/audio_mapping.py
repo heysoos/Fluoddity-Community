@@ -97,7 +97,8 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
              states: dict[int, ShaperState], strengths: dict[str, float],
              global_strength: float, dt: float,
              deaf: set[str], shaped: dict | None = None,
-             apply_shapers: bool = True, held=()) -> dict[str, float]:
+             apply_shapers: bool = True, held=(),
+             rate_scale: float = 1.0) -> dict[str, float]:
     """Modulated values for the targets that have an enabled mapping.
 
     `bases` is read and never written. Targets with no mapping, and targets a
@@ -140,7 +141,7 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
             s = min(1.0, max(0.0, signals[m.signal] * m.gain))
             if apply_shapers:
                 s = states.setdefault(m.uid, ShaperState()).apply(
-                    s, dt, m.shaper, m.signal not in held)
+                    s, dt, m.shaper, m.signal not in held, rate_scale)
             if shaped is not None:
                 shaped[m.uid] = s
             sign = -1.0 if m.mode == "subtract" else 1.0
@@ -150,7 +151,7 @@ def modulate(bases: dict[str, float], targets, mappings, signals,
             s = min(1.0, max(0.0, signals[m.signal] * m.gain))
             if apply_shapers:
                 s = states.setdefault(m.uid, ShaperState()).apply(
-                    s, dt, m.shaper, m.signal not in held)
+                    s, dt, m.shaper, m.signal not in held, rate_scale)
             if shaped is not None:
                 shaped[m.uid] = s
             v *= 1.0 + s * m.depth

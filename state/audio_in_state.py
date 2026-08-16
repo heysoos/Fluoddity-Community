@@ -21,7 +21,7 @@ if TYPE_CHECKING:                       # annotations only - see below
 PERSISTED_FIELDS: tuple[str, ...] = (
     "mappings", "brain_mappings", "strengths", "global_strength",
     "auto_gain", "device_name", "modulate", "muted", "bands",
-    "release_seconds",
+    "release_seconds", "rate_scale",
 )
 
 _STRENGTH_MAX = 2.0
@@ -54,6 +54,11 @@ class AudioInState:
     # The band smoother's release. 0 hands every shaper the raw per-block
     # measurement; the rise is never smoothed at any setting.
     release_seconds: float = 0.075
+    # Multiplies every phase shaper's rate at once, so a rig tuned to one
+    # tempo can be slid onto another without touching each row. It scales
+    # FREQUENCY only - an envelope's attack and release are durations, and
+    # dragging this must not stretch them.
+    rate_scale: float = 1.0
 
     # The master bypass, and the per-target one. Both silence the modulation
     # while leaving capture running, so the traces keep moving and you can see
@@ -173,6 +178,7 @@ def to_dict(state: AudioInState) -> dict:
                       "ceiling": float(v.get("ceiling", 0.0))}
                   for k, v in state.bands.items() if isinstance(v, dict)},
         "release_seconds": float(state.release_seconds),
+        "rate_scale": float(state.rate_scale),
     }
 
 
@@ -219,3 +225,5 @@ def apply_dict(state: AudioInState, data: dict) -> None:
     if isinstance(data.get("release_seconds"), (int, float)):
         state.release_seconds = max(0.0, min(2.0,
                                              float(data["release_seconds"])))
+    if isinstance(data.get("rate_scale"), (int, float)):
+        state.rate_scale = max(0.05, min(8.0, float(data["rate_scale"])))

@@ -132,7 +132,7 @@ class AudioRuntime:
                  for t in p_targets}
         moved = modulate(bases, p_targets, ast.mappings, signals, self._states,
                          ast.strengths, ast.global_strength, dt, deaf,
-                         ast.shaped, held=held)
+                         ast.shaped, held=held, rate_scale=ast.rate_scale)
         if moved:
             sim_out = replace(ui_state.sim, **moved)
 
@@ -210,7 +210,7 @@ class AudioRuntime:
         moved = modulate(bases, targets, mappings, signals, self._states,
                          ast.strengths, ast.global_strength, dt,
                          muted_targets(ast, f"{ui_state.brain.modality}:"),
-                         ast.shaped, held=held)
+                         ast.shaped, held=held, rate_scale=ast.rate_scale)
         if not moved:
             return None
         return self._brain.modulated({**bases, **moved})

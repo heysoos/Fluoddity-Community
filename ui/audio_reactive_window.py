@@ -302,6 +302,14 @@ class AudioReactiveWindowMixin:
             ast.global_strength = value
         self._delayed_tooltip("Scales every mapping at once.")
 
+        changed, value = self._audio_slider("Rate Scale", ast.rate_scale,
+                                            0.05, 8.0, "x%.2f", 1.0, log=True)
+        if changed:
+            ast.rate_scale = value
+        self._delayed_tooltip(
+            "Multiplies every phase shaper's rate, so a rig can be slid onto "
+            "another tempo.")
+
         changed, value = self._audio_slider("Release", ast.release_seconds,
                                             0.0, 0.5, "%.3f s", 0.075)
         if changed:

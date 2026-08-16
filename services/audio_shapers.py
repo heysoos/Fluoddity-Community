@@ -60,12 +60,16 @@ class ShaperState:
         self._latched = 0.0
 
     def apply(self, x: float, dt: float, p: ShaperParams,
-              live: bool = True) -> float:
+              live: bool = True, rate_scale: float = 1.0) -> float:
         """`live` is False while the signal is being HELD rather than measured.
 
         A held signal is a perfectly good non-zero number, which is why the
         integrator below has to be told: without this, a centroid parked at
         0.73 by a paused track kept the wave travelling forever.
+
+        `rate_scale` multiplies FREQUENCY and nothing else. Applying it to
+        `dt` would reach every attack, release and hold as well, which are
+        durations - stretching those is not a change of tempo.
         """
         x = 0.0 if x != x else min(1.0, max(0.0, float(x)))
         dt = max(1e-6, float(dt))
@@ -101,7 +105,7 @@ class ShaperState:
             # keeps the wave cycling, and silence stops it dead wherever it had
             # got to rather than dragging the parameter back.
             self._phase = (self._phase + (x if live else 0.0)
-                           * p.rate * dt) % 1.0
+                           * p.rate * rate_scale * dt) % 1.0
             return min(1.0, max(0.0, _wave(self._phase, p.wave)))
 
         if kind == "sample_hold":
