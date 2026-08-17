@@ -71,6 +71,12 @@ special-cased: it is a source that owns a private accumulation buffer and
 participates read-only, exactly as a webcam does. Persistence is a property of a
 source, never of the bus.
 
+The rule holds for optical flow too, which is the one mapping that needs
+temporal state. A **source** may keep history and expose a previous frame; the
+mapping only reads it. So the memory still belongs to a source, the bus stays
+stateless, and flow does not become a wrapper node that quietly turns the stack
+into a graph.
+
 ## Architecture
 
 | file | purpose |
@@ -160,6 +166,20 @@ Stage 1 ships six:
 is also the source that can run away, which the composite's non-finite clamp
 covers.
 
+### History
+
+A source declares `keeps_history`. Those that do expose a previous frame
+alongside the current one, which is what the `flow` mapping reads. Cost is a
+ping-pong of texture handles rather than a copy: CPU-fed sources upload into
+alternating textures, GPU sources render into alternating scratch. Either way it
+is a pointer swap.
+
+`video`, `webcam`, `feedback` and `shader` keep history — a procedural shader
+animates, so it has genuine flow. `image`, `gradient` and `noise` at zero speed
+do not: a still frame has no motion, so `flow` is unavailable on them and the
+mapping is greyed out with that as the reason rather than silently returning
+zero.
+
 Stage 2 adds `video` and `webcam`. Both go through the ffmpeg subprocess pattern
 already in `utilities/ffmpeg_recorder.py`, reading raw `rgb24` off stdout
 instead of writing to stdin — a webcam is `-f dshow` on Windows. **No new Python
@@ -214,11 +234,63 @@ RGBA in, whatever the destination needs out.
 |---|---|---|
 | `rg_direct` | vec2 | Channels straight through. For hand-authored vector fields. |
 | `polar` | vec2 | Hue as angle, value as magnitude. Today's PNG behaviour, preserved so existing `_fields.png` still means the same thing. |
-| `gradient` | vec2 | ∇luminance. Particles flow up or down brightness. |
-| `curl` | vec2 | ∇⊥luminance. Divergence-free, so particles circulate along contours instead of piling into extrema. Usually the better one for a camera feed. |
+| `gradient` | vec2 | ∇ of the blurred scalar. This is attract/repulse: the field is a potential and particles run down it or up it. |
+| `curl` | vec2 | ∇⊥ of the blurred scalar. Divergence-free, so particles circulate along contours instead of piling into extrema. Usually the better one for a still camera feed. |
+| `flow` | vec2 | Optical flow between the source's current and previous frame. Motion in the input carries particles. |
 | `luminance` | float | For the scalar destinations. |
 
-Each takes an invert and a scale. `gradient` and `curl` are 4-tap.
+Every mapping takes three shared parameters.
+
+**`scalar`** picks what the mapping operates on: `luminance` or `|flow|`. This
+is what makes attract/repulse work on *motion* rather than on brightness —
+`gradient` over `|flow|` pulls particles toward whatever is moving, with no new
+machinery.
+
+**`blur`** is a pre-filter radius, and for `gradient` it is load-bearing rather
+than cosmetic. Raw ∇luminance over a sharp camera frame is high-frequency noise:
+particles jitter on sensor grain instead of being drawn to a hand. Blur turns
+the input into a smooth potential with a basin around each bright or moving
+region, which is the behaviour "attract" names. Implemented off the source's mip
+chain, so radius is nearly free.
+
+**`sign`** is a labelled toggle — `attract` / `repel` — rather than asking that
+a negative strength be understood to mean repulsion.
+
+**A vec2 mapping targeting a scalar destination contributes its magnitude.** So
+`flow` into `spawn` means particles are born where there is movement, and
+`flow` into `param:HAZARD_RATE` means motion kills them. This is a general rule,
+not a per-mapping special case.
+
+`gradient` and `curl` are 4-tap. `flow` is multi-pass; see Performance.
+
+### Optical flow
+
+Lucas-Kanade, solved per pixel over a local window. The brightness constancy
+equation `Ix·u + Iy·v + It = 0` is one equation in two unknowns, so a window is
+gathered and the least-squares 2×2 system solved:
+
+```
+[ ΣIx²   ΣIxIy ] [u]   [ -ΣIxIt ]
+[ ΣIxIy  ΣIy²  ] [v] = [ -ΣIyIt ]
+```
+
+Four passes, not one big gather. A **products** pass writes
+`(Ix², Iy², IxIy, IxIt)` and `IyIt` into two targets; a **separable box blur**
+over those (two passes) is the window sum, which makes window size free; a
+**solve** pass inverts the 2×2 with a Tikhonov regulariser on the determinant.
+The regulariser is required, not defensive — the aperture problem makes the
+system singular wherever the input is locally flat or a straight edge, which is
+most of a typical frame, and an unregularised solve returns garbage of unbounded
+magnitude there.
+
+Flow needs the previous frame, which extends the memory rule (see Sources).
+Because flow is smooth by nature, the half-res default bus is the right place to
+compute it rather than a compromise.
+
+`feedback` supports history like any other source, so `feedback` + `flow` makes
+the sim's own motion a force on itself. It costs nothing beyond the flow passes
+and is the most likely thing to run away, which is what the composite's
+non-finite clamp and a bounded strength are for.
 
 ## Destinations
 
@@ -297,6 +369,14 @@ there is no source pass. Procedural sources are 2. Against today's override path
 which already runs 1, the architecture's own overhead is one composite pass per
 layer.
 
+**`flow` is the exception, at four extra passes.** They are individually cheap —
+the window sum is a separable box blur, so window size costs nothing — but it is
+four rather than one, and it is the only mapping that will show up in a profile.
+Two things bound it. A flow layer is dirty exactly when its source delivers a new
+frame, so a 30 fps camera under a 60 fps render computes flow every *other*
+frame and reuses it in between. And flow is smooth, so it belongs at the half-res
+default bus rather than needing full canvas resolution.
+
 Order of magnitude, as arithmetic rather than measurement: RGBA32F at 647² is
 6.7 MB per full read or write, so a composite pass moves roughly 20 MB counting
 a 4-tap curl and a masked write — tens of microseconds against a 16.7 ms frame.
@@ -374,15 +454,18 @@ Each stage is independently shippable.
 
 **Stage 1 — the bus, force and strafe.** Data model, registry, composite,
 dirty flag, bus resolution, layer list, inspect panel, error rows. Sources:
-`noise`, `image`, `gradient`, `shader`, `brush`, `feedback`. Removes the
-override path. *Done when* a stack of three layers composites correctly, a
-disabled layer contributes exactly zero, a broken shader shows one red row while
-the others keep rendering, and an existing preset with a `_fields.png` opens
-with its brush layer intact.
+`noise`, `image`, `gradient`, `shader`, `brush`, `feedback`. Mappings:
+`rg_direct`, `polar`, `gradient`, `curl`, `luminance`, with `blur`, `sign` and
+the scalar-magnitude reduction. Removes the override path. *Done when* a stack
+of three layers composites correctly, a disabled layer contributes exactly zero,
+a broken shader shows one red row while the others keep rendering, and an
+existing preset with a `_fields.png` opens with its brush layer intact.
 
-**Stage 2 — video and webcam.** An ffmpeg subprocess feeding a texture on a
-worker thread. Pure addition; no bus changes. *Done when* a camera drives a
-force field at full render rate and closing the layer terminates the process.
+**Stage 2 — video, webcam, and optical flow.** An ffmpeg subprocess feeding a
+texture on a worker thread; source history; the four flow passes; `|flow|` as a
+`scalar` choice, which is what makes attract/repulse work on motion. *Done when*
+waving a hand at the camera carries particles in the direction of the wave, a
+still camera contributes nothing, and closing the layer terminates the process.
 
 **Stage 3 — the `canvas` and `spawn` destinations.** New consumers: an inject
 pass in `can_update`, and rejection sampling in `reset()`. *Done when* particles
@@ -408,6 +491,15 @@ bit-identical. **A disabled layer contributes exactly zero** — the regression
 test for the reported defect. A source that fails to compile leaves the
 destination unchanged rather than black. A NaN from a source reaches the
 destination as zero.
+
+**Optical flow** is tested against synthetic motion it must recover, not against
+a camera. A pattern translated by a known `(dx, dy)` between two frames must
+produce a flow field agreeing with it in direction and within tolerance in
+magnitude; a static frame pair must produce zero everywhere; and a locally flat
+or straight-edged region — where the system is singular — must produce a bounded
+result rather than garbage, which is the regulariser's test. Recovery is checked
+on the *pattern's* interior, since flow at a window that sees no texture is
+undefined by construction rather than wrong.
 
 **UI render**, the `tests/test_archive_window_render.py` pattern, observing both
 traps it documents: size the host window taller than the panel, and assert on
