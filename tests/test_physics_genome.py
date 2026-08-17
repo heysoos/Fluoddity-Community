@@ -12,6 +12,8 @@ from services.physics_genome import (
     default_origin,
     encode_physics,
     midpoint_z,
+    reach,
+    spans,
 )
 from services.tournament_service import TournamentService
 
@@ -42,7 +44,7 @@ def test_zero_reproduces_the_origin_exactly():
 def test_an_out_of_range_preset_value_is_not_at_a_saturated_edge():
     """-0.341 used to encode to z = -4.605, where the tanh gradient is 4e-4 and
     CMA-ES could never move the gene again."""
-    z = encode_physics(HHH_ORIGIN, HHH_ORIGIN)
+    z, _n = encode_physics(HHH_ORIGIN, HHH_ORIGIN)
     assert np.allclose(z, 0.0, atol=1e-6)
     gradient = 1.0 - np.tanh(z) ** 2
     assert gradient.min() > 0.99, "origin must sit where the map is steepest"
@@ -61,10 +63,59 @@ def test_extreme_z_saturates_rather_than_escaping():
     """tanh, not clipping: no repair bias at the boundary."""
     hot = decode_physics(np.full(PHYSICS_DIM, 50.0), HHH_ORIGIN)
     cold = decode_physics(np.full(PHYSICS_DIM, -50.0), HHH_ORIGIN)
+    up, dn = reach(HHH_ORIGIN)
+    for j, (name, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
+        assert hot[name] == pytest.approx(HHH_ORIGIN[name] + up[j], abs=1e-3)
+        assert cold[name] == pytest.approx(HHH_ORIGIN[name] - dn[j], abs=1e-3)
+
+
+# ---- hard limits -------------------------------------------------------
+# The span alone let EVERY preset in the library reach DRAG above 1, where
+# `vel = vel*drag + force` amplifies. The reach is shrunk to fit instead of
+# the value being clamped, so the map stays smooth and z=0 is still the preset.
+
+def test_the_search_cannot_leave_a_hard_limit():
+    from ui.physics_params import PARAM_BY_NAME
+
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        vals = decode_physics(rng.normal(0, 3, PHYSICS_DIM), HHH_ORIGIN)
+        for name, _g, _lo, _hi in PHYSICS_PARAMS:
+            p = PARAM_BY_NAME[name]
+            if p.hard_max is not None:
+                assert vals[name] <= p.hard_max + 1e-6, name
+            if p.hard_min is not None:
+                assert vals[name] >= p.hard_min - 1e-6, name
+
+
+def test_a_parameter_with_no_hard_limit_keeps_its_whole_span():
+    """Shrinking is PER PARAMETER. Two of the eight are bounded; the rest must
+    not lose reach because those two did."""
+    from ui.physics_params import PARAM_BY_NAME
+
+    hot = decode_physics(np.full(PHYSICS_DIM, 50.0), HHH_ORIGIN)
     for name, _g, lo, hi in PHYSICS_PARAMS:
-        span = SPAN_FRACTION * (hi - lo)
-        assert hot[name] == pytest.approx(HHH_ORIGIN[name] + span, abs=1e-3)
-        assert cold[name] == pytest.approx(HHH_ORIGIN[name] - span, abs=1e-3)
+        if PARAM_BY_NAME[name].hard_max is None:
+            span = SPAN_FRACTION * (hi - lo)
+            assert hot[name] == pytest.approx(HHH_ORIGIN[name] + span, abs=1e-3)
+
+
+def test_a_preset_sitting_on_its_bound_can_still_move_inward():
+    """Reach zero on one side is correct, not a freeze: the preset is AT the
+    ceiling, so the only way is down."""
+    o = dict(HHH_ORIGIN, DRAG=1.0)
+    hot = decode_physics(np.full(PHYSICS_DIM, 50.0), o)
+    cold = decode_physics(np.full(PHYSICS_DIM, -50.0), o)
+    assert hot["DRAG"] == pytest.approx(1.0, abs=1e-6)
+    assert cold["DRAG"] == pytest.approx(0.0, abs=1e-3)
+
+
+def test_a_value_outside_the_shrunk_reach_is_reported_as_clipped():
+    """An archived phenotype from a preset that could reach further is no
+    longer reachable, and the seed readout has to say so."""
+    o = dict(HHH_ORIGIN)
+    _z, n = encode_physics(dict(o, DRAG=1.4), o)
+    assert n == 1
 
 
 def test_without_an_origin_zero_is_the_nominal_midpoint():
@@ -79,12 +130,38 @@ def test_encode_decode_roundtrips():
     rng = np.random.default_rng(1)
     z = rng.normal(0, 1.5, PHYSICS_DIM)
     vals = decode_physics(z, HHH_ORIGIN)
-    assert np.allclose(encode_physics(vals, HHH_ORIGIN), z, atol=1e-3)
+    assert np.allclose(encode_physics(vals, HHH_ORIGIN)[0], z, atol=1e-3)
 
 
 def test_wrong_length_is_rejected():
     with pytest.raises(ValueError):
         decode_physics(np.zeros(PHYSICS_DIM + 1))
+
+
+# ---- the clip ----------------------------------------------------------
+# decode cannot leave origin +- span, so the ONLY lossy direction is encode.
+# It reports a count, as the brain's genome_spec.encode does.
+
+def test_a_value_within_reach_is_not_reported_as_clipped():
+    _z, n = encode_physics(HHH_ORIGIN, HHH_ORIGIN)
+    assert n == 0
+
+
+def test_encode_counts_the_genes_it_could_not_reach():
+    """A phenotype further than one span from the origin cannot be encoded -
+    it comes back as the nearest reachable value instead."""
+    o = default_origin()
+    far = {n: v + 2.0 * s for (n, v), s in zip(o.items(), spans())}
+    _z, n = encode_physics(far, o)
+    assert n == PHYSICS_DIM
+
+
+def test_the_count_is_per_gene():
+    o = default_origin()
+    v = dict(o)
+    v["DRAG"] = o["DRAG"] + 2.0 * spans()[[p[0] for p in PHYSICS_PARAMS].index("DRAG")]
+    _z, n = encode_physics(v, o)
+    assert n == 1
 
 
 def test_spec_dimension_grows_by_exactly_the_physics_block():

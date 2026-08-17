@@ -100,6 +100,9 @@ class ImgepDriver:
         self._last_descriptors: np.ndarray | None = None
         self._last_seed_ess = 0.0
         self._last_seed_alpha = 0.0
+        # Physics genes the current origin could not reach when the running
+        # expedition was seeded. Describes ONE seed, so it is cleared with it.
+        self._seed_phys_clipped = 0
 
         self.gen = 0
         self._last_score_label = "novelty"
@@ -199,6 +202,7 @@ class ImgepDriver:
             "prompt": self.goal_label,
             "seed_ess": float(self._last_seed_ess),
             "seed_alpha": float(self._last_seed_alpha),
+            "seed_phys_clipped": int(self._seed_phys_clipped),
             "n_summits": int(self._n_summits),
             "n_records": int(self._n_records),
             "expedition_best": (float(self._expedition_best)
@@ -246,6 +250,7 @@ class ImgepDriver:
         self._remaining = 0
         self._x0_index = None
         self._expedition_best = -np.inf
+        self._seed_phys_clipped = 0
 
     def ask(self, n: int) -> np.ndarray:
         n = int(n)
@@ -287,10 +292,16 @@ class ImgepDriver:
         return out
 
     def _parent_z(self, i: int) -> np.ndarray:
+        return self._parent_z_clipped(i)[0]
+
+    def _parent_z_clipped(self, i: int) -> tuple[np.ndarray, int]:
         """Re-encode an archived PHENOTYPE into z under the CURRENT origin.
 
-        The archive stores decoded values precisely so this works: a z archived
-        under one preset would mean a different creature under another.
+        -> (z, physics genes the current origin could not reach). The archive
+        stores decoded values precisely so this works: a z archived under one
+        preset would mean a different creature under another. What it cannot do
+        is reach further than one span from the origin, so an entry authored
+        under a distant preset comes back as the nearest creature to it.
 
         Encoded under the SPEC's layout - the brain that is running - and only
         ever called on a native row, because that is the only kind of genome
@@ -308,16 +319,16 @@ class ImgepDriver:
                 f"chose it must filter through Archive.native_rows()")
         zb, _clamped = encode(self.archive.brain_at(i), self.spec.layout)
         if self.spec.dim <= len(zb):
-            return zb[: self.spec.dim].astype(np.float32)
+            return zb[: self.spec.dim].astype(np.float32), 0
         entry = self.archive.entries[i]
         if "physics" in entry.spec:
-            zp = encode_physics(_phys_dict(self.archive.physics[i]),
-                                self.physics_origin)
+            zp, n_clipped = encode_physics(_phys_dict(self.archive.physics[i]),
+                                           self.physics_origin)
         else:
             # z = 0 decodes to the current origin exactly, so a brain-only
             # entry is well-defined rather than an error.
-            zp = np.zeros(PHYSICS_DIM, dtype=np.float32)
-        return np.concatenate([zb, zp]).astype(np.float32)
+            zp, n_clipped = np.zeros(PHYSICS_DIM, dtype=np.float32), 0
+        return np.concatenate([zb, zp]).astype(np.float32), n_clipped
 
     # ---- expeditions ---------------------------------------------------
 
@@ -366,10 +377,15 @@ class ImgepDriver:
         # Fresh optimizer per goal - a covariance learned for one goal doesn't
         # transfer to another. sigma << sigma0: local refinement, not a fresh
         # search.
+        # The seed is the one re-encode worth reporting: it becomes the
+        # optimizer's mean, so a clipped one starts the chase from a creature
+        # the user did not pick. Expansion parents re-encode too, but there are
+        # `tiles` of them every generation and a count per draw is not a signal.
+        x0, self._seed_phys_clipped = self._parent_z_clipped(self._x0_index)
         self._optimizer = make_optimizer(
             self.algorithm, self.spec.dim, self.tournament.tiles,
             self.expedition_sigma, self.base_seed + self.gen,
-            self._parent_z(self._x0_index).astype(np.float64),
+            x0.astype(np.float64),
             layout=self.spec.layout,
         )
         return True

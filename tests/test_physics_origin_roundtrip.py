@@ -33,7 +33,7 @@ def test_a_stored_phenotype_reproduces_under_any_origin():
     z = np.full(len(PHYSICS_PARAMS), 0.4, dtype=np.float32)
     phenotype = decode_physics(z, origin_a())          # what the archive stores
 
-    z_under_b = encode_physics(phenotype, origin_b())  # re-encoded on reuse
+    z_under_b, _n = encode_physics(phenotype, origin_b())  # re-encoded on reuse
     got = decode_physics(z_under_b, origin_b())
 
     for k, v in phenotype.items():

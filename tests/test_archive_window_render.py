@@ -1026,6 +1026,75 @@ def test_every_settings_section_renders_when_opened(gui):
     assert frame(open_all) > closed, "opening the headers drew nothing extra"
 
 
+def _close_all_sections():
+    # The context is module-scoped and _open_all_sections writes storage that
+    # outlives its own test, so "the sections are shut" has to be asserted
+    # rather than assumed. Inside the frame, like the opener: get_id and
+    # get_state_storage are both relative to the host window.
+    store = imgui.get_state_storage()
+    for name in SECTIONS:
+        store.set_int(imgui.get_id(name), 0)
+
+
+def test_the_physics_toggle_is_drawn_with_every_section_shut(gui):
+    """physics_enabled and every consumer of it already shipped; no widget
+    wrote it, so it could never leave its default. A folded header's body does
+    not run at all, so drawing with all of them shut is the assertion that it
+    is reachable."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+
+    def draw():
+        _close_all_sections()
+        h.render_explore_tab()
+
+    assert "Search Physics Too" in checkbox_labels(draw)
+
+
+def test_a_clipped_expedition_seed_says_so(gui, monkeypatch):
+    """Re-encoding an archived phenotype is the one lossy step, and it is
+    silent: the chase starts from the nearest creature the preset can reach
+    rather than the one the seed named."""
+    h = Harness(driver=_TracingDriver(seed_phys_clipped=3),
+                archive=_FakeArchive(), goals=GoalList())
+    said = " ".join(_texts(monkeypatch, h.render_explore_tab))
+    assert "3" in said and "physics" in said.lower()
+
+
+def test_an_unclipped_seed_says_nothing(gui, monkeypatch):
+    """A line that is always on screen is not a warning."""
+    h = Harness(driver=_TracingDriver(seed_phys_clipped=0),
+                archive=_FakeArchive(), goals=GoalList())
+    said = " ".join(_texts(monkeypatch, h.render_explore_tab)).lower()
+    assert "could not reach" not in said
+
+
+def _click_checkbox(monkeypatch, draw, label):
+    """Run one frame of `draw` with `label`'s checkbox reporting a click.
+
+    A real click needs a mouse the headless context has not got, and what is
+    under test is what the tab does with the change rather than ImGui's hit
+    testing.
+    """
+    real = imgui.checkbox
+
+    def spy(lbl, value, *a, **kw):
+        real(lbl, value, *a, **kw)
+        return (True, not value) if lbl == label else (False, value)
+
+    monkeypatch.setattr(imgui, "checkbox", spy)
+    frame(draw, n=1)
+
+
+def test_flipping_the_physics_toggle_resets_the_search(gui, monkeypatch):
+    """The search space changes dimension, so an optimizer built for the old
+    one cannot carry on. Reset keeps the archive."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    ast = h.state.archive
+    _click_checkbox(monkeypatch, h.render_explore_tab, "Search Physics Too")
+    assert ast.physics_enabled is True
+    assert ast.reset_requested is True
+
+
 # Every ImGui call whose first argument is a label that becomes the widget's
 # ID. text/text_colored/progress_bar/image are absent on purpose: they have no
 # ID, so they cannot collide.

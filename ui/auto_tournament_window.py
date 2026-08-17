@@ -91,7 +91,7 @@ class AutoTournamentWindowMixin:
         _, ats.sigma0 = imgui.slider_float("Initial Sigma", ats.sigma0, 0.05, 1.5)
 
         imgui.separator()
-        self._render_physics_search(ats, svc)
+        self._render_physics_search(ats)
 
         imgui.separator()
         self._render_tile_mutation(ats, sigma)
@@ -230,7 +230,8 @@ class AutoTournamentWindowMixin:
         if imgui.button("Reset"):
             ats.reset_requested = True
 
-    def _render_physics_search(self, ats, svc):
+    def _render_physics_search(self, ats):
+        """Drawn by both tabs; `ats` is whichever state owns the search."""
         from services.physics_genome import PHYSICS_PARAMS
 
         was = ats.physics_enabled
@@ -251,7 +252,7 @@ class AutoTournamentWindowMixin:
                                      for n, _g, _lo, _hi in PHYSICS_PARAMS))
         layout.text_colored_wrapped(
             _WARN,
-            "the preset's physics sliders no longer apply while this is on")
+            "these sliders set the centre of the search, not each tile's value")
 
     def _render_tile_mutation(self, ats, sigma):
         _, ats.tile_mutation_enabled = imgui.checkbox(

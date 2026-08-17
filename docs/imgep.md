@@ -239,3 +239,44 @@ it carries its seed directly.
 | `n_views` | 3 | CLIP sub-crops averaged per tile; costs `tiles × snapshots × views` passes |
 | `refresh_sweep_gens` | 10 | generations for stored novelty to be fully re-scored |
 | `novelty_share` / `latent_share` | 0.25 / 0.5 | goal mix; text takes the rest |
+| `physics_enabled` | off | search the physics parameters as well as the brain |
+
+### Searching physics
+
+**Search Physics Too** adds `services/physics_genome.PHYSICS_PARAMS` to the
+search space. They are searched RELATIVE to the loaded preset — `z = 0` is the
+preset exactly — so the sliders still matter while it is on: they set the
+CENTRE the search roams around, not each tile's value. The parameters outside
+that list (trails, boundary mode, cohorts, hue) are never searched under any
+setting.
+
+How far a gene may roam is `SPAN_FRACTION` (0.5) of its nominal range either
+way from the preset, **bounded by the parameter's hard limits** — the span is a
+distance and not a value, so on its own it does not keep a gene legal.
+`hard_min`/`hard_max` in `ui/physics_params.py` are the one home for those
+limits, and `physics_genome.reach()` shrinks the roam distance to fit them
+instead of clamping the decoded value, which would hand the optimizer a
+plateau. The reach is therefore asymmetric, and zero on a side whose limit the
+preset already sits on.
+
+Two of the eight searched parameters have hard limits, `DRAG` and
+`SENSOR_ANGLE`, both ±1. `DRAG` is the one that matters: `vel = vel*drag +
+force`, so above 1 velocity is amplified every step. Over the 131 presets the
+unbounded span let **every one of them** reach past ±1 on both parameters, with
+22.0% and 21.4% of the reachable interval out of bounds; shrinking removes
+exactly that and costs the other six parameters nothing.
+
+`tanh` keeps the decode inside the reach, so nothing clamps on the way to the
+GPU and what the archive stores is what ran. The reach is also the limit in the
+other direction: seeding an expedition re-encodes
+a stored phenotype under the CURRENT preset, and a value further than one span
+away has no `z` at all, so the chase starts from the nearest creature the
+preset can reach instead. `encode_physics` returns that count and the Explore
+tab prints it, the same contract `genome_spec.encode` has for the brain.
+
+Turning it on or off changes the dimension of the search space, so it resets
+the search. The archive survives, because it stores decoded phenotypes rather
+than `z`. An archive may therefore hold entries from both settings: one
+admitted with it off carries no searched physics and replays under the physics
+its run was carried out under (`<archive>/runs/<run_id>.json`), and either kind
+can be a parent or a seed.

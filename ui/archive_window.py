@@ -109,6 +109,10 @@ class ArchiveWindowMixin:
         imgui.separator()
         self._render_explore_transport(ast)
         imgui.separator()
+        # Above the fold with the transport: it decides what the search is FOR,
+        # and a folded header's body does not run at all.
+        self._render_physics_search(ast)
+        imgui.separator()
 
         layout.push_settings_width()
         if imgui.collapsing_header("Goals", imgui.TreeNodeFlags_.default_open):
@@ -317,6 +321,15 @@ class ArchiveWindowMixin:
             layout.text_disabled_wrapped(
                 f"Seed pool: {st['seed_ess']:.0f} entries "
                 f"(alpha {st['seed_alpha']:.1f})")
+        if st.get("seed_phys_clipped"):
+            # Re-encoding an archived phenotype is the one lossy step in the
+            # search, and nothing else on screen would show it happened.
+            from services.physics_genome import PHYSICS_DIM
+            layout.text_colored_wrapped(
+                _WARN,
+                f"Seed: the preset could not reach "
+                f"{st['seed_phys_clipped']} of {PHYSICS_DIM} physics genes - "
+                f"the chase started from the nearest creature to it.")
         if st.get("blocked_by_pins"):
             layout.text_colored_wrapped(
                 _WARN,

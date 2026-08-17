@@ -289,6 +289,58 @@ def test_a_brain_only_parent_gets_zero_physics_genes_in_a_physics_run():
     assert np.allclose(z[:, BRAIN_SPEC.dim:], 0.0, atol=1e-6)
 
 
+def _a_physics_archive():
+    """A driver whose archive holds entries with searched physics, at an origin
+    the caller can then move away from."""
+    from services.physics_genome import PHYSICS_PARAMS
+
+    d, arc, _ = make(seed_n=0)
+    d.set_spec(BRAIN_PHYSICS_SPEC)
+    d.physics_enabled = True
+    d.physics_origin = {n: (lo + hi) / 2 for n, _g, lo, hi in PHYSICS_PARAMS}
+    d.tell(d.ask(4), moving(4))
+    return d, arc
+
+
+def test_a_seed_within_reach_of_the_preset_reports_no_clipping():
+    d, _ = _a_physics_archive()
+    emb = np.zeros(DIM, dtype=np.float32)
+    emb[0] = 1.0
+    assert d.start_expedition_with(emb, "latent", "", seed_index=0)
+    assert d.status()["seed_phys_clipped"] == 0
+
+
+def test_a_seed_out_of_reach_of_the_preset_is_reported():
+    """The archive stores phenotypes, so seeding re-encodes under the CURRENT
+    origin. A preset far from the one an entry was authored under cannot
+    reach it, and the optimizer silently started from the nearest value it
+    could."""
+    from services.physics_genome import PHYSICS_DIM, spans
+
+    d, _ = _a_physics_archive()
+    d.physics_origin = {n: v + 2.0 * s
+                        for (n, v), s in zip(d.physics_origin.items(), spans())}
+    emb = np.zeros(DIM, dtype=np.float32)
+    emb[0] = 1.0
+    assert d.start_expedition_with(emb, "latent", "", seed_index=0)
+    assert d.status()["seed_phys_clipped"] == PHYSICS_DIM
+
+
+def test_ending_an_expedition_clears_the_clip_report():
+    """It describes ONE seed. Left standing it would name a creature the
+    search is no longer anywhere near."""
+    from services.physics_genome import spans
+
+    d, _ = _a_physics_archive()
+    d.physics_origin = {n: v + 2.0 * s
+                        for (n, v), s in zip(d.physics_origin.items(), spans())}
+    emb = np.zeros(DIM, dtype=np.float32)
+    emb[0] = 1.0
+    d.start_expedition_with(emb, "latent", "", seed_index=0)
+    d.end_expedition()
+    assert d.status()["seed_phys_clipped"] == 0
+
+
 def test_set_spec_changes_the_ask_dimension():
     d, _, _ = make()
     assert d.ask(4).shape[1] == BRAIN_SPEC.dim
