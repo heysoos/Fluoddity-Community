@@ -192,9 +192,9 @@ class PreferencesWindowMixin:
             )
 
             if changed:
-                # cam_brush_mode is True for Camera (index 2) and Tiled (index 3)
-                # Force Field (4) and Strafe Field (5) are raw texture views like canvas/brush
-                if self.state.sim.current_view_option in (2, 3):
+                # cam_brush_mode is True for Camera (index 1) and Tiled (index 2)
+                # Force Field (3) and Strafe Field (4) are raw texture views like canvas
+                if self.state.sim.current_view_option in (1, 2):
                     self.state.camera.cam_brush_mode = True
                 else:
                     self.state.camera.cam_brush_mode = False
@@ -302,6 +302,12 @@ class PreferencesWindowMixin:
                 imgui.unindent(20)
             if watercolor_active:
                 imgui.end_disabled()
+
+            # === Performance readout ===
+            imgui.separator()
+            fps = imgui.get_io().framerate
+            ms = 1000.0 / fps if fps > 0 else 0.0
+            imgui.text(f"Performance: {fps:.1f} FPS ({ms:.2f} ms/frame)")
 
         imgui.end()
 

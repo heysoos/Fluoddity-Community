@@ -6,7 +6,7 @@ from utilities.gl_helpers import read_shader, shader_prepend, prepend_defines, t
 from state import SimState
 
 # Global constants
-SIZE_OF_ENTITY_STRUCT = 4*12  # 4 bytes per 32bit value. 12 values (pos:2, vel:2, size:1, padding:3, color:4)
+SIZE_OF_ENTITY_STRUCT = 4*8  # 4 bytes per 32bit value. 8 values (pos:2, vel:2, hue:1, size:1, padding:2)
 SIZE_OF_RULE_STRUCT = 4*4*20  # 4 bytes per float32. 4 floats per vec4. 20 vec4s per rule
 
 class Sim:
@@ -22,8 +22,8 @@ class Sim:
         self.setup_shaders()
 
         # View options (for UI combo box)
-        self.view_options = [self.can, self.brush_tex]
-        self.view_option_labels = ['Canvas (Persistent particle trails)', 'Brush (Trails laid down this frame)']
+        self.view_options = [self.can_textures[self.can_read_index]]
+        self.view_option_labels = ['Canvas (Persistent particle trails)']
 
         # Current state (will be updated by apply_state each frame)
         self._state = SimState()
@@ -33,9 +33,22 @@ class Sim:
         self._pending_rule_buffer_update = False  # Set true to trigger rule buffer write next frame
         self._pending_entity_id = None  # Entity ID to read back after rule buffer is written
 
+        # Frame-constant shader uniforms only change when state does. apply_state()
+        # (once per rendered frame) marks them dirty; entity_update()/can_update()
+        # re-upload them on that frame's first physics step and clear the flag, so the
+        # dozens of physics-setting tryset() calls run once/frame instead of once/step
+        # (speedmult x savings — matters a lot at 60-100 steps/frame).
+        self._entity_uniforms_dirty = True
+        self._canvas_uniforms_dirty = True
+
     def get_entity_count(self) -> int:
         """Calculate entity count based on world size."""
         return int(600000 * self.world_size)
+
+    @property
+    def can(self):
+        """The most recently completed canvas texture (read buffer)."""
+        return self.can_textures[self.can_read_index]
 
     def get_canvas_dimensions(self) -> tuple[int, int]:
         """Calculate canvas dimensions based on world size and aspect ratio."""
@@ -73,11 +86,11 @@ class Sim:
         self.multi_load_buffer.bind_to_storage_buffer(3)  # Binding 3 matches shader layout
         self.multi_load_rule_buffer.bind_to_storage_buffer(4)  # Binding 4 for multi-load rules
 
-        # Create double-buffered canvas textures (4-channel float32)
+        # Create double-buffered canvas textures (2-channel RG32F: velocity only)
         # We ping-pong between these to avoid reading and writing the same texture
         self.can_textures = [
-            self.ctx.texture(canvas_shape, 4, dtype='f4'),
-            self.ctx.texture(canvas_shape, 4, dtype='f4')
+            self.ctx.texture(canvas_shape, 2, dtype='f4'),
+            self.ctx.texture(canvas_shape, 2, dtype='f4')
         ]
         for tex in self.can_textures:
             tex.repeat_x = True
@@ -88,16 +101,6 @@ class Sim:
         ]
         self.can_read_index = 0  # Index of texture to read from (write to the other)
 
-        # Aliases for backward compatibility
-        self.can = self.can_textures[0]
-        self.canvas = self.can_framebuffers[1]  # Write to buffer 1, read from buffer 0 initially
-
-        # Create brush texture and framebuffer
-        self.brush_tex = self.ctx.texture(canvas_shape, 4, dtype='f4')
-        self.brush_tex.repeat_x = True
-        self.brush_tex.repeat_y = True
-        self.brush = self.ctx.framebuffer([self.brush_tex])
-
         # For camera to use (will be updated each frame to point to the most recently written buffer)
         self.view_tex = self.can_textures[self.can_read_index]
 
@@ -106,9 +109,9 @@ class Sim:
             fb.use()
             self.ctx.clear()
 
-        #reestablish view options for canvas/brush view modes
+        # View options for debug view modes
         # Note: view_options[0] will be updated dynamically to point to current read buffer
-        self.view_options = [self.can_textures[self.can_read_index], self.brush_tex]
+        self.view_options = [self.can_textures[self.can_read_index]]
     def setup_shaders(self):
         canvas_dim_x,canvas_dim_y = self.get_canvas_dimensions()
         canvas_shape = (canvas_dim_x, canvas_dim_y)
@@ -169,162 +172,174 @@ class Sim:
         '''
         Run a single physics update on all particles
         '''
+        # --- Per-step uniforms (genuinely change every physics step) ---
         tryset(self.entity_update_program, 'frame_count', self.frame_count)
-        tryset(self.entity_update_program, 'canvas', 1)
-        tryset(self.entity_update_program, 'WORLD_SIZE', self.world_size)
-
-        # Advanced drawing field texture
-        tryset(self.entity_update_program, 'field_texture', 5)
-        tryset(self.entity_update_program, 'advanced_drawing_resources_initialized', field_texture_bound)
-        tryset(self.entity_update_program, 'force_field_strength', force_field_strength)
-        tryset(self.entity_update_program, 'strafe_field_strength', strafe_field_strength)
-
         # Only write rules to buffer when explicitly requested (avoids 192MB/frame cost)
         tryset(self.entity_update_program, 'WRITE_RULES', self._pending_rule_buffer_update)
 
-        # Multi-load mode: set uniform arrays for all loaded configs
-        if multi_load_service and multi_load_service.is_active() and not is_preview_active:
+        multi_load_active = (multi_load_service and multi_load_service.is_active()
+                             and not is_preview_active)
+
+        # Multi-load progress advances every step, so its uniforms refresh per step.
+        # (The expensive SSBO write inside is already guarded by its own dirty flag.)
+        if multi_load_active:
             self._set_multi_load_uniforms(multi_load_service)
-        
-        # Normal mode: set single config uniforms
-        else:
-            tryset(self.entity_update_program, 'MULTILOAD_COUNT', 0)
-            self._assign_physics_setting('AXIAL_FORCE_SETTING', self._state.AXIAL_FORCE, 'Axial Force', 'AXIAL_FORCE', -1.0, 1.0)
-            self._assign_physics_setting('LATERAL_FORCE_SETTING', self._state.LATERAL_FORCE, 'Lateral Force', 'LATERAL_FORCE', -1.0, 1.0)
-            self._assign_physics_setting('SENSOR_GAIN_SETTING', self._state.SENSOR_GAIN, 'Sensor Gain', 'SENSOR_GAIN', 0.0, 5.0)
-            self._assign_physics_setting('MUTATION_SCALE_SETTING', self._state.MUTATION_SCALE, 'Mutation Scale', 'MUTATION_SCALE', -0.5, 0.5)
-            self._assign_physics_setting('DRAG_SETTING', self._state.DRAG, 'Drag', 'DRAG', -1.0, 1.0)
-            self._assign_physics_setting('STRAFE_POWER_SETTING', self._state.STRAFE_POWER, 'Strafe Power', 'STRAFE_POWER', 0.0, 0.5)
-            self._assign_physics_setting('SENSOR_ANGLE_SETTING', self._state.SENSOR_ANGLE, 'Sensor Angle', 'SENSOR_ANGLE', -1.0, 1.0)
-            self._assign_physics_setting('GLOBAL_FORCE_MULT_SETTING', self._state.GLOBAL_FORCE_MULT, 'Global Force Mult', 'GLOBAL_FORCE_MULT', 0.0, 2.0)
-            self._assign_physics_setting('SENSOR_DISTANCE_SETTING', self._state.SENSOR_DISTANCE, 'Sensor Distance', 'SENSOR_DISTANCE', 0.0, 4.0)
-            tryset(self.entity_update_program, 'DISABLE_SYMMETRY', self._state.DISABLE_SYMMETRY)
-            tryset(self.entity_update_program, 'ABSOLUTE_ORIENTATION', self._state.ABSOLUTE_ORIENTATION)
-            tryset(self.entity_update_program, 'ORIENTATION_MIX', self._state.ORIENTATION_MIX)
-            # Rule seed from sim state (saved with physics configs)
-            tryset(self.entity_update_program, 'RULE_SEED', self._state.rule_seed)
-        
-        #both modes: set global and conditionally global uniforms
-        tryset(self.entity_update_program, 'BOUNDARY_CONDITIONS_MODE', self._state.boundary_conditions)
-        tryset(self.entity_update_program, 'RESET_MODE', self._state.initial_conditions)
-        tryset(self.entity_update_program, 'COHORTS', self._state.num_cohorts)
-        self._assign_physics_setting('HAZARD_RATE_SETTING', self._state.HAZARD_RATE, 'Hazard Rate', 'HAZARD_RATE', 0.0, 0.05)
 
-        # Appearance settings from sim state (now part of physics config)
-        tryset(self.entity_update_program, 'HUE_SENSITIVITY', self._state.hue_sensitivity)
-        tryset(self.entity_update_program, 'COLOR_BY_COHORT', self._state.color_by_cohort)
+        # --- Frame-constant uniforms: upload once per frame, not once per step ---
+        # These derive from self._state / the frame's args, which don't change across
+        # the speedmult physics steps in a rendered frame. apply_state() sets the flag.
+        if self._entity_uniforms_dirty:
+            tryset(self.entity_update_program, 'canvas', 1)
+            tryset(self.entity_update_program, 'WORLD_SIZE', self.world_size)
 
+            # Advanced drawing field texture
+            tryset(self.entity_update_program, 'field_texture', 5)
+            tryset(self.entity_update_program, 'advanced_drawing_resources_initialized', field_texture_bound)
+            tryset(self.entity_update_program, 'force_field_strength', force_field_strength)
+            tryset(self.entity_update_program, 'strafe_field_strength', strafe_field_strength)
 
+            # Normal mode: set single config uniforms (multi-load handled above per-step)
+            if not multi_load_active:
+                tryset(self.entity_update_program, 'MULTILOAD_COUNT', 0)
+                self._assign_physics_setting('AXIAL_FORCE_SETTING', self._state.AXIAL_FORCE, 'Axial Force', 'AXIAL_FORCE', -1.0, 1.0)
+                self._assign_physics_setting('LATERAL_FORCE_SETTING', self._state.LATERAL_FORCE, 'Lateral Force', 'LATERAL_FORCE', -1.0, 1.0)
+                self._assign_physics_setting('SENSOR_GAIN_SETTING', self._state.SENSOR_GAIN, 'Sensor Gain', 'SENSOR_GAIN', 0.0, 5.0)
+                self._assign_physics_setting('MUTATION_SCALE_SETTING', self._state.MUTATION_SCALE, 'Mutation Scale', 'MUTATION_SCALE', -0.5, 0.5)
+                self._assign_physics_setting('DRAG_SETTING', self._state.DRAG, 'Drag', 'DRAG', -1.0, 1.0)
+                self._assign_physics_setting('STRAFE_POWER_SETTING', self._state.STRAFE_POWER, 'Strafe Power', 'STRAFE_POWER', 0.0, 0.5)
+                self._assign_physics_setting('SENSOR_ANGLE_SETTING', self._state.SENSOR_ANGLE, 'Sensor Angle', 'SENSOR_ANGLE', -1.0, 1.0)
+                self._assign_physics_setting('GLOBAL_FORCE_MULT_SETTING', self._state.GLOBAL_FORCE_MULT, 'Global Force Mult', 'GLOBAL_FORCE_MULT', 0.0, 2.0)
+                self._assign_physics_setting('SENSOR_DISTANCE_SETTING', self._state.SENSOR_DISTANCE, 'Sensor Distance', 'SENSOR_DISTANCE', 0.0, 4.0)
+                tryset(self.entity_update_program, 'DISABLE_SYMMETRY', self._state.DISABLE_SYMMETRY)
+                tryset(self.entity_update_program, 'ABSOLUTE_ORIENTATION', self._state.ABSOLUTE_ORIENTATION)
+                tryset(self.entity_update_program, 'ORIENTATION_MIX', self._state.ORIENTATION_MIX)
+                # Rule seed from sim state (saved with physics configs)
+                tryset(self.entity_update_program, 'RULE_SEED', self._state.rule_seed)
+
+            #both modes: set global and conditionally global uniforms
+            tryset(self.entity_update_program, 'BOUNDARY_CONDITIONS_MODE', self._state.boundary_conditions)
+            tryset(self.entity_update_program, 'RESET_MODE', self._state.initial_conditions)
+            tryset(self.entity_update_program, 'COHORTS', self._state.num_cohorts)
+            self._assign_physics_setting('HAZARD_RATE_SETTING', self._state.HAZARD_RATE, 'Hazard Rate', 'HAZARD_RATE', 0.0, 0.05)
+
+            # Appearance settings from sim state (now part of physics config)
+            tryset(self.entity_update_program, 'HUE_SENSITIVITY', self._state.hue_sensitivity)
+            tryset(self.entity_update_program, 'COLOR_BY_COHORT', self._state.color_by_cohort)
+
+            self._entity_uniforms_dirty = False
 
         num_workgroups = (self.entity_count + 63) // 64
         ctx.memory_barrier()
         self.entity_update_program.run(num_workgroups)
 
     def brush_update(self, ctx: moderngl.Context):
-        self.brush.use()
-        ctx.clear(0.0, 0.0, 0.0, 0.0)
+        """Render particles additively into the canvas write-target FBO.
 
-        # Pass frame count to shader for initialization
+        FBO must already be bound by update(). Brush pre-scales its output by
+        (1-p) so that, combined with the canvas decay pass, the net contribution
+        matches the old canvas = blur(canvas)*p + (1-p)*brush mix.
+        """
         tryset(self.brush_update_program, 'frame_count', self.frame_count)
+        tryset(self.brush_update_program, 'trail_persistence', self._state.TRAIL_PERSISTENCE)
 
-        # Always use additive blending
+        # Pure additive blending (no alpha channel in the RG32F canvas)
         ctx.enable(moderngl.BLEND)
-        ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
+        ctx.blend_func = moderngl.ONE, moderngl.ONE
         ctx.blend_equation = moderngl.FUNC_ADD
 
         self.brush_vao.render(mode=moderngl.TRIANGLE_FAN, instances=self.entity_count, vertices=4)
 
-    def can_update(self, ctx: moderngl.Context, draw_mode: bool = False, mouse_pos: tuple[float, float] = None,
+    def can_update(self, draw_mode: bool = False, mouse_pos: tuple[float, float] = None,
                    prev_mouse_pos: tuple[float, float] = None, draw_size: float = 0.1, draw_power: float = 0.0,
                    multi_load_service=None, is_preview_active = False, tiling_mode: bool = False,
-                   strong_determinism: bool = False,
                    brush_mode: int = 0, fixed_direction_heading: float = 0.0,
                    erase_mode: bool = False, fill_mode: bool = False, fill_direction_type: int = 0,
                    canvas_draw_active: bool = True):
-        # Boundary conditions mode for wrap behavior
-        tryset(self.canvas_update_program, 'BOUNDARY_CONDITIONS_MODE', self._state.boundary_conditions)
-        tryset(self.canvas_update_program, 'tiling_mode', tiling_mode)
+        """Apply canvas decay (old * trail_persistence) plus draw/erase/fill.
 
-        # Multi-load mode: calculate weighted average trail settings
-        if multi_load_service and multi_load_service.is_active() and not is_preview_active:
-            trail_persistence, trail_diffusion = self._calculate_weighted_trail_settings(multi_load_service)
-        else:
-            trail_persistence = self._state.TRAIL_PERSISTENCE
-            trail_diffusion = self._state.TRAIL_DIFFUSION
+        FBO must already be bound by update(). Canvas read texture must
+        already be bound at location 1.
+        """
+        multi_load_active = (multi_load_service and multi_load_service.is_active()
+                             and not is_preview_active)
 
-        # Assign TRAIL_PERSISTENCE as a PhysicsSetting struct
-        min_val, max_val = self._get_slider_range('Trail Persistence', 0.0, 1.0)
-        tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.slider_value', trail_persistence)
-        tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.min_value', min_val)
-        tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.max_value', max_val)
-        # Only apply sweeps if parameter sweeps UI is enabled AND not in multi-load mode
-        if self._state.parameter_sweeps_enabled and not (multi_load_service and multi_load_service.is_active()):
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.x_sweep', self._state.x_sweeps.get('TRAIL_PERSISTENCE', 0.0))
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.y_sweep', self._state.y_sweeps.get('TRAIL_PERSISTENCE', 0.0))
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.cohort_sweep', self._state.cohort_sweeps.get('TRAIL_PERSISTENCE', 0.0))
-        else:
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.x_sweep', 0.0)
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.y_sweep', 0.0)
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.cohort_sweep', 0.0)
-        # Always apply jitter (independent of parameter_sweeps_enabled)
-        tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.jitter', self._state.jitters.get('TRAIL_PERSISTENCE', 0.0))
-
-        # Assign TRAIL_DIFFUSION as a PhysicsSetting struct
-        min_val, max_val = self._get_slider_range('Trail Diffusion', 0.0, 1.0)
-        tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.slider_value', trail_diffusion)
-        tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.min_value', min_val)
-        tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.max_value', max_val)
-        # Only apply sweeps if parameter sweeps UI is enabled AND not in multi-load mode
-        if self._state.parameter_sweeps_enabled and not (multi_load_service and multi_load_service.is_active()):
-            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.x_sweep', self._state.x_sweeps.get('TRAIL_DIFFUSION', 0.0))
-            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.y_sweep', self._state.y_sweeps.get('TRAIL_DIFFUSION', 0.0))
-            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.cohort_sweep', self._state.cohort_sweeps.get('TRAIL_DIFFUSION', 0.0))
-        else:
-            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.x_sweep', 0.0)
-            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.y_sweep', 0.0)
-            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.cohort_sweep', 0.0)
-        # Always apply jitter (independent of parameter_sweeps_enabled)
-        tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.jitter', self._state.jitters.get('TRAIL_DIFFUSION', 0.0))
-
-        tryset(self.canvas_update_program, 'can_tex', 1)
-        tryset(self.canvas_update_program, 'brush_tex', 3)
-
+        # --- Per-step uniforms (change every physics step) ---
         # Pass frame count to shader for initialization
         tryset(self.canvas_update_program, 'frame_count', self.frame_count)
-
-        # Set draw mode uniforms if in draw mode
-        tryset(self.canvas_update_program, 'draw_mode', draw_mode)
-        tryset(self.canvas_update_program, 'brush_mode', brush_mode)
-        tryset(self.canvas_update_program, 'fixed_direction_heading', fixed_direction_heading)
-        tryset(self.canvas_update_program, 'erase_mode', erase_mode)
+        # fill_mode is gated to step 0 by the caller (canvas_fill = ... and step_index==0),
+        # so it genuinely differs between steps and must be set every step (not guarded).
         tryset(self.canvas_update_program, 'fill_mode', fill_mode)
-        tryset(self.canvas_update_program, 'fill_direction_type', fill_direction_type)
-        tryset(self.canvas_update_program, 'canvas_draw_active', canvas_draw_active)
-        if (draw_mode or erase_mode or fill_mode) and mouse_pos is not None and prev_mouse_pos is not None:
-            tryset(self.canvas_update_program, 'mouse', mouse_pos)
-            tryset(self.canvas_update_program, 'previous_mouse', prev_mouse_pos)
-            tryset(self.canvas_update_program, 'draw_size', draw_size)
-            tryset(self.canvas_update_program, 'draw_power', draw_power)
 
-        if strong_determinism:
-            # Double-buffer: write to the opposite buffer from the one we're reading
-            write_index = 1 - self.can_read_index
-            self.can_framebuffers[write_index].use()
-            self.canvas_vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
+        # Multi-load weights the trail settings by current_progress, which advances
+        # every step, so refresh just those two slider values per step in that mode.
+        if multi_load_active:
+            trail_persistence, trail_diffusion = self._calculate_weighted_trail_settings(multi_load_service)
+            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.slider_value', trail_persistence)
+            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.slider_value', trail_diffusion)
 
-            # Swap buffers: the one we just wrote to becomes the new read buffer
-            self.can_read_index = write_index
+        # --- Frame-constant uniforms: upload once per frame, not once per step ---
+        if self._canvas_uniforms_dirty:
+            # Boundary conditions mode for wrap behavior
+            tryset(self.canvas_update_program, 'BOUNDARY_CONDITIONS_MODE', self._state.boundary_conditions)
+            tryset(self.canvas_update_program, 'tiling_mode', tiling_mode)
 
-            # Update aliases and view options to point to current read buffer
-            self.can = self.can_textures[self.can_read_index]
-            self.canvas = self.can_framebuffers[1 - self.can_read_index]
-            self.view_options[0] = self.can_textures[self.can_read_index]
-            if self._state.current_view_option == 0:
-                self.view_tex = self.can_textures[self.can_read_index]
-        else:
-            # Single-buffer: read and write same texture (non-deterministic but faster)
-            self.can_framebuffers[self.can_read_index].use()
-            self.canvas_vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
+            # In normal mode the trail settings come straight from state (constant across
+            # steps); in multi-load the slider_values were set per-step above.
+            if not multi_load_active:
+                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.slider_value', self._state.TRAIL_PERSISTENCE)
+                tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.slider_value', self._state.TRAIL_DIFFUSION)
+
+            # Assign TRAIL_PERSISTENCE min/max/sweep/jitter
+            min_val, max_val = self._get_slider_range('Trail Persistence', 0.0, 1.0)
+            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.min_value', min_val)
+            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.max_value', max_val)
+            # Only apply sweeps if parameter sweeps UI is enabled AND not in multi-load mode
+            if self._state.parameter_sweeps_enabled and not multi_load_active:
+                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.x_sweep', self._state.x_sweeps.get('TRAIL_PERSISTENCE', 0.0))
+                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.y_sweep', self._state.y_sweeps.get('TRAIL_PERSISTENCE', 0.0))
+                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.cohort_sweep', self._state.cohort_sweeps.get('TRAIL_PERSISTENCE', 0.0))
+            else:
+                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.x_sweep', 0.0)
+                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.y_sweep', 0.0)
+                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.cohort_sweep', 0.0)
+            # Always apply jitter (independent of parameter_sweeps_enabled)
+            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.jitter', self._state.jitters.get('TRAIL_PERSISTENCE', 0.0))
+
+            # Assign TRAIL_DIFFUSION min/max/sweep/jitter
+            min_val, max_val = self._get_slider_range('Trail Diffusion', 0.0, 1.0)
+            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.min_value', min_val)
+            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.max_value', max_val)
+            # Only apply sweeps if parameter sweeps UI is enabled AND not in multi-load mode
+            if self._state.parameter_sweeps_enabled and not multi_load_active:
+                tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.x_sweep', self._state.x_sweeps.get('TRAIL_DIFFUSION', 0.0))
+                tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.y_sweep', self._state.y_sweeps.get('TRAIL_DIFFUSION', 0.0))
+                tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.cohort_sweep', self._state.cohort_sweeps.get('TRAIL_DIFFUSION', 0.0))
+            else:
+                tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.x_sweep', 0.0)
+                tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.y_sweep', 0.0)
+                tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.cohort_sweep', 0.0)
+            # Always apply jitter (independent of parameter_sweeps_enabled)
+            tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.jitter', self._state.jitters.get('TRAIL_DIFFUSION', 0.0))
+
+            tryset(self.canvas_update_program, 'can_tex', 1)
+
+            # Set draw mode uniforms if in draw mode
+            tryset(self.canvas_update_program, 'draw_mode', draw_mode)
+            tryset(self.canvas_update_program, 'brush_mode', brush_mode)
+            tryset(self.canvas_update_program, 'fixed_direction_heading', fixed_direction_heading)
+            tryset(self.canvas_update_program, 'erase_mode', erase_mode)
+            tryset(self.canvas_update_program, 'fill_direction_type', fill_direction_type)
+            tryset(self.canvas_update_program, 'canvas_draw_active', canvas_draw_active)
+            if (draw_mode or erase_mode or fill_mode) and mouse_pos is not None and prev_mouse_pos is not None:
+                tryset(self.canvas_update_program, 'mouse', mouse_pos)
+                tryset(self.canvas_update_program, 'previous_mouse', prev_mouse_pos)
+                tryset(self.canvas_update_program, 'draw_size', draw_size)
+                tryset(self.canvas_update_program, 'draw_power', draw_power)
+
+            self._canvas_uniforms_dirty = False
+
+        # FBO already bound by update() — just render the fullscreen quad
+        self.canvas_vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
 
     def update(self, ctx, draw_mode: bool = False, mouse_pos: tuple[float, float] = None,
                prev_mouse_pos: tuple[float, float] = None, draw_size: float = 0.1, draw_power: float = 0.0,
@@ -336,9 +351,8 @@ class Sim:
                field_texture=None,
                force_field_strength: float = 1.0,
                strafe_field_strength: float = 1.0):
-        # Bind the current read buffer for sampling (will write to the other one)
+        # Bind the current read buffer for entity_update sampling
         self.can_textures[self.can_read_index].use(location=1)
-        self.brush_tex.use(location=3)
 
         # Bind advanced drawing field texture if available
         if field_texture is not None:
@@ -347,18 +361,38 @@ class Sim:
         current_time = time.time()
         self.time = current_time - self.start_time_stamp
 
-        self.brush_update(ctx)
-        ctx.memory_barrier()
+        # 1. Entity physics (reads canvas read buffer for sensors)
         self.entity_update(ctx, multi_load_service, is_preview_active,
                            field_texture_bound=field_texture is not None,
                            force_field_strength=force_field_strength,
                            strafe_field_strength=strafe_field_strength)
 
+        # 2. Determine write target for canvas decay + brush
+        if strong_determinism:
+            write_index = 1 - self.can_read_index
+        else:
+            write_index = self.can_read_index
+
+        # 3. Canvas decay: read from read_index, write decayed values to write_index
+        self.can_framebuffers[write_index].use()
         ctx.disable(moderngl.BLEND)
-        self.can_update(ctx, draw_mode, mouse_pos, prev_mouse_pos, draw_size, draw_power,
-                        multi_load_service, is_preview_active, tiling_mode, strong_determinism,
+        self.can_update(draw_mode, mouse_pos, prev_mouse_pos, draw_size, draw_power,
+                        multi_load_service, is_preview_active, tiling_mode,
                         brush_mode, fixed_direction_heading, erase_mode, fill_mode,
                         fill_direction_type, canvas_draw_active)
+
+        # 4. Brush: additive render into the same write_index FBO
+        ctx.memory_barrier()
+        self.brush_update(ctx)
+        ctx.disable(moderngl.BLEND)
+
+        # 5. Swap buffers if double-buffering
+        if strong_determinism:
+            self.can_read_index = write_index
+            self.view_options[0] = self.can_textures[self.can_read_index]
+            if self._state.current_view_option == 0:
+                self.view_tex = self.can_textures[self.can_read_index]
+
         self.frame_count += 1
 
         # Increment multi-load progress if active
@@ -380,8 +414,6 @@ class Sim:
             fb.use()
             self.ctx.clear(0, 0, 0, 0)
         self.frame_count = 0
-        self.brush.use()
-        self.ctx.clear(0, 0, 0, 0)
         old_fbo.use()
 
     def reload(self):
@@ -390,8 +422,15 @@ class Sim:
         print('reload done')
 
     def apply_state(self, state: SimState) -> None:
-        """Apply state from Orchestrator before update."""
+        """Apply state from Orchestrator before update.
+
+        MUST be called before the frame's physics steps: frame-constant uniforms
+        are cached and only re-uploaded when this marks them dirty.
+        """
         self._state = state
+        # New state -> frame-constant uniforms need re-uploading once this frame.
+        self._entity_uniforms_dirty = True
+        self._canvas_uniforms_dirty = True
         # Update view_tex based on current_view_option
         if state.current_view_option < len(self.view_options):
             self.view_tex = self.view_options[state.current_view_option]
