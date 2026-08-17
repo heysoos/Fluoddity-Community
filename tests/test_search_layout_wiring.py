@@ -154,3 +154,58 @@ def test_a_layout_switch_mid_run_moves_the_search_with_it():
     svc._begin_generation()
     assert svc.spec.dim == gab.length
     assert all(np.asarray(g).size == gab.length for g in ts.population)
+
+
+# ---- a rollout in flight when the space moves --------------------------
+# The test above calls _begin_generation() by hand, which is exactly what
+# production does NOT do: abort_generation() restarts the rollout without
+# re-asking, so the OLD population reached tell() under the NEW spec.
+
+def _fourier_and_mlp():
+    from services.brains import layout_from_signature
+
+    return (layout_from_signature("fourier-n10"),
+            layout_from_signature("mlp-n16.8.8-a0.0.0"))
+
+
+def test_a_layout_switch_drops_a_population_the_new_spec_cannot_read():
+    """Crashed a real run: physics search on under Fourier is an 88-wide z, the
+    brain was switched to a 324-wide MLP, and the rollout already in flight was
+    scored against the new spec."""
+    f, m = _fourier_and_mlp()
+    svc, ts = a_service(f, physics_enabled=True)
+    svc.start("anything")
+    assert svc.current_z.shape[1] == physics_spec_for(f).dim
+
+    ts.set_layout(m)
+    svc.set_layout(m)
+
+    z = svc.current_z
+    assert z is None or z.shape[1] == svc.spec.dim, (
+        f"population is {z.shape[1]} wide but the spec in force is "
+        f"{svc.spec.dim}; it cannot be decoded")
+
+
+def test_the_next_update_asks_for_a_population_in_the_new_space():
+    """Dropping it is only half: the phase machine must re-ask rather than
+    score nothing."""
+    f, m = _fourier_and_mlp()
+    svc, ts = a_service(f, physics_enabled=True)
+    svc.start("anything")
+    ts.set_layout(m)
+    svc.set_layout(m)
+    for _ in range(4):
+        svc.update()
+        if svc.current_z is not None:
+            break
+    assert svc.current_z is not None, "never re-asked after the space moved"
+    assert svc.current_z.shape[1] == svc.spec.dim
+
+
+def test_the_spec_refuses_a_vector_from_another_space():
+    """decode() SLICES, so a short z truncates silently and the failure lands
+    inside whichever modality is running, naming neither space."""
+    _f, m = _fourier_and_mlp()
+    spec = physics_spec_for(m)
+    with pytest.raises(ValueError, match="expects 332"):
+        spec.decode(np.zeros(88, dtype=np.float32))

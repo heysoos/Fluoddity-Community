@@ -1585,6 +1585,20 @@ mechanics these caveats assume.
   one layout, because a full-looking archive that is still bootstrapping has
   no other explanation on screen.
 
+- **A layout change while a rollout is IN FLIGHT must drop the population, and
+  `GenomeSpec` raises on a z from another space.** `abort_generation()` restarts
+  the rollout WITHOUT re-asking — that is what makes it right for a resize or a
+  shader reload, where the genomes are still readable. A layout switch is not
+  that case: `set_layout` therefore clears `_z` and `tile_physics`, and
+  `update()` asks again before the phase machine can reach `score_and_tell`.
+  Left standing, the old population reached `tell()` under the new spec. It did
+  not fail at the boundary either, because `decode`/`split` SLICE and a slice
+  past the end is short rather than an error — so an 88-wide Fourier+physics z
+  read as a 324-float MLP brain and died inside `mlp.decode` as
+  `operands could not be broadcast together with shapes (324,) (88,)`, naming
+  neither space. `_check_width` is the same discipline `_parent_z` already
+  applies to a foreign row. Guarded by `tests/test_search_layout_wiring.py`.
+
 - **A layout change is PRINTED, because nothing else records that it
   happened.** The archive is keyed by signature, so a switch silently
   redirects where results are filed and strands the previous brain's entries

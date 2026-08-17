@@ -196,6 +196,13 @@ class AutoTournamentService:
         self._resolve_spec()
         self._sync_driver()
         if moved:
+            # The population in flight belongs to the OLD space, and a z does
+            # not convert between spaces. abort_generation() restarts the
+            # rollout WITHOUT re-asking, so leaving it standing meant the old
+            # genomes reached tell() under the spec now in force - the crash
+            # this drops it to avoid. update() asks for a new one.
+            self._z = None
+            self.tile_physics = []
             self.abort_generation()
 
     def _resolve_spec(self) -> None:
@@ -301,6 +308,12 @@ class AutoTournamentService:
 
         if self.phase in (Phase.IDLE, Phase.PAUSED):
             return Action.NONE
+
+        # No population to score: the search space moved under a rollout that
+        # was already in flight. Ask in the space now in force rather than
+        # scoring genomes the spec cannot read.
+        if self._z is None:
+            self._begin_generation()
 
         if self._needs_write:
             self._needs_write = False

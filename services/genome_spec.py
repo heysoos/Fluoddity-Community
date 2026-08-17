@@ -109,8 +109,25 @@ class GenomeSpec:
         """
         return self.blocks == other.blocks and self.layout == other.layout
 
+    def _check_width(self, z: np.ndarray) -> None:
+        """A z from another space is an ERROR, not a short read.
+
+        Both readers below SLICE, and a slice past the end of an array is
+        silently short rather than a failure - so a vector from a narrower
+        space reached whichever modality is running and surfaced there as a
+        reshape or broadcast error naming neither space. Same discipline as
+        ImgepDriver._parent_z, and for the same reason: the message has to name
+        the spaces, because the caller that supplied the vector is several
+        frames up the stack.
+        """
+        if z.size != self.dim:
+            raise ValueError(
+                f"{self.signature()} expects {self.dim} genes, got {z.size}; "
+                f"this z belongs to a different search space")
+
     def decode(self, z: np.ndarray) -> dict[str, np.ndarray]:
         z = np.asarray(z, dtype=np.float32)
+        self._check_width(z)
         out: dict[str, np.ndarray] = {}
         off = 0
         for b in self.blocks:
@@ -133,6 +150,7 @@ class GenomeSpec:
         takes the app down.
         """
         z = np.asarray(z, dtype=np.float32).reshape(-1)
+        self._check_width(z)
         out: dict[str, np.ndarray] = {}
         off = 0
         for b in self.blocks:
