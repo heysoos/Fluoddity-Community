@@ -180,6 +180,38 @@ mechanics these caveats assume.
   than a step and the range must be set off a percentile.
   `python -m tools.measure_speed`.
 
+- **`TIME_SCALE` is compensated in TWO moving averages, and that is what makes
+  it a slower creature rather than a different one.** Scaling the position
+  alone gives a particle that turns as sharply per step while covering less
+  ground, and a trail that takes in a whole step's deposit for half a step's
+  travel — tighter and thicker, not slower. Both corrections are one line
+  each, because both quantities are EMAs. The momentum filter `vel = vel*d + f`
+  settles at `f/(1-d)`, so a step covering `ts` retains `d^ts` and takes in
+  `(1-d^ts)/(1-d)` of the force, which holds that steady state exactly. The
+  trail's decay and deposit are two halves of ONE average — it keeps `P` and
+  takes in `1-P` — so `pow(P, ts)` corrects both at once, and two steps at
+  half time land exactly where one step at full time did. The step is scaled
+  AFTER the `V_MAX` clamp, or the cap would stop being a distance per unit
+  time. **Every `pow` is guarded on `ts == 1.0`**, because GLSL does not
+  promise a correctly rounded `pow` and an unguarded `pow(x, 1.0)` would
+  perturb the whole preset library by a bit or two; multiplying by exactly 1.0
+  needs no guard. `TRAIL_DIFFUSION` is deliberately NOT compensated — it is
+  off in almost every preset, and a Gaussian's variance adds rather than its
+  radius, so the slider's own nonlinear mapping would have to be inverted.
+  Guarded by `tests/test_time_scale.py`.
+
+- **A `plain_uniform` parameter is in `PHYSICS_PARAMS` but not in
+  `PHYSICS_PARAM_NAMES`.** It is one float for the whole canvas, so there is
+  no sweep or jitter to offer and no entry in those dicts — declaring one
+  would be the "declared but never read" defect the registry exists to stop.
+  It stays in the table regardless, because the slider, the label, the range
+  menu and the audio target must all come from one place: a second list of
+  modulatable parameters is exactly what
+  `tests/test_audio_mapping.py::test_physics_targets_come_from_the_registry_not_a_second_list`
+  forbids, and it caught the first attempt at this. `TIME_SCALE` is also
+  absent from `PhysicsConfig`, so loading someone else's preset leaves your
+  tempo where you set it.
+
 - **The `MultiLoadConfig` struct is written by OFFSET, and a physics
   parameter's label must be `title()` of its field name.** Two raw std430
   writers pack it in declaration order — `_write_multi_load_ssbo` and
@@ -365,6 +397,38 @@ mechanics these caveats assume.
   one — "keep what is on screen" would otherwise inherit the outgoing
   archive's bar, which is a distance in a different space.
 
+- **The encoder NOBODY CHOSE is the one that must offer to download itself.**
+  Auto's key comes from a combo and `_ensure_auto_service` gates it on
+  `is_present`, which is what draws the Download button; Explore's comes off
+  `encoder.json` and was handed straight to `VisionScorer`, so a missing model
+  surfaced as a raw `ONNXRuntimeError: NO_SUCHFILE` — inside a tab that
+  returns before it draws anything else, leaving no control on screen at all.
+  `_ensure_archive_service` gates the same way and the `model_missing` branch
+  draws the archive ROW as well as the button: the other way out is an archive
+  whose space IS on disk, and nothing else in that tab can be drawn.
+  `archive_unavailable` is cleared where the driver is REUSED, not only where
+  it is built, or the banner outlives the archive that raised it. The request
+  is `ArchiveState.download_model_requested` rather than Auto's, handled ABOVE
+  `_handle_explore`'s early return — a missing encoder is exactly why the
+  driver does not exist. Guarded by `tests/test_missing_archive_encoder.py`.
+
+- **The weights are USER data, and `utilities.paths.get_models_root` is their
+  one home.** They used to be read from `"models"` relative to the CWD, which
+  made them a property of whichever folder was launched rather than of the
+  user: every worktree wanted its own copy — `clip-l14` alone is 859 MB — and
+  a packaged build under Program Files cannot write that folder at all. The
+  same two reasons `imgui.ini` moved. `migrate_models` runs at every launch
+  and follows `migrate_legacy_archive`'s rules exactly: a MOVE, because these
+  are gigabytes, and nothing at all once the target exists, so a second
+  checkout cannot donate its copy over the one in use. It uses `shutil.move`
+  rather than `os.replace` — a rename within one volume, a copy across two,
+  which is the difference between an instant migration and downloading
+  everything again. It deliberately does NOT create an empty `models/`:
+  indistinguishable from a finished migration, it would strand weights still
+  sitting beside the app. A failure is not fatal — the weights stay where they
+  are and read as not-downloaded, which the button above already answers.
+  Guarded by `tests/test_models_migration.py`.
+
 - **Auto's encoder picker is read EVERY FRAME; Explore's is read once.**
   `_ensure_auto_service` returns early once the service exists, so the combo
   beside the prompt reached the scorer exactly once and then changed nothing —
@@ -374,6 +438,19 @@ mechanics these caveats assume.
   space, and 512 against 768 is not a shape error until the first tile
   arrives) and aborts the generation in flight. Guarded by
   `tests/test_scorer_lifecycle.py`.
+
+- **`_ensure_scorer` names EVERY DRIVER, because the service holds no scorer
+  of its own.** `AutoTournamentService.scorer` is a PROPERTY forwarding to
+  `self.driver`, and the two drivers are swapped in and out by mode — so
+  assigning through the service reached whichever was installed and left the
+  other on the encoder that had just been replaced. Which one missed depended
+  on the mode that happened to be running when the archive's encoder was
+  adopted, and `_follow_auto_encoder` heals it only when Auto's chosen key
+  differs from the resident one. At equal width a foreign vector is silently
+  wrong rather than an error — `clip-b32` and `clip-b16` are both 512 — so
+  this fails quietly. The build happens before any reassignment, so a failure
+  leaves every holder on the outgoing encoder rather than half-swapping the
+  app. Guarded by `tests/test_scorer_holders.py`.
 
 - **The settings a run was carried out under are a LOG, not a field.**
   `settings.json` is rewritten wholesale, so the `min_separation` that admitted
@@ -734,6 +811,355 @@ mechanics these caveats assume.
   otherwise call `configure()` on the same object every frame, so each bails out
   when the other owns the driver.
 
+### Audio input
+
+- **The window sets FREQUENCY resolution and the HOP sets time resolution, and
+  a transient is a hop problem, not a width one.** FFT_SIZE is 2048 and HOP is
+  512. Narrowing the window is the obvious fix for a soft transient and it is
+  the wrong one: 1024/512 buys a hi-hat peak of 0.812 against 0.749, and pays
+  for it with double the bin width, where the bass band (20–250 Hz) has only
+  about ten bins to begin with. Halving the hop instead costs one extra FFT per
+  block and nothing else.
+
+- **A band SUMS LINEAR ENERGY and takes decibels once; averaging each bin's dB
+  level is what stopped it ever reaching zero.** The old measure mapped every
+  bin onto `[-90, -20]` dB and averaged the results over the band, so the
+  hundreds of bins carrying nothing set the answer — `hi` spans about 600 bins
+  at 2048/48k and a cymbal lights a handful. Over the calibration material
+  every band read **0.17–0.18 with only room hiss playing** and sat at 0.25–0.44
+  between hits on a loud track: a rig that modulates hardest when nothing is
+  happening, and a `phase` shaper that never stops travelling. `power`
+  (`10·log10(Σ|X|²)`) is the default and reads **0.00** on both room rows.
+  `rms`, `peak` and `mean_db` are the alternatives, per band, and `mean_db` is
+  kept only so a rig built against it still plays.
+  **Each measure carries its OWN dB window, because they are not on one scale**
+  — a sum over 600 bins is not a mean over them — and the floor is set ABOVE a
+  quiet passage rather than above the noise floor, since a quiet part of a
+  track passing a healthy signal is the whole complaint. Nothing here adapts:
+  a running floor or a running peak makes the same sound read differently
+  depending on what played before it, which is exactly the auto-gain defect one
+  caveat down. `python -m tools.measure_audio_response` prints the table the
+  windows come from; the room rows must read 0.00.
+
+- **The five loudness signals ask ONE question in five ranges, which is why a
+  rig could not follow a song's arrangement.** Two answer different questions.
+  `flux` is a MEASURE (`Σ max(0, |X| - |X_prev|)` over the band), so a
+  sustained note reads **0.00 however loud it is** and only the attack
+  registers — `bass`/flux is a kick and `hi`/flux is a hi-hat, with no new
+  signal names and the same window machinery. It is deliberately level-
+  dependent like the other measures; a ratio would put a quiet passage's hits
+  at full scale, which is the complaint the measures answer. Its floor sits
+  **10 dB above the levels'** because broadband noise is new every block, so a
+  room's hiss fluxes in `hi` where it barely registers in `power`.
+  `centroid` is a SIGNAL — the energy-weighted centre of the spectrum, read on
+  a LOG axis over a window in HERTZ, not decibels. It is a ratio, so it says
+  nothing about level: a quiet bright break reads high and a loud bass-only
+  drop reads low, which no band can tell apart. Three consequences: auto-gain
+  must skip it (dividing a ratio by its own running peak means nothing and
+  would put every bright moment at 1.0), it starts at 0 so a rig that has
+  heard nothing contributes nothing, and it must be HELD below
+  `CENTROID_GATE`.
+  **The gate is the whole feature, and "any signal at all" is not a gate.**
+  Being a ratio, the centroid reports a room's noise floor at full strength
+  however quiet the room is — the −60, −50 and −40 dBFS rows read identically
+  — and a noise spectrum is a fresh random draw every block, so it WANDERS:
+  swing 0.14 on pink and 0.36 on brown, 0.06 per block, with nothing playing.
+  The first version gated on `volume > 0`, which a −60 dBFS room already
+  clears at 0.08. The gate is 0.25 of `volume`'s own scale, which is measured
+  to sit above a loud room and below quiet music; expressing it as a fraction
+  rather than in dB means `volume`'s floor slider moves it. The slow envelope needed no new
+  machinery at all — `smooth` reaches 30 s now, on a LOGARITHMIC track,
+  because every percussive setting is under a second and would otherwise share
+  the first pixel.
+
+- **The band smoother is ASYMMETRIC, and the rise is not smoothed at all.** The
+  two directions solve different problems: falling slowly is what stops a
+  steady note drawing a fuzzy hash, while rising slowly only costs the
+  transient. A hi-hat decays in a few milliseconds, so the symmetric 75 ms
+  one-pole reported a peak of 0.315 where the signal was 0.749 — it was not
+  delaying the highs, it was eating 58% of their height. `ATTACK_SECONDS` is
+  therefore 0, `SMOOTHING_SECONDS` 0.075, and the cost is measured in the other
+  column: the per-analysis step on a steady note goes 0.00085 → 0.00109, still
+  23x calmer than the unsmoothed 0.0256 that made the traces vibrate. Both
+  numbers must be read together — `python -m tools.measure_audio_response`. A
+  mapping that wants a soft attack asks for one with the `smooth` shaper; the
+  analyser cannot give a snap back that it has already thrown away.
+  The release is now a SETTING (`AudioInState.release_seconds`, default 0.075)
+  and **0 hands every shaper the raw per-block measurement** — the point of the
+  shapers is to do the smoothing, so the analyser has to be able to stay out of
+  it. It applies to the BAND, last, after the measure and the auto-gain, so it
+  means the same thing whichever measure produced the number; the DISPLAY
+  spectrum keeps its own fixed smoothing, because the bars are there to be read.
+
+- **The DISPLAY spectrum's dB window is not a band's.** The mel bars are read
+  over `[-90, -20]` dB, which rests ordinary material across the middle of the
+  scale — right for something to look at, and the reason a band measured off
+  those bars could not reach zero. Bands carry their own windows
+  (`MEASURE_WINDOWS`), and `volume` measures the whole block at once, which
+  sits far above any single bin, so it has its own `[-60, -6]`. Raw linear
+  magnitude is what the first version drew and it fails twice over: every band
+  pins at 1.0, and the mel rows — unnormalised triangles whose width grows 20x
+  from the bottom of the axis to the top — draw any spectrum at all as a ramp
+  rising to the right. The rows average instead.
+
+- **A mapping's shaper state is keyed by a `uid` the `Mapping` carries, never
+  by `id()`.** CPython hands the address of a freed object straight to the next
+  one of its type: over 2000 create/delete cycles of the real class, 1999
+  reused an address just released. So a row added after one is deleted
+  inherited the deleted row's envelope and LFO phase — starting mid-attack for
+  no visible reason — and `shaped` aliased the same way, letting a drawer draw
+  another row's trace. `uid` is an ordinary dataclass field, so it takes part
+  in `__eq__` and a rig diffed by value sees a delete-and-re-add as the change
+  it is; it is copied with the mapping and never persisted, so a loaded rig
+  mints fresh ones. Nothing tells the runtime a row was deleted, so
+  `AudioRuntime._prune_states` cuts the table back every frame — to the WHOLE
+  rig, not the modality on screen, or switching brains and back would restart
+  the shapers that were waiting there. Guarded by `tests/test_audio_mapping.py`
+  and `tests/test_audio_runtime.py`.
+
+- **NO shaper may generate MOTION from silence, which is NOT the same as
+  answering silence with zero.** A latched sample-and-hold and a stopped
+  integrator both sit on a perfectly good non-zero value; what none of them may
+  do is MOVE while the band is dead. The old `lfo` did: it drove the rate from
+  the band but floored that rate at `rate_min` (0.5 Hz), so a dead-zero band
+  still swung the full 0..1 forever — a rig that modulated hardest with the
+  music off. It was deliberate, and
+  `test_lfo_runs_even_when_the_signal_is_silent` asserted it. The FLOOR was the
+  defect; driving the rate from the band was right. Guarded by
+  `test_no_shaper_moves_on_its_own_when_the_band_is_silent`, derived from
+  `SHAPER_KINDS` so a kind added later cannot skip it — and asserting a
+  TOLERANCE rather than equality, because `smooth` converges on its target
+  instead of arriving and is still creeping by ~1e-18.
+  **A HELD signal is the second way in, and the first guard did not see it.**
+  That test drives an input of exactly zero, but `centroid` parks at whatever
+  the last music was, so a paused track left `phase` integrating 0.73 forever
+  — the free-running LFO again, by another road. `SignalSnapshot.held` names
+  the signals reporting a remembered value, `AudioRuntime` passes it to
+  `modulate`, and `ShaperState.apply` takes `live`. Holding must stop MOTION
+  without silencing the signal: the parameter has to stay where the music left
+  it, which is the whole reason the centroid holds rather than diving.
+
+- **`phase` INTEGRATES the band: `dphase = band * rate * dt`, so it only ever
+  lurches forward.** The band sets how fast the wave TRAVELS, never where it
+  sits — which is the whole difference from a waveshaper that maps level
+  straight onto phase. A held note therefore keeps it cycling rather than
+  parking it, and silence stops it DEAD WHEREVER IT HAD GOT TO rather than
+  dragging the parameter back to base. Measured over a track that plays, stops
+  and resumes: loud (0.9) travels a full sweep, quiet (0.2) travels 0.345 of
+  one in the same time, silence holds at exactly 0.345 with zero travel, and
+  the next loud passage carries on from there. `rate` is cycles per second at a
+  full-scale band, which is literally the old `rate_max` — so a stored `lfo`
+  row carries its rate straight across and loses only the floor. Two things are
+  load-bearing: the advance is scaled by `dt` and NOT per frame, or a slow
+  render moves the wave less per second of music than a fast one; and `_wave`
+  starts at ZERO for all three shapes, so a phase still at 0 — a rig that has
+  heard nothing — contributes nothing.
+
+- **`rate_scale` multiplies the RATE, never `dt`.** One knob slides a whole
+  rig onto another tempo, which is what matching a beat needs; scaling `dt`
+  instead would reach every attack, release and hold as well, and those are
+  durations. So `phase` is the only kind that notices it, and the guard
+  against generating motion from silence still holds at any setting — the
+  band is still a factor in the advance. The traces need nothing of their
+  own: the drawer plots `shaped`, which IS the shaper's output.
+
+- **Auto-gain divides each band by a peak the signal REACHES, so any steady
+  input normalises to its own top — it ships OFF.** `np.maximum(peaks, raw)`
+  puts the peak at the signal, and the 0.9995/block decay only matters on the
+  way down, so the output for steady material is 1.0 by construction whatever
+  its level. Measured on `mid`: a −50 dB room hiss reads raw 0.229 and gained
+  **0.962**; a −70 dB hiss reads raw 0.003 and gained **0.554**, swinging the
+  whole range; real material (a −12 dB kick loop) reads 0.735. There is no gap
+  between a room and a track, so the feature cannot be tuned into correctness —
+  `AudioInState.auto_gain` is therefore `False` and the checkbox is the escape
+  hatch. Only digital silence is safe, which is why a loopback endpoint with the
+  music off looks clean and a microphone does not, and why this survived:
+  `tools/measure_audio_response` passed `auto_gain=False` in every case. It now
+  prints the table. The checkbox is pushed to the analyser EVERY frame rather
+  than at Start, or the only way out needs a Stop/Start; the peaks are dropped
+  on the switch, since they record a level that has gone.
+
+- **The audio brain's base scales come from the LIVE layout, and its `z` is
+  never re-encoded on a scale change.** The Brain window's scale sliders and
+  the rig write the same slot, and `_apply_brain_layout` handles a scales-only
+  change with `sim.set_brain_scales` — which re-decodes from the sim's stored
+  `z` and does NOT touch `rule_manager`. So the rule the rig is handed is the
+  pre-drag one, and anchoring to the layout captured when audio adopted the
+  brain put that brain back every frame: dragging MLP Weight Scale 1.0 → 4.0
+  wrote p90|w| 1.5895 and the rig overwrote it with 0.4141. Re-encoding is NOT
+  the fix and makes it worse — `decode(encode(P, new), new)` is `P`, the very
+  brain that was on screen before the slider moved. Keep the first `z`, take
+  the scales off the layout that is live now. `layout.length` is in
+  `_base_brain_id` so a WIDTH change still forces a re-encode; the scales
+  deliberately are not.
+
+- **The rig file is SHARED by every copy of Fluoddity, so a session writes it
+  only if it CHANGED it.** `Documents/Fluoddity/audio_rig.json` is one file for
+  every worktree and every instance another session launches, and the write at
+  exit used to be unconditional — so a second copy opened and closed without
+  going near audio put its empty rig over the one you had just built, which
+  reads as a save that only sometimes works. `App._rig_at_start` holds the dict
+  `load_rig` produced, and `_save_last_rig` compares `to_dict(audio)` against
+  it. Two consequences: a first-ever run that touches nothing never creates the
+  file, and two instances that BOTH edit still resolve last-writer-wins, which
+  is not fixable — two rigs cannot be merged. Polling was considered and
+  rejected: it costs almost nothing but guards only a hard kill, which is the
+  one thing that skips `cleanup()`. Named rigs are a separate thing entirely,
+  in `audio_rigs/` rather than the user configs folder, because everything
+  there appears in File > Load and a rig is not a physics config. Guarded by
+  `tests/test_rig_presets.py`.
+
+- **`imgui.ini` is shared between the app and the test suite, and the tests
+  must not read or write it.** Dear ImGui persists every window's size in
+  `create_context`/`destroy_context`, so the tests saved a layout and consumed
+  it on the next run: the archive gallery came back 382px tall, two of its
+  eight entries no longer fit, and a test that had always passed began failing
+  with no code change. Running the app writes the same file, so the suite's
+  result depended on whether anyone had resized a panel. `tests/conftest.py`
+  wraps `create_context` to null the filename AND calls `ui.ini_path.suppress()`
+  — the app sets the filename during `UI.__init__`, which runs after
+  `create_context` and would otherwise put the suite back on the real file.
+  That is why the set lives in ONE function and nowhere else. Never read it
+  back — `get_ini_filename()` on the null segfaults.
+
+- **The layout file is USER data, and which windows were open is not in it.**
+  `imgui.ini` used to sit in `get_app_dir()`, which is the launched folder
+  running from source — so five worktrees kept five layouts — and is
+  potentially read-only in a packaged build under Program Files. It is now
+  `Documents/Fluoddity/imgui.ini`, seeded by `migrate_imgui_ini` from an
+  existing app-dir layout before `default_imgui.ini`, and never overwritten
+  once it exists. ImGui records each window's position and size but not
+  whether it was on screen at all, so the open/closed flags live in
+  `PreferencesState` — which round-trips through `asdict`, so a field there
+  persists for free. `show_demo_window` is deliberately excluded. The two
+  windows whose flag belongs to a feature (`state.audio.show_window`,
+  `state.archive.show_browser`) are MIRRORED rather than moved: `get_state()`
+  copies state to preference every frame and `_restore_open_windows` applies
+  it once at startup. Restoring the browser sets `open_browser_requested`,
+  which reloads the archive — `rescore_all()` is load-bearing there, so it
+  must be asked for exactly ONCE and never per frame.
+
+### Recording
+
+- **`generate_view_texture()` returns two different things, and the recorder
+  gets whichever arrived.** The camera views (Camera, Tiled, Particles+Trails —
+  `cam_brush_mode`) hand it `cam_brush_target`, a FRAMEBUFFER-sized buffer with
+  the camera already baked in; every other view hands it `sim.view_tex` at
+  canvas resolution with no camera applied. `FrameAssembler` sizes itself from
+  its input, so the assembled texture inherits that shape. Black bars exist
+  only in the first case, and so does zoom's cost: the world is rasterised into
+  however many pixels the zoom leaves it, so **no crop can restore resolution a
+  zoom-out never drew**. Recovering it needs the recording to own its
+  framebuffer and camera — a second particle raster per frame — which was
+  considered and rejected. Framing near fit-to-window is the user's half of the
+  bargain.
+
+- **The crop RECT is re-derived every frame; the crop TARGET is frozen at
+  record start.** The encoder rejects a mid-stream dimension change, so a zoom
+  rescales into the fixed target rather than resizing the file. The rect comes
+  from `camera.assembled_view_rect` and is never recomputed — that field is
+  assigned with the texture it describes, and recomputing it later crops one
+  frame's pixels with a later frame's camera. It is intersected with the
+  texture, so zoomed in the crop is an identity and framing is untouched.
+  Because the target no longer tracks the window, a mid-take resize stops
+  splitting the file. `record_sizes` derives the video size in OUTPUT space:
+  cropping first and dividing by the supersample kernel after can land on an
+  odd number, which the recorder pads — putting a black edge back on the side
+  the crop just removed. Guarded by `tests/test_record_view_gl.py`, whose rects
+  are all off-centre, because a centred camera cancels the `v`-flip and
+  validates any orientation bug you like.
+
+- **The SOUNDTRACK is the recording's clock, and wall time is only a
+  cross-check.** The tap starts and stops with the recorder, so both streams
+  cover the same wall interval and `frame_count / audio_seconds` is exactly the
+  rate that makes them the same length — sync is arithmetic rather than a
+  measurement, and it rides the sound card's clock rather than the frame
+  loop's. This is why the sidecar is muxed at close rather than piped live:
+  `-framerate` is fixed when the encoder starts, and the real rate is not
+  knowable until the take ends, so `-itsscale` retimes it during a stream copy.
+  `-itsscale` is an INPUT option and only affects the input it PRECEDES. Wall
+  time catches a device that died mid-take, where the audio is far too short
+  and the derived rate would silently speed the video up to match it.
+
+- **Because the clock is honest, hitting real time is a taste decision, not a
+  correctness one.** With audio the `speedmult` override in `main.py` is
+  skipped and the rate follows the user's slider: blur samples ARE physics
+  sub-steps, so forcing them up renders far below real time. Raising the slider
+  trades fps for blur and sync is unaffected. Silent recording keeps the fixed
+  50 fps and its exact previous behaviour.
+
+- **The soundtrack delay is the `adelay` FILTER, and `-itsoffset` is the trap.**
+  In front of a headerless raw input `-itsoffset` is accepted and shifts
+  nothing: the file still plays, so the only symptom is that the control does
+  nothing. What is left in the output is the AAC encoder's own priming delay,
+  0.021 s, identical at every setting — which reads like a working control with
+  a bad scale factor. An argv test cannot see this, so
+  `tests/test_record_delay_e2e.py` decodes the muxed audio and finds a click.
+  `adelay` takes MILLISECONDS and needs `all=1`, or only the first channel
+  moves. The picture lags the sound it reacts to — analysis block, the band
+  smoother's release, a frame, and the readback's frame — so delay is the
+  direction that matters and the slider does not go negative.
+
+- **The tap is guarded SEPARATELY from the analysis, not by the same
+  `try`.** Sharing it means a full disk stops the signals driving the sim.
+  Cleared before teardown in `stop()`, as `_analyzer` is, so a callback in
+  flight cannot write into a file the main thread is closing. Every path
+  through `RecordingAudio.finish()` leaves the output file in place — a
+  soundtrack is worth strictly less than the recording it belongs to.
+
+- **Nothing on the frame loop may touch the pixels, and `stdin.write` may not
+  happen on it at all.** Recording used to cost **44.1 ms per frame** at
+  1920x1080 before ffmpeg saw anything — a `read()` of an RGBA **float32**
+  target (16.6 ms, 33.2 MB, and a synchronous readback stalls the whole
+  pipeline) then `*255 -> clip -> astype -> flipud -> tobytes` on the host
+  (27.5 ms, four passes over eight million floats). It then blocked on a pipe
+  to an encoder at preset `slow`, whose **worst single write was 1118 ms**.
+  Three fixes, all needed: an RGBA8 target read through a PAIR of buffers
+  mapped a frame late (a synchronous `texture.read_into(host)` is 24.5 ms; via
+  a PBO it is 2.5); the flip done in the vertex shader so the readback IS the
+  `rgba` ffmpeg is given, with no host pass; and a writer thread, so a full
+  pipe never reaches the caller. Now **8–15 ms mean**.
+  `python -m tools.measure_recording`. The trap when re-measuring is the one
+  the canvas-format caveat names: this is a laptop, so two runs measure its
+  thermal state as much as the code. Read the columns against each other in
+  ONE run, never across runs.
+
+- **The encoder must DRAIN faster than the sim produces.** At 1080p, preset
+  `slow` drains 32–48 fps with a worst single write over a SECOND; `veryfast`
+  drains 64–84 with a worst write of 29 ms. `PRESET` is therefore
+  `veryfast`/CRF 20. The queue is bounded by MEMORY (256 MB, 4..32 frames) and
+  BLOCKING: a full queue slows the sim rather than dropping a frame, so the
+  file is exactly what the sim produced — which is also what lets
+  `recording_fps` divide by it.
+
+- **The readback is a frame LATE, so `finish()` collects the one in flight —
+  but never past `max_frames`.** The frame count is what the soundtrack's
+  length is divided by, so losing the last frame would stretch the take and
+  keeping one too many would run a limited take long. `VidSaver._max_frames`
+  is remembered for exactly that check. Guarded by
+  `tests/test_vid_saver_audio.py::test_hitting_the_frame_limit_still_muxes`,
+  which caught the extra frame the drain first introduced.
+
+- **RGB8 is smaller and NOT a required color-renderable format.** It works on
+  this machine (2.55 ms against RGBA8's 3.09, and 6.2 MB over the pipe against
+  8.3) and it is the same trap as RGB32F elsewhere in this file. RGBA8 is
+  required, ffmpeg takes `rgba` natively, and the difference is 79.6 fps
+  against 76.1 — so the format is RGBA8 and the alpha is ffmpeg's problem.
+
+- **`VidSaver._plan` is the ONE authority on the output size, and it rounds
+  DOWN to even.** H.264 refuses odd dimensions, and the old path rebuilt the
+  whole image into a padded host array every frame to fix it. `record_sizes`
+  already produced even sizes for a cropped take; the uncropped branch now
+  does too, and `FFmpegVideoRecorder` raises on odd rather than accepting what
+  it cannot encode. The reader reaches the same number by the same rule — a
+  frame whose size disagreed with the encoder's header would be refused.
+
+- **The flip lives in the vertex shader, so both capture paths share it.**
+  `save_frame_gpu` (screenshots, synchronous, PNG, exact dimensions) and
+  `AsyncFrameReader` (recording) run the same program; a leftover `np.flipud`
+  on either side would put that one upside down silently. Guarded by
+  `tests/test_video_recording.py::test_the_screenshot_path_agrees_with_the_recorder_on_which_way_is_up`.
+
 ### UI and platform
 
 - **There is ONE save dialog, and every Save button in the app opens it.**
@@ -816,6 +1242,18 @@ mechanics these caveats assume.
   wider than `WIDEST_LABEL` fails `tests/test_label_widths.py`, measured in
   real pixels — the font is proportional, so character counts do not predict
   width.
+
+- **A POPUP BODY only runs while the popup is open, so a render smoke test
+  never enters one.** Every widget call inside `begin_popup*` is unexecuted by
+  an ordinary test pass, and imgui_bundle's bindings raise `TypeError` on a bad
+  signature rather than failing to compile — `imgui.selectable(label)` is
+  missing its `p_selected` and takes the whole app down the first time a user
+  right-clicks. A test opens the body by wrapping `begin_popup_context_item`
+  and calling `imgui.open_popup(str_id)` first: both hash `str_id` against the
+  same window and ID stack, so this reaches a popup nested inside a `push_id`.
+  Pair it with a test that the wrapper opened something, or the coverage is
+  imaginary. Guarded by
+  `tests/test_audio_reactive_window_render.py::test_the_forced_popup_helper_really_opens_something`.
 
 - **An ImGui widget's identity IS its label, and a duplicate silently kills the
   loser.** Two visible items hashing to one ID puts Dear ImGui's "conflicting
@@ -917,6 +1355,52 @@ mechanics these caveats assume.
   an unchanged layout, which is what stops the following frame paying for a
   second archive rebuild.
 
+- **An undo step must be something the USER did, and three parts of the app
+  drive undoable preferences on their own.** An automatic mode, a recording
+  and a screenshot each commandeer `speedmult`, `motion_blur` and
+  `blur_quality` and put them back when they finish. All three are undoable,
+  so every phase change of those state machines looked to the per-frame diff
+  exactly like a slider moving: a generation deposits several, `MAX_STEPS` is
+  200, and leaving Explore running discarded every real step the user had
+  made — after which half the surviving steps restore `speedmult = 0`, which
+  stops the sim and leaves a black canvas under a working UI.
+  `App._preferences_are_borrowed` is the one predicate over all three, for the
+  same reason `preview_active` is one over the previews: a fourth borrower is
+  covered by naming it there. Guarded by `tests/test_undo_ownership.py`.
+
+- **A DECODE SCALE is not in the signature, and the restore has to compare the
+  settings as well.** Keeping scales out of `signature()` is deliberate —
+  dragging one must not tear down the archive — but `Snapshot.brain_settings`
+  carries them, so a drag DOES commit a step. Gated on the signature alone
+  that step restored nothing, and the `rebase()` immediately after it
+  overwrote the old scale with the new one, putting the value out of reach for
+  good: the panel showed a row, Ctrl+Z did nothing, and the number was gone.
+  `_brain_matches` compares both; a snapshot carrying no settings at all means
+  "the signature is all we know", not "the defaults". MLP is the modality this
+  matters most for, since `w_scale`/`b_scale` are what a rig modulates.
+
+- **A hover BORROWS the state an undo would write, so an undo is refused while
+  one is live.** `_end_archive_preview` restores the pre-hover physics
+  wholesale when the pointer leaves, and `pop_rule()` takes back the rule — so
+  an undo applied underneath a preview is reverted a moment later with nothing
+  on screen to say so, and the rebase has already consumed the step it undid.
+  Hovering does not set `want_capture_keyboard`, so Ctrl+Z genuinely reaches
+  the orchestrator with a borrow outstanding. `_handle_undo` therefore returns
+  early on `preview_active` with a notice, which is the same predicate
+  `_record_undo_step` already uses.
+
+- **A step's NAME travels as a one-shot on `ui_state`, never through the
+  journal.** `UndoHistory.tag()` existed from the start and nothing called it,
+  so every row was `describe()`'s guess — and a preset load moves a dozen
+  fields at once, so every preset in the library produced a row saying
+  "Settings". `CommandHandler` holds no journal (it sets `ui_state.undo_tag`
+  and the orchestrator forwards it, the pattern every other command follows),
+  and the tag is cleared by the frame that USES it: a load deferred behind a
+  live widget keeps its name, while a load that changed nothing drops it
+  rather than naming whatever moves next. Still advisory — the DIFF is what
+  commits a step, so a call site that forgets to tag costs a name and never
+  coverage. Guarded by `tests/test_undo_labels.py`.
+
 - **Undo covers the recipe, never the picture.** The canvas and entity buffers
   are out, so Clear Canvas, Reset and Fill have nothing to restore, and
   deleting a preset or an archive entry stays outside. Under a tournament the
@@ -928,9 +1412,11 @@ mechanics these caveats assume.
 - **A render test must not read `imgui.ini`.** ImGui restores each window's
   saved size, position and scroll from it, and the file is gitignored — so a
   test that draws a window passes on a fresh clone and fails on a machine that
-  has run the app. `tests/test_undo_window_render.py` sets
-  `io.set_ini_filename("")` in its fixture. Sizing the HOST window is not
-  enough; the window under test picks up its own saved geometry.
+  has run the app. Sizing the HOST window is not enough; the window under test
+  picks up its own saved geometry. `tests/conftest.py` handles the whole suite
+  by wrapping `create_context`, and a fixture must NOT set the filename again
+  itself — see the `imgui.ini` caveat under UI and platform for why that set
+  has exactly one home.
 
 - **`sim.py` is user-owned** — do not restructure without asking. It has its own
   hardcoded param lists in `entity_update()` and `_write_multi_load_ssbo()`.
@@ -1208,7 +1694,24 @@ mechanics these caveats assume.
   there turn out to be interesting the conclusion is that `W_SCALE` is wrong,
   not that the region should be fenced; promoting it to a `Setting(kind=
   "float")` makes it a decode scale, which neither splits the archive nor
-  resets a search.
+  resets a search. That is what `w_scale` and `b_scale` now are.
+
+- **`w_scale` 0.25–8.0 and `b_scale` 0.0–4.0 are measured, and the DEFAULTS
+  decode bit-identically to the constants they replaced.** MLP was the one
+  modality whose settings were all structural, so `brain_targets` offered
+  nothing and the audio panel's Brain section was empty under it — which reads
+  as the panel failing rather than as a property of that brain. Below `w_scale`
+  0.25 the hidden layer is near-linear and output magnitude stops tracking the
+  slider at all — p50 output is 0.41, 0.38, 0.35 at 0.1, 0.25, 0.5, i.e. flat
+  and slightly BACKWARDS. Upward the limit is saturation: on a lively input
+  units railed at |h| > 0.99 run 3.3% at 4.0, 21% at 8.0 and 38% at 12. Bias
+  stops at 4.0 on the same measure, 12% railed against 36% at 6.0. Two traps:
+  `encode` must divide by the SAME scales `decode` multiplies by, or the
+  modulator's encode-once/decode-many moves the brain the instant audio touches
+  it; and `b_scale` reaches 0 legitimately, so encode floors it rather than
+  dividing by zero. `python -m tools.measure_mlp_scale`. Guarded by
+  `tests/test_brain_scales.py`, which derives its cases from
+  `settings_schema()` — that is what proves a new scale is actually READ.
 
 - **A layer edit has an OWNER, and two states have none.** Under a tournament
   slot 0 is tile 0 of a running grid, which is rewritten every generation, so

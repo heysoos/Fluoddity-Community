@@ -186,8 +186,8 @@ class MenuBarMixin:
                 imgui.end_menu()
 
             # Window toggle button (shows/hides Physics Settings, Preferences, Drawing Controls, Config Clipboard, Screen Recording)
-            if imgui.menu_item("Show/Hide Windows (X)", "", self.show_sidebar)[0]:
-                self.show_sidebar = not self.show_sidebar
+            if imgui.menu_item("Show/Hide Windows (X)", "", self.state.preferences.show_sidebar)[0]:
+                self.state.preferences.show_sidebar = not self.state.preferences.show_sidebar
 
             # Reset menu
             if imgui.begin_menu("Reset...", not self.force_close_main_menus):
@@ -309,16 +309,16 @@ class MenuBarMixin:
                                        extras_menu_min.y + extras_menu_size.y))
 
                 # Config Clipboard window
-                _, self.show_history_window = imgui.checkbox(
+                _, self.state.preferences.show_history_window = imgui.checkbox(
                     "Config Clipboard",
-                    self.show_history_window
+                    self.state.preferences.show_history_window
                 )
                 self._delayed_tooltip("Set restorable checkpoints with Ctrl-C")
 
                 # Screen Recording Controls
-                _, self.show_video_recording_window = imgui.checkbox(
+                _, self.state.preferences.show_video_recording_window = imgui.checkbox(
                     "Screen Recording Controls",
-                    self.show_video_recording_window
+                    self.state.preferences.show_video_recording_window
                 )
 
                 # Tournament mode (interactive evolution)
@@ -339,13 +339,22 @@ class MenuBarMixin:
                     self.state.archive.open_browser_requested = want
                 self._delayed_tooltip("Browse saved creatures and preview them live.")
 
+                # Live audio driving physics and brain parameters.
+                changed, want = imgui.checkbox(
+                    "Audio Reactive",
+                    self.state.audio.show_window
+                )
+                if changed:
+                    self.state.audio.show_window = want
+                self._delayed_tooltip("Bind live audio bands to physics and brain parameters.")
+
                 # Every change you have made this session, newest first.
                 changed, want = imgui.checkbox(
                     "Undo History",
-                    self.show_undo_window
+                    self.state.preferences.show_undo_window
                 )
                 if changed:
-                    self.show_undo_window = want
+                    self.state.preferences.show_undo_window = want
                 self._delayed_tooltip("Browse every change you have made, and step back to one.")
 
                 # Which function the particles' brains actually compute
@@ -370,7 +379,7 @@ class MenuBarMixin:
                     "Strong Determinism",
                     self.state.preferences.strong_determinism
                 )
-                self._delayed_tooltip("Enables double buffering for the canvas. When checked,\nevents will unfold exactly the same way after every\nsimulation reset. Comes with a small ~3% performance penalty.")
+                self._delayed_tooltip("Make events unfold the same way after every simulation reset.")
 
                 # Advanced Drawing toggle
                 _, self.state.preferences.advanced_drawing_enabled = imgui.checkbox(

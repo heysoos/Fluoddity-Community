@@ -156,6 +156,54 @@ def test_the_runner_records_the_rect_whenever_it_sets_the_texture(monkeypatch):
     assert hi[1] - lo[1] == pytest.approx(1.0, abs=1e-6)
 
 
+def test_the_runner_hands_the_recorder_the_rect_it_just_recorded(monkeypatch):
+    """The recorder crops with this rect; without it a recording keeps the
+    black bars around the world. It must be THIS frame's rect, since the
+    camera may have moved since the texture was assembled."""
+    import camera as camera_module
+    from simulation_runner import SimulationRunner
+
+    monkeypatch.setattr(camera_module.glfw, "get_framebuffer_size",
+                        lambda _w: (1920, 1080))
+
+    class _Prefs:
+        bloom_enabled = False
+        max_frames = -1
+        supersample_k = 1
+        filename_prefix = ""
+
+    class _SimState:
+        watercolor_mode = False
+
+    class _UIState:
+        preferences = _Prefs()
+        sim = _SimState()
+
+    cam = camera_at(position=(0.0, 0.03))
+    cam.assembled_texture = None
+    cam.assembled_view_rect = None
+    cam.ctx = None
+
+    seen = {}
+
+    class _Video:
+        def is_active(self):
+            return True
+
+        def process_frame(self, ctx, texture, max_frames, ssk_w,
+                          filename_prefix="", view_rect=None):
+            seen["rect"] = view_rect
+
+    runner = object.__new__(SimulationRunner)
+    runner.camera = cam
+    runner.video_service = _Video()
+
+    runner._process_assembled_frame(_FakeTex((1920, 1080)), _UIState())
+
+    assert seen["rect"] is not None, "the recorder was given no rect to crop to"
+    assert seen["rect"] == cam.assembled_view_rect
+
+
 def test_a_fresh_camera_has_no_recorded_rect():
     cam = camera_at()
     cam.assembled_texture = None

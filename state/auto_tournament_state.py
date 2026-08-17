@@ -1,4 +1,4 @@
-"""UI state for the CLIP-guided automatic tournament.
+"""UI state for the vision-guided automatic tournament.
 
 One-shot request flags are set by the UI and cleared by the consuming side in
 CommandHandler - never inside UI.get_state(), which returns the live object.

@@ -10,6 +10,27 @@
 
 **Spec:** [docs/superpowers/specs/2026-08-12-audio-reactive-design.md](../specs/2026-08-12-audio-reactive-design.md)
 
+**Branch:** `worktree-audio-reactive`, off `integration` at `f2272d0` — the
+variable-depth MLP stack, so `brains.STRUCTURAL_KINDS` is available as Task 3
+assumes.
+
+## Coexisting with the other branches in flight
+
+The window module is named `audio_reactive_window.py`, NOT `audio_window.py`.
+The unmerged sonification branch already ships `ui/audio_window.py` with a class
+called `AudioWindowMixin`, a `render_audio_window()` method and a
+`tests/test_audio_window_render.py` — all four names identical to what this plan
+originally asked for. The two features point opposite ways (sim to MIDI out
+there, audio in to physics here), so both will land, and one mixin would shadow
+the other in the MRO with nothing raising. The spec caught this for the state
+module and chose `audio_in_state.py`; it missed the window. `audio_in_state.py`
+keeps its spec name — nothing collides with it.
+
+These files are edited by more than one branch in flight and will conflict
+textually at merge. Keep each addition to its own line, appended rather than
+interleaved: `main.py`, `ui/core.py`, `state/__init__.py`, `state/ui_state.py`,
+`requirements.txt`, `Fluoddity.spec`, `docs/testing_checklist.md`.
+
 ## Global Constraints
 
 - **`PyAudioWPatch` must be imported lazily**, inside functions, never at module scope and never at startup. With it absent the feature disables itself and every other part of the app runs unchanged. This is the same rule `onnxruntime` and `cmaes` follow.
@@ -37,7 +58,7 @@
 | `services/audio_brain.py` | Pure: encode-once / decode-many for brain scale modulation |
 | `services/audio_capture.py` | The only module that performs IO: device list, stream, capture thread |
 | `state/audio_in_state.py` | Mappings, strengths, live snapshot, persistence allowlist |
-| `ui/audio_window.py` | Source row, spectrum, band traces, matrix, drawer |
+| `ui/audio_reactive_window.py` | Source row, spectrum, band traces, matrix, drawer |
 | `ui/slider_widgets.py` | *(modify)* in-track swing display, `Audio…` context item |
 | `main.py` | *(modify)* the apply seam, Auto/Explore suppression, cleanup step |
 
@@ -2138,17 +2159,17 @@ other, and audio would move the physics mid-comparison."
 ### Task 8: The panel
 
 **Files:**
-- Create: `ui/audio_window.py`
+- Create: `ui/audio_reactive_window.py`
 - Modify: `ui/core.py:19-56` (mixin), `ui/core.py:703` (render call), `ui/menu_bar.py`
-- Test: `tests/test_audio_window_render.py`
+- Test: `tests/test_audio_reactive_window_render.py`
 
 **Interfaces:**
 - Consumes: `services.audio_mapping`, `state.audio_in_state`.
-- Produces: `AudioWindowMixin` with `render_audio_window()`; `SIGNAL_COLORS: dict[str, tuple]`; `TraceRing(length: int)` with `.push(v: float)` and `.values -> np.ndarray`.
+- Produces: `AudioReactiveWindowMixin` with `render_audio_reactive_window()`; `SIGNAL_COLORS: dict[str, tuple]`; `TraceRing(length: int)` with `.push(v: float)` and `.values -> np.ndarray`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/test_audio_window_render.py`:
+Create `tests/test_audio_reactive_window_render.py`:
 
 ```python
 """Render smoke, ID collisions, and the drawing rules the panel must follow."""
@@ -2158,23 +2179,23 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-SRC = Path(__file__).resolve().parent.parent / "ui" / "audio_window.py"
+SRC = Path(__file__).resolve().parent.parent / "ui" / "audio_reactive_window.py"
 
 
 def test_the_mixin_is_part_of_UI():
     from ui import UI
-    from ui.audio_window import AudioWindowMixin
-    assert issubclass(UI, AudioWindowMixin)
+    from ui.audio_reactive_window import AudioReactiveWindowMixin
+    assert issubclass(UI, AudioReactiveWindowMixin)
 
 
 def test_every_signal_has_a_colour():
     from services.audio_analysis import SIGNAL_NAMES
-    from ui.audio_window import SIGNAL_COLORS
+    from ui.audio_reactive_window import SIGNAL_COLORS
     assert set(SIGNAL_COLORS) == set(SIGNAL_NAMES)
 
 
 def test_the_ring_is_float32_numpy_all_the_way_to_the_widget():
-    from ui.audio_window import TraceRing
+    from ui.audio_reactive_window import TraceRing
     r = TraceRing(64)
     r.push(0.5)
     assert isinstance(r.values, np.ndarray)
@@ -2183,7 +2204,7 @@ def test_the_ring_is_float32_numpy_all_the_way_to_the_widget():
 
 
 def test_the_ring_keeps_the_newest_sample_last():
-    from ui.audio_window import TraceRing
+    from ui.audio_reactive_window import TraceRing
     r = TraceRing(4)
     for v in (0.1, 0.2, 0.3, 0.4, 0.5):
         r.push(v)
@@ -2228,7 +2249,7 @@ def test_no_visible_label_is_used_twice():
 def test_the_window_renders_headless():
     from imgui_bundle import imgui
 
-    from ui.audio_window import AudioWindowMixin
+    from ui.audio_reactive_window import AudioReactiveWindowMixin
     from state import UIState
 
     imgui.create_context()
@@ -2237,7 +2258,7 @@ def test_the_window_renders_headless():
     io.delta_time = 1 / 60
     io.backend_flags |= imgui.BackendFlags_.renderer_has_textures.value
 
-    class Host(AudioWindowMixin):
+    class Host(AudioReactiveWindowMixin):
         def __init__(self):
             self.state = UIState()
             self.state.audio.show_window = True
@@ -2248,7 +2269,7 @@ def test_the_window_renders_headless():
 
     host = Host()
     imgui.new_frame()
-    host.render_audio_window()
+    host.render_audio_reactive_window()
     imgui.end_frame()
     imgui.render()
 
@@ -2256,7 +2277,7 @@ def test_the_window_renders_headless():
 def test_a_closed_window_renders_nothing_and_does_not_raise():
     from imgui_bundle import imgui
 
-    from ui.audio_window import AudioWindowMixin
+    from ui.audio_reactive_window import AudioReactiveWindowMixin
     from state import UIState
 
     imgui.create_context()
@@ -2265,7 +2286,7 @@ def test_a_closed_window_renders_nothing_and_does_not_raise():
     io.delta_time = 1 / 60
     io.backend_flags |= imgui.BackendFlags_.renderer_has_textures.value
 
-    class Host(AudioWindowMixin):
+    class Host(AudioReactiveWindowMixin):
         def __init__(self):
             self.state = UIState()
             self.state.audio.show_window = False
@@ -2275,19 +2296,19 @@ def test_a_closed_window_renders_nothing_and_does_not_raise():
             pass
 
     imgui.new_frame()
-    Host().render_audio_window()
+    Host().render_audio_reactive_window()
     imgui.end_frame()
     imgui.render()
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_audio_window_render.py -v`
-Expected: FAIL — `ModuleNotFoundError: No module named 'ui.audio_window'`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_audio_reactive_window_render.py -v`
+Expected: FAIL — `ModuleNotFoundError: No module named 'ui.audio_reactive_window'`
 
 - [ ] **Step 3: Write the implementation**
 
-Create `ui/audio_window.py`:
+Create `ui/audio_reactive_window.py`:
 
 ```python
 """The Audio Reactive panel: source, spectrum, band traces, mapping matrix.
@@ -2336,7 +2357,7 @@ class TraceRing:
         return self._buf
 
 
-class AudioWindowMixin:
+class AudioReactiveWindowMixin:
     """Combined into UI via multiple inheritance."""
 
     def _audio_rings(self) -> dict:
@@ -2349,7 +2370,7 @@ class AudioWindowMixin:
             self._audio_device_cache = audio_capture.list_devices()
         return self._audio_device_cache
 
-    def render_audio_window(self):
+    def render_audio_reactive_window(self):
         ast = self.state.audio
         if not ast.show_window:
             return
@@ -2537,19 +2558,19 @@ class AudioWindowMixin:
 In `ui/core.py`, add the import beside the other window mixins (after line 32):
 
 ```python
-from .audio_window import AudioWindowMixin
+from .audio_reactive_window import AudioReactiveWindowMixin
 ```
 
 Add it to the `UI` base list, after `BrainWindowMixin,`:
 
 ```python
-    AudioWindowMixin,
+    AudioReactiveWindowMixin,
 ```
 
 Beside `self.render_brain_window()` (around line 703), add:
 
 ```python
-            self.render_audio_window()
+            self.render_audio_reactive_window()
 ```
 
 In `ui/menu_bar.py`, inside the Extras menu, beside the Archive Browser item, add:
@@ -2561,7 +2582,7 @@ In `ui/menu_bar.py`, inside the Extras menu, beside the Archive Browser item, ad
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `.venv/Scripts/python.exe -m pytest tests/test_audio_window_render.py -v`
+Run: `.venv/Scripts/python.exe -m pytest tests/test_audio_reactive_window_render.py -v`
 Expected: PASS, 9 tests
 
 - [ ] **Step 6: Verify no label width regression**
@@ -2572,7 +2593,7 @@ Expected: PASS
 - [ ] **Step 7: Commit**
 
 ```bash
-git add ui/audio_window.py ui/core.py ui/menu_bar.py tests/test_audio_window_render.py
+git add ui/audio_reactive_window.py ui/core.py ui/menu_bar.py tests/test_audio_reactive_window_render.py
 git commit -m "feat: the panel that shows what each band is doing
 
 Traces go through plot_lines over a float32 array, one crossing into C++ per
@@ -2744,7 +2765,7 @@ In `services/audio_runtime.py`, add:
         ast = ui_state.audio
         if not ast.enabled or modulated_sim is ui_state.sim:
             return {}
-        from ui.audio_window import SIGNAL_COLORS
+        from ui.audio_reactive_window import SIGNAL_COLORS
 
         deaf = deaf_targets(ui_state.sim)
         targets = {t.key: t for t in physics_targets(ui_state.sim)}

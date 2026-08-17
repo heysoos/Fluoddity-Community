@@ -13,6 +13,10 @@ from imgui_bundle import imgui
 # tests/test_label_widths.py - a longer label than this fails the test.
 WIDEST_LABEL = "Autosave every N gens"
 
+# The Physics window has its own longest label, and its own test case. The lock
+# prefix counts: an alt-locked parameter renders as "[L]" plus its label.
+WIDEST_PHYSICS_LABEL = "[L]Trail Persistence"
+
 # Neither window is usable narrower than this.
 MIN_PANEL_WIDTH = 420.0
 MIN_PANEL_HEIGHT = 260.0

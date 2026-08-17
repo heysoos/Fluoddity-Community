@@ -19,9 +19,6 @@ from ui.undo_window import UndoWindowMixin
 def gui():
     imgui.create_context()
     io = imgui.get_io()
-    # Never read or write a developer's imgui.ini: a saved window layout
-    # changes what a frame draws and makes these tests machine-dependent.
-    io.set_ini_filename("")
     io.display_size = imgui.ImVec2(1280, 900)
     io.delta_time = 1.0 / 60.0
     io.backend_flags |= imgui.BackendFlags_.renderer_has_textures
@@ -37,7 +34,6 @@ class Panel(UndoWindowMixin):
         self.state = UIState()
         self.undo_steps = steps
         self.undo_cursor = cursor
-        self.show_undo_window = True
 
 
 def frame(panel, n=2):

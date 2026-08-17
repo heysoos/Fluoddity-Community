@@ -49,12 +49,9 @@ def spread_report(embeddings: np.ndarray) -> dict:
         "p95": float(np.percentile(v, 95)),
         # A median far below the mean means a large block of near-identical
         # images is dragging the aggregate down while a minority of genuinely
-        # distinct pairs holds the mean up. Measured 2026-08-07: one converged
-        # run's 481 best-tile frames sat at mean 0.043 and were 57% of all
-        # pairs in a 635-image sample, pulling a 0.18 across-run spread down to
-        # 0.14. The aggregate is not wrong, it is answering a different
-        # question - re-measure on a decorrelated subsample before believing a
-        # FAIL.
+        # distinct pairs holds the mean up. The aggregate is not wrong, it is
+        # answering a different question - re-measure on a decorrelated
+        # subsample before believing a FAIL.
         "duplicate_dominated": bool(n >= 8 and p50 < 0.5 * mean),
         "passes": bool(mean > MEAN_BAR and std > STD_BAR),
     }

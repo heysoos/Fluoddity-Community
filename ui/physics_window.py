@@ -1,5 +1,6 @@
 """Physics Settings window: sliders, additional settings, appearance, notes (normal + multi-load modes)."""
 from imgui_bundle import imgui
+from . import layout
 from .physics_params import PARAM_GROUPS
 
 
@@ -41,6 +42,11 @@ class PhysicsWindowMixin:
         if pls:
             pls.handle_alt_click('rule_seed')
         imgui.separator()
+
+        # A label is drawn to the widget's RIGHT and is clipped, not scrolled,
+        # so without this every label here vanishes off the edge at any narrow
+        # window width. Paired with pop_item_width before end().
+        layout.push_settings_width(layout.WIDEST_PHYSICS_LABEL)
 
         # === Basics Group (Trail sensors and rule mutation) ===
         imgui.set_next_item_open(self.state.preferences.physics_group_basics)
@@ -161,7 +167,7 @@ class PhysicsWindowMixin:
                 self.state.sim.DISABLE_SYMMETRY = new_ds
             if pls:
                 pls.pop_locked_style(ds_lock_colors)
-            self._delayed_tooltip("Allow particles to display \"right / left handed\" behavior,\nleading to clockwise/counterclockwise bias.\nTurn it on to see why we go through trouble\nof calculating \"mirror world\" behavior in entity_update.glsl")
+            self._delayed_tooltip("Give particles a left/right handedness, and so a rotational bias.")
 
             # Absolute Orientation (combo box with 3 modes)
             combo_items = ["Off", "Y axis", "Radial"]
@@ -197,7 +203,7 @@ class PhysicsWindowMixin:
                     self.state.sim.ORIENTATION_MIX = new_om
                 if pls:
                     pls.pop_locked_style(om_lock_colors)
-                self._delayed_tooltip("Blend factor for orientation calculations (0.0 = velocity only, 1.0 = full absolute orientation)")
+                self._delayed_tooltip("Blend between heading-from-velocity and absolute orientation.")
 
             imgui.separator()
 
@@ -231,6 +237,7 @@ class PhysicsWindowMixin:
         # Render the tooltip if window is hovered
         self.render_physics_tooltip()
 
+        imgui.pop_item_width()
         imgui.end()
 
         # Pop sweep preview style colors (pushed before imgui.begin)

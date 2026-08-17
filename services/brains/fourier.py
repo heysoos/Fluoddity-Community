@@ -28,9 +28,8 @@ class FourierModality:
         return [
             Setting("centers", "Centers", "int", 4, 48, 10),
             # The legacy decode used a flat 3.0 with no low-frequency bias,
-            # while random_genome biases low. Measured over five runs, evolved
-            # frequencies drift to ~2x the generator's mean. Exposing both as
-            # settings makes that a choice rather than an accident.
+            # while random_genome biases low. Exposing both as settings makes
+            # that a choice rather than an accident.
             Setting("freq_scale", "Freq Scale", "float", 0.5, 4.0, FREQ_SCALE),
             Setting("low_freq_bias", "Low-Freq Bias", "float", 0.0, 1.0, 0.0),
         ]

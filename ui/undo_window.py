@@ -13,7 +13,7 @@ class UndoWindowMixin:
         """Steps newest-first. The orchestrator pushes undo_steps each frame."""
         expanded, opened = imgui.begin("Undo History", True)
         if not opened:
-            self.show_undo_window = False
+            self.state.preferences.show_undo_window = False
             self.state.undo_preview_index = -1
             imgui.end()
             return

@@ -29,6 +29,15 @@ class PhysicsParamDef:
     # The top of the track disables the parameter outright rather than setting
     # it to a large number. The shader must agree, or the readout lies.
     off_at_max: bool = False
+    # A plain float uniform, not a PhysicsSetting struct: no sweeps, no
+    # jitter, no per-cohort variation, and no entry in the sweep dicts. It is
+    # still in this table so that the slider, the label, the audio target and
+    # the range menu all come from one place - a second list is what
+    # tests/test_audio_mapping.py exists to forbid.
+    plain_uniform: bool = False
+    # Draw the slider on a logarithmic track. A range spanning two decades
+    # crowds everything below the midpoint into the last few pixels.
+    is_log_scaled: bool = False
 
     @property
     def config_attr(self) -> str:
@@ -127,6 +136,13 @@ PHYSICS_PARAMS: list[PhysicsParamDef] = [
         is_power_scaled=True, power_exponent=3.0,
         description="Probability per frame that particles reset to initial conditions. Gives particles a probabalistic 'lifetime' after which they reset.",
     ),
+    PhysicsParamDef(
+        name='TIME_SCALE', label='Time Scale', group='advanced',
+        default_min=0.02, default_max=2.0,
+        hard_min=0.02, hard_max=2.0,
+        plain_uniform=True, is_log_scaled=True,
+        description="How much simulated time one physics step covers.",
+    ),
 ]
 
 
@@ -137,7 +153,10 @@ PARAM_BY_NAME: dict[str, PhysicsParamDef] = {p.name: p for p in PHYSICS_PARAMS}
 PARAM_BY_LABEL: dict[str, PhysicsParamDef] = {p.label: p for p in PHYSICS_PARAMS}
 
 # Ordered list of just the parameter names (used by SimState defaults, config_saver, etc.)
-PHYSICS_PARAM_NAMES: list[str] = [p.name for p in PHYSICS_PARAMS]
+# Plain uniforms are excluded: this list seeds the sweep and jitter dicts, and
+# a key nothing ever reads is the "declared but never read" defect.
+PHYSICS_PARAM_NAMES: list[str] = [p.name for p in PHYSICS_PARAMS
+                                  if not p.plain_uniform]
 
 # Groups in display order
 PARAM_GROUPS: dict[str, list[PhysicsParamDef]] = {}

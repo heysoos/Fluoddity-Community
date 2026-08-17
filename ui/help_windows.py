@@ -1,6 +1,8 @@
 """Help and informational windows: Controls, Tutorial, Parameter Sweeps, Performance, Video Recording."""
 from imgui_bundle import imgui
 
+from ui import notices
+
 
 class HelpWindowsMixin:
     """Mixin for help/informational windows. Combined into UI via multiple inheritance."""
@@ -240,7 +242,7 @@ class HelpWindowsMixin:
         if recording_active or video_pending:
             imgui.push_style_color(imgui.Col_.window_bg, imgui.ImVec4(0.3, 0.1, 0.1, 1.0))
 
-        expanded, self.show_video_recording_window = imgui.begin("Screen Recording", True)
+        expanded, self.state.preferences.show_video_recording_window = imgui.begin("Screen Recording", True)
 
         if expanded:
             record_key = self.keybindings.get_key_display_name('record_screen')
@@ -300,7 +302,7 @@ class HelpWindowsMixin:
                 v_max=100,
                 format=f"x%d ({current_hz}hz)"
             )
-            self._delayed_tooltip("Physics steps per frame for video/screenshots.\nHigher values = faster physics with smoother motion blur.\nAlso determines screenshot exposure (# of samples to blend together).")
+            self._delayed_tooltip("Physics steps per frame for video and screenshots.")
 
             if recording_active:
                 imgui.end_disabled()
@@ -349,7 +351,7 @@ class HelpWindowsMixin:
                     1, 20,
                     format=blur_format
                 )
-                self._delayed_tooltip("Motion Blur can be expensive at high frequencies,\nskip some frames to improve performance.\nThis setting overrides the Blur Quality slider in Preferences while recording.")
+                self._delayed_tooltip("How often a recorded frame gets motion blur.")
                 imgui.unindent(20)
 
             # Downsample Resolution Factor (was Supersample Kernel Width)
@@ -363,6 +365,41 @@ class HelpWindowsMixin:
                 256
             )
             self._delayed_tooltip("Defaults to 'animation' if left empty. Saves to documents/Fluoddity/ All filenames get timestamps appended")
+
+            imgui.spacing()
+            if recording_active:
+                imgui.begin_disabled()
+            _, self.state.preferences.record_audio = imgui.checkbox(
+                "Record Audio",
+                self.state.preferences.record_audio
+            )
+            if recording_active:
+                imgui.end_disabled()
+            self._delayed_tooltip("Mux the audio the visuals are reacting to onto the recording.")
+            if self.state.preferences.record_audio:
+                imgui.indent(20)
+                imgui.text_colored(
+                    imgui.ImVec4(0.6, 0.6, 0.6, 1.0),
+                    "Physics rate follows Preferences, not Capture Frequency."
+                )
+                changed, delay = imgui.slider_float(
+                    "Audio Delay",
+                    self.state.preferences.record_audio_delay,
+                    0.0, 0.5,
+                    format="%.3f s"
+                )
+                if changed:
+                    self.state.preferences.record_audio_delay = delay
+                self._delayed_tooltip("Delays the soundtrack to meet the picture, which lags the sound it reacts to.")
+                if imgui.begin_popup_context_item("audio_delay_reset"):
+                    if imgui.selectable("Reset to 0##do", False)[0]:
+                        self.state.preferences.record_audio_delay = 0.0
+                        imgui.close_current_popup()
+                    imgui.end_popup()
+                imgui.unindent(20)
+
+            notices.render_banner(self.state.preferences, "record_notice",
+                                  notices.WARN, scope="recording")
 
         imgui.end()
 

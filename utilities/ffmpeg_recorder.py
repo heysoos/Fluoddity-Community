@@ -1,10 +1,21 @@
+import queue
 import subprocess
-import numpy as np
+import threading
 from datetime import datetime
 import sys
-import os
 from pathlib import Path
 from utilities.paths import get_videos_dir
+
+# The encoder must drain faster than the sim produces, or the queue below only
+# postpones the stall. `veryfast` does at 1080p where `slow` does not; see the
+# recording caveats in CLAUDE.md.
+PRESET = 'veryfast'
+CRF = 20
+
+# The queue absorbs BURSTS - a keyframe, a scene change - not a sustained
+# deficit, so it is sized by memory rather than by seconds.
+_QUEUE_BUDGET_BYTES = 256 << 20
+_QUEUE_MIN, _QUEUE_MAX = 4, 32
 
 
 def find_ffmpeg():
@@ -40,6 +51,70 @@ def find_ffmpeg():
         "Download FFmpeg from: https://ffmpeg.org/download.html"
     )
 
+# A take shorter than this cannot be judged by percentage alone: the tap and
+# the first frame never start on the same instant.
+_CLOCK_FLOOR_SECONDS = 0.25
+_CLOCK_TOLERANCE = 0.10
+
+
+def recording_fps(frame_count, audio_seconds, wall_seconds, nominal_fps):
+    """(fps, warning) for a finished take.
+
+    The soundtrack is the clock. The tap starts and stops with the recorder, so
+    both streams cover the same wall interval and frames divided by audio
+    seconds is exactly the rate that makes them the same length - sync falls
+    out of the arithmetic rather than depending on a timer, and it rides the
+    sound card's clock rather than the frame loop's.
+
+    Wall time is kept only as a cross-check. If a device dies mid-take the
+    audio is far too short, and the derived rate would silently speed the video
+    up to match it.
+    """
+    if frame_count <= 0:
+        return nominal_fps, ""
+    if audio_seconds <= 0.0:
+        return nominal_fps, ""          # silent take: unchanged behaviour
+    slack = max(_CLOCK_FLOOR_SECONDS, _CLOCK_TOLERANCE * wall_seconds)
+    if wall_seconds > 0.0 and abs(audio_seconds - wall_seconds) > slack:
+        return (frame_count / wall_seconds,
+                f"Audio ran {audio_seconds:.1f}s against {wall_seconds:.1f}s of "
+                f"recording, so the soundtrack may drift - the capture device "
+                f"probably stopped early.")
+    return frame_count / audio_seconds, ""
+
+
+def mux_command(ffmpeg, video_path, audio_path, out_path, itsscale,
+                sample_rate, channels, audio_offset=0.0):
+    """argv muxing the soundtrack onto a finished take and retiming it.
+
+    -itsscale is an input option and applies to the input it PRECEDES, so its
+    position is load-bearing. The video is stream-copied - the pixels are
+    already right and a second encode would only cost a generation.
+
+    The delay is the `adelay` FILTER, not -itsoffset: in front of a headerless
+    raw input that flag shifts nothing, and the file still plays, so the only
+    way to tell is to decode the result and look. The audio is re-encoded
+    anyway, so a filter costs nothing extra.
+
+    A zero delay emits no filter at all, so a take made without one muxes
+    exactly as it did before the control existed.
+    """
+    delay = [] if not audio_offset else [
+        '-af', f'adelay=delays={max(0.0, audio_offset) * 1000.0:.1f}:all=1']
+    return [
+        ffmpeg, '-y',
+        '-itsscale', f'{itsscale:.9f}',
+        '-i', str(video_path),
+        '-f', 'f32le', '-ar', str(int(sample_rate)), '-ac', str(int(channels)),
+        '-i', str(audio_path),
+        '-c:v', 'copy',
+        '-c:a', 'aac', '-b:a', '192k',
+        *delay,
+        '-shortest',
+        str(out_path),
+    ]
+
+
 class FFmpegVideoRecorder:
     """
     Video recorder that pipes frames directly to ffmpeg without intermediate PNG files.
@@ -63,33 +138,39 @@ class FFmpegVideoRecorder:
     To decrease quality/size: Raise CRF (e.g., 28) and/or use faster preset (e.g., 'veryfast')
     """
 
-    def __init__(self, width, height, fps=50, output_path=None, realtime=True, debug_log=False):
+    def __init__(self, width, height, fps=50, output_path=None, realtime=True,
+                 debug_log=False, preset=PRESET, crf=CRF):
         """
         Initialize ffmpeg video recorder.
 
+        Frames arrive as raw RGBA bytes and are written by a BACKGROUND THREAD:
+        `stdin.write` blocks whenever the pipe is full, and on the caller's
+        thread that means the encoder's pace sets the caller's.
+
         Args:
-            width: Video width in pixels
-            height: Video height in pixels
-            fps: Frames per second
+            width: Video width in pixels. Must be even - VidSaver._plan already
+                   rounds down, since H.264 will not take odd.
+            height: Video height in pixels. Must be even.
+            fps: Frames per second. Nominal only when the take has a
+                 soundtrack; recording_fps() derives the real rate at the mux.
             output_path: Path for output video. If None, generates timestamped filename
-            realtime: If True, use faster encoding. If False, use higher quality
+            realtime: Unused, kept so old callers still construct. Quality is
+                      `preset`/`crf`.
             debug_log: If True, save ffmpeg output to a log file for debugging
         """
+        if width % 2 or height % 2:
+            raise ValueError(
+                f"H.264 needs even dimensions, got {width}x{height}. VidSaver "
+                f"rounds down; nothing should reach here odd.")
+
         # Store original dimensions
         self.input_width = width
         self.input_height = height
-
-        # H.264 requires dimensions divisible by 2 (ideally 16)
-        # Pad to even numbers
-        self.width = width + (width % 2)
-        self.height = height + (height % 2)
-
-        self.needs_padding = (self.width != width or self.height != height)
-
-        if self.needs_padding:
-            print(f"Note: Padding video from {width}x{height} to {self.width}x{self.height} (H.264 requires even dimensions)")
+        self.width = width
+        self.height = height
 
         self.fps = fps
+        self.frame_bytes = width * height * 4
 
         # Generate output path if not provided
         if output_path is None:
@@ -100,21 +181,12 @@ class FFmpegVideoRecorder:
 
         self.output_path = output_path
 
-        # Quality settings
-        if realtime:
-            preset = 'fast'
-            crf = 23  # Reasonable quality
-        else:
-            preset = 'slow'
-            crf = 18  # Higher quality (lower = better)
-
         # Find ffmpeg executable (bundled or system PATH)
         ffmpeg_cmd = find_ffmpeg()
 
         # Start ffmpeg process
         # Optionally capture ffmpeg output to log file for debugging
         if debug_log:
-            import os
             self.stderr_log_path = output_path.replace('.mp4', '_ffmpeg.log')
             self.stderr_log = open(self.stderr_log_path, 'w')
             stderr_dest = self.stderr_log
@@ -126,8 +198,11 @@ class FFmpegVideoRecorder:
         self.ffmpeg = subprocess.Popen([
             ffmpeg_cmd, '-y',  # Overwrite output file
             '-f', 'rawvideo',
-            '-pixel_format', 'rgb24',
-            '-video_size', f'{self.width}x{self.height}',  # Use padded dimensions
+            # rgba, not rgb24: it is what the GPU wrote, so no host pass has
+            # to drop the alpha. ffmpeg's own conversion is part of a job it is
+            # already doing.
+            '-pixel_format', 'rgba',
+            '-video_size', f'{self.width}x{self.height}',
             '-framerate', str(fps),
             '-i', '-',  # Read from stdin
             '-c:v', 'libx264',
@@ -138,83 +213,91 @@ class FFmpegVideoRecorder:
         ], stdin=subprocess.PIPE, stderr=stderr_dest, stdout=subprocess.DEVNULL)
 
         self.frame_count = 0
+        depth = max(_QUEUE_MIN,
+                    min(_QUEUE_MAX, _QUEUE_BUDGET_BYTES // self.frame_bytes))
+        # Bounded and BLOCKING: a full queue slows the sim rather than dropping
+        # a frame, so the video is always exactly what the sim produced.
+        self._queue = queue.Queue(maxsize=depth)
+        self._error = None
+        self._writer = threading.Thread(target=self._drain, name="ffmpeg-write",
+                                        daemon=True)
+        self._writer.start()
 
-    def write_frame_from_texture(self, accumulation_texture):
+    def _drain(self):
+        """Pump the queue into ffmpeg. Owns stdin; nothing else may write it."""
+        while True:
+            frame = self._queue.get()
+            try:
+                if frame is None:
+                    return
+                self.ffmpeg.stdin.write(frame)
+            except (BrokenPipeError, OSError) as exc:
+                # Kept for the next write_frame or for close() to raise on the
+                # caller's thread, where it can reach the user.
+                self._error = exc
+                return
+            finally:
+                self._queue.task_done()
+
+    def _ffmpeg_died_message(self):
+        error_msg = (f"FFmpeg process has terminated unexpectedly with return "
+                     f"code {self.ffmpeg.returncode}")
+        if self.stderr_log:
+            self.stderr_log.flush()
+        if self.stderr_log_path:
+            try:
+                with open(self.stderr_log_path, 'r') as f:
+                    log_contents = f.read()
+                    if log_contents:
+                        error_msg += f"\n\nFFmpeg error log:\n{log_contents}"
+            except OSError:
+                pass
+        else:
+            error_msg += ("\n\n(Enable debug_log=True to see detailed ffmpeg "
+                          "output)")
+        return error_msg
+
+    def _check_writer(self):
+        """Raise on the CALLER's thread for anything the writer hit."""
+        if self._error is not None:
+            raise RuntimeError(
+                f"Failed to write frame to ffmpeg: {self._error}. "
+                f"The ffmpeg process may have crashed or the pipe is broken."
+            ) from self._error
+        if not self._writer.is_alive():
+            raise RuntimeError(self._ffmpeg_died_message())
+
+    def write_frame(self, frame_bytes):
+        """Queue one frame of raw RGBA for the writer thread.
+
+        Blocks only once the queue is full, which means the encoder is behind
+        by the whole budget - the sim slows rather than losing a frame.
         """
-        Read frame from ModernGL texture and write to video.
-
-        Args:
-            accumulation_texture: moderngl.Texture with the rendered frame
-        """
-        # Read from texture
-        data = accumulation_texture.read()
-
-        # Convert to numpy array
-        frame = np.frombuffer(data, dtype=np.float32).reshape(self.height, self.width, 4)
-
-        # Drop alpha channel and convert to uint8
-        frame = frame[:, :, :3]
-        frame = np.clip(frame * 255, 0, 255).astype(np.uint8)
-
-        # Flip vertically (OpenGL -> image coordinates)
-        frame = np.flipud(frame)
-
-        # Write to ffmpeg
-        self.ffmpeg.stdin.write(frame.tobytes())
+        if len(frame_bytes) != self.frame_bytes:
+            raise ValueError(
+                f"Frame is {len(frame_bytes)} bytes, expected "
+                f"{self.frame_bytes} for {self.input_width}x"
+                f"{self.input_height} RGBA. Did the window size change during "
+                f"recording?"
+            )
+        if self.ffmpeg.poll() is not None:
+            raise RuntimeError(self._ffmpeg_died_message())
+        self._check_writer()
+        self._queue.put(frame_bytes)
         self.frame_count += 1
 
-    def write_frame_from_array(self, frame_array):
-        """
-        Write frame from numpy array directly to video.
-
-        Args:
-            frame_array: numpy array (height, width, 3) of uint8 RGB data,
-                        already flipped and in correct orientation
-        """
-        # Validate frame dimensions match input expectations
-        if frame_array.shape != (self.input_height, self.input_width, 3):
-            raise ValueError(
-                f"Frame dimensions {frame_array.shape} don't match recorder "
-                f"input dimensions ({self.input_height}, {self.input_width}, 3). "
-                f"Did the window size change during recording?"
-            )
-
-        # Pad frame if needed for H.264 encoding
-        if self.needs_padding:
-            padded = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-            padded[:self.input_height, :self.input_width, :] = frame_array
-            frame_array = padded
-
-        # Check if ffmpeg process is still alive
-        if self.ffmpeg.poll() is not None:
-            # Try to read the error log if debug logging is enabled
-            error_msg = f"FFmpeg process has terminated unexpectedly with return code {self.ffmpeg.returncode}"
-            if self.stderr_log:
-                self.stderr_log.flush()
-                self.stderr_log.close()
-            if self.stderr_log_path:
-                try:
-                    with open(self.stderr_log_path, 'r') as f:
-                        log_contents = f.read()
-                        if log_contents:
-                            error_msg += f"\n\nFFmpeg error log:\n{log_contents}"
-                except:
-                    pass
-            else:
-                error_msg += "\n\n(Enable debug_log=True to see detailed ffmpeg output)"
-            raise RuntimeError(error_msg)
-
-        try:
-            self.ffmpeg.stdin.write(frame_array.tobytes())
-            self.frame_count += 1
-        except (BrokenPipeError, OSError) as e:
-            raise RuntimeError(
-                f"Failed to write frame to ffmpeg: {e}. "
-                f"The ffmpeg process may have crashed or the pipe is broken."
-            ) from e
-
     def close(self):
-        """Close the video file and finish encoding."""
+        """Close the video file and finish encoding.
+
+        The backlog is drained first: everything already queued belongs in the
+        file, and this is the one place it is right to wait for the encoder.
+        """
+        if self._writer.is_alive():
+            self._queue.put(None)
+            self._writer.join(timeout=max(15.0, self.frame_count / 20.0))
+            if self._writer.is_alive():
+                print("Writer thread did not finish; the video may be short.")
+
         if self.ffmpeg.stdin:
             try:
                 # Flush any buffered data before closing

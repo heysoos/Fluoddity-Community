@@ -13,7 +13,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-MODELS_ROOT = "models"
+from utilities.paths import get_models_root
+
 CLEARED_MARK = ".cleared-"
 
 _ORT_DTYPES = {"tensor(float)": np.float32, "tensor(float16)": np.float16}
@@ -103,7 +104,7 @@ class Encoder:
         self.model = model
         self.key = model.key
         self.px = model.px
-        path = Path(MODELS_ROOT) / model.subdir / "vision_model_fp16.onnx"
+        path = get_models_root() / model.subdir / "vision_model_fp16.onnx"
         self.sess = ort.InferenceSession(str(path), opts, providers=providers)
         self.provider = self.sess.get_providers()[0]
 
@@ -167,7 +168,7 @@ def build_encoders(keys, providers=None) -> list[Encoder]:
     out = []
     for key in keys:
         model = get(key)
-        path = Path(MODELS_ROOT) / model.subdir / "vision_model_fp16.onnx"
+        path = get_models_root() / model.subdir / "vision_model_fp16.onnx"
         if not path.is_file():
             print(f"[skip] {key}: {path} not present")
             continue

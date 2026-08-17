@@ -57,6 +57,49 @@ Use this after large refactors or significant new features. Items roughly ordere
 - [ ] **e.** Pending state: shows countdown, can cancel with record key
 - [ ] **f.** Video saved to Documents/Fluoddity/ with timestamp
 - [ ] **g.** Recording window shows status (RECORDING / WAITING / idle)
+- [ ] **h.** In a camera view (Camera / Tiled / Particles+Trails), zoom out so
+      black bars show around the canvas, then record: the file has no bars.
+- [ ] **i.** Zoom IN past the canvas edges and record: the framing is exactly
+      what is on screen, unchanged.
+- [ ] **j.** In the raw Canvas view the recording is unchanged from before.
+- [ ] **k.** Resize the window mid-take in a camera view: it stays ONE file.
+- [ ] **l.** Pan while zoomed out during a take: the world stays framed rather
+      than sliding, and no bar appears at the edge it was panned away from.
+- [ ] **m.** The framerate barely moves when recording starts, and there are NO
+      periodic freezes. A lurch of a second or more means something is writing
+      to ffmpeg on the frame loop again.
+- [ ] **n.** The video plays and is the right way up. A vertical flip means the
+      two capture paths stopped agreeing about which way is up.
+- [ ] **o.** Set Video End Frame and let a take stop on its own: the file has
+      exactly the frames asked for, not one more. The readback runs a frame
+      behind, so the last one is collected at the end.
+- [ ] **p.** Record at a window size with an odd pixel dimension: the video is
+      one pixel smaller on that axis and encodes fine, rather than failing.
+- [ ] **q.** Record for several minutes and watch memory: it settles rather
+      than climbing. The frame queue is capped, so a slow encoder must slow the
+      sim instead of growing.
+- [ ] **r.** Shift+P during a recording still writes an upright screenshot at
+      the full window size, not the even-rounded video size.
+
+### Video Recording with audio
+Sync is the thing only a person can confirm, so use material with a hard beat.
+- [ ] **a.** With audio capture running, tick Record Audio and record: the mp4
+      plays with sound, and a visible hit lands on the beat you can hear.
+- [ ] **b.** The same at the END of a two-minute take - drift accumulates, so a
+      short clip proves nothing.
+- [ ] **c.** With Record Audio ticked, the Preferences physics Rate slider is
+      NOT locked during recording; with it unticked, it is.
+- [ ] **d.** Record with audio capture stopped: the take completes silently and
+      is not an error.
+- [ ] **e.** Stop the capture device mid-take (unplug, or stop it in the Audio
+      tab): the recording still saves, and the window shows a drift warning.
+- [ ] **f.** No `.video.mp4` or `.pcm` file is left behind after a take.
+- [ ] **g.** Audio Delay at 0 records exactly as before; the slider only
+      appears with Record Audio ticked, and right-click resets it.
+- [ ] **h.** Record the same passage at 0 and at 0.15: the second one has the
+      hit landing visibly later against the same picture. If both look
+      identical the delay is being accepted and ignored — the failure mode is
+      silent, so compare two takes rather than judging one.
 
 ## 6. Screenshots
 - [ ] **a.** Shift+P takes screenshot
@@ -92,6 +135,14 @@ Use this after large refactors or significant new features. Items roughly ordere
 - [ ] **e.** Draw size / Draw power visible only in Draw Trail mode
 - [ ] **f.** Debug arrows toggle + sensitivity slider
 - [ ] **g.** Preferences saved on exit, restored on next launch
+- [ ] **h.** Window layout: open Physics, Screen Recording, Config Clipboard
+      and Audio Reactive, move and resize them, quit and relaunch — each is
+      back where it was. The windows left closed stay closed.
+- [ ] **i.** `Documents/Fluoddity/imgui.ini` exists and is the file that
+      changes; running from a different folder gets the same layout.
+- [ ] **j.** With the Archive Browser open at quit, the next launch reopens it
+      on the same archive (it costs a moment while the archive loads).
+- [ ] **k.** Tournament Mode is OFF at launch however it was left.
 
 ## 10. Menu Auto-Close
 - [ ] **a.** Main menu bar: menus close when mouse moves far away
@@ -284,3 +335,143 @@ only the running app can answer.
 - [ ] Multi-load two presets with different V Max values: each config's particles obey their own limit
 - [ ] Run a tournament: every tile obeys the global V Max, and lowering it mid-run affects all tiles together
 - [ ] Run Explore with physics search on: V Max stays where you left it and is not varied between tiles
+
+## Audio Reactive
+
+Needs sound playing on the machine, or a microphone. `PyAudioWPatch` must be
+installed; without it the panel says so and everything else runs unchanged.
+
+- [ ] Extras > Audio Reactive opens the panel; it is closed on a fresh launch.
+- [ ] The device list contains both `input:` and `loopback:` entries.
+- [ ] Picking a loopback device and pressing Start with the machine SILENT
+      reads `waiting`, not `active` - a loopback endpoint sends nothing until
+      something plays, so this is the normal state, not a fault.
+- [ ] Starting music then flips it to `active` and the spectrum moves.
+- [ ] Stop halts the traces; the status reads `idle`.
+- [ ] The spectrum is BARS, coloured red/orange/green/blue low to high, and it
+      does not rescale itself frame to frame - hold a steady note and the bars
+      hold still rather than heaving about.
+- [ ] The five band traces move while audio plays, and each band prints its
+      current value. On a steady note a trace is FLAT, not a fuzzy hash: the
+      bands are smoothed, and a trace never draws more samples than it has
+      pixels.
+- [ ] Nothing playing but room noise leaves every band at ZERO, not part way
+      up. This is what the measures were changed for; if a band sits high with
+      nothing playing, raise its Floor under Bands.
+- [ ] A quiet passage of a track reads far lower than a loud one, and the bands
+      return to zero between hits rather than resting half-lit.
+- [ ] Hi-hats and snare hits SNAP: the `hi` and `presence` traces jump on the
+      transient and ease back down, rather than swelling into it. A steady note
+      still draws a flat trace - both halves matter, and a change to the
+      smoothing that fixes one usually breaks the other.
+- [ ] Binding bass to Sensor Gain visibly changes the simulation on a beat.
+- [ ] Unticking `Modulate` at the top freezes the simulation's response while
+      the spectrum and every trace KEEP moving; the sliders lose their hatching.
+      Ticking it back resumes without touching any mapping.
+- [ ] A bound row's own checkbox silences every band on that parameter at once
+      and dims its name. The band dots stay clickable, and a band whose `On`
+      box was already unticked in the drawer is still unticked after the row is
+      switched back on.
+- [ ] Muting a Brain row under one modality leaves the same-named row under
+      another alone (mlp and lenia both have Weight Scale).
+- [ ] Both switches survive a quit and relaunch.
+- [ ] A bound row shows a sparkline of what audio is doing to that parameter;
+      an unbound row shows none and is dimmed.
+- [ ] Clicking a bound row's name opens its drawer; clicking another row's name
+      closes the first - only one is ever open.
+- [ ] Clicking a band dot toggles the mapping and does NOT open or close a
+      drawer.
+- [ ] The drawer has one tab per bound band, and a Total tab once two or more
+      bands are bound.
+- [ ] A band tab offers Depth, Gain, mode, an On toggle and a Shaper; picking
+      each shaper shows only the controls that shaper uses (smooth: attack and
+      release; gate: threshold and hold; lfo: rates and wave).
+- [ ] Right-clicking Depth, Gain, Strength or any shaper slider offers a reset
+      naming that control's default, and picking it puts the value back.
+- [ ] A band tab's trace shows the SHAPER'S output bright over the raw band
+      faint: pick `lfo` and the bright line oscillates while the faint one
+      follows the music. Picking `none` makes the two identical.
+- [ ] The Total tab shows live value, base, delta, a range bar, and the
+      contributing bands overlaid with the parameter's own trace.
+- [ ] The Sensor Gain slider shows hatching, a pale base tick, and a handle that
+      rides with the music. Its printed value is the live one.
+- [ ] Every mark stays INSIDE the slider and none of it reaches the label. In
+      `add` mode the hatching starts under the grab and runs up to where a
+      full-scale signal would take it; the pale tick sits exactly under the
+      grab at any value, on a bipolar slider (Lateral Force) as well as a
+      0-based one.
+- [ ] Give a mapping an `lfo` or `smooth` shaper: the hatching still shows the
+      whole swing, not half of it.
+- [ ] Dragging that slider moves the base tick; the hatching follows it.
+- [ ] File > Save writes the slider value, not the momentary modulated one.
+- [ ] Right-click on a bound slider > Audio... opens the panel.
+- [ ] Setting an X sweep on a bound parameter badges the row `swept`, and the
+      parameter stops responding to audio.
+- [ ] Switching brain modality changes the Brain rows; switching back restores
+      the mappings that were there.
+- [ ] EVERY modality offers at least one Brain row, MLP included (Weight Scale
+      and Bias Scale). Mapping a band to Weight Scale visibly changes how hard
+      the brain drives the particles.
+- [ ] Enabling Auto (Prompt) stops audio modulating anything; disabling restores it.
+- [ ] Quitting and relaunching restores the mappings, with capture stopped.
+- [ ] With the panel closed, the frame rate matches a run with the feature never
+      enabled.
+- [ ] The Sonification window (Extras) still opens and works alongside this one;
+      the two panels are separate and neither replaces the other.
+
+### How each band is measured
+
+- [ ] The Bands section shows a measure per band, a floor and a ceiling, with
+      `volume` naming its own measure and offering only the window.
+- [ ] Switching a band to `mean_db` makes it sit high with quiet material, and
+      back to `power` drops it. That contrast is the whole change.
+- [ ] Switching a measure moves the floor and ceiling to that measure's own
+      defaults; right-clicking either puts it back.
+- [ ] Raising a band's Floor above the music makes it read zero, immediately,
+      with the track still playing - no Stop and Start.
+- [ ] Setting Release to 0 makes the traces snap back the instant the sound
+      stops; the rise is identical at every setting. The spectrum bars stay
+      smooth either way.
+- [ ] With Release at 0 and a `phase` shaper bound, the wave stops dead in the
+      gaps rather than drifting on.
+- [ ] The measures, the windows and Release all survive a quit, and a rig saved
+      before they existed still loads.
+- [ ] Setting a band to `flux` makes it fire on ATTACKS and drop straight back:
+      a sustained bass note holds `power` open for its whole length and leaves
+      `flux` at zero after the first moment. `hi`/flux tracks the hi-hats.
+- [ ] `centroid` moves with brightness and NOT with level: turn the system
+      volume down and it stays put while every other trace drops. A filter
+      sweep or the hats entering moves it.
+- [ ] Stopping the music leaves `centroid` where it was rather than diving; it
+      is at zero on a fresh launch, before anything has played.
+- [ ] Bind `centroid` to a `phase` shaper, let it run, then PAUSE the music on
+      a loopback device: the wave must stop where it is. It holds a non-zero
+      value, so an integrator would otherwise keep travelling with nothing
+      playing.
+- [ ] On a MICROPHONE with the room quiet, `centroid` is frozen - not drifting.
+      Its trace must be a flat line. If it still moves, the room is above the
+      gate: raise `volume`'s Floor until volume itself reads near zero.
+- [ ] The shaper's Attack and Release reach 30 s and the low end is still
+      controllable - the track is logarithmic, so 0.05 s is a real position on
+      it and not the first pixel.
+- [ ] Loading the `Dancing` preset binds four rows (centroid, volume, bass,
+      hi), sets bass and hi to `flux`, and Release to 0. The device you had
+      selected is unchanged.
+
+### Rig presets, and the rig surviving a second copy
+
+- [ ] Build a rig, press Save at the top of the panel, name it: the dialog says
+      it saves to `Documents/Fluoddity/audio_rigs`, NOT to physics_configs, and
+      the name appears in the Preset combo straight away.
+- [ ] The saved rig does not appear anywhere under File > Load.
+- [ ] Saving under a name that already exists asks before overwriting.
+- [ ] Clear the rig, pick the preset, press Load: every mapping, strength and
+      mute comes back.
+- [ ] Quit and relaunch with no preset touched: the rig you left is the rig you
+      get, with capture stopped.
+- [ ] **The wipe.** Open two copies of Fluoddity. Build a rig in the first;
+      touch nothing in the second. Close the SECOND, then the first. Relaunch:
+      the rig is still there. (Before this rule the untouched copy overwrote
+      it, which is why the rig seemed to save only sometimes.)
+- [ ] Load a preset in one copy and close it last: that preset is what comes
+      back next launch.

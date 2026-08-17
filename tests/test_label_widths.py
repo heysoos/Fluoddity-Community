@@ -18,7 +18,7 @@ from ui import layout
 _LABELLED = ("slider_int", "slider_float", "combo", "input_text", "drag_float")
 
 _PANELS = ("ui/archive_window.py", "ui/auto_tournament_window.py",
-           "ui/tournament_window.py")
+           "ui/tournament_window.py", "ui/audio_reactive_window.py")
 
 
 @pytest.fixture(scope="module")
@@ -64,6 +64,24 @@ def test_no_label_is_wider_than_the_room_reserved_for_it(gui):
     assert not too_wide, (
         f"wider than layout.WIDEST_LABEL ({layout.WIDEST_LABEL!r}, {room:.0f}px) "
         f"- shorten the label or update WIDEST_LABEL: {too_wide}")
+
+
+def test_no_physics_label_is_wider_than_its_own_reserved_room(gui):
+    """The Physics window reserves WIDEST_PHYSICS_LABEL, not WIDEST_LABEL: its
+    sliders carry a '[L]' prefix when alt-locked, which widens the label."""
+    from ui.physics_params import PHYSICS_PARAMS
+
+    imgui.new_frame()
+    room = imgui.calc_text_size(layout.WIDEST_PHYSICS_LABEL).x
+    rendered = [p.label for p in PHYSICS_PARAMS]
+    rendered += ["[L]" + p.label for p in PHYSICS_PARAMS]
+    rendered += _labels("ui/physics_window.py")
+    too_wide = {lbl: imgui.calc_text_size(lbl).x
+                for lbl in rendered if imgui.calc_text_size(lbl).x > room}
+    imgui.render()
+    assert not too_wide, (
+        f"wider than layout.WIDEST_PHYSICS_LABEL "
+        f"({layout.WIDEST_PHYSICS_LABEL!r}, {room:.0f}px): {too_wide}")
 
 
 def test_the_reserved_width_still_leaves_a_usable_widget(gui):

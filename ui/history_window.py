@@ -11,7 +11,7 @@ class HistoryWindowMixin:
         """Render config clipboard window with hover preview."""
         expanded, opened = imgui.begin("Config Clipboard - EXPERIMENTAL", True)
         if not opened:
-            self.show_history_window = False
+            self.state.preferences.show_history_window = False
             imgui.end()
             return
 

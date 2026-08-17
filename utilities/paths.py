@@ -48,9 +48,39 @@ def get_user_keyboard_controls_path() -> Path:
     return get_user_data_dir() / "keyboard_controls.json"
 
 
-def get_imgui_ini_path() -> Path:
-    """Get path to imgui.ini (stays in app directory since imgui_bundle doesn't expose ini_filename)."""
-    return get_app_dir() / "imgui.ini"
+def get_imgui_ini_path(user_dir=None) -> Path:
+    """Get path to imgui.ini, the saved window layout.
+
+    User data, not app data: the app directory is read-only under Program
+    Files, and running from source it is whichever checkout was launched, so a
+    layout saved there belongs to one folder rather than to the user.
+    """
+    base = Path(user_dir) if user_dir is not None else get_user_data_dir()
+    return base / "imgui.ini"
+
+
+def migrate_imgui_ini(user_dir=None, app_dir=None) -> Path:
+    """Seed the layout file, preferring a layout the user already arranged.
+
+    Does nothing once the file exists, so it can run at every launch.
+    -> the path, whether or not anything was written.
+    """
+    target = get_imgui_ini_path(user_dir)
+    if target.exists():
+        return target
+    base = Path(app_dir) if app_dir is not None else get_app_dir()
+    # An arranged layout first, the bundled one second.
+    for source in (base / "imgui.ini",
+                   get_default_imgui_ini_path(base)):
+        if source.exists():
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(source, target)
+                print(f"[Fluoddity] Created imgui.ini from {source}")
+            except OSError as exc:
+                print(f"[Fluoddity] could not seed imgui.ini ({exc})")
+            return target
+    return target
 
 
 def get_user_physics_configs_dir() -> Path:
@@ -120,14 +150,58 @@ def migrate_legacy_archive(user_dir=None) -> Path:
     return root
 
 
+def get_models_root(user_dir=None) -> Path:
+    """Where the vision encoders' ONNX weights live.
+
+    User data rather than app data, for the same two reasons imgui.ini is: the
+    app directory is read-only under Program Files, and running from source it
+    is whichever checkout was launched - so every worktree needed its own copy
+    of several gigabytes.
+    """
+    base = Path(user_dir) if user_dir is not None else get_user_data_dir()
+    return base / "models"
+
+
+def migrate_models(user_dir=None, app_dir=None) -> Path:
+    """Move a models/ folder beside the app into the user data directory.
+
+    A move, not a copy: an encoder is hundreds of megabytes. `shutil.move` is a
+    rename within one volume and a copy across two, which is the difference
+    between an instant migration and downloading it all again.
+
+    If the target already exists this does NOTHING, so a second checkout cannot
+    donate its copy over the one in use. Failure is not fatal - the weights are
+    left where they are and read as not-downloaded, which the app already
+    offers a button for.
+
+    -> the models root, whether or not anything moved.
+    """
+    root = get_models_root(user_dir)
+    if root.exists():
+        return root
+
+    base = Path(app_dir) if app_dir is not None else get_app_dir()
+    legacy = base / "models"
+    if legacy.is_dir():
+        try:
+            root.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(root))
+            print(f"[Fluoddity] encoder weights moved to {root}")
+        except OSError as exc:
+            print(f"[Fluoddity] could not move the encoder weights ({exc}); "
+                  f"they are still in {legacy}")
+    return root
+
+
 def get_default_keyboard_controls_path() -> Path:
     """Get path to bundled default_keyboard_controls.json."""
     return get_app_dir() / "default_keyboard_controls.json"
 
 
-def get_default_imgui_ini_path() -> Path:
+def get_default_imgui_ini_path(app_dir=None) -> Path:
     """Get path to bundled default_imgui.ini."""
-    return get_app_dir() / "default_imgui.ini"
+    base = Path(app_dir) if app_dir is not None else get_app_dir()
+    return base / "default_imgui.ini"
 
 
 def initialize_user_data():
@@ -144,6 +218,10 @@ def initialize_user_data():
     get_screenshots_dir().mkdir(exist_ok=True)
     get_videos_dir().mkdir(exist_ok=True)
     migrate_legacy_archive()
+    # Deliberately not mkdir'd: an empty models/ here is indistinguishable
+    # from a finished migration, and would stop the next launch adopting the
+    # weights that are still beside the app.
+    migrate_models()
 
     # Copy default keyboard controls if user's doesn't exist
     user_keyboard = get_user_keyboard_controls_path()
@@ -153,13 +231,6 @@ def initialize_user_data():
             shutil.copy(default_keyboard, user_keyboard)
             print(f"[Fluoddity] Created keyboard controls from defaults: {user_keyboard}")
 
-    # Copy default imgui.ini to app directory if it doesn't exist
-    # (imgui_bundle doesn't expose ini_filename, so imgui.ini must stay in app dir)
-    imgui_ini = get_imgui_ini_path()
-    if not imgui_ini.exists():
-        default_imgui = get_default_imgui_ini_path()
-        if default_imgui.exists():
-            shutil.copy(default_imgui, imgui_ini)
-            print(f"[Fluoddity] Created imgui.ini from defaults: {imgui_ini}")
+    migrate_imgui_ini()
 
     print(f"[Fluoddity] User data directory: {user_dir}")

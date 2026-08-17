@@ -24,9 +24,14 @@ ImGui is immediate-mode: every frame, all widgets are re-rendered by calling fun
 | `tournament_window.py` | `TournamentWindowMixin` | Manual tournament: grid size, tile selection, breeding |
 | `auto_tournament_window.py` | `AutoTournamentWindowMixin` | Auto (Prompt) mode: prompt, encoder, optimizer settings, status |
 | `archive_window.py` | `ArchiveWindowMixin` | Explore (IMGEP) mode: archive picker, goals, gallery, map |
+| `brain_window.py` | `BrainWindowMixin` | Brain modality picker, per-modality settings, the MLP layer stack, Inspector |
+| `audio_reactive_window.py` | `AudioReactiveWindowMixin` | Audio device and bands, the mapping rig, per-row shapers |
+| `undo_window.py` | `UndoWindowMixin` | Undo history: every step, hover to preview, click to jump |
 
-Three plain modules, not mixins: `physics_params.py` (shared parameter table),
-`notices.py` (dismissable on-screen messages) and `layout.py`.
+Five plain modules, not mixins: `physics_params.py` (shared parameter table),
+`notices.py` (dismissable on-screen messages), `layout.py`, `ini_path.py` (the
+one place the imgui.ini filename is set) and `encoder_widgets.py` (the encoder
+combo and readout).
 
 `layout.py` is what keeps a panel readable when it is narrow. ImGui draws a
 widget's label to its RIGHT and clips it rather than scrolling, so a settings

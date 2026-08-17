@@ -479,7 +479,8 @@ def migrate_archive(archive_dir) -> Path | None:
     Moves, never copies: an archive runs to hundreds of megabytes of thumbnails.
 
     Distinct from utilities.paths.migrate_legacy_archive, which moves the whole
-    pre-2026-08-08 archive under archives/default; this one is the level below.
+    pre-multi-archive layout under archives/default; this one is the level
+    below.
     """
     from services.brains import default_layout
 

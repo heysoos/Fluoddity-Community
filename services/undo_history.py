@@ -95,7 +95,16 @@ def describe(old: Snapshot, new: Snapshot) -> str:
             and np.array_equal(old.rule, new.rule)))
 
     if not moved:
-        return "Rule" if rule_moved else "Change"
+        if rule_moved:
+            return "Rule"
+        # A decode scale moves no declared field and no rule - it is not in
+        # the signature either, deliberately - so without this the one row a
+        # scale drag produces says nothing at all.
+        scaled = [k for k, v in new.brain_settings.items()
+                  if old.brain_settings.get(k, v) != v]
+        if len(scaled) == 1:
+            return _field_label(scaled[0])
+        return "Brain settings" if scaled else "Change"
     if len(moved) == 1 and not rule_moved:
         return _field_label(moved[0][1])
     panels = {panel for panel, _f in moved}

@@ -326,7 +326,7 @@ def test_a_deep_stack_hovers_and_loads():
     assert len(h.switches) == 1
     got_layout, handed = h.switches[0]
     assert got_layout == DEEP
-    assert ui_state.brain.settings == {"layers": [[8, 0], [6, 1], [4, 2]]}
+    assert ui_state.brain.settings["layers"] == [[8, 0], [6, 1], [4, 2]]
     assert handed is not None and np.allclose(handed, cfg.rule)
 
 

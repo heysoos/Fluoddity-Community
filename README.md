@@ -60,7 +60,7 @@ sliders step back and the grid stays with whatever is running it.
 
 One archive holds **every brain you use it with**, in a directory per layout. Novelty, admission, the map and the record book pool across all of them — they are about pictures — but the search can only breed from and seed on the brain that is running, because another brain's genome is a different creature under this one's decode. So changing brain mid-archive is fine and keeps everything you made: the browser tells you how many entries the current brain owns, and switching back picks up where you left off. Selecting an entry names the brain it was authored under, and clicking a foreign one switches to it. Changing brain also prints a line to the console, since it redirects where new results are filed.
 
-Auto and Explore need the optional packages in `requirements.txt` (`onnxruntime-directml`, `tokenizers`, `cmaes`), and offer a **Download CLIP model (~330 MB)** button the first time. Manual mode needs none of that. The archive browser — `Extras > Archive Browser` — opens without CLIP too.
+Auto and Explore need the optional packages in `requirements.txt` (`onnxruntime-directml`, `tokenizers`, `cmaes`), and offer a **Download** button named for whichever encoder is selected the first time it is used. Manual mode needs none of that. The archive browser — `Extras > Archive Browser` — opens without an encoder too.
 
 ## Brain Modality
 

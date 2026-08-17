@@ -10,6 +10,7 @@ from services.field_handler import FieldHandler
 from services.parameter_lock_service import ParameterLockService
 from utilities.paths import initialize_user_data, get_user_physics_configs_dir, get_app_physics_configs_dir, get_screenshots_dir
 from state import load_preferences, save_preferences, SimState
+from state.audio_in_state import to_dict as rig_to_dict
 from command_handler import CommandHandler
 from simulation_runner import SimulationRunner
 from camera_input import process_camera_input
@@ -92,6 +93,7 @@ class App:
 
         # Apply loaded preferences to UI
         self.ui.state.preferences = loaded_prefs
+        self._restore_open_windows(loaded_prefs)
         self.ui._last_applied_world_size = loaded_prefs.world_size
         self.ui._last_applied_particle_density = loaded_prefs.particle_density
 
@@ -109,6 +111,15 @@ class App:
         self.arrow_debug_service = ArrowDebugService(self.ctx)
         self.multi_load_service = MultiLoadService()
         self.tournament_service = TournamentService(grid=4)
+        from services.audio_runtime import AudioRuntime
+        self.audio_runtime = AudioRuntime()
+        from services.audio_rig_io import load_rig
+        load_rig(self.ui.state.audio)
+        # The rig file is shared by every copy of Fluoddity, and the write at
+        # exit used to be unconditional - so a second instance that never
+        # touched audio wrote its empty rig over the one you had just built.
+        # A session writes only what it changed. See _save_last_rig.
+        self._rig_at_start = rig_to_dict(self.ui.state.audio)
         # Built lazily on first use of Auto mode - onnxruntime and cmaes must
         # never be imported at startup.
         self.auto_service = None
@@ -122,7 +133,7 @@ class App:
         self._auto_prev_hue = None
         self._auto_was_enabled = False
         self._last_crops = None
-        # Explore (IMGEP) mode, also lazy - it needs the same CLIP scorer.
+        # Explore (IMGEP) mode, also lazy - it needs the same vision scorer.
         self.imgep_driver = None
         self.prompt_driver = None
         self.archive = None
@@ -202,12 +213,25 @@ class App:
         self.sim.reload()
         self.sim.reset()
 
+    def _restore_open_windows(self, prefs):
+        """Reopen the windows that were on screen when the app last closed.
+
+        Only the two windows whose flag lives outside PreferencesState need
+        anything here. The browser's open is a one-shot request, asked for
+        once at construction: repeating it would reload the archive every
+        frame, and that reload rescores every entry.
+        """
+        self.ui.state.audio.show_window = prefs.show_audio_window
+        if prefs.show_archive_browser:
+            self.ui.state.archive.show_browser = True
+            self.ui.state.archive.open_browser_requested = True
+
     # ------------------------------------------------------------------
-    # Automatic (CLIP-guided) tournament
+    # Automatic (vision-guided) tournament
     # ------------------------------------------------------------------
 
     def _ensure_auto_service(self):
-        """Build the CLIP scorer, capture buffer and service on first use.
+        """Build the vision scorer, capture buffer and service on first use.
 
         Imports stay lazy (onnxruntime/cmaes must not load at startup); Auto
         mode degrades to a message instead of crashing when they're absent.
@@ -310,12 +334,19 @@ class App:
             self.ui.auto_unavailable = f"could not load encoder: {exc}"
             return False
         self.vision_scorer = built
-        # Both holders keep their own reference; a stale one keeps scoring with
-        # the encoder that was just replaced.
+        # EVERY driver by name. AutoTournamentService owns no scorer - its
+        # `scorer` is a property forwarding to whichever driver is installed -
+        # so assigning through the service reaches one of the two and leaves
+        # the other holding the encoder that was just replaced. Which one
+        # misses depends on the mode that happened to be running, and at equal
+        # width (clip-b32 and clip-b16 are both 512) a foreign vector is
+        # silently wrong rather than an error.
+        for holder in (getattr(self, "prompt_driver", None),
+                       getattr(self, "imgep_driver", None)):
+            if holder is not None:
+                holder.scorer = built
         if getattr(self, "auto_service", None) is not None:
             self.auto_service.scorer = built
-        if getattr(self, "imgep_driver", None) is not None:
-            self.imgep_driver.scorer = built
         return True
 
     def _build_archive_set(self, path):
@@ -581,7 +612,6 @@ class App:
         _release_archive is what flushes, closes and drops the thumbnails.
         """
         from services.archive_library import resolve
-        from services.genome_spec import physics_spec_for, spec_for
         from utilities.paths import get_archives_root
 
         current = self.sim.brain_layout
@@ -708,10 +738,23 @@ class App:
         # _build_archive_set, which the browser also reaches - opening the
         # gallery must not pay for an ONNX session. See CLAUDE.md.
         if self.archive_store is not None:
+            from tools.fetch_models import is_present
+
             ui_state.archive.encoder_key = self.archive_store.encoder
+            # Gated the same way Auto's combo is. Without it the ONE encoder
+            # nobody chose - it comes off encoder.json - is the ONE that
+            # answers a missing download with a raw ONNX error and no way out
+            # of the tab.
+            if not is_present(self.archive_store.encoder):
+                self.ui.archive_unavailable = "model_missing"
+                return False
             if not self._ensure_scorer(self.archive_store.encoder):
                 self.ui.archive_unavailable = self.ui.auto_unavailable
                 return False
+        # Cleared HERE and not only where the driver is built, or an archive
+        # whose encoder was missing leaves the banner - and so the dead tab -
+        # standing after a switch to one whose encoder is on disk.
+        self.ui.archive_unavailable = ""
         if self.imgep_driver is not None:
             return True
 
@@ -953,8 +996,17 @@ class App:
                                  if self.archive_store is not None else [])
 
         # Undo/redo, before the commands: a restored preset must be applied in
-        # the same frame the key was pressed.
+        # the same frame the key was pressed. Before the soundtrack push too,
+        # so a restored recording preference takes effect in its own frame.
         self._handle_undo(ui_state)
+
+        # 1.9. The soundtrack choice, pushed BEFORE process_commands, which is
+        # where the record toggle starts a take. Recording also starts from the
+        # scheduled-start check below, which is why this is a per-frame push
+        # rather than an argument at either call.
+        self.video_service.configure(self.audio_runtime.capture,
+                                     ui_state.preferences.record_audio,
+                                     ui_state.preferences.record_audio_delay)
 
         # 2. Process one-shot commands
         result = self.command_handler.process_commands(ui_state, tiling_mode)
@@ -1010,9 +1062,20 @@ class App:
             ui_state.preferences.blur_quality = self.user_blur_quality
 
         if is_recording:
-            ui_state.preferences.speedmult = ui_state.preferences.motion_blur_samples
+            # With a soundtrack the physics rate is the user's, not the capture
+            # frequency: blur samples ARE physics sub-steps, so forcing it up
+            # would render far below real time. The audio still sets the file's
+            # framerate, so sync holds at whatever rate is achieved - this only
+            # decides whether the result is smooth or blurred.
+            if not ui_state.preferences.record_audio:
+                ui_state.preferences.speedmult = ui_state.preferences.motion_blur_samples
             ui_state.preferences.motion_blur = ui_state.preferences.recording_motion_blur
             ui_state.preferences.blur_quality = ui_state.preferences.recording_blur_quality
+
+        if self.was_recording and not is_recording:
+            message = self.video_service.take_message()
+            if message:
+                ui_state.preferences.record_notice = message
 
         self.was_recording = is_recording
 
@@ -1023,7 +1086,18 @@ class App:
         # After process_commands, so a preset loaded this frame is capped in
         # the same frame it arrives.
         clamp_auto_hue(ui_state)
-        self.sim.apply_state(ui_state.sim)
+        # Audio modulates a COPY. ui_state.sim keeps what the user set, so the
+        # sliders do not drift and Save writes slider values rather than
+        # whatever the music was doing at that instant.
+        _audio_sim, _audio_brain = self.audio_runtime.update(
+            ui_state, dt, self.sim.brain_layout,
+            self.rule_manager.get_current_rule())
+        self.sim.apply_state(_audio_sim)
+        if _audio_brain is not None:
+            self.sim.apply_rule(_audio_brain)
+        # The panel draws the modulation inside each slider's own track.
+        self.ui.audio_overlays = self.audio_runtime.overlays(
+            ui_state, _audio_sim)
         self.sim.apply_camera_state(ui_state.camera)
         self.camera.apply_state(ui_state.camera)
         self.multi_load_service.apply_state(ui_state.multi_load)
@@ -1311,9 +1385,37 @@ class App:
             self._auto_prev_motion_blur,
             prev_hue=getattr(self, "_auto_prev_hue", None))
 
+    def _save_last_rig(self, ui_state):
+        """Write the last-used rig, but only if this session changed it.
+
+        Several copies of the app share the one file, so an untouched instance
+        must leave it exactly as it found it.
+        """
+        from services.audio_rig_io import rig_path, save_rig
+
+        current = rig_to_dict(ui_state.audio)
+        if current == getattr(self, "_rig_at_start", None):
+            return False
+        if save_rig(ui_state.audio):
+            return True
+        print(f"[cleanup] the audio rig could not be written to {rig_path()}")
+        return False
+
     def _handle_undo(self, ui_state):
         """Ctrl+Z / Ctrl+Shift+Z, and a click in the history panel."""
         from services import undo_history as uh
+
+        # A hover puts someone else's rule and physics on screen, and the
+        # un-hover puts back what was there before it - wholesale. An undo
+        # applied underneath one is therefore reverted a moment later with no
+        # sign that anything happened, and the rebase below has already
+        # overwritten the step it undid. Refuse, and say why.
+        if self.command_handler.preview_active:
+            if (ui_state.request_undo or ui_state.request_redo
+                    or ui_state.undo_jump_index >= 0):
+                ui_state.undo_notice = "Finish the preview first"
+            ui_state.undo_jump_index = -1
+            return
 
         target = None
         if ui_state.request_undo:
@@ -1344,6 +1446,18 @@ class App:
             uh.capture(ui_state, self.rule_manager.get_current_rule(),
                        self.sim.brain_layout))
 
+    def _preferences_are_borrowed(self, ui_state) -> bool:
+        """Is something other than the user driving the render preferences?
+
+        One predicate rather than a check per site, for the same reason
+        CommandHandler.preview_active is one: a fourth borrower added later is
+        covered by naming it HERE.
+        """
+        return bool(ui_state.auto_tournament.enabled
+                    or ui_state.archive.enabled
+                    or self.screenshot_in_progress
+                    or self.video_service.is_active())
+
     def _record_undo_step(self, ui_state):
         """Commit a step if anything declared changed and no widget is active."""
         from services import undo_history as uh
@@ -1361,11 +1475,29 @@ class App:
         # physics on screen the same way.
         if self.command_handler.preview_active:
             return
+        # Nor is a preference the user did not set. An automatic mode, a
+        # recording and a screenshot each commandeer speedmult, motion_blur
+        # and blur_quality - all three undoable - and put them back when they
+        # finish, so the journal saw a slider move every time the state
+        # machine changed phase. A generation deposits several, and the cap is
+        # 200 steps: leaving Explore running discarded every real step the
+        # user had made, and half the survivors restore speedmult = 0.
+        if self._preferences_are_borrowed(ui_state):
+            return
         snap = uh.capture(ui_state, self.rule_manager.get_current_rule(),
                           self.sim.brain_layout)
         held = self.undo_history.current()
+        # Cleared either way past this point, and only past it: a frame that
+        # commits nothing has not USED the tag, so a load deferred behind a
+        # live widget keeps its name - while a load that moved nothing drops
+        # it rather than naming whatever changes next.
+        tag = ui_state.undo_tag
         if held is not None and uh.same(held, snap):
+            ui_state.undo_tag = ""
             return
+        ui_state.undo_tag = ""
+        if tag:
+            self.undo_history.tag(tag)
         self.undo_history.commit(snap)
 
     def _handle_undo_preview(self, ui_state):
@@ -1432,6 +1564,10 @@ class App:
             self._step("restore auto overrides",
                        self._restore_auto_overrides, ui_state)
             self._step("save preferences", save_preferences, ui_state.preferences)
+            # The lookup goes inside the lambda, as below: _step guards the
+            # call, not the expression that produces it.
+            self._step("save audio rig",
+                       lambda: self._save_last_rig(ui_state))
 
         # The scoring thread only reads its own copy of the frame buffer, so
         # closing it after the flush cannot race the archive.
@@ -1442,6 +1578,10 @@ class App:
         if self.thumb_cache is not None:
             self._step("release thumbnails", self.thumb_cache.release)
 
+        # The lookup goes INSIDE the lambda: _step guards the call, not the
+        # expression that produces it, so a service that never got built would
+        # otherwise raise here and skip every step below.
+        self._step("audio", lambda: self.audio_runtime.close())
         self._step("advanced drawing", self.advanced_drawing_processor.cleanup)
         self._step("video", self.video_service.cleanup)
         self._step("ui", self.ui.cleanup)

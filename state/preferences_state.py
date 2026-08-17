@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from pathlib import Path
 import json
 from utilities.paths import get_user_preferences_path
@@ -26,7 +26,19 @@ class PreferencesState:
     bloom_radius: float = 1.0  # Bloom blur spread
 
     # UI preferences
+    # Which windows were open last time. ImGui remembers where each one sat
+    # (imgui.ini); this is what remembers whether it was on screen at all.
     show_preferences_window: bool = True  # Whether preferences window is visible
+    show_sidebar: bool = True  # Master toggle (X) for the window group
+    show_physics_settings_window: bool = True
+    show_video_recording_window: bool = False
+    show_history_window: bool = False  # Config clipboard
+    show_undo_window: bool = False  # Undo history panel
+    # Mirrors of the flags the audio and archive states own. Those two are
+    # written by their own features, so the preference follows them rather
+    # than replacing them.
+    show_audio_window: bool = False
+    show_archive_browser: bool = False
     show_controls_window: bool = False  # Help controls window
     show_parameter_sweeps_window: bool = False  # Help parameter sweeps window
     show_tutorial_window: bool = True  # Help tutorial window
@@ -69,6 +81,9 @@ class PreferencesState:
     motion_blur_samples: int = 12
     supersample_k: int = 1
     filename_prefix: str = ""
+    record_audio: bool = False  # Mux the captured audio onto the recording
+    record_audio_delay: float = 0.0  # Seconds to delay the soundtrack by
+    record_notice: str = ""  # Result of the last take, shown once and dismissed
     recording_motion_blur: bool = True  # Motion blur setting used during video recording
     recording_blur_quality: int = 1  # Blur quality setting used during video recording
     video_end_frame: int = 0  # Target frame for video to end on (0 = disabled, start immediately)
@@ -95,6 +110,7 @@ NOT_UNDOABLE: dict[str, str] = {
     "advanced_drawing_enabled": "window visibility or panel collapse state",
     "physics_tooltips_enabled": "UI chrome, not the look of the simulation",
     "mouse_mode": "tool selection, not a change to the creature",
+    "record_notice": "the last take's message, shown once and dismissed",
     "archive_name": "names an external archive; switching it reloads the store",
 }
 

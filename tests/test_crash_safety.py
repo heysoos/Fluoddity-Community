@@ -45,6 +45,7 @@ class _App:
     _step = staticmethod(App._step)
     _write_crash_log = App._write_crash_log
     _cleanup_safely = App._cleanup_safely
+    _save_last_rig = App._save_last_rig
 
     def __init__(self, boom=None):
         self.window = object()
@@ -68,8 +69,12 @@ class _App:
     # -- things cleanup reaches for
     def get_state(self):
         self.log.append("get_state")
+        # `audio` is a real AudioInState because cleanup writes the rig through
+        # it; a bare object would only prove the guard swallows the failure.
+        from state.audio_in_state import AudioInState
         return type("UI", (), {"preferences": object(),
-                               "archive": object()})()
+                               "archive": object(),
+                               "audio": AudioInState()})()
 
     def _restore_auto_overrides(self, _ui):
         self.log.append("restore")

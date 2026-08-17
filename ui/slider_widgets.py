@@ -3,6 +3,54 @@ from imgui_bundle import imgui
 from .physics_params import PARAM_BY_LABEL
 
 
+# ImGui insets a slider's grab by this at each end of the frame; the grab's own
+# width is style.GrabMinSize and its CENTRE travels only what is left over.
+_GRAB_PADDING = 2.0
+
+
+def track_span(item_min_x: float, item_max_x: float,
+               label: str) -> tuple[float, float]:
+    """The slider's own track, as (left, width).
+
+    get_item_rect_* covers the track AND the label drawn beside it, so a
+    fraction of that rect runs off the end of the slider it belongs to.
+    """
+    text = imgui.calc_text_size(label, hide_text_after_double_hash=True).x
+    width = item_max_x - item_min_x
+    if text > 0.0:
+        width -= text + imgui.get_style().item_inner_spacing.x
+    return item_min_x, max(1.0, width)
+
+
+def track_x(x0: float, width: float, fraction: float) -> float:
+    """Where ImGui draws the grab's centre for a value at `fraction`.
+
+    A plain x0 + width*fraction does not land under the grab: it misses by up
+    to half a grab, which reads as the marker disagreeing with the slider.
+    """
+    inner = max(0.0, width - _GRAB_PADDING * 2.0)
+    grab = min(imgui.get_style().grab_min_size, inner)
+    usable = max(0.0, inner - grab)
+    return (x0 + _GRAB_PADDING + grab * 0.5
+            + usable * min(1.0, max(0.0, fraction)))
+
+
+def swing_fraction(base: float, lo: float, hi: float,
+                   reach: float) -> tuple[float, float]:
+    """Where the modulation's reachable span sits on the track, as (start, width).
+
+    Both are fractions in [0,1], clipped to the track, so the hatching can never
+    be drawn outside the slider it belongs to.
+    """
+    span = hi - lo
+    if span <= 0.0:
+        return 0.0, 0.0
+    a = min(1.0, max(0.0, (base - lo) / span))
+    b = min(1.0, max(0.0, (reach - lo) / span))
+    start, end = (a, b) if a <= b else (b, a)
+    return start, end - start
+
+
 class SliderWidgetsMixin:
     """Mixin for slider widget utilities. Combined into UI via multiple inheritance."""
 
@@ -69,6 +117,9 @@ class SliderWidgetsMixin:
         slider_label = display_label if display_label else label
         changed, new_value = imgui.slider_float(slider_label, value, min_val, max_val, format=display_format)
 
+        # An unbound slider draws nothing extra, so it stays pixel-identical.
+        self._draw_audio_swing(param_name, slider_label)
+
         # Check alt-click for lock toggle (intercept suppresses the value change)
         pls = self.param_lock_service
         if pls and pls.handle_alt_click(param_name):
@@ -94,6 +145,43 @@ class SliderWidgetsMixin:
             changed = True
 
         return changed, new_value
+
+    def _draw_audio_swing(self, param_name, label):
+        """Draw the modulation inside the slider's own track.
+
+        The hatched band runs from the value the user set to where a full-scale
+        signal would take it, the pale tick is that set value, and the bright
+        mark is the live one. Draws nothing when the parameter has no mapping.
+        """
+        overlay = getattr(self, "audio_overlays", {}).get(param_name)
+        if not overlay:
+            return
+        p0 = imgui.get_item_rect_min()
+        p1 = imgui.get_item_rect_max()
+        dl = imgui.get_window_draw_list()
+        x0, w = track_span(p0.x, p1.x, label)
+        lo, hi = overlay["lo"], overlay["hi"]
+        colour = overlay["color"]
+
+        start, width = swing_fraction(overlay["base"], lo, hi, overlay["reach"])
+        if width > 0.0:
+            dl.add_rect_filled(
+                imgui.ImVec2(track_x(x0, w, start), p0.y),
+                imgui.ImVec2(track_x(x0, w, start + width), p1.y),
+                imgui.get_color_u32(imgui.ImVec4(colour[0], colour[1],
+                                                 colour[2], 0.18)))
+
+        base_x = track_x(x0, w, swing_fraction(overlay["base"], lo, hi,
+                                               overlay["base"])[0])
+        dl.add_rect_filled(
+            imgui.ImVec2(base_x, p0.y + 1), imgui.ImVec2(base_x + 1.0, p1.y - 1),
+            imgui.get_color_u32(imgui.ImVec4(0.72, 0.72, 0.77, 0.9)))
+
+        live_x = track_x(x0, w, swing_fraction(overlay["live"], lo, hi,
+                                               overlay["live"])[0])
+        dl.add_rect_filled(
+            imgui.ImVec2(live_x - 1.0, p0.y), imgui.ImVec2(live_x + 2.0, p1.y),
+            imgui.get_color_u32(imgui.ImVec4(*colour)))
 
     def add_slider_context_menu(self, slider_name, default_min, default_max):
         """
@@ -177,6 +265,15 @@ class SliderWidgetsMixin:
 
             if imgui.button(button_label):
                 reset_requested = True
+
+            imgui.separator()
+
+            # Opens the panel on this row; binding still happens in one place.
+            if imgui.button(f"Audio...##{slider_name}"):
+                self.state.audio.show_window = True
+                self.state.audio.open_target = self._label_to_param_name(
+                    slider_name) or ""
+                imgui.close_current_popup()
 
             imgui.end_popup()
 
@@ -406,8 +503,10 @@ class SliderWidgetsMixin:
         # Build display label: "[L]Sensor Gain##Sensor Gain" when locked
         display_label = pls.get_display_label(pdef.name, pdef.label) if pls else pdef.label
 
-        # Sweep buttons + range adjust (only when sweeps enabled)
-        if self.state.sim.parameter_sweeps_enabled:
+        # Sweep buttons + range adjust (only when sweeps enabled). A plain
+        # uniform has no sweep to offer: it is one float for the whole canvas,
+        # so a control that varied it by position would read nothing back.
+        if self.state.sim.parameter_sweeps_enabled and not pdef.plain_uniform:
             self.render_sweep_buttons(pdef.name)
             imgui.same_line(spacing=2)
             self.render_range_adjust_buttons(
@@ -433,6 +532,21 @@ class SliderWidgetsMixin:
                 new_value = pdef.default_max * (new_pos ** pdef.power_exponent)
                 setattr(self.state.sim, pdef.name, new_value)
             # Context menu without jitter (power-scaled params hide jitter)
+            _, _, reset_requested, _ = self.add_slider_context_menu(
+                pdef.label, pdef.default_min, pdef.default_max)
+            if reset_requested:
+                setattr(self.state.sim, pdef.name,
+                        self.current_physics_defaults.values.get(pdef.name, value))
+        elif pdef.plain_uniform:
+            # No sweeps and no jitter, so the range menu has nothing to offer
+            # but its reset - which a plain context menu still gives.
+            flags = (imgui.SliderFlags_.logarithmic if pdef.is_log_scaled
+                     else imgui.SliderFlags_.none)
+            changed, new_value = imgui.slider_float(
+                display_label, value, pdef.default_min, pdef.default_max,
+                "%.3f", flags)
+            if not (pls and pls.handle_alt_click(pdef.name)) and changed:
+                setattr(self.state.sim, pdef.name, float(new_value))
             _, _, reset_requested, _ = self.add_slider_context_menu(
                 pdef.label, pdef.default_min, pdef.default_max)
             if reset_requested:

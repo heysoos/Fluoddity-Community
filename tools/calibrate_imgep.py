@@ -38,10 +38,9 @@ def _population_spread(pop: np.ndarray) -> float:
 
     Not pop.std(). The whole-array std folds in how much a single genome's 80
     coefficients differ from each other, which is a property of the parent
-    rather than of the mutation - measured 2026-08-07, that term is ~0.92 and
-    it swamps everything, leaving the ratio nearly flat (0.87 to 1.28) across a
-    12x sweep of sigma_expand. Reducing over axis 0 first asks the actual
-    question: how far apart are the children?
+    rather than of the mutation, and it swamps everything - a sweep of
+    sigma_expand comes back nearly flat. Reducing over axis 0 first asks the
+    actual question: how far apart are the children?
     """
     return float(np.asarray(pop, dtype=np.float64).std(axis=0).mean())
 
@@ -108,7 +107,7 @@ def measure_liveness(preset_names, steps, snapshots, seed=12345, limit=0):
     from sim import Sim
     from state import SimState
     from state.preferences_state import PreferencesState
-        from utilities.paths import get_app_physics_configs_dir
+    from utilities.paths import get_app_physics_configs_dir
 
     root = get_app_physics_configs_dir()
     paths = []

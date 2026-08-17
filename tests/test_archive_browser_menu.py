@@ -212,7 +212,21 @@ def ensure_service(app, ui_state):
     return App._ensure_archive_service(app, ui_state)
 
 
-def test_starting_explore_after_browsing_reuses_the_loaded_archive(root):
+@pytest.fixture
+def weights_present(monkeypatch):
+    """Say the archive's encoder is downloaded.
+
+    Stubbed for the same reason `_ensure_scorer` is: these tests are about the
+    handoff from browsing to searching, and without this they pass or fail on
+    whether the machine running them happens to hold that encoder.
+    """
+    import tools.fetch_models as fm
+
+    monkeypatch.setattr(fm, "is_present", lambda key: True)
+
+
+def test_starting_explore_after_browsing_reuses_the_loaded_archive(
+        root, weights_present):
     """load_from_store rescores everything, which is seconds on a full
     archive. Browsing then searching must not pay for it twice."""
     app, ui = _ExploreApp(), _UIState()
@@ -235,7 +249,8 @@ def test_the_browser_alone_never_builds_the_scorer(root):
     assert app.imgep_driver is None
 
 
-def test_explore_still_loads_the_archive_when_the_browser_never_opened(root):
+def test_explore_still_loads_the_archive_when_the_browser_never_opened(
+        root, weights_present):
     app, ui = _ExploreApp(), _UIState()
     assert ensure_service(app, ui) is True
     assert app.archive is not None

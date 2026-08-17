@@ -22,12 +22,11 @@ except ImportError:                                     # pragma: no cover
     pass
 
 from services.vision_models import get  # noqa: E402
-
-MODELS_ROOT = "models"
+from utilities.paths import get_models_root  # noqa: E402
 
 
 def model_dir(model_key: str) -> Path:
-    return Path(MODELS_ROOT) / get(model_key).subdir
+    return get_models_root() / get(model_key).subdir
 
 
 def total_files(model_key: str) -> int:

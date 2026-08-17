@@ -68,6 +68,7 @@ SUBJECTS = [
     (save_targets.AUTO_BEST, -1, ()),
     (save_targets.AUTO_TILE, 7, ()),
     (save_targets.ARCHIVE_ENTRY, 123, ()),
+    (save_targets.AUDIO_RIG, -1, ()),
 ]
 
 
@@ -149,3 +150,41 @@ def test_no_clash_when_nothing_is_on_disk(tmp_path):
     h = Harness(tmp_path)
     h.open_save_popup(save_targets.CONFIG)
     assert h._existing_stems("brand-new") == []
+
+
+# ---- the one subject that does not land in the configs folder ------------
+
+def test_a_rig_goes_to_the_rigs_folder(tmp_path, monkeypatch):
+    from services import audio_rig_io
+
+    monkeypatch.setattr(audio_rig_io, "get_user_data_dir", lambda: tmp_path)
+    h = Harness(tmp_path / "configs")
+    h.open_save_popup(save_targets.AUDIO_RIG)
+    assert h._save_dir() == audio_rig_io.rigs_dir()
+
+
+def test_everything_else_still_goes_to_the_configs_folder(tmp_path):
+    h = Harness(tmp_path)
+    h.open_save_popup(save_targets.CONFIG)
+    assert h._save_dir() == Path(tmp_path)
+
+
+def test_the_overwrite_check_looks_in_the_rigs_folder(tmp_path, monkeypatch):
+    """Checking the configs folder would overwrite a rig without asking."""
+    from services import audio_rig_io
+
+    monkeypatch.setattr(audio_rig_io, "get_user_data_dir", lambda: tmp_path)
+    audio_rig_io.rigs_dir().mkdir(parents=True)
+    (audio_rig_io.rigs_dir() / "reef.json").write_text("{}")
+
+    h = Harness(tmp_path / "configs")
+    h.open_save_popup(save_targets.AUDIO_RIG)
+    assert h._existing_stems("reef") == ["reef"]
+    assert h._existing_stems("other") == []
+
+
+def test_a_given_name_beats_the_suggestion(tmp_path):
+    """The rig row opens the dialog on the preset already selected."""
+    h = Harness(tmp_path)
+    h.open_save_popup(save_targets.AUDIO_RIG, name="reef")
+    assert h.save_filename_buffer == "reef"

@@ -29,7 +29,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 import ui  # noqa: F401,E402  prime the services/ui import cycle
 
-from tools.phase_view import (colormap, fill_holes, load, normalise,
+from tools.phase_view import (fill_holes, load, normalise,
                               recompute_series_columns)
 
 # Dark surface: the subject is a glowing particle field, and a light ground

@@ -1,6 +1,8 @@
 """Command handler: processes one-shot UI commands each frame."""
 import copy
 import random
+from pathlib import Path
+
 import numpy as np
 from utilities.gl_helpers import readback_rule
 
@@ -141,7 +143,13 @@ class CommandHandler:
         """Layout first, then the rule."""
         if snap.brain_signature and self.apply_brain_layout is not None:
             live = getattr(getattr(self, "sim", None), "brain_layout", None)
-            if live is None or live.signature() != snap.brain_signature:
+            # The SETTINGS as well as the signature. A decode scale is
+            # deliberately outside the signature - dragging one must not tear
+            # down the archive - but the snapshot carries it, so a drag does
+            # commit a step. Gated on the signature alone that step restored
+            # nothing, and the rebase after it overwrote the old scale with
+            # the new one, putting the value out of reach for good.
+            if live is None or not self._brain_matches(live, snap):
                 from services.brains import layout_from_signature
 
                 layout = layout_from_signature(snap.brain_signature,
@@ -159,6 +167,18 @@ class CommandHandler:
         rule = np.array(snap.rule, copy=True)
         self.rule_manager.push_rule(rule, ui_state.sim.rule_seed)
         self.sim.apply_rule(rule)
+
+    @staticmethod
+    def _brain_matches(live, snap) -> bool:
+        """Is the live layout the one the snapshot holds, scales included?"""
+        from services.brains import settings_of
+
+        if live.signature() != snap.brain_signature:
+            return False
+        # An older snapshot may carry no settings at all; that means "the
+        # signature is all we know", not "the defaults".
+        return not snap.brain_settings or (
+            dict(settings_of(live)) == snap.brain_settings)
 
     @staticmethod
     def _put_brain_window(layout, ui_state) -> None:
@@ -299,7 +319,7 @@ class CommandHandler:
         # the GPU buffers and resets the optimizer.
         self._handle_brain_layout(ui_state)
 
-        # Automatic (CLIP-guided) tournament mode
+        # Automatic (vision-guided) tournament mode
         self._handle_auto_tournament(ui_state)
 
         # Archive management, before Explore so a switch lands this frame
@@ -809,7 +829,7 @@ class CommandHandler:
         print(f"[tournament] saved {written}")
 
     # ------------------------------------------------------------------
-    # Automatic (CLIP-guided) tournament
+    # Automatic (vision-guided) tournament
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -907,6 +927,7 @@ class CommandHandler:
         ast.seed_entry_id = -1
         ast.delete_entry_id = -1
         ast.refit_projection_requested = False
+        ast.download_model_requested = False
 
     @staticmethod
     def _clear_archive_flags(ast):
@@ -987,6 +1008,12 @@ class CommandHandler:
 
     def _handle_explore(self, ui_state):
         ast = ui_state.archive
+        # Above the early return: a missing encoder is exactly why the driver
+        # was never built, so a download honoured only once it exists could
+        # never be asked for.
+        if ast.download_model_requested:
+            self._start_model_download(ast.encoder_key)
+
         svc, drv = self.auto_service, self.imgep_driver
         if drv is None or svc is None or svc.driver is not drv:
             self._clear_explore_flags(ast)
@@ -1259,7 +1286,16 @@ class CommandHandler:
             self._archive_preview_id = -1
             self._archive_preview_physics = None
             self._archive_preview_pushed = False
-            ast.notice = f"Loaded #{entry_id}."
+            # Say WHICH HALVES arrived. An archive written before run configs
+            # existed, or one whose run had physics search off, stored no
+            # physics for any entry - so a click loads the brain and leaves
+            # the sliders alone, and "Loaded #N" reads as a control that only
+            # half works rather than as a limit of what was recorded.
+            ast.notice = (f"Loaded #{entry_id}."
+                          if self._entry_has_physics(entry_id)
+                          else f"Loaded #{entry_id} - brain only, this entry "
+                               f"stored no physics.")
+            ui_state.undo_tag = f"Load entry #{entry_id}"
             return
 
         want = int(ast.preview_entry_id) if ast.live_preview else -1
@@ -1268,6 +1304,20 @@ class CommandHandler:
         self._end_archive_preview(ui_state)
         if want >= 0:
             self._show_archive_preview(ui_state, want)
+
+    def _entry_has_physics(self, entry_id) -> bool:
+        """Did this entry record any physics of its own?
+
+        The two layers _show_archive_preview applies: the RUN's config, and
+        the entry's own vector for the parameters the optimizer searched. With
+        neither, loading the entry writes the brain and nothing else.
+        """
+        i = self._archive_index(entry_id)
+        if i is None:
+            return False
+        entry = self.archive.entries[i]
+        return ("physics" in entry.spec
+                or self._run_config_for(entry) is not None)
 
     def _run_config_for(self, entry):
         """-> the PhysicsConfig this entry's RUN was carried out under, or None
@@ -1634,9 +1684,13 @@ class CommandHandler:
                     self._push_and_apply_rule(rule, ui_state)
                     if fh:
                         fh.apply_last_copied(ui_state)
+                    ui_state.undo_tag = "Paste config"
                     print("Config loaded from clipboard")
                 else:
                     print("Failed to load config from clipboard")
+
+        # Audio rig preset (Audio Reactive panel)
+        self._handle_audio_preset(ui_state)
 
         # File save (menu)
         if ui_state.request_save_file:
@@ -1677,7 +1731,38 @@ class CommandHandler:
         if kind == save_targets.ARCHIVE_ENTRY:
             return self._export_archive_entry(ui_state, int(ui_state.save_arg),
                                               filename)
+        if kind == save_targets.AUDIO_RIG:
+            return self._save_audio_rig(ui_state, filename)
         return self._save_live_config(ui_state, filename)
+
+    def _save_audio_rig(self, ui_state, filename):
+        """Write the live rig under a name, and say so on the panel."""
+        from services.audio_rig_io import preset_path, save_rig
+
+        path = preset_path(filename)
+        ast = ui_state.audio
+        if save_rig(ast, path):
+            ast.preset_name = path.stem
+            ast.notice = f"Rig saved as {path.stem}"
+        else:
+            ast.warning = f"Could not write {path}"
+
+    def _handle_audio_preset(self, ui_state):
+        """Load a named rig over the live one. Cleared before the attempt, so
+        a preset that will not read cannot retry every frame."""
+        ast = ui_state.audio
+        if not ast.request_load_preset:
+            return
+        ast.request_load_preset = False
+        from services.audio_rig_io import load_rig, preset_path
+
+        name = ast.preset_name
+        if not name:
+            return
+        if load_rig(ast, preset_path(name)):
+            ast.notice = f"Rig loaded from {name}"
+        else:
+            ast.warning = f"Could not read the rig '{name}'"
 
     def _save_live_config(self, ui_state, filename):
         """Handle file save from menu, including field texture PNG."""
@@ -1748,6 +1833,7 @@ class CommandHandler:
             if ui_state.load_watercolor_override is not None:
                 ui_state.sim.watercolor_mode = ui_state.load_watercolor_override
             print(f"Config loaded (from preview): {filename}")
+            ui_state.undo_tag = f"Load {Path(filename).stem}"
             self.ui.update_physics_defaults(filename)
         else:
             # No preview active - load fresh from file
@@ -1762,6 +1848,7 @@ class CommandHandler:
                 if fh:
                     fh.apply_for_config(config, filepath, ui_state)
                 print(f"Config loaded from {filepath}")
+                ui_state.undo_tag = f"Load {Path(filename).stem}"
                 self.ui.update_physics_defaults(filename)
             else:
                 print(f"Failed to load config from {filepath}")
@@ -1903,6 +1990,7 @@ class CommandHandler:
             # Extract original filename from label (everything before the *)
             original_filename = label.rsplit("*", 1)[0]
             self.ui.update_physics_defaults(original_filename)
+            ui_state.undo_tag = f"Load {label}"
             print(f"Config loaded from clipboard: {label}")
 
     def _delete_clipboard_config(self, ui_state):

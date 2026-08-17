@@ -8,6 +8,7 @@ from .tournament_state import TournamentState
 from .auto_tournament_state import AutoTournamentState
 from .archive_state import ArchiveState
 from .brain_state import BrainState
+from .audio_in_state import AudioInState
 
 
 @dataclass
@@ -22,6 +23,7 @@ class UIState:
     auto_tournament: AutoTournamentState = field(default_factory=AutoTournamentState)
     archive: ArchiveState = field(default_factory=ArchiveState)
     brain: BrainState = field(default_factory=BrainState)
+    audio: AudioInState = field(default_factory=AudioInState)
 
     # Input state (updated by callbacks)
     keys_pressed: set = field(default_factory=set)
@@ -71,6 +73,10 @@ class UIState:
     # Which step the pointer is over, or -1. CONTINUOUS, not a one-shot: a
     # panel that stops being drawn would otherwise strand the preview.
     undo_preview_index: int = -1
+    # What to call the step this frame commits, set by whatever caused the
+    # change. Advisory, and cleared by the commit it names - the diff is what
+    # triggers a step, so a forgotten tag costs a name and never coverage.
+    undo_tag: str = ""
 
     # Config save/load (Ctrl+C/Ctrl+V)
     request_save_config: bool = False

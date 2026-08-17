@@ -16,6 +16,7 @@ from services.config_saver import ConfigSaver, PhysicsConfig
 from utilities.keybinding_management import KeybindingManager
 from utilities.paths import get_user_physics_configs_dir, get_app_physics_configs_dir
 
+from . import ini_path
 from .popup_modals import PopupModalsMixin
 from .help_windows import HelpWindowsMixin
 from .slider_widgets import SliderWidgetsMixin
@@ -31,6 +32,7 @@ from .tournament_window import TournamentWindowMixin
 from .auto_tournament_window import AutoTournamentWindowMixin
 from .archive_window import ArchiveWindowMixin
 from .brain_window import BrainWindowMixin
+from .audio_reactive_window import AudioReactiveWindowMixin
 
 
 @dataclass
@@ -56,6 +58,7 @@ class UI(
     AutoTournamentWindowMixin,
     ArchiveWindowMixin,
     BrainWindowMixin,
+    AudioReactiveWindowMixin,
 ):
     """Passive UI - renders widgets, exposes state, handles no logic."""
 
@@ -75,6 +78,7 @@ class UI(
 
         io = imgui.get_io()
         io.config_flags |= imgui.ConfigFlags_.docking_enable  # Enable docking
+        ini_path.install(io)
 
         # Default font at normal size
         io.fonts.add_font_default()
@@ -90,18 +94,16 @@ class UI(
         self.tooltip_texture_size = 128
         self.setup_tooltip_shader()
 
-        # UI-only state
+        # UI-only state. Which windows are open lives in PreferencesState, so
+        # a layout comes back with the app; the demo window is a developer
+        # toggle and deliberately does not.
         self.show_demo_window = False
-        self.show_physics_settings_window = True  # Physics settings window (always visible, but can be hidden with sidebar)
-        self.show_video_recording_window = False  # Video recording controls window
-        self.show_sidebar = True  # Controls visibility of Physics Settings and Preferences windows
 
-        # Config clipboard state
-        self.show_history_window = False  # Toggled by Extras menu
-        self.show_undo_window = False  # Toggled by Extras menu
         # Pushed by the orchestrator each frame: (index, label, is_redo).
         self.undo_steps = []
         self.undo_cursor = -1
+
+        # Config clipboard state
         self.config_clipboard: list[tuple] = []  # [(PhysicsConfig, display_label, field_snapshot), ...]
         self.clipboard_counter: int = 0  # Global jersey counter (00, 01, 02...)
         self.clipboard_previewing_index: int | None = None
@@ -425,7 +427,7 @@ class UI(
                 self._request_full_reset = True
             elif key == self.keybindings.get_key("toggle_sidebar"):
                 # Toggle windows (Physics Settings, Preferences, Drawing Controls, Config Clipboard, Screen Recording)
-                self.show_sidebar = not self.show_sidebar
+                self.state.preferences.show_sidebar = not self.state.preferences.show_sidebar
             elif key == self.keybindings.get_key("exit_keybinding"):
                 glfw.set_window_should_close(window, True)
             #elif key == self.keybindings.get_key("toggle_tooltips"):
@@ -447,6 +449,12 @@ class UI(
         reset_key = self.keybindings.get_key("reset_keybinding")
         if reset_key and reset_key in self._keys_pressed:
             self._request_reset = True
+
+        # These two windows keep owning their own flag; the preference only
+        # records what it was, so the next launch can put it back.
+        self.state.preferences.show_audio_window = self.state.audio.show_window
+        self.state.preferences.show_archive_browser = (
+            self.state.archive.show_browser)
 
         # Build state snapshot
         self.state.keys_pressed = self._keys_pressed.copy()
@@ -662,7 +670,7 @@ class UI(
             imgui.push_style_color(imgui.Col_.header_active, imgui.ImVec4(0.5, 0.17, 0.17, 1.0))
             color_push_count = 9
         elif sweeps_active:
-            # Yellow tint for parameter sweeps mode (30% less intense)
+            # Yellow tint for parameter sweeps mode
             imgui.push_style_color(imgui.Col_.window_bg, imgui.ImVec4(0.205, 0.19, 0.13, 0.94))
             imgui.push_style_color(imgui.Col_.menu_bar_bg, imgui.ImVec4(0.245, 0.231, 0.161, 1.0))
             imgui.push_style_color(imgui.Col_.title_bg, imgui.ImVec4(0.17, 0.161, 0.119, 1.0))
@@ -681,11 +689,11 @@ class UI(
         self.render_popup_modals()
 
         # Render Physics Settings window if sidebar is visible
-        if self.show_sidebar:
+        if self.state.preferences.show_sidebar:
             self.render_physics_settings_window()
 
         # Render Preferences window if sidebar is visible AND preferences are enabled
-        if self.show_sidebar and self.state.preferences.show_preferences_window:
+        if self.state.preferences.show_sidebar and self.state.preferences.show_preferences_window:
             self.render_preferences_window()
 
         # Render Controls help window if visible
@@ -705,28 +713,29 @@ class UI(
             self.render_performance_window()
 
         # Render Screen Recording window if visible (hidden when windows toggled off)
-        if self.show_sidebar and self.show_video_recording_window:
+        if self.state.preferences.show_sidebar and self.state.preferences.show_video_recording_window:
             self.render_video_recording_window()
 
         # Render history window if visible (hidden when windows toggled off)
-        if self.show_sidebar and self.show_history_window:
+        if self.state.preferences.show_sidebar and self.state.preferences.show_history_window:
             self.render_history_window()
 
-        if self.show_undo_window:
+        if self.state.preferences.show_undo_window:
             self.render_undo_window()
 
         # Render Advanced Drawing window if enabled (hidden when windows toggled off)
-        if self.show_sidebar and self.state.preferences.advanced_drawing_enabled:
+        if self.state.preferences.show_sidebar and self.state.preferences.advanced_drawing_enabled:
             self.render_advanced_drawing_window()
 
         # Render field loader window (transient, not gated by sidebar)
         self.render_field_loader_window()
 
         # Render tournament window if enabled (hidden when windows toggled off)
-        if self.show_sidebar:
+        if self.state.preferences.show_sidebar:
             self.render_tournament_window()
             self.render_archive_window()
             self.render_brain_window()
+            self.render_audio_reactive_window()
 
         if self.show_demo_window:
             imgui.show_demo_window()
