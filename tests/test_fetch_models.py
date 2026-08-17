@@ -1,7 +1,19 @@
 """Download bookkeeping, without touching the network."""
 import pytest
 
+import utilities.paths as paths
 from tools.fetch_models import is_present, missing, model_dir, total_files
+
+
+@pytest.fixture
+def user_dir(tmp_path, monkeypatch):
+    """Point the user data directory somewhere empty.
+
+    Not `chdir`: the weights live beside the user's other data now, so the
+    working directory no longer decides anything.
+    """
+    monkeypatch.setattr(paths, "get_user_data_dir", lambda: tmp_path)
+    return tmp_path
 
 
 def test_a_model_dir_is_named_for_its_subdir():
@@ -9,17 +21,21 @@ def test_a_model_dir_is_named_for_its_subdir():
     assert model_dir("clip-b32").name == "clip-vit-b32"
 
 
-def test_an_empty_dir_is_not_present_and_lists_everything_missing(tmp_path,
-                                                                 monkeypatch):
-    monkeypatch.chdir(tmp_path)
+def test_the_weights_are_user_data_and_not_relative_to_the_launch_folder(
+        user_dir):
+    """Read from the CWD, every worktree and every installed copy needed its
+    own several gigabytes."""
+    assert model_dir("clip-b32") == user_dir / "models" / "clip-vit-b32"
+
+
+def test_an_empty_dir_is_not_present_and_lists_everything_missing(user_dir):
     assert not is_present("clip-b32")
     assert len(missing("clip-b32")) == total_files("clip-b32") == 3
 
 
-def test_a_partial_download_is_not_present(tmp_path, monkeypatch):
+def test_a_partial_download_is_not_present(user_dir):
     """A .part file must never read as a finished asset."""
-    monkeypatch.chdir(tmp_path)
-    d = tmp_path / "models" / "clip-vit-b32"
+    d = user_dir / "models" / "clip-vit-b32"
     d.mkdir(parents=True)
     (d / "vision_model_fp16.onnx").write_bytes(b"x")
     (d / "text_model_fp16.onnx.part").write_bytes(b"x")
@@ -28,9 +44,8 @@ def test_a_partial_download_is_not_present(tmp_path, monkeypatch):
     assert "vision_model_fp16.onnx" not in missing("clip-b32")
 
 
-def test_a_complete_dir_is_present(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    d = tmp_path / "models" / "clip-vit-b32"
+def test_a_complete_dir_is_present(user_dir):
+    d = user_dir / "models" / "clip-vit-b32"
     d.mkdir(parents=True)
     for name in ("vision_model_fp16.onnx", "text_model_fp16.onnx",
                  "tokenizer.json"):

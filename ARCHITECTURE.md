@@ -142,6 +142,12 @@ every fitness and admission equation, and what each setting does.
 | `archive_projection.py` | 74 | PCA: 2-D for the map view, 8-D (with variances) for latent goals |
 | `search_driver.py` | 46 | The `SearchDriver` protocol both drivers implement |
 
+Encoder weights live under `Documents/Fluoddity/models/<subdir>/`, one
+directory per registry entry, downloaded on demand by `tools/fetch_models.py`.
+User data rather than app data, so every checkout and every installed copy
+shares one set; `utilities.paths.migrate_models` moves an older `models/`
+folder in from beside the app at launch.
+
 Archives live under `Documents/Fluoddity/archives/<name>/`, one directory per
 archive, each with the `index.jsonl` / `vectors.npz` / `goals.json` / `thumbs/`
 shape `ArchiveStore` writes. There is no registry file: the filesystem is the

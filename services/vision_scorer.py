@@ -25,8 +25,7 @@ import numpy as np
 from PIL import Image
 
 from services.vision_models import DEFAULT_KEY, get
-
-MODELS_ROOT = "models"
+from utilities.paths import get_models_root
 
 _ORT_DTYPES = {
     "tensor(float)": np.float32,
@@ -151,7 +150,7 @@ class VisionScorer:
         import onnxruntime as ort
         from tokenizers import Tokenizer
 
-        d = Path(MODELS_ROOT) / self._model.subdir
+        d = get_models_root() / self._model.subdir
         if providers is None:
             providers = ["DmlExecutionProvider", "CPUExecutionProvider"]
         have = set(ort.get_available_providers())

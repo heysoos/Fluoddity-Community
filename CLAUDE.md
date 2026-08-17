@@ -410,9 +410,24 @@ mechanics these caveats assume.
   it is built, or the banner outlives the archive that raised it. The request
   is `ArchiveState.download_model_requested` rather than Auto's, handled ABOVE
   `_handle_explore`'s early return — a missing encoder is exactly why the
-  driver does not exist. `MODELS_ROOT` is relative to the CWD, so a worktree
-  has its own `models/` and a junction is what shares one. Guarded by
-  `tests/test_missing_archive_encoder.py`.
+  driver does not exist. Guarded by `tests/test_missing_archive_encoder.py`.
+
+- **The weights are USER data, and `utilities.paths.get_models_root` is their
+  one home.** They used to be read from `"models"` relative to the CWD, which
+  made them a property of whichever folder was launched rather than of the
+  user: every worktree wanted its own copy — `clip-l14` alone is 859 MB — and
+  a packaged build under Program Files cannot write that folder at all. The
+  same two reasons `imgui.ini` moved. `migrate_models` runs at every launch
+  and follows `migrate_legacy_archive`'s rules exactly: a MOVE, because these
+  are gigabytes, and nothing at all once the target exists, so a second
+  checkout cannot donate its copy over the one in use. It uses `shutil.move`
+  rather than `os.replace` — a rename within one volume, a copy across two,
+  which is the difference between an instant migration and downloading
+  everything again. It deliberately does NOT create an empty `models/`:
+  indistinguishable from a finished migration, it would strand weights still
+  sitting beside the app. A failure is not fatal — the weights stay where they
+  are and read as not-downloaded, which the button above already answers.
+  Guarded by `tests/test_models_migration.py`.
 
 - **Auto's encoder picker is read EVERY FRAME; Explore's is read once.**
   `_ensure_auto_service` returns early once the service exists, so the combo

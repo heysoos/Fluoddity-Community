@@ -150,6 +150,49 @@ def migrate_legacy_archive(user_dir=None) -> Path:
     return root
 
 
+def get_models_root(user_dir=None) -> Path:
+    """Where the vision encoders' ONNX weights live.
+
+    User data rather than app data, for the same two reasons imgui.ini is: the
+    app directory is read-only under Program Files, and running from source it
+    is whichever checkout was launched - so every worktree needed its own copy
+    of several gigabytes.
+    """
+    base = Path(user_dir) if user_dir is not None else get_user_data_dir()
+    return base / "models"
+
+
+def migrate_models(user_dir=None, app_dir=None) -> Path:
+    """Move a models/ folder beside the app into the user data directory.
+
+    A move, not a copy: an encoder is hundreds of megabytes. `shutil.move` is a
+    rename within one volume and a copy across two, which is the difference
+    between an instant migration and downloading it all again.
+
+    If the target already exists this does NOTHING, so a second checkout cannot
+    donate its copy over the one in use. Failure is not fatal - the weights are
+    left where they are and read as not-downloaded, which the app already
+    offers a button for.
+
+    -> the models root, whether or not anything moved.
+    """
+    root = get_models_root(user_dir)
+    if root.exists():
+        return root
+
+    base = Path(app_dir) if app_dir is not None else get_app_dir()
+    legacy = base / "models"
+    if legacy.is_dir():
+        try:
+            root.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy), str(root))
+            print(f"[Fluoddity] encoder weights moved to {root}")
+        except OSError as exc:
+            print(f"[Fluoddity] could not move the encoder weights ({exc}); "
+                  f"they are still in {legacy}")
+    return root
+
+
 def get_default_keyboard_controls_path() -> Path:
     """Get path to bundled default_keyboard_controls.json."""
     return get_app_dir() / "default_keyboard_controls.json"
@@ -175,6 +218,10 @@ def initialize_user_data():
     get_screenshots_dir().mkdir(exist_ok=True)
     get_videos_dir().mkdir(exist_ok=True)
     migrate_legacy_archive()
+    # Deliberately not mkdir'd: an empty models/ here is indistinguishable
+    # from a finished migration, and would stop the next launch adopting the
+    # weights that are still beside the app.
+    migrate_models()
 
     # Copy default keyboard controls if user's doesn't exist
     user_keyboard = get_user_keyboard_controls_path()
