@@ -69,29 +69,54 @@ Out of scope, deliberately:
 
 ## 0. The browser prerequisite
 
-`ast.enabled` is set by the Explore *tab being selected*
-(`ui/archive_window.py`), not by a search running. Both the Live preview
-checkbox and `_handle_archive_preview` gate on it, so with the Tournament
-window open on Explore, clicking an entry of another brain does nothing at all
-and says nothing. Measured against the real handler over a mixed archive:
+`_handle_archive_preview` does TWO things and gates them as one. It runs the
+hovered entry in the live sim — a rule pushed into SLOT 0 — and on a click of a
+FOREIGN entry it adopts that entry's brain layout. They need different gates,
+and the one they share is wrong for both.
+
+The gate is `ast.enabled or auto_tournament.enabled`, which is a TAB SELECTION.
+What actually puts a grid on the canvas is `ui_state.tournament.enabled` — the
+tournament WINDOW being open — which the gate never consults. Measured against
+the real handler, hovering a NATIVE entry:
 
 ```
-explore_tab=False live_preview=True  | after hover=fourier  after click=gabor    switched=['gabor-n12']
-explore_tab=False live_preview=False | after hover=fourier  after click=fourier  switched=[]
-explore_tab=True  live_preview=True  | after hover=fourier  after click=fourier  switched=[]
-explore_tab=True  live_preview=False | after hover=fourier  after click=fourier  switched=[]
+tournament_window=False explore_tab=False auto_tab=False -> rules into slot 0: 1
+tournament_window=True  explore_tab=True  auto_tab=False -> rules into slot 0: 0
+tournament_window=True  explore_tab=False auto_tab=True  -> rules into slot 0: 0
+tournament_window=True  explore_tab=False auto_tab=False -> rules into slot 0: 1
 ```
+
+**Too permissive.** The last row is the Manual tab: the grid IS on screen, and
+a hover pushes a rule into slot 0, which under a grid is TILE 0. One square of
+the grid changes and nothing else — precisely the defect `_grid_owner()` was
+added to fix for the Z and G keys, arriving by another road.
+
+**Too strict.** Adopting a foreign entry's LAYOUT is not a single-sim operation
+and never was. The Brain window's modality combo already switches layout while
+a tournament runs, and `tournament_service.set_layout` follows it. Refusing the
+same thing from the browser is what makes the Brain window appear not to follow
+the gallery — the symptom this section exists to fix.
+
+So the two actions split:
+
+- **The preview** gates on `ui_state.tournament.enabled`: is there a grid. This
+  both closes the Manual-tab hole and keeps the Explore and Auto behaviour
+  exactly as it is.
+- **The adopt** does not gate on the grid at all. Under a grid it switches the
+  layout and lets the tournament re-randomise beneath it, exactly as the Brain
+  window does. What it skips is the single-rule push into slot 0 — which is the
+  split `_grid_owner()` already expresses for Z and G, reused rather than
+  reinvented.
+
+The Live preview checkbox follows the PREVIEW's gate, and names which of the
+two is unavailable rather than reading as though the whole browser is inert. A
+control that cannot do what it offers is worse than no control, the rule the
+Explore tab's permanently-disabled Encoder combo already follows.
 
 Hovering never moves the Brain window and never should: a hover BORROWS a
 layout and `_handle_brain_layout` is suppressed for its duration, because the
 window's own layout would otherwise tear down and rebuild the archive once a
-frame. Only a click switches.
-
-The fix is to gate on `running` rather than on `enabled`, so the browser works
-whenever the search is idle, and to say why in place of the greyed control when
-it genuinely is running. A control that cannot do what it offers is worse than
-no control — the same rule the Explore tab's permanently-disabled Encoder combo
-already follows.
+frame. Only a click switches. That is unchanged here.
 
 This is independent of everything below and worth doing first.
 
@@ -389,8 +414,9 @@ next is a cost the user should see at the moment they set it.
   genome of the running layout's width.
 - **A reverted move leaves the native count where it started** and is not
   immediately re-proposed.
-- **The browser fix**: a click switches brain whenever the search is idle,
-  including with the Explore tab open.
+- **The browser fix**, in both directions: a hover no longer writes into slot 0
+  while the Manual tab holds a grid on screen, and a click adopts a foreign
+  entry's layout with the tournament window open.
 - **An archive reopens under the brain it was last searched under**, driven
   through the real open path rather than a model of it — including the three
   cases that must NOT switch: an archive with no recorded signature, one
