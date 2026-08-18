@@ -508,6 +508,37 @@ class App:
         if "grid" in applied and ast.grid != before:
             ast.grid_changed = True
 
+    def _restore_archive_layout(self, ui_state) -> bool:
+        """Put back the brain this archive was last searched under. -> did it.
+
+        Called only from the paths that OPEN an archive. Never from
+        _apply_brain_layout, which WRITES the setting this reads - calling one
+        from the other would put the outgoing layout straight back.
+
+        A signature this build cannot rebuild keeps the current brain and says
+        so: a plausible layout of the wrong width is worse than refusing.
+        """
+        from command_handler import CommandHandler
+        from services.brains import layout_from_signature
+
+        ast = ui_state.archive
+        sig = str(ast.layout_signature or "")
+        live = getattr(getattr(self, "sim", None), "brain_layout", None)
+        if not sig or live is None or sig == live.signature():
+            return False
+        layout = layout_from_signature(sig)
+        if layout is None:
+            ast.warning = (
+                f"this archive was searched under {sig}, which this build "
+                f"cannot rebuild; the brain is unchanged.")
+            return False
+        # The WINDOW as well as the sim: _handle_brain_layout applies whatever
+        # it finds in ui_state.brain every frame, so a restore that moves only
+        # the sim is undone by the next one.
+        CommandHandler._put_brain_window(layout, ui_state)
+        self._apply_brain_layout(layout, ui_state)
+        return True
+
     def _switch_archive(self, name, ui_state):
         """Point the search at a different archive directory. -> success."""
         from services.archive_library import list_archives, resolve, safe_name
@@ -536,6 +567,7 @@ class App:
         was_open = ast.show_browser
         self._load_archive_settings(ui_state)
         ast.show_browser = ast.show_browser or was_open
+        self._restore_archive_layout(ui_state)
 
         ui_state.preferences.archive_name = safe
         ast.archive_name = safe
@@ -733,6 +765,8 @@ class App:
         # reopening an archive show that archive's settings rather than the
         # class defaults.
         self._load_archive_settings(ui_state)
+        # After the settings, which is where layout_signature arrives.
+        self._restore_archive_layout(ui_state)
         ast.archive_name = path.name
         ast.archive_list = list_archives(get_archives_root())
         ui_state.preferences.archive_name = path.name
