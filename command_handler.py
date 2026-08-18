@@ -1628,10 +1628,21 @@ class CommandHandler:
         world_pos = (tex_coords[0] * 2 - 1, tex_coords[1] * 2 - 1)
 
         if self.sim.has_active_cohort_sweep():
-            entity_id, entity_pos, entity_cohort = self.entity_picker.find_nearest_entity(tex_coords)
+            entity_id, entity_pos, entity_cohort = self.entity_picker.find_nearest_entity(
+                tex_coords, self._canvas_aspect())
             self.sim.update_sliders_from_particle(world_pos, entity_cohort)
         else:
             self.sim.update_sliders_from_position(world_pos)
+
+    def _canvas_aspect(self) -> float:
+        """Width / height of the canvas the particles were drawn into.
+
+        Read off the canvas rather than parsed from the preference string: the
+        preference can move before the sim has rebuilt to match it, and one
+        parser is already one too many.
+        """
+        w, h = self.sim.can.size
+        return w / h
 
     def _handle_entity_pick(self, ui_state, tiling_mode):
         """Handle entity selection via left click in Select Particle mode."""
@@ -1643,7 +1654,8 @@ class CommandHandler:
                 np.fmod(tex_coords[0] + 10.0, 1.0),
                 np.fmod(tex_coords[1] + 10.0, 1.0)
             )
-        entity_id, entity_pos, entity_cohort = self.entity_picker.find_nearest_entity(tex_coords)
+        entity_id, entity_pos, entity_cohort = self.entity_picker.find_nearest_entity(
+            tex_coords, self._canvas_aspect())
 
         if entity_id >= 0 and entity_id < self.sim.entity_count:
             print(f"Entity {entity_id} at pos {entity_pos}, cohort {entity_cohort} - requesting rule buffer update")
