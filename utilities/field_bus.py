@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import moderngl
 
+from services import field_sources
 from state.field_stack import MAPPINGS
 from utilities.gl_helpers import read_shader, tryset
 
@@ -39,6 +40,10 @@ class FieldBus:
         self._composite_vao = None
         self._scratch = None
         self._scratch_fbo = None
+        self._sources = {}      # layer uid -> (source key, source object)
+        self._dirty = True
+        self._pass_count = 0
+        self._scale = 0.0
 
     # -- public ---------------------------------------------------------
 
@@ -81,8 +86,17 @@ class FieldBus:
             return
         self._ensure_composite()
 
+        # A mipmap min-filter over a texture with no mip chain is INCOMPLETE and
+        # samples as black. Blur needs the chain, so it is built on demand and
+        # the filter put back afterwards: `feedback` hands back the sim's own
+        # canvas, and leaving that on a mipmap filter would change how the sim
+        # samples its own trails.
+        previous_filter = src_tex.filter
         if layer.blur > 0.0:
             src_tex.build_mipmaps()
+            src_tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        else:
+            src_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         src_tex.use(location=0)
 
         prog = self._composite
@@ -113,6 +127,7 @@ class FieldBus:
         self.ctx.disable(moderngl.BLEND)
         self.ctx.blend_equation = moderngl.FUNC_ADD
         self._fbo.color_mask = (True, True, True, True)
+        src_tex.filter = previous_filter
 
     @property
     def scratch_texture(self):
@@ -131,7 +146,118 @@ class FieldBus:
         vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
         return self._scratch
 
+    # -- the rebuild loop -----------------------------------------------
+
+    @property
+    def dirty(self) -> bool:
+        return self._dirty
+
+    @property
+    def pass_count(self) -> int:
+        """Passes run on the last rebuild. Zero when the bus was clean."""
+        return self._pass_count
+
+    def mark_dirty(self) -> None:
+        self._dirty = True
+
+    def source_for(self, layer):
+        """The GPU-side source object for a layer, or None if it has none."""
+        entry = self._sources.get(layer.uid)
+        return entry[1] if entry else None
+
+    def brush_source(self):
+        """The brush layer's accumulation buffer, or None if no brush layer."""
+        for key, source in self._sources.values():
+            if key == "brush":
+                return source
+        return None
+
+    def reload_shaders(self) -> None:
+        """Recompile the composite and every user shader. Bound to the V key."""
+        if self._composite_vao is not None:
+            self._composite_vao.release()
+            self._composite_vao = None
+        if self._composite is not None:
+            self._composite.release()
+            self._composite = None
+        for _key, source in self._sources.values():
+            reload_fn = getattr(source, "reload", None)
+            if reload_fn is not None:
+                reload_fn()
+        self.mark_dirty()
+
+    def rebuild(self, stack, canvas_width: int, canvas_height: int,
+                scale: float, frame) -> bool:
+        """Rebuild every destination from the stack. Returns True if it ran.
+
+        Clean and unchanged means no passes at all, which is what makes a
+        static layer free in steady state.
+        """
+        layers = list(getattr(stack, "layers", []))
+        self._prune_sources(layers)
+
+        if not layers:
+            self._pass_count = 0
+            if self._tex is not None:
+                self._release_target()
+            self._dirty = False
+            return False
+
+        if scale != self._scale:
+            self._scale = scale
+            self._dirty = True
+        had_target = self._tex is not None
+        self.ensure(canvas_width, canvas_height, scale)
+        if not had_target:
+            self._dirty = True
+
+        if not self._dirty:
+            self._pass_count = 0
+            return False
+
+        self._pass_count = 0
+        self.clear()
+        for layer in layers:
+            if not layer.enabled:
+                layer.error = None
+                continue
+            source = self._source_for_layer(layer)
+            tex = source.evaluate(self, layer, frame)
+            layer.error = getattr(source, "error", None)
+            if tex is None:
+                continue
+            if tex is self._scratch:
+                self._pass_count += 1
+            self.composite_one(tex, layer)
+            self._pass_count += 1
+
+        self._dirty = False
+        return True
+
+    def _source_for_layer(self, layer):
+        """The layer's source object, rebuilt only if its KIND changed.
+
+        Keyed by uid so reordering the stack neither recompiles a shader nor
+        discards the brush's paint.
+        """
+        entry = self._sources.get(layer.uid)
+        if entry is not None and entry[0] == layer.source:
+            return entry[1]
+        if entry is not None:
+            entry[1].release()
+        source = field_sources.make_source(layer.source, self.ctx)
+        self._sources[layer.uid] = (layer.source, source)
+        return source
+
+    def _prune_sources(self, layers) -> None:
+        live = {l.uid for l in layers}
+        for uid in [u for u in self._sources if u not in live]:
+            self._sources.pop(uid)[1].release()
+
     def cleanup(self) -> None:
+        for _key, source in self._sources.values():
+            source.release()
+        self._sources.clear()
         self._release_target()
         if self._composite_vao is not None:
             self._composite_vao.release()
