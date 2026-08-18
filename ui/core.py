@@ -754,12 +754,6 @@ class UI(
         imgui.render()
         self.imgui_renderer.render(imgui.get_draw_data())
 
-    def _delayed_tooltip(self, text: str):
-        """Show tooltip with delay, requiring mouse to be stationary."""
-        # HoveredFlags_.delay_normal provides medium delay, stationary provides "mouse must be still"
-        if imgui.is_item_hovered(imgui.HoveredFlags_.delay_normal | imgui.HoveredFlags_.stationary):
-            imgui.set_tooltip(text)
-
     def cleanup(self):
         self.tooltip_fbo.release()
         self.tooltip_texture.release()

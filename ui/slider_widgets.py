@@ -1,5 +1,7 @@
 """Reusable slider widgets with context menus, sweep buttons, and range adjustment."""
 from imgui_bundle import imgui
+
+from ui import hints
 from .physics_params import PARAM_BY_LABEL
 
 
@@ -131,7 +133,7 @@ class SliderWidgetsMixin:
 
         # Show delayed tooltip explaining jitter when slider is orange-tinted
         if has_jitter:
-            self._delayed_tooltip(
+            hints.tip(
                 "Parameter varies randomly within the listed range.\n"
                 "Right-click for context menu with jitter slider."
             )
@@ -230,7 +232,7 @@ class SliderWidgetsMixin:
                     f"##jitter_{slider_name}", current_jitter, 0.0, 2.0, "%.2f")
                 if changed_jitter:
                     self.state.sim.jitters[param_name] = new_jitter
-                self._delayed_tooltip("Adds random jitter to this setting per-particle per-frame.\nOften results in a softer, fuzzier look.")
+                hints.tip("Adds random jitter to this setting per-particle per-frame.\nOften results in a softer, fuzzier look.")
                 imgui.separator()
 
             imgui.text(f"Adjust Range: {slider_name}")
@@ -481,7 +483,7 @@ class SliderWidgetsMixin:
         imgui.end_group()
 
         # Add tooltip when hovering over the button group
-        self._delayed_tooltip("Up arrow widens slider range. Down arrow narrows range")
+        hints.tip("Up arrow widens slider range. Down arrow narrows range")
 
     def render_physics_slider(self, pdef):
         """Render a complete physics slider from its PhysicsParamDef.

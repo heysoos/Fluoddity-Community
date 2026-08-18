@@ -1,6 +1,8 @@
 """Advanced Drawing window: brush modes, force/strafe field controls."""
 import math
 from imgui_bundle import imgui
+
+from ui import hints
 from utilities.advanced_drawing import AdvancedDrawingProcessor
 
 
@@ -45,7 +47,7 @@ class AdvancedDrawingWindowMixin:
                 math.pi,
                 format="%.3f",
             )
-            self._delayed_tooltip(
+            hints.tip(
                 "Heading angle for Fixed Direction brush mode.\n"
                 "0 = up (positive Y), PI/2 = right."
             )
@@ -65,18 +67,18 @@ class AdvancedDrawingWindowMixin:
 
             if imgui.radio_button("Trails / Canvas", target == 0):
                 target = 0
-            self._delayed_tooltip("Draw on the particle trail canvas (existing behavior).")
+            hints.tip("Draw on the particle trail canvas (existing behavior).")
 
             if imgui.radio_button("Force Field", target == 1):
                 target = 1
-            self._delayed_tooltip(
+            hints.tip(
                 "Draw onto the force field texture.\n"
                 "Acts like any other force: some rules may 'swim upstream'."
             )
 
             if imgui.radio_button("Strafe Field", target == 2):
                 target = 2
-            self._delayed_tooltip(
+            hints.tip(
                 "Draw onto the strafe field texture.\n"
                 "All particles will be dragged in the direction of the field."
             )
@@ -89,7 +91,7 @@ class AdvancedDrawingWindowMixin:
             # === 5. Fill Popup ===
             if imgui.button("Fill..."):
                 imgui.open_popup("fill_popup")
-            self._delayed_tooltip(
+            hints.tip(
                 "Apply the brush to the entire canvas/field for one frame.\n"
                 "Like the fill bucket in a paint program. Strength proportional to Draw power."
             )
@@ -118,7 +120,7 @@ class AdvancedDrawingWindowMixin:
                     self._request_clear_force_field = True
                 elif target == 2:
                     self._request_clear_strafe_field = True
-            self._delayed_tooltip(f"Clear the {clear_label.lower()} to zero.")
+            hints.tip(f"Clear the {clear_label.lower()} to zero.")
 
             imgui.separator()
 
@@ -149,7 +151,7 @@ class AdvancedDrawingWindowMixin:
                 prefs.force_field_strength = 10.0 ** (FIELD_MIN_EXP + FIELD_EXP_RANGE * new_fpos)
             if pls:
                 pls.pop_locked_style(ffs_lock_colors)
-            self._delayed_tooltip(
+            hints.tip(
                 "Multiplier for force field effects.\n"
                 "Logarithmic scale: 0.0001 to 10.0, default 1.0."
             )
@@ -176,7 +178,7 @@ class AdvancedDrawingWindowMixin:
                 prefs.strafe_field_strength = 10.0 ** (FIELD_MIN_EXP + FIELD_EXP_RANGE * new_spos)
             if pls:
                 pls.pop_locked_style(sfs_lock_colors)
-            self._delayed_tooltip(
+            hints.tip(
                 "Multiplier for strafe field effects.\n"
                 "Logarithmic scale: 0.0001 to 10.0, default 1.0."
             )
@@ -187,7 +189,7 @@ class AdvancedDrawingWindowMixin:
             _, prefs.debug_arrows = imgui.checkbox(
                 "View Draw Target Arrows", prefs.debug_arrows
             )
-            self._delayed_tooltip(
+            hints.tip(
                 "Render a grid of arrows to help visualize the active draw target's vector field."
             )
 
@@ -199,7 +201,7 @@ class AdvancedDrawingWindowMixin:
                 1.0,
                 format="%.2f",
             )
-            self._delayed_tooltip(
+            hints.tip(
                 "Opacity of the force/strafe field color overlay in the main view.\n"
                 "0 = hidden, 1 = fully visible."
             )
@@ -210,7 +212,7 @@ class AdvancedDrawingWindowMixin:
             changed, prefs.shader_driven_field = imgui.checkbox(
                 "Shader Driven Field", prefs.shader_driven_field
             )
-            self._delayed_tooltip(
+            hints.tip(
                 "Use a frag shader to override the field texture."
             )
 

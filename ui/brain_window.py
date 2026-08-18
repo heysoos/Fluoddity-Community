@@ -11,7 +11,7 @@ from imgui_bundle import imgui
 
 from services.brains import (MAX_BRAIN_FLOATS, REGISTRY, get, layout_defines,
                              settings_of)
-from ui import layout as layout_helpers
+from ui import hints, layout as layout_helpers
 
 # tanh(2.65) ~ 0.99, so |z| beyond this decodes to within 1% of its rail: the
 # parameter has stopped responding to the optimizer.
@@ -276,8 +276,7 @@ class BrainWindowMixin:
             if imgui.small_button(f"x##rm{i}"):
                 removed = i
             imgui.end_disabled()
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("remove this layer")
+            hints.tip("remove this layer")
             self._render_layer_menu(state, i, layers[i], row_hovered[i])
 
         if removed is not None:
@@ -290,7 +289,7 @@ class BrainWindowMixin:
             layers.append([added, 0])
         imgui.end_disabled()
         if added is None and imgui.is_item_hovered():
-            imgui.set_tooltip("no room for another layer")
+            hints.tip("no room for another layer")
 
         if layers != committed:
             # The BUILT stack, not the asked-for one: adding a second layer
@@ -370,8 +369,7 @@ class BrainWindowMixin:
         imgui.separator()
         if imgui.button("Reset layer"):
             state.layer_op = (i, "reset", None)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("back to how this layer was when the menu opened")
+        hints.tip("back to how this layer was when the menu opened")
         imgui.end_disabled()
         imgui.end_popup()
 
@@ -550,9 +548,7 @@ class BrainWindowMixin:
             (u0, v0), (u1, v1) = preview.uv_for(slot)
             imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(SIZE, SIZE),
                         imgui.ImVec2(u0, v0), imgui.ImVec2(u1, v1))
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("whole brain" if slot == 0
-                                  else f"unit {slot - 1}")
+            hints.tip("whole brain" if slot == 0 else f"unit {slot - 1}")
         imgui.end_child()
 
     @property

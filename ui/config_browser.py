@@ -1,6 +1,8 @@
 """Config file browser: scanning, caching, and load submenu rendering."""
 from imgui_bundle import imgui
 
+from ui import hints
+
 
 class ConfigBrowserMixin:
     """Mixin for config file browsing. Combined into UI via multiple inheritance."""
@@ -177,9 +179,9 @@ class ConfigBrowserMixin:
                             # Wrap notes at ~50 characters for readable tooltip
                             import textwrap
                             wrapped = textwrap.fill(config.notes, width=50)
-                            imgui.set_tooltip(wrapped)
+                            hints.tip(wrapped)
                         else:
-                            imgui.set_tooltip("N will be highlighted if there are any notes to display here")
+                            hints.tip("N will be highlighted if there are any notes to display here")
 
                     imgui.pop_style_color(2)
 

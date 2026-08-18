@@ -1,7 +1,7 @@
 """Help and informational windows: Controls, Tutorial, Parameter Sweeps, Performance, Video Recording."""
 from imgui_bundle import imgui
 
-from ui import notices
+from ui import hints, notices
 
 
 class HelpWindowsMixin:
@@ -272,7 +272,7 @@ class HelpWindowsMixin:
                 'Video End Frame',
                 self.state.preferences.video_end_frame
             )
-            self._delayed_tooltip("Target frame for video to end on.\nWhen set, recording will be delayed until the\ncalculated start frame is reached.\nSet to 0 to start recording immediately.")
+            hints.tip("Target frame for video to end on.\nWhen set, recording will be delayed until the\ncalculated start frame is reached.\nSet to 0 to start recording immediately.")
             imgui.spacing()
 
             # Video Length (in seconds) - converts to/from max_frames internally
@@ -287,7 +287,7 @@ class HelpWindowsMixin:
             )
             if changed:
                 self.state.preferences.max_frames = int(new_length * 60)
-            self._delayed_tooltip("After Video reaches this length, the recording will be stopped")
+            hints.tip("After Video reaches this length, the recording will be stopped")
 
             # Lock motion_blur_samples during recording
             if recording_active:
@@ -302,7 +302,7 @@ class HelpWindowsMixin:
                 v_max=100,
                 format=f"x%d ({current_hz}hz)"
             )
-            self._delayed_tooltip("Physics steps per frame for video and screenshots.")
+            hints.tip("Physics steps per frame for video and screenshots.")
 
             if recording_active:
                 imgui.end_disabled()
@@ -325,7 +325,7 @@ class HelpWindowsMixin:
                 imgui.ImVec4(0.6, 0.8, 1.0, 1.0),
                 f"Frame Range: {start_frame} --- {end_frame}"
             )
-            self._delayed_tooltip(f"Estimated recording range based on current settings.\nTotal simulation frames: {total_sim_frames}\n({self.state.preferences.max_frames} output frames x {self.state.preferences.motion_blur_samples} physics steps)")
+            hints.tip(f"Estimated recording range based on current settings.\nTotal simulation frames: {total_sim_frames}\n({self.state.preferences.max_frames} output frames x {self.state.preferences.motion_blur_samples} physics steps)")
             imgui.spacing()
 
             # Motion Blur checkbox (overrides preferences during recording)
@@ -333,7 +333,7 @@ class HelpWindowsMixin:
                 "Motion Blur (Recording)",
                 self.state.preferences.recording_motion_blur
             )
-            self._delayed_tooltip("Enable motion blur during video recording.\nThis setting overrides the Motion Blur checkbox in Preferences while recording.")
+            hints.tip("Enable motion blur during video recording.\nThis setting overrides the Motion Blur checkbox in Preferences while recording.")
 
             # Blur Quality slider (only shown when recording motion blur is enabled)
             if self.state.preferences.recording_motion_blur:
@@ -351,12 +351,12 @@ class HelpWindowsMixin:
                     1, 20,
                     format=blur_format
                 )
-                self._delayed_tooltip("How often a recorded frame gets motion blur.")
+                hints.tip("How often a recorded frame gets motion blur.")
                 imgui.unindent(20)
 
             # Downsample Resolution Factor (was Supersample Kernel Width)
             _, self.state.preferences.supersample_k = imgui.input_int('Downsample Resolution Factor', self.state.preferences.supersample_k)
-            self._delayed_tooltip("Set to '2' to render a video at half resolution.")
+            hints.tip("Set to '2' to render a video at half resolution.")
 
             # Filename input
             _, self.state.preferences.filename_prefix = imgui.input_text(
@@ -364,7 +364,7 @@ class HelpWindowsMixin:
                 self.state.preferences.filename_prefix,
                 256
             )
-            self._delayed_tooltip("Defaults to 'animation' if left empty. Saves to documents/Fluoddity/ All filenames get timestamps appended")
+            hints.tip("Defaults to 'animation' if left empty. Saves to documents/Fluoddity/ All filenames get timestamps appended")
 
             imgui.spacing()
             if recording_active:
@@ -375,7 +375,7 @@ class HelpWindowsMixin:
             )
             if recording_active:
                 imgui.end_disabled()
-            self._delayed_tooltip("Mux the audio the visuals are reacting to onto the recording.")
+            hints.tip("Mux the audio the visuals are reacting to onto the recording.")
             if self.state.preferences.record_audio:
                 imgui.indent(20)
                 imgui.text_colored(
@@ -390,7 +390,7 @@ class HelpWindowsMixin:
                 )
                 if changed:
                     self.state.preferences.record_audio_delay = delay
-                self._delayed_tooltip("Delays the soundtrack to meet the picture, which lags the sound it reacts to.")
+                hints.tip("Delays the soundtrack to meet the picture, which lags the sound it reacts to.")
                 if imgui.begin_popup_context_item("audio_delay_reset"):
                     if imgui.selectable("Reset to 0##do", False)[0]:
                         self.state.preferences.record_audio_delay = 0.0

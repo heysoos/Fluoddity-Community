@@ -9,7 +9,7 @@ from imgui_bundle import imgui
 from services import save_targets
 from services.capture_health import sweeping_parameters
 from services.cohort_tiling import cohorts_for, max_variants
-from ui import layout
+from ui import hints, layout
 from ui.notices import OK, render_banner
 
 ALGORITHM_NAMES = ["CMA-ES", "Sep-CMA-ES", "GA", "Random Search"]
@@ -237,8 +237,7 @@ class AutoTournamentWindowMixin:
         was = ats.physics_enabled
         _, ats.physics_enabled = imgui.checkbox(
             "Search Physics Too", ats.physics_enabled)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(PHYSICS_TOOLTIP)
+        hints.tip(PHYSICS_TOOLTIP)
         if ats.physics_enabled != was:
             ats.reset_requested = True     # the search space changed dimension
 
@@ -264,8 +263,7 @@ class AutoTournamentWindowMixin:
         ats.variants_per_tile = max(1, min(ats.variants_per_tile, kmax))
         _, ats.variants_per_tile = imgui.slider_int(
             "Variants per Tile", ats.variants_per_tile, 1, kmax)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(COHORT_TOOLTIP)
+        hints.tip(COHORT_TOOLTIP)
         layout.text_disabled_wrapped(
             f"cohorts driven to {cohorts_for(ats.grid, ats.variants_per_tile)} "
             f"(max {kmax} variants at this grid)")
@@ -396,18 +394,18 @@ class AutoTournamentWindowMixin:
         layout.wrap_row(right, layout.button_width("Save checkpoint"))
         if imgui.button("Save checkpoint"):
             ats.save_checkpoint_requested = True
-        imgui.set_item_tooltip("Resumes the optimizer; it is not a config.")
+        hints.tip("Resumes the optimizer; it is not a config.")
 
         _, self._auto_load_path = imgui.input_text(
             "Load path", getattr(self, "_auto_load_path", ""))
         right = layout.row_right_edge()
         if imgui.button("Load genome"):
             ats.load_genome_path = self._auto_load_path
-        imgui.set_item_tooltip("Takes the starting point only.")
+        hints.tip("Takes the starting point only.")
         layout.wrap_row(right, layout.button_width("Load checkpoint"))
         if imgui.button("Load checkpoint"):
             ats.load_checkpoint_path = self._auto_load_path
-        imgui.set_item_tooltip("Restores the whole search, and the saved grid.")
+        hints.tip("Restores the whole search, and the saved grid.")
 
         if svc is not None and svc.logger is not None and svc.logger.enabled:
             right = layout.row_right_edge()

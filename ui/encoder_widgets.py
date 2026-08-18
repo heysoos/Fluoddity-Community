@@ -8,6 +8,8 @@ one while the list is open.
 """
 from imgui_bundle import imgui
 
+from ui import hints
+
 
 def encoder_combo(label: str, current: str) -> tuple[bool, str]:
     """Pick an encoder. -> (changed, key)."""
@@ -22,8 +24,7 @@ def encoder_combo(label: str, current: str) -> tuple[bool, str]:
             model = REGISTRY[key]
             if imgui.selectable(model.label, key == current)[0]:
                 chosen = key
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(model.blurb)
+            hints.tip(model.blurb)
         imgui.end_combo()
     return chosen != current, chosen
 
@@ -36,5 +37,4 @@ def encoder_readout(label: str, key: str) -> None:
     imgui.begin_disabled()
     imgui.begin_combo(label, model.label)
     imgui.end_disabled()
-    if imgui.is_item_hovered():
-        imgui.set_tooltip(model.blurb)
+    hints.tip(model.blurb)

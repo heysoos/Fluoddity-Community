@@ -1,5 +1,7 @@
 """Physics Settings window: sliders, additional settings, appearance, notes (normal + multi-load modes)."""
 from imgui_bundle import imgui
+
+from ui import hints
 from . import layout
 from .physics_params import PARAM_GROUPS
 from state import view_modes
@@ -100,7 +102,7 @@ class PhysicsWindowMixin:
                         is_selected = (self.state.sim.boundary_conditions == i)
                         if imgui.selectable(option, is_selected)[0]:
                             self.state.sim.boundary_conditions = i
-                        self._delayed_tooltip(boundary_tooltips[i])
+                        hints.tip(boundary_tooltips[i])
                         if is_selected:
                             imgui.set_item_default_focus()
                     imgui.end_combo()
@@ -127,7 +129,7 @@ class PhysicsWindowMixin:
                         is_selected = (self.state.sim.initial_conditions == i)
                         if imgui.selectable(option, is_selected)[0]:
                             self.state.sim.initial_conditions = i
-                        self._delayed_tooltip(initial_tooltips[i])
+                        hints.tip(initial_tooltips[i])
                         if is_selected:
                             imgui.set_item_default_focus()
                     imgui.end_combo()
@@ -151,7 +153,7 @@ class PhysicsWindowMixin:
                 self.state.sim.num_cohorts = new_nc
             if pls:
                 pls.pop_locked_style(nc_lock_colors)
-            self._delayed_tooltip("Each particle is assigned to a cohort. Each cohort shares behavior:\neach cohort has a distinct mutation.")
+            hints.tip("Each particle is assigned to a cohort. Each cohort shares behavior:\neach cohort has a distinct mutation.")
 
             imgui.separator()
 
@@ -168,7 +170,7 @@ class PhysicsWindowMixin:
                 self.state.sim.DISABLE_SYMMETRY = new_ds
             if pls:
                 pls.pop_locked_style(ds_lock_colors)
-            self._delayed_tooltip("Give particles a left/right handedness, and so a rotational bias.")
+            hints.tip("Give particles a left/right handedness, and so a rotational bias.")
 
             # Absolute Orientation (combo box with 3 modes)
             combo_items = ["Off", "Y axis", "Radial"]
@@ -185,7 +187,7 @@ class PhysicsWindowMixin:
                 self.state.sim.ABSOLUTE_ORIENTATION = new_ao
             if pls:
                 pls.pop_locked_style(ao_lock_colors)
-            self._delayed_tooltip("What direction are particles 'facing'? Which way is 'up'?\nOff: use particle velocity\nY axis: align to y axis\nRadial: align to center of canvas")
+            hints.tip("What direction are particles 'facing'? Which way is 'up'?\nOff: use particle velocity\nY axis: align to y axis\nRadial: align to center of canvas")
 
             # Orientation Mix (only visible if Absolute Orientation != Off)
             if self.state.sim.ABSOLUTE_ORIENTATION != 0:
@@ -204,7 +206,7 @@ class PhysicsWindowMixin:
                     self.state.sim.ORIENTATION_MIX = new_om
                 if pls:
                     pls.pop_locked_style(om_lock_colors)
-                self._delayed_tooltip("Blend between heading-from-velocity and absolute orientation.")
+                hints.tip("Blend between heading-from-velocity and absolute orientation.")
 
             imgui.separator()
 
@@ -214,7 +216,7 @@ class PhysicsWindowMixin:
                 self.state.sim.parameter_sweeps_enabled
             )
             sweep_key = self.keybindings.get_key_display_name('toggle_parameter_sweep')
-            self._delayed_tooltip(f"Enable parameter sweeps to vary physics across the canvas.\nPress {sweep_key} to toggle. See Help -> Parameter Sweeps for details.")
+            hints.tip(f"Enable parameter sweeps to vary physics across the canvas.\nPress {sweep_key} to toggle. See Help -> Parameter Sweeps for details.")
 
         # === Notes Group ===
         imgui.set_next_item_open(self.state.preferences.physics_group_notes)
@@ -231,7 +233,7 @@ class PhysicsWindowMixin:
             )
             if changed:
                 self.state.sim.notes = new_notes
-            self._delayed_tooltip("Optional notes to save with this config.\nThese will be saved when you save the config.\nEnter to finish editing, Ctrl+Enter for newline.")
+            hints.tip("Optional notes to save with this config.\nThese will be saved when you save the config.\nEnter to finish editing, Ctrl+Enter for newline.")
 
         imgui.separator()
 
@@ -283,7 +285,7 @@ class PhysicsWindowMixin:
                     self.state.sim.color_by_cohort = new_cbc
                 if pls:
                     pls.pop_locked_style(cbc_lock_colors)
-                self._delayed_tooltip("Colors particles based on their cohort assignment\nrather than their behavior.")
+                hints.tip("Colors particles based on their cohort assignment\nrather than their behavior.")
 
                 # Hue Sensitivity (only if not color by cohort)
                 if not self.state.sim.color_by_cohort:
@@ -298,7 +300,7 @@ class PhysicsWindowMixin:
                         self.state.sim.hue_sensitivity = new_hs
                     if pls:
                         pls.pop_locked_style(hs_lock_colors)
-                    self._delayed_tooltip("Controls color variation based on particle velocity.")
+                    hints.tip("Controls color variation based on particle velocity.")
 
                 imgui.separator()
 
@@ -316,8 +318,8 @@ class PhysicsWindowMixin:
                     _, self.state.sim.ink_weight = imgui.slider_float(
                         "Ink Weight", self.state.sim.ink_weight, 0.0, 20.0
                     )
-                    self._delayed_tooltip("Controls optical density in watercolor mode.\nHigher values = darker/more opaque.")
-                self._delayed_tooltip("Enable watercolor rendering effect." + ("\nSwitch to Camera view to enable." if watercolor_disabled else ""))
+                    hints.tip("Controls optical density in watercolor mode.\nHigher values = darker/more opaque.")
+                hints.tip("Enable watercolor rendering effect." + ("\nSwitch to Camera view to enable." if watercolor_disabled else ""))
                 if watercolor_disabled:
                     imgui.end_disabled()
 
@@ -380,19 +382,19 @@ class PhysicsWindowMixin:
                 changed, new_idx = imgui.combo("Particle Assignment", current_idx, assignment_options)
                 if changed:
                     self.state.multi_load.assignment_mode = assignment_options[new_idx]
-                self._delayed_tooltip("Random: each particle randomly assigned\nCohorts: particles grouped by cohort")
+                hints.tip("Random: each particle randomly assigned\nCohorts: particles grouped by cohort")
 
                 _, self.state.multi_load.per_config_initial_conditions = imgui.checkbox(
                     "Per-config Initial Conditions", self.state.multi_load.per_config_initial_conditions)
-                self._delayed_tooltip("Each config uses its own initial conditions")
+                hints.tip("Each config uses its own initial conditions")
 
                 _, self.state.multi_load.per_config_cohorts = imgui.checkbox(
                     "Per-config Cohorts", self.state.multi_load.per_config_cohorts)
-                self._delayed_tooltip("Each config uses its own cohort count")
+                hints.tip("Each config uses its own cohort count")
 
                 _, self.state.multi_load.per_config_hazard_rate = imgui.checkbox(
                     "Per-config Hazard Rate", self.state.multi_load.per_config_hazard_rate)
-                self._delayed_tooltip("Each config uses its own hazard rate setting")
+                hints.tip("Each config uses its own hazard rate setting")
 
                 imgui.end_menu()
 
@@ -455,20 +457,20 @@ class PhysicsWindowMixin:
                 self.state.sim.HAZARD_RATE = HAZARD_MAX * (new_pos ** HAZARD_POWER)
                 if self.state.multi_load.per_config_hazard_rate:
                     imgui.end_disabled()
-                self._delayed_tooltip("Probability per frame that particles reset to initial conditions")
+                hints.tip("Probability per frame that particles reset to initial conditions")
 
                 # Disable these options in multi-load (per-config settings)
                 imgui.begin_disabled()
                 imgui.checkbox("Disable Symmetry", False)
                 imgui.checkbox("Absolute Orientation", False)
                 imgui.end_disabled()
-                self._delayed_tooltip("Per-config settings in Multi-Load mode")
+                hints.tip("Per-config settings in Multi-Load mode")
 
                 # Parameter Sweeps (disabled)
                 imgui.begin_disabled()
                 imgui.checkbox("Parameter Sweeps", False)
                 imgui.end_disabled()
-                self._delayed_tooltip("Disabled in Multi-Load mode")
+                hints.tip("Disabled in Multi-Load mode")
 
                 imgui.end_menu()
 
@@ -531,10 +533,10 @@ class PhysicsWindowMixin:
 
         _, self.state.multi_load.simultaneous_configs = imgui.slider_float(
             "Simultaneous Configs", self.state.multi_load.simultaneous_configs, 0.0, float(max(1, config_count-.001)))
-        self._delayed_tooltip("Sets the size of the sliding window that blends the configs.\nAt 0 there will be no blending, just one config at a time.\nAt max value, all loaded configs will be active at once.")
+        hints.tip("Sets the size of the sliding window that blends the configs.\nAt 0 there will be no blending, just one config at a time.\nAt max value, all loaded configs will be active at once.")
         _, self.state.multi_load.progression_pace = imgui.slider_float(
             "Progression Pace", self.state.multi_load.progression_pace, 0.0, 1.0)
-        self._delayed_tooltip("Defines the pace at which we animate current\nprogress through the loaded configs.")
+        hints.tip("Defines the pace at which we animate current\nprogress through the loaded configs.")
 
         # Sync current progress from service (for auto-advancement display)
         if self.multi_load_service:
@@ -550,12 +552,12 @@ class PhysicsWindowMixin:
         # Always sync state from service for next frame
         if self.multi_load_service:
             self.state.multi_load.current_progress = self.multi_load_service.current_progress
-        self._delayed_tooltip("Determines where in the config lineup we are.")
+        hints.tip("Determines where in the config lineup we are.")
 
         imgui.separator()
         if imgui.button("Import from Config Clipboard"):
             self._request_import_clipboard_to_multiload = True
-        self._delayed_tooltip("Replace the loaded configs with the contents\nof the config clipboard (see Extras).")
+        hints.tip("Replace the loaded configs with the contents\nof the config clipboard (see Extras).")
         imgui.separator()
         imgui.text(f"Loaded Configurations ({config_count}/64)")
         imgui.separator()

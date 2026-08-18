@@ -1,6 +1,8 @@
 """Main menu bar: File, Reset, Help, Extras menus with auto-close logic."""
 from imgui_bundle import imgui
 
+from ui import hints
+
 
 class MenuBarMixin:
     """Mixin for main menu bar. Combined into UI via multiple inheritance."""
@@ -53,14 +55,14 @@ class MenuBarMixin:
                     self._load_category = "Core"
                     self._request_load_file = True
                     self._load_watercolor_override = None
-                self._delayed_tooltip("Start a fresh config. Loads from _Default")
+                hints.tip("Start a fresh config. Loads from _Default")
 
                 imgui.separator()
 
                 if imgui.menu_item("Save...", "", False)[0]:
                     # Defaults to the last loaded filename, via open_save_popup.
                     self.open_save_popup()
-                self._delayed_tooltip("Save the current physics settings including particle rules.")
+                hints.tip("Save the current physics settings including particle rules.")
 
                 # Load submenu with preview - locks to current watercolor mode
                 # Right-click toggles watercolor mode
@@ -207,7 +209,7 @@ class MenuBarMixin:
                     self._load_filename = self.currently_open_project
                     self._request_load_file = True
                     self._load_watercolor_override = self.state.sim.watercolor_mode  # Preserve current watercolor mode
-                self._delayed_tooltip(f"Equivalent to File -> Load {self.currently_open_project}")
+                hints.tip(f"Equivalent to File -> Load {self.currently_open_project}")
 
                 # Reset all slider ranges
                 if imgui.menu_item("Reset all slider ranges to defaults", "", False)[0]:
@@ -221,24 +223,24 @@ class MenuBarMixin:
                         self.state.sim.x_sweeps[param] = 0.0
                         self.state.sim.y_sweeps[param] = 0.0
                         self.state.sim.cohort_sweeps[param] = 0.0
-                self._delayed_tooltip("Set all parameter sweeps to 'off'.")
+                hints.tip("Set all parameter sweeps to 'off'.")
 
                 # Reset all UI settings
                 if imgui.menu_item("Reset all UI settings", "", False)[0]:
                     # Reset preferences to defaults (equivalent to deleting preferences.config)
                     from state.preferences_state import PreferencesState
                     self.state.preferences = PreferencesState()
-                self._delayed_tooltip("Restore all preferences and ui state to factory settings. \nEquivalent to deleting preferences.config, or running this\nprogram for the first time. Physics config saves are not affected.")
+                hints.tip("Restore all preferences and ui state to factory settings. \nEquivalent to deleting preferences.config, or running this\nprogram for the first time. Physics config saves are not affected.")
 
                 # Reset camera
                 if imgui.menu_item("Reset camera", "", False)[0]:
                     self._request_camera_reset = True
-                self._delayed_tooltip("Return camera to default position and zoom level.")
+                hints.tip("Return camera to default position and zoom level.")
 
                 # Reset canvas and fields
                 if imgui.menu_item("Reset Canvas and Fields", "", False)[0]:
                     self._request_clear_canvas_and_fields = True
-                self._delayed_tooltip("Clear canvas, brush, and all field textures to zero.")
+                hints.tip("Clear canvas, brush, and all field textures to zero.")
 
                 imgui.end_menu()
 
@@ -266,15 +268,15 @@ class MenuBarMixin:
                     changed, pls.lock_rule = imgui.checkbox("Lock Rule", pls.lock_rule)
                     if changed:
                         pls._locks['rule_seed'] = pls.lock_rule
-                    self._delayed_tooltip("Prevent the target rule and mutation seed\nfrom being changed by config loads/pastes.\nMutation seed can also be locked independently via Alt-click.")
+                    hints.tip("Prevent the target rule and mutation seed\nfrom being changed by config loads/pastes.\nMutation seed can also be locked independently via Alt-click.")
 
                     _, pls.lock_force_field = imgui.checkbox(
                         "Lock Force Field", pls.lock_force_field)
-                    self._delayed_tooltip("Prevent the force components of the field\ntexture from being changed by loads/pastes.")
+                    hints.tip("Prevent the force components of the field\ntexture from being changed by loads/pastes.")
 
                     _, pls.lock_strafe_field = imgui.checkbox(
                         "Lock Strafe Field", pls.lock_strafe_field)
-                    self._delayed_tooltip("Prevent the strafe components of the field\ntexture from being changed by loads/pastes.")
+                    hints.tip("Prevent the strafe components of the field\ntexture from being changed by loads/pastes.")
 
                     imgui.end_menu()
 
@@ -313,7 +315,7 @@ class MenuBarMixin:
                     "Config Clipboard",
                     self.state.preferences.show_history_window
                 )
-                self._delayed_tooltip("Set restorable checkpoints with Ctrl-C")
+                hints.tip("Set restorable checkpoints with Ctrl-C")
 
                 # Screen Recording Controls
                 _, self.state.preferences.show_video_recording_window = imgui.checkbox(
@@ -326,7 +328,7 @@ class MenuBarMixin:
                     "Tournament Mode",
                     self.state.tournament.enabled
                 )
-                self._delayed_tooltip("Evolve brains interactively: a 4x4 grid of live sims.\nClick tiles you like, then breed the next generation.")
+                hints.tip("Evolve brains interactively: a 4x4 grid of live sims.\nClick tiles you like, then breed the next generation.")
 
                 # Archive Browser, on its own - no tournament mode needed, and
                 # no CLIP either. The orchestrator loads the archive.
@@ -337,7 +339,7 @@ class MenuBarMixin:
                 if changed:
                     self.state.archive.show_browser = want
                     self.state.archive.open_browser_requested = want
-                self._delayed_tooltip("Browse saved creatures and preview them live.")
+                hints.tip("Browse saved creatures and preview them live.")
 
                 # Live audio driving physics and brain parameters.
                 changed, want = imgui.checkbox(
@@ -346,7 +348,7 @@ class MenuBarMixin:
                 )
                 if changed:
                     self.state.audio.show_window = want
-                self._delayed_tooltip("Bind live audio bands to physics and brain parameters.")
+                hints.tip("Bind live audio bands to physics and brain parameters.")
 
                 # Every change you have made this session, newest first.
                 changed, want = imgui.checkbox(
@@ -355,23 +357,23 @@ class MenuBarMixin:
                 )
                 if changed:
                     self.state.preferences.show_undo_window = want
-                self._delayed_tooltip("Browse every change you have made, and step back to one.")
+                hints.tip("Browse every change you have made, and step back to one.")
 
                 # Which function the particles' brains actually compute
                 _, self.state.brain.enabled = imgui.checkbox(
                     "Brain Modality",
                     self.state.brain.enabled
                 )
-                self._delayed_tooltip("Swap the brain the particles run: Fourier, Gabor, Lenia or MLP.\nChanging the parameter count resets the search and switches archive.")
+                hints.tip("Swap the brain the particles run: Fourier, Gabor, Lenia or MLP.\nChanging the parameter count resets the search and switches archive.")
 
                 # Load Field submenu
                 if imgui.begin_menu("Load Field"):
                     if imgui.menu_item("Load Force Field...", "", False)[0]:
                         self._open_field_loader("force")
-                    self._delayed_tooltip("Load a PNG/JPEG image as a force field.\nR=magnitude, G=angle (polar coordinates).")
+                    hints.tip("Load a PNG/JPEG image as a force field.\nR=magnitude, G=angle (polar coordinates).")
                     if imgui.menu_item("Load Strafe Field...", "", False)[0]:
                         self._open_field_loader("strafe")
-                    self._delayed_tooltip("Load a PNG/JPEG image as a strafe field.\nR=magnitude, G=angle (polar coordinates).")
+                    hints.tip("Load a PNG/JPEG image as a strafe field.\nR=magnitude, G=angle (polar coordinates).")
                     imgui.end_menu()
 
                 # Strong Determinism toggle
@@ -379,14 +381,14 @@ class MenuBarMixin:
                     "Strong Determinism",
                     self.state.preferences.strong_determinism
                 )
-                self._delayed_tooltip("Make events unfold the same way after every simulation reset.")
+                hints.tip("Make events unfold the same way after every simulation reset.")
 
                 # Advanced Drawing toggle
                 _, self.state.preferences.advanced_drawing_enabled = imgui.checkbox(
                     "Advanced Drawing - EXPERIMENTAL",
                     self.state.preferences.advanced_drawing_enabled
                 )
-                self._delayed_tooltip(
+                hints.tip(
                     "Open the Drawing Controls window for advanced\n"
                     "brush modes, force fields, and strafe fields."
                 )
@@ -396,7 +398,7 @@ class MenuBarMixin:
                     "Multi Load - EXPERIMENTAL",
                     self.state.multi_load.multi_load_enabled
                 )
-                self._delayed_tooltip("Load multiple files at once, so that particles\nfrom different saves can interact.")
+                hints.tip("Load multiple files at once, so that particles\nfrom different saves can interact.")
 
                 # Parameter Locks checkbox (greyed out in multiload mode)
                 multiload_active = self.state.multi_load.multi_load_enabled
@@ -413,7 +415,7 @@ class MenuBarMixin:
                             self.param_lock_service.enabled = True
                         else:
                             self.param_lock_service.reset()
-                self._delayed_tooltip(
+                hints.tip(
                     "Alt-Click on a parameter to freeze it and its value\n"
                     "won't change when loading new configs.")
                 if multiload_active:

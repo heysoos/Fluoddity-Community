@@ -20,7 +20,7 @@ from services.audio_analysis import BAND_NAMES, SIGNAL_NAMES
 from services.audio_mapping import (MODES, Mapping, brain_targets,
                                     deaf_targets, physics_targets)
 from services.audio_shapers import SHAPER_KINDS, ShaperParams
-from ui import layout, notices
+from ui import hints, layout, notices
 
 SIGNAL_COLORS: dict[str, tuple] = {
     "bass": (0.88, 0.31, 0.38, 1.0),
@@ -229,7 +229,7 @@ class AudioReactiveWindowMixin:
         changed, idx = imgui.combo("Preset", current, names)
         if changed and 0 <= idx < len(names):
             ast.preset_name = names[idx]
-        self._delayed_tooltip("A saved rig: every mapping, strength and mute.")
+        hints.tip("A saved rig: every mapping, strength and mute.")
 
         if imgui.button("Load##audio_preset") and ast.preset_name:
             ast.request_load_preset = True
@@ -258,7 +258,7 @@ class AudioReactiveWindowMixin:
             changed, idx = imgui.combo("Device", current, names)
             if changed:
                 ast.device_name = devices[idx]["name"]
-        self._delayed_tooltip("Which input the bands are read from.")
+        hints.tip("Which input the bands are read from.")
 
         if ast.enabled:
             if imgui.button("Stop##audio_source"):
@@ -285,7 +285,7 @@ class AudioReactiveWindowMixin:
         changed, value = imgui.checkbox("Modulate", ast.modulate)
         if changed:
             ast.modulate = value
-        self._delayed_tooltip(
+        hints.tip(
             "Master switch for every mapping. Capture keeps running, so the "
             "traces still move while it is off.")
 
@@ -293,20 +293,20 @@ class AudioReactiveWindowMixin:
         changed, value = imgui.checkbox("Auto Gain", ast.auto_gain)
         if changed:
             ast.auto_gain = value
-        self._delayed_tooltip("Normalises each band against its recent peak, "
+        hints.tip("Normalises each band against its recent peak, "
                               "which also lifts a quiet room's hiss.")
 
         changed, value = self._audio_slider("Strength", ast.global_strength,
                                             0.0, 2.0, "%.2f", 1.0)
         if changed:
             ast.global_strength = value
-        self._delayed_tooltip("Scales every mapping at once.")
+        hints.tip("Scales every mapping at once.")
 
         changed, value = self._audio_slider("Rate Scale", ast.rate_scale,
                                             0.05, 8.0, "x%.2f", 1.0, log=True)
         if changed:
             ast.rate_scale = value
-        self._delayed_tooltip(
+        hints.tip(
             "Multiplies every phase shaper's rate, so a rig can be slid onto "
             "another tempo.")
 
@@ -314,7 +314,7 @@ class AudioReactiveWindowMixin:
                                             0.0, 0.5, "%.3f s", 0.075)
         if changed:
             ast.release_seconds = value
-        self._delayed_tooltip(
+        hints.tip(
             "How long a band takes to fall. Zero hands every shaper the raw "
             "measurement; the rise is never smoothed.")
 
@@ -349,7 +349,7 @@ class AudioReactiveWindowMixin:
                     lo, hi = aa.MEASURE_WINDOWS[aa.MEASURES[idx]]
                     self._write_band(ast, name, measure=aa.MEASURES[idx],
                                      floor=lo, ceiling=hi)
-                self._delayed_tooltip(
+                hints.tip(
                     "power sums the band's energy and takes decibels once, so "
                     "it rests at the floor between hits; mean_db averages "
                     "every bin's level, including the ones carrying nothing.")
@@ -363,7 +363,7 @@ class AudioReactiveWindowMixin:
                 f"from %.0f {unit}", lo_default, log=unit == "Hz")
             if changed:
                 self._write_band(ast, name, floor=value)
-            self._delayed_tooltip("Everything below this reads zero.")
+            hints.tip("Everything below this reads zero.")
             imgui.same_line()
             imgui.set_next_item_width(90)
             changed, value = self._audio_slider(
@@ -371,7 +371,7 @@ class AudioReactiveWindowMixin:
                 f"to %.0f {unit}", hi_default, log=unit == "Hz")
             if changed:
                 self._write_band(ast, name, ceiling=value)
-            self._delayed_tooltip("At this level and above the band reads one.")
+            hints.tip("At this level and above the band reads one.")
 
     @staticmethod
     def _write_band(ast, name, **changes):
@@ -508,7 +508,7 @@ class AudioReactiveWindowMixin:
             imgui.text_disabled(
                 f"The {modality_name} brain has no continuous scales, so there "
                 f"is nothing here to modulate.")
-            self._delayed_tooltip(
+            hints.tip(
                 "Only settings that rescale an existing brain can be "
                 "modulated; ones that change how many numbers it has cannot.")
             return
@@ -531,7 +531,7 @@ class AudioReactiveWindowMixin:
             changed, on = imgui.checkbox("##row_on", not muted)
             if changed:
                 ast.muted[mute_key] = not on
-            self._delayed_tooltip(
+            hints.tip(
                 "Silences every band mapped to this parameter at once.")
         else:
             imgui.dummy(imgui.ImVec2(imgui.get_frame_height(),
@@ -571,7 +571,7 @@ class AudioReactiveWindowMixin:
         if is_deaf:
             imgui.same_line()
             imgui.text_colored(imgui.ImVec4(0.85, 0.65, 0.25, 1.0), "swept")
-            self._delayed_tooltip(
+            hints.tip(
                 "A swept parameter ignores its slider value, so audio cannot "
                 "move it. Zero the sweeps to use this row.")
 
@@ -616,7 +616,7 @@ class AudioReactiveWindowMixin:
         imgui.same_line()
         if imgui.button(f"{m.mode}##mode"):
             m.mode = MODES[(MODES.index(m.mode) + 1) % len(MODES)]
-        self._delayed_tooltip("Cycles add, subtract and multiply.")
+        hints.tip("Cycles add, subtract and multiply.")
         imgui.same_line()
         changed, value = imgui.checkbox("On##enabled", m.enabled)
         if changed:
@@ -627,19 +627,19 @@ class AudioReactiveWindowMixin:
                                             blank.depth)
         if changed:
             m.depth = value
-        self._delayed_tooltip("How far this band can move the parameter.")
+        hints.tip("How far this band can move the parameter.")
         changed, value = self._audio_slider("Gain", m.gain, 0.0, 4.0, "%.2f",
                                             blank.gain)
         if changed:
             m.gain = value
-        self._delayed_tooltip("Amplifies the band before it is used.")
+        hints.tip("Amplifies the band before it is used.")
 
         kind_idx = (SHAPER_KINDS.index(m.shaper.kind)
                     if m.shaper.kind in SHAPER_KINDS else 0)
         changed, idx = imgui.combo("Shaper", kind_idx, list(SHAPER_KINDS))
         if changed:
             m.shaper.kind = SHAPER_KINDS[idx]
-        self._delayed_tooltip("Reshapes the band before it drives anything.")
+        hints.tip("Reshapes the band before it drives anything.")
 
         for fname in SHAPER_FIELDS.get(m.shaper.kind, ()):
             if fname == "wave":
@@ -657,7 +657,7 @@ class AudioReactiveWindowMixin:
             if changed:
                 setattr(m.shaper, fname, value)
             if fname in _FIELD_TIP:
-                self._delayed_tooltip(_FIELD_TIP[fname])
+                hints.tip(_FIELD_TIP[fname])
 
         # The raw band faint, and what the shaper makes of it bright over the
         # top - the difference between the two IS the shaper's effect, which is

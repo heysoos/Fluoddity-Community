@@ -1,5 +1,7 @@
 """Preferences window: world size, physics frequency, mouse mode, view, appearance."""
 from imgui_bundle import imgui
+
+from ui import hints
 from state import view_modes
 
 # Aspect ratio options: (label, ratio_string, is_separator)
@@ -59,7 +61,7 @@ class PreferencesWindowMixin:
                 if abs(self.state.preferences.world_size - self._last_applied_world_size) > 0.001:
                     self._request_world_size_change = True
 
-            self._delayed_tooltip("EXPENSIVE - Controls the size of the simulation world.\nAffects both entity count and canvas resolution to keep density ~fixed")
+            hints.tip("EXPENSIVE - Controls the size of the simulation world.\nAffects both entity count and canvas resolution to keep density ~fixed")
 
             # Particle Density - the knob World Size cannot be. World Size scales
             # particles and canvas area together, so density is invariant under it.
@@ -78,7 +80,7 @@ class PreferencesWindowMixin:
                        - self._last_applied_particle_density) > 0.001:
                     self._request_world_size_change = True
 
-            self._delayed_tooltip(
+            hints.tip(
                 "EXPENSIVE - How crowded the world is, at the same size.\n"
                 "World Size cannot do this: it scales particle count and canvas\n"
                 "area together, so particles-per-texel stays fixed.\n\n"
@@ -101,7 +103,7 @@ class PreferencesWindowMixin:
                         if selected:
                             imgui.set_item_default_focus()
                 imgui.end_combo()
-            self._delayed_tooltip("Changes the canvas aspect ratio.")
+            hints.tip("Changes the canvas aspect ratio.")
 
             imgui.separator()
 
@@ -131,7 +133,7 @@ class PreferencesWindowMixin:
                     v_max=30,
                     format=f"x%d ({current_hz}hz)"
                 )
-            self._delayed_tooltip("EXPENSIVE- Multiple physics steps can be calculated each\nrender frame and blended together for faster physics.\nMotion blur can be costly for high frequencies,\ntry turning it off if things feel sluggish.")
+            hints.tip("EXPENSIVE- Multiple physics steps can be calculated each\nrender frame and blended together for faster physics.\nMotion blur can be costly for high frequencies,\ntry turning it off if things feel sluggish.")
 
             # Motion blur checkbox (lock during recording)
             if recording_active:
@@ -141,7 +143,7 @@ class PreferencesWindowMixin:
                 "Motion Blur",
                 self.state.preferences.motion_blur
             )
-            self._delayed_tooltip("EXPENSIVE- Multiple physics steps can be calculated each\nrender frame and blended together for faster physics.\nMotion blur can be costly for high frequencies,\ntry turning it off if things feel sluggish.")
+            hints.tip("EXPENSIVE- Multiple physics steps can be calculated each\nrender frame and blended together for faster physics.\nMotion blur can be costly for high frequencies,\ntry turning it off if things feel sluggish.")
 
             if recording_active:
                 imgui.end_disabled()
@@ -162,7 +164,7 @@ class PreferencesWindowMixin:
                     1, 20,
                     format=blur_format
                 )
-                self._delayed_tooltip("Motion Blur can be expensive at high frequencies,\nskip some frames to improve performance")
+                hints.tip("Motion Blur can be expensive at high frequencies,\nskip some frames to improve performance")
                 imgui.unindent(20)
 
             imgui.separator()
@@ -181,7 +183,7 @@ class PreferencesWindowMixin:
                 clicked, new_mode_idx = imgui.combo("Mouse Mode", current_mode_idx, mouse_modes)
                 if clicked:
                     self.state.preferences.mouse_mode = mouse_modes[new_mode_idx]
-                self._delayed_tooltip("In select Particle mode, clicking selects a particle rule to focus on.\nIn Draw trail mode, click and drag to leave trails on the canvas.\nSee Help->Controls for more")
+                hints.tip("In select Particle mode, clicking selects a particle rule to focus on.\nIn Draw trail mode, click and drag to leave trails on the canvas.\nSee Help->Controls for more")
 
             # Draw mode sliders (only show when in Draw Trail mode)
             if self.state.preferences.mouse_mode == "Draw Trail":
@@ -249,7 +251,7 @@ class PreferencesWindowMixin:
                 "Physics Tooltips",
                 self.state.preferences.physics_tooltips_enabled
             )
-            self._delayed_tooltip("Enable verbose tooltip and vector diagram for physics sliders.")
+            hints.tip("Enable verbose tooltip and vector diagram for physics sliders.")
 
             # Arrow debug checkbox - label changes when advanced drawing is open
             arrow_label = ("View Draw Target Arrows"
@@ -259,7 +261,7 @@ class PreferencesWindowMixin:
                 arrow_label,
                 self.state.preferences.debug_arrows
             )
-            self._delayed_tooltip("Render a grid of arrows to help visualize the active draw target's vector field.")
+            hints.tip("Render a grid of arrows to help visualize the active draw target's vector field.")
 
             # Arrow sensitivity slider (only show when debug arrows enabled)
             if self.state.preferences.debug_arrows:
@@ -284,7 +286,7 @@ class PreferencesWindowMixin:
                 0.01, 10.0,
                 format="%.2f"
             )
-            self._delayed_tooltip("Global brightness multiplier for the output.")
+            hints.tip("Global brightness multiplier for the output.")
 
             # Tonemap Softness slider
             _, self.state.preferences.tonemap_softness = imgui.slider_float(
@@ -293,7 +295,7 @@ class PreferencesWindowMixin:
                 0.1, 5.0,
                 format="%.2f"
             )
-            self._delayed_tooltip("Controls highlight compression (asinh stretch).\nLow values = more linear (brighter highlights).\nHigh values = more logarithmic (reveals faint detail).")
+            hints.tip("Controls highlight compression (asinh stretch).\nLow values = more linear (brighter highlights).\nHigh values = more logarithmic (reveals faint detail).")
 
             # Exposure / Cheap Blur slider
             _, self.state.preferences.exposure = imgui.slider_float(
@@ -302,7 +304,7 @@ class PreferencesWindowMixin:
                 0.0, 1.0,
                 format="%.2f"
             )
-            self._delayed_tooltip("Blend frames together for a cheap motion blur or set near 1 for a long exposure effect.")
+            hints.tip("Blend frames together for a cheap motion blur or set near 1 for a long exposure effect.")
 
             # Bloom checkbox + sliders (disabled in watercolor mode)
             watercolor_active = self.state.sim.watercolor_mode
@@ -313,9 +315,9 @@ class PreferencesWindowMixin:
                 self.state.preferences.bloom_enabled
             )
             if watercolor_active:
-                self._delayed_tooltip("Bloom is disabled in Watercolor mode.")
+                hints.tip("Bloom is disabled in Watercolor mode.")
             else:
-                self._delayed_tooltip("Add a glow effect around bright areas.")
+                hints.tip("Add a glow effect around bright areas.")
 
             if self.state.preferences.bloom_enabled and not watercolor_active:
                 imgui.indent(20)
@@ -325,7 +327,7 @@ class PreferencesWindowMixin:
                     0.0, 2.0,
                     format="%.2f"
                 )
-                self._delayed_tooltip("Brightness cutoff for bloom extraction.\nLower = more glow everywhere.")
+                hints.tip("Brightness cutoff for bloom extraction.\nLower = more glow everywhere.")
 
                 _, self.state.preferences.bloom_intensity = imgui.slider_float(
                     "Intensity",
@@ -333,7 +335,7 @@ class PreferencesWindowMixin:
                     0.0, 3.0,
                     format="%.2f"
                 )
-                self._delayed_tooltip("Strength of the bloom glow.")
+                hints.tip("Strength of the bloom glow.")
 
                 _, self.state.preferences.bloom_radius = imgui.slider_float(
                     "Radius",
@@ -341,7 +343,7 @@ class PreferencesWindowMixin:
                     0.1, 3.0,
                     format="%.2f"
                 )
-                self._delayed_tooltip("Spread of the bloom blur kernel.")
+                hints.tip("Spread of the bloom blur kernel.")
                 imgui.unindent(20)
             if watercolor_active:
                 imgui.end_disabled()
