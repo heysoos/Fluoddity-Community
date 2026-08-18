@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import moderngl
+import numpy as np
+from PIL import Image
 
 from services.shader_params import ShaderParam, parse_shader_params
 from utilities.gl_helpers import read_shader, tryset
@@ -177,9 +179,169 @@ class _BuiltinSource(_ProgramSource):
         super().__init__(ctx, read_shader(get(key).shader))
 
 
+class _FeedbackSource:
+    """The sim's own canvas, borrowed. Costs no pass and no copy."""
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.error: str | None = None
+
+    def evaluate(self, bus, layer, frame):
+        self.error = None
+        return frame.canvas_texture
+
+    def release(self) -> None:
+        pass
+
+
+class _ImageSource:
+    """A file on disk, uploaded once and reused until the path changes."""
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.error: str | None = None
+        self._tex = None
+        self._loaded = None
+
+    def evaluate(self, bus, layer, frame):
+        name = layer.params.get("_file", "")
+        if name != self._loaded:
+            self._load(name)
+        return self._tex
+
+    def _load(self, name: str) -> None:
+        self.release()
+        self._loaded = name
+        if not name:
+            self.error = "no image selected"
+            return
+        path = Path(name)
+        if not path.is_absolute():
+            path = get_user_data_dir() / name
+        if not path.exists():
+            self.error = f"image not found: {name}"
+            return
+        try:
+            img = Image.open(path).convert("RGBA").transpose(Image.FLIP_TOP_BOTTOM)
+        except OSError as exc:
+            self.error = f"could not read {name}: {exc}"
+            return
+        data = (np.asarray(img, dtype=np.float32) / 255.0).astype("f4")
+        tex = self.ctx.texture(img.size, 4, data.tobytes(), dtype="f4")
+        tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        tex.repeat_x = True
+        tex.repeat_y = True
+        tex.build_mipmaps()
+        self._tex = tex
+        self.error = None
+
+    def release(self) -> None:
+        if self._tex is not None:
+            self._tex.release()
+            self._tex = None
+
+
+class _UserShaderSource(_ProgramSource):
+    """A user .frag, recompiled whenever the chosen file changes."""
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.error = "no shader selected"
+        self._program = None
+        self._vao = None
+        self._loaded = None
+
+    def evaluate(self, bus, layer, frame):
+        name = layer.params.get("_file", "")
+        if name != self._loaded:
+            self._loaded = name
+            path = resolve_shader_path(name) if name else None
+            if path is None:
+                self.release()
+                self.error = (f"shader not found: {name}" if name
+                              else "no shader selected")
+            else:
+                try:
+                    self._compile(path.read_text())
+                except OSError as exc:
+                    self.release()
+                    self.error = f"could not read {name}: {exc}"
+        if self._program is None:
+            return None
+        return super().evaluate(bus, layer, frame)
+
+    def reload(self) -> None:
+        """Force a recompile on the next evaluate. Bound to the V key."""
+        self._loaded = None
+
+
+class _BrushSource:
+    """The mouse brush's accumulation buffer.
+
+    The one source with memory, which is what lets the bus stay stateless:
+    persistence is a property of a source, never of the bus.
+    """
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.error: str | None = None
+        self._tex = None
+        self._fbo = None
+
+    def ensure(self, width: int, height: int):
+        if self._tex is not None and self._tex.size == (width, height):
+            return self._tex
+        self.release()
+        tex = self.ctx.texture((width, height), 4, dtype="f4")
+        tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        tex.repeat_x = True
+        tex.repeat_y = True
+        self._tex = tex
+        self._fbo = self.ctx.framebuffer(color_attachments=[tex])
+        self._fbo.clear()
+        return tex
+
+    @property
+    def framebuffer(self):
+        return self._fbo
+
+    def evaluate(self, bus, layer, frame):
+        return self.ensure(*bus.resolution)
+
+    def snapshot(self):
+        if self._tex is None:
+            return None
+        h, w = self._tex.height, self._tex.width
+        return np.frombuffer(self._tex.read(), dtype=np.float32).reshape(h, w, 4).copy()
+
+    def write(self, data) -> None:
+        tex = self.ensure(int(data.shape[1]), int(data.shape[0]))
+        tex.write(np.ascontiguousarray(data, dtype="f4").tobytes())
+
+    def clear(self) -> None:
+        if self._fbo is not None:
+            self._fbo.clear()
+
+    def release(self) -> None:
+        if self._fbo is not None:
+            self._fbo.release()
+            self._fbo = None
+        if self._tex is not None:
+            self._tex.release()
+            self._tex = None
+
+
 def make_source(key: str, ctx: moderngl.Context):
     """Instantiate the GPU-side object for a source kind."""
     _build_registry()
     if key in ("noise", "gradient"):
         return _BuiltinSource(ctx, key)
-    raise KeyError(f"source '{key}' is not implemented yet")
+    if key == "feedback":
+        return _FeedbackSource(ctx)
+    if key == "image":
+        return _ImageSource(ctx)
+    if key == "shader":
+        return _UserShaderSource(ctx)
+    if key == "brush":
+        return _BrushSource(ctx)
+    raise KeyError(f"unknown source '{key}'")
