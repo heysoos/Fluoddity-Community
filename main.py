@@ -629,18 +629,15 @@ class App:
                 drv.reset()
 
     def _apply_brain_layout(self, layout, ui_state) -> bool:
-        """Switch the brain layout. A hard reset of the search, never partial.
+        """Switch the brain layout. A hard reset of the SEARCH, never of the
+        archive.
 
-        The archive changes because its directory is keyed by the layout
-        signature, so a layout change IS an archive switch - to a sibling
-        directory under the same archive name. It therefore runs the same
-        sequence a name switch does, rather than an inline copy of it: the
-        settings are saved while the outgoing store is still open, and
-        _release_archive is what flushes, closes and drops the thumbnails.
+        One archive holds every layout, so this re-points it rather than
+        switching to a sibling: the entries, their embeddings, their novelty
+        and their thumbnails are all about pictures and survive the change.
+        Only which rows are native moves. See
+        docs/superpowers/specs/2026-08-17-brain-layout-search-design.md.
         """
-        from services.archive_library import resolve
-        from utilities.paths import get_archives_root
-
         current = self.sim.brain_layout
         if layout == current:
             if tuple(layout.scales) == tuple(current.scales):
@@ -667,9 +664,13 @@ class App:
         print(f"[brain] layout {current.signature()} -> {layout.signature()}"
               + (" WHILE A SEARCH IS RUNNING" if running else ""))
 
-        # Before the release, while the outgoing store is still open.
-        self._save_archive_settings(ui_state)
-        self._release_archive(ui_state)
+        # A layout change is an archive RE-POINT, not an archive switch: every
+        # layout's entries are already in memory and only which of them are
+        # native differs. The search still stops - its space just moved - but
+        # the teardown that used to come with that does not.
+        ui_state.archive.running = False
+        if self.auto_service is not None:
+            self.auto_service.pause()
 
         # The GPU side first: the per-particle readback buffer is sized by the
         # active length, and slot 0 is re-uploaded from whatever rule is live.
@@ -699,17 +700,11 @@ class App:
         # covariance and population are meaningless. Reset rather than resize.
         self._refresh_driver_specs(layout, reset=True)
 
-        if self.archive is not None or self.archive_store is not None:
-            path = resolve(get_archives_root(),
-                           ui_state.preferences.archive_name)
-            self._build_archive_set(path)
-            # settings.json lives inside the signature directory, so the
-            # incoming layout has its own. As in _switch_archive, the switch
-            # may open the browser but must never close it under the user.
-            ast = ui_state.archive
-            was_open = ast.show_browser
-            self._load_archive_settings(ui_state)
-            ast.show_browser = ast.show_browser or was_open
+        if self.archive is not None:
+            self.archive.retarget(layout)
+        # AFTER the switch, so what is written names the layout the archive is
+        # now on rather than the one it just left.
+        self._save_archive_settings(ui_state)
         return True
 
     def _open_archive(self, ui_state):
