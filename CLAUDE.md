@@ -1322,7 +1322,14 @@ mechanics these caveats assume.
   `sort_by`/`sort_desc` pair: a second list of modes is what would let a header
   and the combo mean different things, and switching view would reorder the
   gallery under the pointer. Column visibility, width and order are ImGui's own
-  table settings and live in `imgui.ini`. Guarded by
+  table settings and live in `imgui.ini` - which is exactly why the THUMBNAIL
+  column is `no_resize`. A resizable column's width is restored from that file,
+  so the width handed to `table_setup_column` only ever applies to a table that
+  has none: the pictures grew with the slider and the column they sat in did
+  not. `imgui.internal.table_set_column_width` is NOT the way out - it asserts
+  on both `IsLayoutLocked == false` and `MinColumnWidth > 0`, and the same call
+  sets both, so it cannot be reached from inside the table it would resize.
+  Guarded by
   `tests/test_thumb_cache.py`, `tests/test_gallery_sort.py` and
   `tests/test_archive_window_render.py`.
 
@@ -1517,6 +1524,10 @@ mechanics these caveats assume.
   unreadable thumbnail counts as arrived, or one missing file holds the plan
   back for good. First open is the exception: with nothing to fall back on it
   adopts as it fills, since a blank canvas is worse than a fill.
+  **The snapshot names rows of the ARCHIVE it was built from**, so it is
+  retired when the archive changes and not merely when `pts` does. Switching
+  to a shorter archive otherwise indexes past the end of its entry list
+  mid-frame, and takes the app down inside `thumb_key`.
   **The hover reads the plan being DRAWN.** The scatter is not drawn in this
   mode, so resolving a hover against it named an entry the user could not see.
   **The SIZE slider is continuous because only the ZOOM is quantised.**

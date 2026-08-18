@@ -542,6 +542,10 @@ else, so any other interpreter shows the Layout combo as PCA-only:
       are replaced all at once. No vertical sweep of thumbnails.
 - [ ] **x3.** Zoom right in: every cell on screen has a picture, and new
       entries keep appearing rather than the same few.
+- [ ] **x4.** Switch to a SMALLER archive with the map open: it redraws
+      rather than crashing.
+- [ ] **x5.** Gallery list mode: the thumbnail column's width tracks the size
+      slider, and offers no resize handle of its own.
 - [ ] **y.** A big archive is no slower to draw than a small one at the same
       zoom. The count follows the viewport, not the entry count.
 
