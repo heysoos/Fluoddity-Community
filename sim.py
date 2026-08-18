@@ -136,6 +136,17 @@ class Sim:
         self.multi_load_buffer.bind_to_storage_buffer(3)  # Binding 3 matches shader layout
         self.multi_load_rule_buffer.bind_to_storage_buffer(4)  # Binding 4 for multi-load rules
 
+        # Per-cohort audio gain and offset, one row per maskable parameter,
+        # plus one entry per row carrying that parameter's clamp bounds.
+        # Zeroed is not identity here, so it is filled rather than reserved.
+        from services.cohort_audio import COHORT_AUDIO_PARAMS, MASK_SLOTS
+        self._cohort_audio_rows = len(COHORT_AUDIO_PARAMS)
+        self.cohort_audio_buffer = self.ctx.buffer(
+            reserve=self._cohort_audio_rows * (MASK_SLOTS + 1) * 2 * 4)
+        self.cohort_audio_buffer.clear()
+        self._cohort_audio = None
+        self.cohort_audio_buffer.bind_to_storage_buffer(5)
+
         # Double-buffered canvas, RG32F: the trail is a VELOCITY FIELD and
         # nothing reads a third channel. Ping-ponged so a pass never reads and
         # writes the same texture.
@@ -362,6 +373,12 @@ class Sim:
         # of its own - the service calls it between generations - so a cached
         # copy would keep a stale grid; and the overrides below must land on
         # top of the settings the block above has just written.
+        # Outside the cached block: the arrays move every frame while a rig is
+        # playing, and the cache is skipped only when the program changes.
+        _ca = self._cohort_audio
+        tryset(self.entity_update_program, 'COHORT_AUDIO_ACTIVE', _ca is not None)
+        if _ca is not None:
+            self.cohort_audio_buffer.write(np.ascontiguousarray(_ca, dtype='f4'))
         # Tournament tiling uniforms
         tryset(self.entity_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
         tryset(self.entity_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
@@ -612,6 +629,10 @@ class Sim:
         # Update view_tex based on current_view_option
         if state.current_view_option < len(self.view_options):
             self.view_tex = self.view_options[state.current_view_option]
+
+    def set_cohort_audio(self, arr) -> None:
+        """Per-cohort modulation for the next step, or None for no masking."""
+        self._cohort_audio = arr
 
     def apply_camera_state(self, camera_state) -> None:
         """Apply camera state from Orchestrator before update."""
