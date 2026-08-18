@@ -1135,6 +1135,7 @@ class App:
             ui_state, dt, self.sim.brain_layout,
             self.rule_manager.get_current_rule())
         self.sim.apply_state(_audio_sim)
+        self.sim.set_cohort_audio(self.audio_runtime.cohort_audio)
         if _audio_brain is not None:
             self.sim.apply_rule(_audio_brain)
         # The panel draws the modulation inside each slider's own track.

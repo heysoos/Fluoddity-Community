@@ -390,3 +390,29 @@ def test_calculate_setting_itself_is_untouched():
     src = (SHADERS / "entity_update.glsl").read_text(encoding="utf-8")
     body = src.split("float calculate_setting(")[1].split("\n}")[0]
     assert "cohort_audio" not in body
+
+
+def test_a_stopped_rig_leaves_the_cohort_arrays_off():
+    from services.audio_runtime import AudioRuntime
+    from state.ui_state import UIState
+
+    rt = AudioRuntime()
+    ui = UIState()
+    ui.audio.enabled = False
+    rt.update(ui, 1 / 60.0, None, None)
+    assert rt.cohort_audio is None
+    rt.close()
+
+
+def test_the_runtime_exposes_the_arrays_rather_than_widening_its_return():
+    """update() is unpacked into a pair at its one call site."""
+    import inspect
+    from services.audio_runtime import AudioRuntime
+    src = inspect.getsource(AudioRuntime.update)
+    assert "self.cohort_audio" in src
+
+
+def test_the_orchestrator_hands_them_to_the_sim():
+    root = SHADERS.parent
+    src = (root / "main.py").read_text(encoding="utf-8")
+    assert "set_cohort_audio(self.audio_runtime.cohort_audio)" in src
