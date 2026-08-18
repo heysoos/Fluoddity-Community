@@ -1477,6 +1477,111 @@ def test_the_auto_tab_keeps_its_buttons_at_the_minimum_width(gui):
 
 # ---- live preview ----------------------------------------------------------
 
+# ---- the map's click target -------------------------------------------
+
+def _map_harness(n=40):
+    """A populated archive with a FITTED projection, so the map actually draws
+    dots rather than the "not enough entries" line."""
+    from services.archive_projection import Projection
+
+    arc = _populated(n)
+    rng = np.random.default_rng(0)
+    e = rng.normal(size=(n, 8)).astype(np.float32)
+    e /= np.linalg.norm(e, axis=1, keepdims=True)
+    arc.embeddings = e
+    proj = Projection()
+    proj.fit(e)
+    h = Harness(archive=arc)
+    h.archive_projection = proj
+    return h
+
+
+def _map_rect(h):
+    """Where the map canvas actually landed, by spying on its hit target.
+
+    Computed rather than assumed: the canvas sits under a toolbar and a control
+    row whose height is not the test's business.
+    """
+    seen = {}
+    real = imgui.invisible_button
+
+    def spy(str_id, size, *a, **kw):
+        if str_id == "map_hit":
+            p = imgui.get_cursor_screen_pos()
+            seen["rect"] = (p.x, p.y, size.x, size.y)
+        return real(str_id, size, *a, **kw)
+
+    imgui.invisible_button = spy
+    try:
+        _map_frame(h, (-100.0, -100.0), False)
+    finally:
+        imgui.invisible_button = real
+    return seen.get("rect")
+
+
+def _map_frame(h, pos, down):
+    """One full frame with the pointer at `pos` and button 0 in state `down`."""
+    io = imgui.get_io()
+    io.add_mouse_pos_event(float(pos[0]), float(pos[1]))
+    io.add_mouse_button_event(0, bool(down))
+    imgui.new_frame()
+    imgui.set_next_window_pos(imgui.ImVec2(0.0, 0.0))
+    imgui.set_next_window_size(imgui.ImVec2(1200.0, 4000.0))
+    imgui.begin("host", True)
+    h._render_map(h.state.archive, h.archive_obj)
+    imgui.end()
+    imgui.render()
+
+
+def _release_mouse():
+    """The context is module-scoped, so a test that presses the button MUST put
+    it back: everything after it would otherwise render with the mouse held
+    down over wherever this left the pointer."""
+    io = imgui.get_io()
+    io.add_mouse_button_event(0, False)
+    io.add_mouse_pos_event(-1000.0, -1000.0)
+    frame(lambda: None, n=2)
+
+
+def test_arriving_at_the_map_and_pressing_does_not_pan_it(gui):
+    """The frame a widget becomes active, io.mouse_delta is the movement that
+    ARRIVED at it, not a drag of it.
+
+    Panning by that slides every dot out from under the cursor before the hit
+    test runs, so the first click after moving the pointer picks a different
+    entry - and a second, stationary, click on the same spot works. Differential
+    on purpose: the same press point either way, so it cannot pass by the press
+    simply missing the canvas.
+    """
+    a = _map_harness()
+    try:
+        rect = _map_rect(a)
+        assert rect, "map canvas never drew its hit target"
+        cx, cy = rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5
+
+        # Already there, then press.
+        _map_frame(a, (cx, cy), False)
+        _map_frame(a, (cx, cy), False)
+        _map_frame(a, (cx, cy), True)
+        still = (a.state.archive.map_center_x, a.state.archive.map_center_y)
+    finally:
+        _release_mouse()
+
+    # Arrive from across the canvas, then press at the SAME point.
+    b = _map_harness()
+    try:
+        _map_frame(b, (cx - 200.0, cy - 90.0), False)
+        _map_frame(b, (cx - 200.0, cy - 90.0), False)
+        _map_frame(b, (cx, cy), True)
+        arrived = (b.state.archive.map_center_x, b.state.archive.map_center_y)
+    finally:
+        _release_mouse()
+
+    assert arrived == pytest.approx(still, abs=1e-6), (
+        "pressing after moving the pointer panned the map, so the dot under "
+        "the cursor is no longer the one that was aimed at")
+
+
 def _browser(h):
     h.state.archive.show_browser = True
     return lambda: h.render_archive_window()

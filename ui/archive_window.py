@@ -1241,7 +1241,14 @@ class ArchiveWindowMixin:
             ast.map_center_y = uy - (vy - 0.5) / ast.map_zoom
 
         if imgui.is_item_active():
-            d = io.mouse_delta
+            # On the frame the canvas BECOMES active, mouse_delta is the
+            # movement that ARRIVED at the dot, not a drag of it. Panning by
+            # that slides every dot out from under the cursor before the hit
+            # test below runs, so the click lands on whatever slid into its
+            # place - and a second, stationary click on the same spot works.
+            # It also counts toward the drag slop, which can suppress the click
+            # outright instead.
+            d = imgui.ImVec2(0.0, 0.0) if imgui.is_item_activated() else io.mouse_delta
             self._map_drag_px = getattr(self, "_map_drag_px", 0.0) + \
                 abs(d.x) + abs(d.y)
             ast.map_center_x -= (d.x / w) / ast.map_zoom
