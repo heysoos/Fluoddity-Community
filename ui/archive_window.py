@@ -1075,9 +1075,10 @@ class ArchiveWindowMixin:
 
         size = imgui.ImVec2(max(64.0, imgui.get_content_region_avail().x),
                             self._MAP_H)
-        # The canvas OWNS the wheel. A child with both no_scrollbar and
-        # no_scroll_with_mouse absorbs it instead of forwarding it to the tab,
-        # so scrolling here zooms and never also scrolls the panel behind it.
+        # A child so the canvas clips, and no_scrollbar so it draws none. The
+        # WHEEL is claimed in _draw_map, not here: no_scroll_with_mouse is
+        # ImGui's "give the parent a chance to scroll" flag, so a child cannot
+        # absorb the wheel by asking for it.
         imgui.push_style_var(imgui.StyleVar_.window_padding,
                              imgui.ImVec2(0.0, 0.0))
         imgui.begin_child("map_canvas", size, imgui.ChildFlags_.none,
@@ -1158,6 +1159,10 @@ class ArchiveWindowMixin:
         # Lets the Home button, drawn last, sit on top and take the click.
         imgui.set_next_item_allow_overlap()
         imgui.invisible_button("map_hit", size)
+        # The canvas OWNS the wheel while it is hovered. ImGui routes the wheel
+        # in NewFrame, before any of this runs, so nothing read here can stop
+        # it - only claiming the key can.
+        imgui.set_item_key_owner(imgui.Key.mouse_wheel_y)
         hovering = imgui.is_item_hovered()
         clicked = self._map_interact(ast, origin, size, hovering)
 

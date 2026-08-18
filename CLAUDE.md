@@ -1294,13 +1294,25 @@ mechanics these caveats assume.
   `tests/test_thumb_cache.py`, `tests/test_gallery_sort.py` and
   `tests/test_archive_window_render.py`.
 
-- **A wheel event reaches the zoom AND the scrollbar, unless a child eats it.**
-  ImGui scrolls the hovered window during `NewFrame`, so a canvas that reads
-  `io.mouse_wheel` to zoom also scrolls the panel it sits in — which reads as
-  the wheel doing something different every time. The map canvas is therefore
-  a child window with **both** `no_scrollbar` and `no_scroll_with_mouse`: with
-  only the latter, ImGui walks up to the parent and scrolls that instead.
-  Guarded by `tests/test_archive_window_render.py::test_the_map_canvas_is_a_child`.
+- **A canvas that reads the wheel must CLAIM it, and no child flag can do
+  that.** ImGui routes the wheel during `NewFrame`, before any of our code
+  runs, so a canvas reading `io.mouse_wheel` to zoom also scrolls the panel it
+  sits in. `no_scroll_with_mouse` is exactly the wrong instrument — it is
+  ImGui's *"give the parent a chance to scroll"* flag, so the pair
+  `no_scrollbar | no_scroll_with_mouse` GUARANTEED the forwarding it was
+  credited with preventing, and the map zoomed and scrolled together for as
+  long as that was believed. `_draw_map` calls
+  `imgui.set_item_key_owner(imgui.Key.mouse_wheel_y)` on the `map_hit` item
+  instead, which claims the wheel while that item is hovered and leaves every
+  other panel scrolling normally. The child and `no_scrollbar` stay, for
+  clipping and for not drawing a scrollbar — neither has anything to do with
+  the wheel. **A flags assertion cannot see any of this**: the old test read
+  the flags and passed throughout. `tests/test_map_wheel.py` DRIVES the wheel,
+  and it needs two things a naive version gets wrong — the panel must be
+  parked MID-scroll, since at scroll 0 a wheel-up has nowhere to go and a
+  broken build passes, and the mouse position must be resolved AFTER the
+  scroll, since scrolling moves the canvas out from under a point computed
+  before it.
 
 - **A control the user has to FIND cannot live in a folded section, and a
   render test cannot see one either.** ImGui clips a window's contents to the

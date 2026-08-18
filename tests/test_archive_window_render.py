@@ -1392,10 +1392,15 @@ def test_the_density_map_renders_in_every_colour_mode(gui, mode):
 
 # ---- the canvas owns the mouse wheel --------------------------------------
 
-def test_the_map_canvas_is_a_child_that_absorbs_the_wheel(gui, monkeypatch):
-    """ImGui scrolls the hovered window with the same wheel event the zoom
-    reads, so the tab scrolled AND the map zoomed. A child with both
-    no_scrollbar and no_scroll_with_mouse is what stops the forwarding."""
+def test_the_map_canvas_is_a_child_with_no_scrollbar(gui, monkeypatch):
+    """The canvas clips to a child and draws no scrollbar of its own.
+
+    This says NOTHING about the wheel. It used to claim the flags were what
+    stopped the wheel reaching the panel behind, and it passed for as long as
+    that was false - no_scroll_with_mouse is ImGui's "give the parent a chance
+    to scroll" flag, so it guaranteed the forwarding it was credited with
+    preventing. What the wheel actually does is driven in
+    tests/test_map_wheel.py."""
     seen = {}
     real = imgui.begin_child
 
@@ -1410,8 +1415,6 @@ def test_the_map_canvas_is_a_child_that_absorbs_the_wheel(gui, monkeypatch):
 
     flags = seen.get("map_canvas")
     assert flags is not None, f"no map canvas child; saw {sorted(seen)}"
-    assert flags & imgui.WindowFlags_.no_scroll_with_mouse
-    # Without NoScrollbar too, ImGui walks up to the parent and scrolls it.
     assert flags & imgui.WindowFlags_.no_scrollbar
 
 
