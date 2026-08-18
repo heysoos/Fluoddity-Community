@@ -1239,18 +1239,34 @@ class CommandHandler:
     def _handle_archive_preview(self, ui_state):
         """Run the hovered archive entry in the live sim, and commit a click.
 
-        Outside tournament mode only - there the canvas is a grid of
-        simulations and swapping one rule into it would mean nothing.
+        Two actions with two gates. Running a rule needs a single sim, so it is
+        refused under a grid; adopting another brain's LAYOUT is not a
+        single-sim operation and stays available.
 
         Runs on its own rather than inside _handle_explore, which bails as soon
         as the Explore driver is detached; the browser stays usable after that
         and this is the whole point of it.
         """
         ast = ui_state.archive
-        tournament = ast.enabled or ui_state.auto_tournament.enabled
-        if self.archive is None or tournament:
+        # A GRID, not a tab selection. What puts one on the canvas is the
+        # tournament WINDOW being open, so a sub-mode flag misses the Manual
+        # tab entirely - and slot 0 under a grid is tile 0, which is the split
+        # _grid_owner() already makes for the Z and G keys.
+        grid = bool(getattr(ui_state.tournament, "enabled", False))
+        if self.archive is None:
             self._end_archive_preview(ui_state)
             ast.load_entry_id = -1
+            return
+        if grid:
+            # The RULE half is what a grid owns. Adopting another brain's
+            # LAYOUT is not a single-sim operation and stays available: the
+            # Brain window's modality combo already does it under a grid.
+            self._end_archive_preview(ui_state)
+            entry_id, ast.load_entry_id = ast.load_entry_id, -1
+            row = self._archive_index(entry_id) if entry_id >= 0 else None
+            if row is not None and not self.archive.is_native(row):
+                self._return_layout("gallery")
+                self._adopt_foreign_entry(ui_state, row)
             return
 
         # Ids restart at 0 in every archive, so after a switch the id being

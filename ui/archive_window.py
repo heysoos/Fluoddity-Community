@@ -747,10 +747,11 @@ class ArchiveWindowMixin:
     def _render_live_preview_toggle(self, ast):
         """Run the hovered entry in the live sim, like hovering File > Load.
 
-        Only outside tournament mode: there the canvas is a grid of
-        simulations, so there is no single sim for an entry to run in.
+        Unavailable under a grid: the canvas is many simulations there, so
+        there is no single sim for one entry to run in. Clicking an entry of
+        another brain still switches to it.
         """
-        busy = ast.enabled or self.state.auto_tournament.enabled
+        busy = bool(self.state.tournament.enabled)
         imgui.begin_disabled(busy)
         _, ast.live_preview = imgui.checkbox("Live preview", ast.live_preview)
         imgui.end_disabled()
@@ -759,7 +760,8 @@ class ArchiveWindowMixin:
                 "Hover an entry to run it; click to keep it.")
         if busy:
             imgui.same_line()
-            imgui.text_disabled("(close the Tournament window first)")
+            imgui.text_disabled("(no single sim under a grid - "
+                                "clicking still switches brain)")
         elif ast.live_preview:
             imgui.same_line()
             imgui.text_colored(imgui.ImVec4(*_OK),
