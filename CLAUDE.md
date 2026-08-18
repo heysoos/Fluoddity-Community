@@ -546,6 +546,46 @@ mechanics these caveats assume.
   leaves every holder on the outgoing encoder rather than half-swapping the
   app. Guarded by `tests/test_scorer_holders.py`.
 
+- **A layout change RE-POINTS the archive; only an archive NAME change tears
+  one down.** Every layout's entries are already in memory — `load_from_store`
+  reads every signature directory — so `Archive.retarget()` moves `layout`,
+  `store` and the width map and nothing else. The embeddings, the novelty
+  column, the rejects ring, the projection and the thumbnail cache are about
+  PICTURES and survive it; `gl_loader` closes over the LIVE `stores` dict, so a
+  store added by a retarget is reachable without rebuilding the cache. It must
+  not clear `_novelty_clean` — nothing was admitted or removed, so a rescore
+  would buy nothing. ROW ORDER is the one thing a retarget does not reproduce:
+  `load_from_store` reads the RUNNING layout first, so a reload orders the rows
+  differently, and re-ordering them is exactly the array rebuild being avoided.
+  Nothing keys off a row index across the change — `thumb_key` and the map
+  cache are keyed by signature and id — so compare native sets by
+  `(signature, id)`, never by index. `settings.json`, `goals.json`,
+  `settings_history.jsonl`, `runs/` and `encoder.json` all live at the archive
+  ROOT and are shared across layouts; only `index.jsonl`, `vectors.npz` and
+  `thumbs/` are per-signature. Guarded by `tests/test_archive_retarget.py` and
+  `tests/test_brain_layout_retarget_wiring.py`.
+
+- **An archive records the brain it was last searched under, and nothing else
+  did.** `archive_name` is in preferences, so the archive reopens; without
+  `ArchiveState.layout_signature` the brain did not, and an archive whose
+  entries are all one modality reopened under another with ZERO native rows —
+  where Start bootstraps the wrong brain into it. Written from
+  `sim.brain_layout` at save time rather than trusted from the field, which
+  would file the layout the archive just left. Restored only by the paths that
+  OPEN an archive: `_apply_brain_layout` WRITES what `_restore_archive_layout`
+  reads, so wiring one into the other puts the outgoing layout straight back. A
+  signature this build cannot rebuild keeps the current brain and says so, and
+  a missing key means "leave the brain alone" — so every archive written before
+  this opens untouched. Guarded by `tests/test_archive_layout_restore.py`.
+
+- **The archive browser's PREVIEW and its ADOPT are two actions with two
+  gates.** What owns slot 0 is a GRID, which is `ui_state.tournament.enabled` —
+  the window being open — not a sub-mode flag; gating on the flag missed the
+  Manual tab, where a hover wrote a rule into tile 0. Adopting another brain's
+  LAYOUT is not a single-sim operation and stays available under a grid,
+  because the Brain window's modality combo already does exactly that while a
+  tournament runs. This is the same split `_grid_owner()` makes for Z and G.
+
 - **The settings a run was carried out under are a LOG, not a field.**
   `settings.json` is rewritten wholesale, so the `min_separation` that admitted
   entry #4000 is gone the moment the slider moves.
