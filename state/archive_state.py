@@ -116,7 +116,8 @@ class ArchiveState:
     # Which engine lays the map out. See services/map_layout.py; "pca" is the
     # default and the fallback, so a build without umap-learn is unchanged.
     map_layout: str = "pca"          # pca | umap
-    # One representative thumbnail per occupied screen cell.
+    # The atlas REPLACES the scatter while it is on: a picture and a dot
+    # competing for the same entry is what made it flicker on every pan.
     map_thumbs: bool = False
     map_thumb_px: int = 32
     # Low, because a large archive spans few generations: a default that shows

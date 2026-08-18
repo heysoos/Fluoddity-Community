@@ -526,12 +526,19 @@ else, so any other interpreter shows the Layout combo as PCA-only:
 - [ ] **r.** Switch archives: the map is the new archive's, not the old one's.
 
 ### D. The thumbnail atlas
-- [ ] **s.** Thumbnails checkbox: one picture per cell, dots elsewhere.
+- [ ] **s.** Thumbnails checkbox: pictures ONLY - no dots anywhere, and the
+      Colour and Draw combos grey out.
 - [ ] **t.** Size slider 16..64 changes the cell size.
-- [ ] **u.** Zoom in: cells subdivide and more pictures appear.
-- [ ] **v.** The Colour combo still works with thumbnails on - it must not be
-      overridden by the picture layer.
-- [ ] **w.** A big archive is no slower to draw than a small one at the same
+- [ ] **u.** Zoom in: cells subdivide and more pictures appear. Pan and zoom
+      slowly - the pictures must SLIDE, never reshuffle which entry is where.
+- [ ] **v.** Leave the map open and STOP TOUCHING IT: within a second or two
+      the pictures must stop appearing. A sweep that keeps rolling across the
+      atlas means the working set no longer fits the cache.
+- [ ] **w.** Move the pointer across a settled atlas: nothing redraws. The
+      hover card's own picture must not cost a cell.
+- [ ] **x.** At the 16px end of the size slider the cells go sparse rather
+      than flashing - the most novel entry in each cell keeps its picture.
+- [ ] **y.** A big archive is no slower to draw than a small one at the same
       zoom. The count follows the viewport, not the entry count.
 
 Numbers behind the UMAP choice: `python -m tools.measure_map_layout`.

@@ -87,6 +87,14 @@ class ThumbCache:
             _release(old)
         return tex
 
+    def peek(self, name: str):
+        """The texture if it is already resident, without loading one.
+
+        Deliberately does NOT count as a use: a peek is a look, so sweeping the
+        map over an archive cannot evict what the gallery is showing.
+        """
+        return self._items.get(name) if name else None
+
     def invalidate(self, name: str) -> None:
         tex = self._items.pop(name, None)
         _release(tex)

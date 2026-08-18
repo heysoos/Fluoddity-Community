@@ -14,7 +14,7 @@ from services.archive_library import safe_name
 from services.gallery_sort import (DEFAULT_SORT, GALLERY_SORTS,
                                    sort_entries)
 from services.map_layout import ENGINE_LABELS, ENGINES
-from ui import layout
+from ui import hints, layout
 from ui.notices import BAD as _BAD
 from ui.notices import DIM as _DIM
 from ui.notices import OK as _OK
@@ -45,6 +45,17 @@ GALLERY_TABLE = "gallery_list"
 # size, which is what bounds the count by the viewport.
 ATLAS_PX_MIN = 16
 ATLAS_PX_MAX = 64
+# The most pictures the atlas will draw at once, and the headroom left over
+# the top of them. The visible cell count is set by the size slider and the
+# canvas alone - at the small end it runs past anything the cache can hold,
+# and a working set larger than the cache evicts its own cells and re-decodes
+# them for as long as the map is open. The headroom is for the hover card and
+# the selection panel, which call get() on entries that are not cell winners.
+ATLAS_BUDGET = 640
+ATLAS_HEADROOM = 64
+# Thumbnails DECODED per frame. A JPEG decode is about a
+# millisecond, and a zoom changes every cell's winner at once.
+ATLAS_NEW_PER_FRAME = 8
 # (column label, the sort mode its header selects; "" for a column that does
 # not sort). The modes are GALLERY_SORTS keys, so a header and the combo can
 # never mean different things.
@@ -348,14 +359,12 @@ class ArchiveWindowMixin:
         if st["regime"] == "expedition":
             if imgui.button("Cancel##expedition"):
                 ast.cancel_expedition_requested = True
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("Abandon this goal.")
+            hints.tip("Abandon this goal.")
         imgui.text_wrapped(f"Archive: {st['archive_size']} / {st['capacity']}   "
                            f"admitting {100.0 * st['admission_rate']:.0f}%   "
                            f"evicted {st['n_evicted']}")
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("A low rate means the archive already holds "
-                              "those patterns.")
+        hints.tip("A low rate means the archive already holds "
+                  "those patterns.")
         if st.get("last_tiles"):
             layout.text_disabled_wrapped(
                 f"Last generation: kept {st.get('last_admitted', 0)} of "
@@ -367,10 +376,9 @@ class ArchiveWindowMixin:
                 _OK,
                 f"Kept for matching: {st.get('n_summits', 0)} summits, "
                 f"{st.get('n_records', 0)} goal records")
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(
-                    "Summits beat their own expedition's best; records beat "
-                    "the archive's best for one of your goals.")
+            hints.tip(
+                "Summits beat their own expedition's best; records beat "
+                "the archive's best for one of your goals.")
         self._render_explore_traces(d)
         if st.get("seed_ess"):
             layout.text_disabled_wrapped(
@@ -465,8 +473,7 @@ class ArchiveWindowMixin:
         imgui.text("Goals")
         imgui.same_line()
         imgui.text_disabled("(?)")
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(GOAL_TOOLTIP)
+        hints.tip(GOAL_TOOLTIP)
 
         goals = self.archive_goals
         if goals is not None:
@@ -509,8 +516,7 @@ class ArchiveWindowMixin:
 
     def _render_view_setting(self, ast):
         _, ast.n_views = imgui.slider_int("Encoder Views", ast.n_views, 1, 8)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Sub-crops averaged into each tile's embedding.")
+        hints.tip("Sub-crops averaged into each tile's embedding.")
         if ast.n_views <= 1:
             layout.text_colored_wrapped(
                 _WARN,
@@ -522,8 +528,7 @@ class ArchiveWindowMixin:
         _, ast.sigma_expand = imgui.slider_float(
             "Expansion Sigma", ast.sigma_expand, 0.01, 1.0)
         _, ast.alpha = imgui.slider_float("Novelty Exponent", ast.alpha, 0.0, 8.0)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(ALPHA_TOOLTIP)
+        hints.tip(ALPHA_TOOLTIP)
         _, ast.k = imgui.slider_int("Neighbours (k)", ast.k, 1, 50)
         _, ast.seed_n = imgui.slider_int("Seed Entries", ast.seed_n, 64, 2048)
         _, ast.sigma0 = imgui.slider_float("Bootstrap Sigma", ast.sigma0, 0.05, 1.5)
@@ -605,44 +610,38 @@ class ArchiveWindowMixin:
         _, ast.min_separation = imgui.slider_float(
             "Min Separation", ast.min_separation, 0.0,
             model.separation_slider_max, "%.4f")
-        if imgui.is_item_hovered():
-            # Naming the calibrated value matters: 0.02 and 0.05 look wildly
-            # different and mean the same thing under different encoders.
-            imgui.set_tooltip(
-                f"Refuses anything this close to a stored entry. "
-                f"{model.label} calibrates at "
-                f"{model.default_min_separation:.4f}.")
+        # Naming the calibrated value matters: 0.02 and 0.05 look wildly
+        # different and mean the same thing under different encoders.
+        hints.tip(
+            f"Refuses anything this close to a stored entry. "
+            f"{model.label} calibrates at "
+            f"{model.default_min_separation:.4f}.")
         if ast.min_separation <= 0.0:
             layout.text_colored_wrapped(
                 _WARN,
                 "off - a converging expedition will store every tile it makes")
         _, ast.capacity = imgui.slider_int("Capacity", ast.capacity, 1000, 100000)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Over this, the least novel entries are evicted.")
+        hints.tip("Over this, the least novel entries are evicted.")
         _, ast.refresh_sweep_gens = imgui.slider_int(
             "Novelty Sweep (gens)", ast.refresh_sweep_gens, 1, 100)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Generations to re-score every entry.")
+        hints.tip("Generations to re-score every entry.")
 
     def _render_expedition_settings(self, ast):
         _, ast.expansion_between = imgui.slider_int(
             "Expansion Between", ast.expansion_between, 0, 500)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Expansion generations between expeditions; "
-                              "0 disables expeditions.")
+        hints.tip("Expansion generations between expeditions; "
+                  "0 disables expeditions.")
         _, ast.expedition_gens = imgui.slider_int(
             "Expedition Gens", ast.expedition_gens, 5, 400)
         _, ast.expedition_sigma = imgui.slider_float(
             "Expedition Sigma", ast.expedition_sigma, 0.01, 1.0)
         _, ast.novelty_share = imgui.slider_float(
             "Novelty Goal Share", ast.novelty_share, 0.0, 1.0)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Expeditions that climb novelty with no target.")
+        hints.tip("Expeditions that climb novelty with no target.")
         _, ast.latent_share = imgui.slider_float(
             "Latent Goal Share", ast.latent_share, 0.0, 1.0)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Expeditions toward a point past the archive's "
-                              "frontier.")
+        hints.tip("Expeditions toward a point past the archive's "
+                  "frontier.")
         left = 1.0 - min(1.0, ast.novelty_share + ast.latent_share)
         layout.text_colored_wrapped(
             _DIM,
@@ -651,12 +650,10 @@ class ArchiveWindowMixin:
             f"{100 * left:.0f}% text")
         _, ast.seed_ess_min = imgui.slider_float(
             "Seed Pool Min", ast.seed_ess_min, 1.0, 128.0)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Fewest entries in the running as a starting point.")
+        hints.tip("Fewest entries in the running as a starting point.")
         _, ast.seed_ess_max = imgui.slider_float(
             "Seed Pool Max", ast.seed_ess_max, 16.0, 4096.0)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Most entries in the running as a starting point.")
+        hints.tip("Most entries in the running as a starting point.")
 
     # ---- the browser ---------------------------------------------------
 
@@ -724,17 +721,18 @@ class ArchiveWindowMixin:
         if len(st.get("layouts", ())) < 2:
             return
         native, size = int(st["native"]), int(st["size"])
-        imgui.text_colored(
-            imgui.ImVec4(*_DIM),
+        # Wrapped: imgui.text_colored does not, and this line is long enough to
+        # run off the edge of any panel narrow enough to sit beside the canvas.
+        layout.text_colored_wrapped(
+            _DIM,
             f"{len(st['layouts'])} brains here; {native} of {size} are "
             f"{arc.signature} - the rest browse and rank but cannot be bred from")
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "Novelty, admission and the map pool across every brain.\n"
-                "Parents and seeds come from the running brain's entries only,\n"
-                "because another brain's genome is a different creature under\n"
-                "this one's decode. Switch brain to work on the others.\n\n"
-                + "\n".join(f"  {s}" for s in st["layouts"]))
+        hints.tip(
+            "Novelty, admission and the map pool across every brain.\n"
+            "Parents and seeds come from the running brain's entries only,\n"
+            "because another brain's genome is a different creature under\n"
+            "this one's decode. Switch brain to work on the others.\n\n"
+            + "\n".join(f"  {s}" for s in st["layouts"]))
 
     def _render_live_preview_toggle(self, ast):
         """Run the hovered entry in the live sim, like hovering File > Load.
@@ -747,7 +745,7 @@ class ArchiveWindowMixin:
         _, ast.live_preview = imgui.checkbox("Live preview", ast.live_preview)
         imgui.end_disabled()
         if not busy and imgui.is_item_hovered():
-            imgui.set_tooltip(
+            hints.tip(
                 "Hover an entry to run it; click to keep it.")
         if busy:
             imgui.same_line()
@@ -788,8 +786,7 @@ class ArchiveWindowMixin:
         # WIDEST_LABEL; the icons are what say which end is which.
         if self._size_icon("##gallery_list_icon", "list"):
             ast.thumb_size = GALLERY_SIZE_MIN
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Smallest size: a list with the details.")
+        hints.tip("Smallest size: a list with the details.")
         imgui.same_line()
         # Off the frame height, so the track scales with the font rather than
         # with whatever the widest label in the panel happens to be.
@@ -801,8 +798,7 @@ class ArchiveWindowMixin:
         imgui.same_line()
         if self._size_icon("##gallery_grid_icon", "grid"):
             ast.thumb_size = GALLERY_SIZE_MAX
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Largest size, which is what a thumbnail holds.")
+        hints.tip("Largest size, which is what a thumbnail holds.")
 
         # The sort row. The combo takes the width its label leaves, so the
         # direction and the filter start a row of their own.
@@ -820,8 +816,7 @@ class ArchiveWindowMixin:
         if imgui.arrow_button("##sort_dir",
                               imgui.Dir.down if ast.sort_desc else imgui.Dir.up):
             ast.sort_desc = not ast.sort_desc
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Reverse the order.")
+        hints.tip("Reverse the order.")
         layout.wrap_row(right, layout.button_width("Pinned only"))
         _, ast.pinned_only = imgui.checkbox("Pinned only", ast.pinned_only)
 
@@ -904,7 +899,9 @@ class ArchiveWindowMixin:
                     else:
                         imgui.button(f"#{e.id}##g{i}", imgui.ImVec2(size, size))
                     if imgui.is_item_hovered():
-                        imgui.set_tooltip(
+                        # card, not tip: sweeping the gallery to see what each
+                        # entry is IS the feature, so it cannot wait for a delay.
+                        hints.card(
                             f"#{e.id}  {e.source}\nnovelty {e.novelty:.3f}\n"
                             f"liveness {e.liveness:.3f}\ngoal: {e.goal or '-'}")
                         ast.preview_entry_id = i
@@ -1027,18 +1024,15 @@ class ArchiveWindowMixin:
         if imgui.button("Save as config..."):
             self.open_save_popup(save_targets.ARCHIVE_ENTRY,
                                  arg=ast.selected_entry_id)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(EXPORT_TOOLTIP)
+        hints.tip(EXPORT_TOOLTIP)
         layout.wrap_row(right, layout.button_width("Seed a run from here"))
         if imgui.button("Seed a run from here"):
             ast.seed_entry_id = ast.selected_entry_id
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(SEED_TOOLTIP)
+        hints.tip(SEED_TOOLTIP)
         layout.wrap_row(right, layout.button_width("Delete"))
         if imgui.button("Delete"):
             ast.delete_entry_id = ast.selected_entry_id
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Remove this entry and its thumbnail.")
+        hints.tip("Remove this entry and its thumbnail.")
 
     # Summits are brighter than the expeditions they sit among, and records get
     # their own hue because a record can be set in any regime.
@@ -1119,12 +1113,11 @@ class ArchiveWindowMixin:
                                  [ENGINE_LABELS[e] for e in engines])
         if changed:
             ast.map_layout = engines[i]
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "PCA is instant and linear; UMAP separates clusters and is"
-                "\nfitted in the background."
-                if len(engines) > 1 else
-                "UMAP needs umap-learn installed.")
+        hints.tip(
+            "PCA is instant and linear; UMAP separates clusters and is"
+            "\nfitted in the background."
+            if len(engines) > 1 else
+            "UMAP needs umap-learn installed.")
 
         layout.wrap_row(right, layout.button_width("Relayout"))
         busy = bool(svc is not None and svc.fitting)
@@ -1132,8 +1125,7 @@ class ArchiveWindowMixin:
         if imgui.button("Relayout"):
             ast.refit_projection_requested = True
         imgui.end_disabled()
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Lay the map out again over the whole archive.")
+        hints.tip("Lay the map out again over the whole archive.")
 
         if svc is not None:
             status = svc.status()
@@ -1172,7 +1164,7 @@ class ArchiveWindowMixin:
             self._map_home(ast)
         hovered = imgui.is_item_hovered()
         if hovered:
-            imgui.set_tooltip("Reset zoom and recentre.")
+            hints.tip("Reset zoom and recentre.")
 
         bg = (imgui.IM_COL32(70, 80, 100, 235) if hovered
               else imgui.IM_COL32(45, 50, 62, 170))
@@ -1218,21 +1210,23 @@ class ArchiveWindowMixin:
         on = ((xs >= origin.x) & (xs <= far.x) & (ys >= origin.y) & (ys <= far.y))
         sel = np.flatnonzero(on)
 
-        if ast.map_render in ("density", "points+density"):
+        if not ast.map_thumbs and ast.map_render in ("density", "points+density"):
             self._draw_density(
                 draw, xs[sel], ys[sel], origin, size, pts.colors[sel],
                 None if pts.tvals is None else pts.tvals[sel])
 
-        if ast.map_render != "density":
+        # The atlas REPLACES the scatter. Points drawn as well would compete
+        # with the pictures for the same entries on every pan, and a dot under
+        # a picture is invisible while still costing a draw call.
+        if ast.map_thumbs:
+            self._draw_atlas(ast, arc, draw, pts, origin, size)
+        elif ast.map_render != "density":
             # .tolist() first: indexing a numpy array with a Python int inside
             # the loop costs more than the draw call it feeds.
             px, py = xs[sel].tolist(), ys[sel].tolist()
             pc = pts.colors[sel].tolist()
             for x, y, c in zip(px, py, pc):
                 draw.add_circle_filled(imgui.ImVec2(x, y), 3.0, c)
-
-        if ast.map_thumbs:
-            self._draw_atlas(ast, arc, draw, pts, xs, ys, sel, origin, size)
 
         best_i, best_d = -1, 1e9
         if hovering and len(sel):
@@ -1260,46 +1254,77 @@ class ArchiveWindowMixin:
             return int(pts.idx[best_i]), clicked
         return -1, False
 
-    def _draw_atlas(self, ast, arc, draw, pts, xs, ys, sel, origin, size):
-        """One representative thumbnail per occupied cell.
+    def _atlas_plan(self, ast, pts, size):
+        """Which entry stands for which cell, in UNIT space. Cached.
 
-        The count follows the VIEWPORT, never the archive: at 32px cells a
-        490x320 canvas holds at most 150 of them however many entries there
-        are. Binning is in SCREEN space, so zooming in splits cells and
-        reveals more with no new gesture.
+        Binned in unit space at a zoom-QUANTISED cell size, so panning cannot
+        change it and zooming only changes it when a level boundary is crossed.
+        Binning in screen space instead reshuffles every picture on a one-pixel
+        pan, which is what made the atlas flicker.
+        """
+        cell_u = map_view.atlas_cell(size.x * ast.map_zoom,
+                                     size.y * ast.map_zoom,
+                                     float(ast.map_thumb_px))
+        key = (cell_u,)
+        hit = getattr(self, "_atlas_cache", None)
+        # `pts` by identity, not by id(): CPython hands a freed object's
+        # address to the next one of its type, so an id alone can collide.
+        if hit is not None and hit[0] is pts and hit[1] == key:
+            return hit[2]
+        plan = map_view.atlas_winners(pts.unit, pts.novelty, cell_u,
+                                      budget=ATLAS_BUDGET)
+        self._atlas_cache = (pts, key, (plan, cell_u))
+        return plan, cell_u
+
+    def _draw_atlas(self, ast, arc, draw, pts, origin, size):
+        """One thumbnail per occupied cell, and nothing else.
+
+        Only ATLAS_NEW_PER_FRAME are DECODED per frame: a JPEG decode is about
+        a millisecond, and crossing a zoom level renews every cell at once.
+        A cell whose picture has not arrived draws NOTHING - a placeholder dot
+        would be the picture-versus-point flicker all over again.
         """
         cache = getattr(self, "thumb_cache", None)
-        if cache is None or not len(sel):
+        if cache is None or not len(pts.idx):
             return
-        px = float(max(ATLAS_PX_MIN, min(ATLAS_PX_MAX, int(ast.map_thumb_px))))
-        flat, on, nx, ny, cell = map_view.bin_points(
-            xs[sel], ys[sel], origin, size, px)
-        if not len(flat):
+        (ux, uy, win), cell_u = self._atlas_plan(ast, pts, size)
+        if not len(win):
             return
-        # The cell's most novel entry stands for it - the same ranking the
-        # gallery and the eviction pass use.
-        rows = pts.idx[sel][on]
-        novelty = np.array([arc.entries[i].novelty for i in rows],
-                           dtype=np.float32)
-        win, counts = map_view.cell_argmax(flat, novelty, nx * ny)
-        live = np.flatnonzero(counts > 0)
-        self._reserve_thumbs(cache, len(live))
-        for c in live.tolist():
-            row = int(rows[win[c]])
-            tex = cache.get(arc.thumb_key(row))
+
+        corner = np.stack([ux, uy], axis=1)
+        sx, sy = self._map_to_screen(ast, corner, origin, size)
+        # y is flipped by _map_to_screen, so the cell's top edge comes from its
+        # FAR corner in unit space.
+        far = np.stack([ux + cell_u[0], uy + cell_u[1]], axis=1)
+        fx, fy = self._map_to_screen(ast, far, origin, size)
+        on = ((fx >= origin.x) & (sx <= origin.x + size.x)
+              & (sy >= origin.y) & (fy <= origin.y + size.y))
+        live = np.flatnonzero(on)
+        # Room for the whole PLAN, not just the cells on screen: reserving the
+        # visible subset shrinks the cache as you zoom in and evicts the rest
+        # of the level, so zooming back out decodes it all again. The plan is
+        # capped at ATLAS_BUDGET, so this is bounded either way. The headroom
+        # is for the hover card's own get(), which would otherwise evict a
+        # cell that is still on screen.
+        self._reserve_thumbs(cache, len(win) + ATLAS_HEADROOM)
+
+        budget = ATLAS_NEW_PER_FRAME
+        peek = getattr(cache, "peek", None)
+        rows, x0, y0, x1, y1 = (win[live], sx[live], fy[live],
+                                fx[live], sy[live])
+        for row, ax, ay, bx, by in zip(rows.tolist(), x0.tolist(), y0.tolist(),
+                                       x1.tolist(), y1.tolist()):
+            key = arc.thumb_key(int(pts.idx[row]))
+            tex = peek(key) if peek is not None else None
             if tex is None:
-                continue
-            cx = origin.x + (c % nx) * cell
-            cy = origin.y + (c // nx) * cell
+                if budget <= 0:
+                    continue
+                budget -= 1
+                tex = cache.get(key)
+                if tex is None:
+                    continue
             draw.add_image(imgui.ImTextureRef(tex.glo),
-                           imgui.ImVec2(cx, cy),
-                           imgui.ImVec2(cx + cell, cy + cell))
-            if counts[c] > 1:
-                # A cell standing for several entries says so, or the atlas
-                # reads as one-picture-per-creature at every zoom.
-                draw.add_rect(imgui.ImVec2(cx, cy),
-                              imgui.ImVec2(cx + cell, cy + cell),
-                              imgui.IM_COL32(255, 255, 255, 40))
+                           imgui.ImVec2(ax, ay), imgui.ImVec2(bx, by))
 
     def _map_points(self, arc, proj, ast):
         """-> a map_view.MapPoints, or None if the filter matched nothing.
@@ -1345,7 +1370,9 @@ class ArchiveWindowMixin:
             tvals = map_view.normalise(values)
             colors = map_view.ramp_colors(tvals)
 
-        out = map_view.MapPoints(unit, lo, span, colors, idx, tvals)
+        novelty = np.array([e.novelty for e in shown], dtype=np.float32)
+        out = map_view.MapPoints(unit, lo, span, colors, idx, tvals,
+                                 novelty)
         self._map_cache = (arc, proj, key, out)
         return out
 
@@ -1357,6 +1384,10 @@ class ArchiveWindowMixin:
         w = self._MAP_COMBO_W
         right = layout.row_right_edge()
 
+        # Pictures carry their own colour and their own marks, so neither
+        # combo has anything to say while the atlas is on.
+        pictures = bool(ast.map_thumbs)
+        imgui.begin_disabled(pictures)
         imgui.set_next_item_width(w)
         changed, i = imgui.combo("Colour##map",
                                  map_view.COLOR_MODES.index(ast.map_color_by)
@@ -1364,8 +1395,9 @@ class ArchiveWindowMixin:
                                  list(map_view.COLOR_MODES))
         if changed:
             ast.map_color_by = map_view.COLOR_MODES[i]
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("What the colours mean.")
+        imgui.end_disabled()
+        hints.tip("Thumbnails carry their own colour." if pictures
+                  else "What the colours mean.")
 
         layout.wrap_row(right, layout.labelled_width(w, "Show"))
         imgui.set_next_item_width(w)
@@ -1376,10 +1408,10 @@ class ArchiveWindowMixin:
                                  labels)
         if changed:
             ast.map_filter = map_view.FILTER_MODES[i]
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Which entries to draw.")
+        hints.tip("Which entries to draw.")
 
         layout.wrap_row(right, layout.labelled_width(w, "Draw"))
+        imgui.begin_disabled(pictures)
         imgui.set_next_item_width(w)
         changed, i = imgui.combo("Draw##map",
                                  map_view.RENDER_MODES.index(ast.map_render)
@@ -1387,20 +1419,16 @@ class ArchiveWindowMixin:
                                  list(map_view.RENDER_MODES))
         if changed:
             ast.map_render = map_view.RENDER_MODES[i]
-        if imgui.is_item_hovered():
-            imgui.set_tooltip("Dots, or a heatmap of the same colours.")
+        imgui.end_disabled()
+        hints.tip("Dots, or a heatmap of the same colours.")
 
         self._render_map_filter_arg(ast, arc)
 
     def _render_atlas_controls(self, ast) -> None:
-        """Thumbnails are a THIRD axis, not a Draw mode: a picture layer that
-        overrode the Colour combo is the defect that shape guards against."""
+        """The atlas toggle and its cell size."""
         right = layout.row_right_edge()
         _, ast.map_thumbs = imgui.checkbox("Thumbnails", ast.map_thumbs)
-        if imgui.is_item_hovered():
-            imgui.set_tooltip(
-                "One picture per cell of the map, so it can be read at a"
-                "\nglance. Zoom in to split the cells.")
+        hints.tip("A picture per cell instead of dots. Zoom in to split them.")
         if not ast.map_thumbs:
             return
         layout.wrap_row(right, layout.labelled_width(self._MAP_COMBO_W, "Size"))

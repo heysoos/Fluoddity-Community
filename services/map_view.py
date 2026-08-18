@@ -22,6 +22,7 @@ class MapPoints(NamedTuple):
     colors: np.ndarray          # (n,) packed RGBA
     idx: np.ndarray             # (n,) archive indices - row i is NOT entry i
     tvals: np.ndarray | None    # (n,) the normalised scalar being coloured
+    novelty: np.ndarray         # (n,) float32, for the atlas's cell winner
 
 # UI-facing option lists. The first of each is the historical behaviour and
 # stays the default: these are additions to the map, not a replacement for it.
@@ -247,3 +248,88 @@ def cell_argmax(flat: np.ndarray, values: np.ndarray, ncells: int):
         order = np.argsort(values, kind="stable")
         win[flat[order]] = order
     return win, counts
+
+
+def covered_by(flat: np.ndarray, on: np.ndarray, drawn) -> np.ndarray:
+    """-> mask over the ORIGINAL points, True where a thumbnail covers them.
+
+    Widened back through `on`, because bin_points drops the off-canvas points
+    and the dots are drawn from the full array. Without this the scatter draws
+    underneath every picture in the atlas.
+    """
+    out = np.zeros(len(on), dtype=bool)
+    if not len(flat) or not drawn:
+        return out
+    hit = np.isin(flat, np.fromiter(drawn, dtype=np.int64, count=len(drawn)))
+    out[np.flatnonzero(on)] = hit
+    return out
+
+
+def quantised_cell(span_px: float, cell_px: float) -> float:
+    """Unit-space cell size whose on-screen size is in [cell_px, 2*cell_px).
+
+    A POWER OF TWO, so the assignment is invariant under pan and under zoom
+    within a level. Binning in SCREEN space instead churns: a one-pixel pan
+    moves every boundary, so each cell's winner changes and the atlas
+    reshuffles under the pointer.
+    """
+    if span_px <= 0.0 or cell_px <= 0.0:
+        return 1.0
+    raw = float(cell_px) / float(span_px)
+    if raw >= 1.0:
+        return 1.0
+    level = int(np.floor(np.log2(1.0 / raw)))
+    return float(2.0 ** -level)
+
+
+def atlas_cell(span_x_px: float, span_y_px: float, cell_px: float):
+    """-> the unit-space cell (x, y) the atlas bins into.
+
+    ONE level for both axes, so a zoom octave reshuffles the atlas once
+    rather than twice, and the cell is SQUARE ON SCREEN rather than in unit
+    space - a cell quantised separately per axis is drawn as a rectangle,
+    which stretches the thumbnail inside it.
+    """
+    cx = quantised_cell(span_x_px, cell_px)
+    if span_y_px <= 0.0:
+        return cx, cx
+    # ROUNDED: the caller scales both spans by the zoom, so the ratio is
+    # constant to within a bit or two - and an unrounded ratio is a fresh
+    # cache key every frame.
+    aspect = round(float(span_x_px) / float(span_y_px), 6)
+    return cx, cx * aspect
+
+
+def atlas_winners(unit: np.ndarray, values: np.ndarray, cell_u,
+                  budget: int | None = None):
+    """-> (cell origin x, cell origin y, winning row) per occupied cell.
+
+    In UNIT space, so panning cannot change any of it and the result can be
+    cached until the zoom LEVEL moves.
+
+    `budget` caps how many cells are returned, keeping the highest-`values`
+    ones: a map asking for more pictures than the cache can hold evicts its
+    own cells and re-decodes them for as long as it is on screen.
+    """
+    n = len(unit)
+    if not n:
+        z = np.zeros(0, dtype=np.float32)
+        return z, z, np.zeros(0, dtype=np.int64)
+    cx, cy = float(cell_u[0]), float(cell_u[1])
+    gx = np.floor(np.asarray(unit[:, 0], dtype=np.float64) / cx).astype(np.int64)
+    gy = np.floor(np.asarray(unit[:, 1], dtype=np.float64) / cy).astype(np.int64)
+    # unit is in [0, 1], so both are non-negative and this packs without a
+    # negative-modulo trap.
+    key = gy * (np.int64(1) << np.int64(32)) + gx
+    uniq, inv = np.unique(key, return_inverse=True)
+    win, _counts = cell_argmax(inv.astype(np.int64),
+                               np.asarray(values, dtype=np.float32), len(uniq))
+    keep = win >= 0
+    win = win[keep]
+    if budget is not None and len(win) > int(budget):
+        top = np.argpartition(np.asarray(values, dtype=np.float32)[win],
+                              -int(budget))[-int(budget):]
+        win = win[np.sort(top)]
+    return (gx[win].astype(np.float32) * cx,
+            gy[win].astype(np.float32) * cy,
+            win)

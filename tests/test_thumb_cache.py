@@ -139,3 +139,41 @@ def test_nothing_is_evicted_after_reserving_room_for_the_frame():
         c.get(name)
     assert len(c) == 6
     assert not any(t.released for t in made)
+
+
+# ---- peek, and the per-frame decode budget ------------------------------
+#
+# Zooming the map changes which entry wins each cell, so the representative set
+# churns and every changed cell is a MISS. A JPEG decode is ~1 ms, so a frame
+# that fetches every changed cell stalls. peek() is what lets a caller draw
+# what it already has and fetch only a few new ones per frame.
+
+def test_peek_returns_a_resident_texture():
+    c, made = cache()
+    got = c.get("a")
+    assert c.peek("a") is got
+    assert len(made) == 1
+
+
+def test_peek_never_loads():
+    c, made = cache()
+    assert c.peek("a") is None
+    assert made == [], "peek decoded a thumbnail"
+
+
+def test_peek_does_not_disturb_the_eviction_order():
+    """A peek is a look, not a use: counting it as a use would let whatever the
+    map happens to sweep over evict what the gallery is showing."""
+    c, _ = cache(capacity=2)
+    first = c.get("a")
+    c.get("b")
+    c.peek("a")           # if this counted as a use, 'b' would go next
+    c.get("c")
+    assert c.peek("a") is None
+    assert first.released is True
+    assert c.peek("b") is not None
+
+
+def test_an_empty_name_peeks_to_nothing():
+    c, _ = cache()
+    assert c.peek("") is None

@@ -18,8 +18,10 @@ from state.sim_state import SimState
 from state.auto_tournament_state import AutoTournamentState
 from state.tournament_state import TournamentState
 from ui import layout
-from ui.archive_window import (GALLERY_COLUMNS, GALLERY_LIST_MAX,
-                               GALLERY_TABLE, ArchiveWindowMixin)
+from ui.archive_window import (ATLAS_BUDGET, ATLAS_HEADROOM, ATLAS_PX_MAX,
+                               ATLAS_PX_MIN, GALLERY_COLUMNS,
+                               GALLERY_LIST_MAX, GALLERY_TABLE,
+                               ArchiveWindowMixin)
 from ui.auto_tournament_window import AutoTournamentWindowMixin
 
 
@@ -2065,3 +2067,286 @@ def test_thumbnails_off_asks_for_nothing(gui):
     h.thumb_cache = cache
     frame(_mapped_with(h))
     assert cache.asked == 0
+
+
+# ---- the atlas must not draw dots under its pictures, or stall on a zoom --
+
+class _DrawSpy:
+    """Counts what the map put on the draw list, forwarding everything else."""
+
+    def __init__(self, real):
+        self._real = real
+        self.circles = 0
+        self.images = 0
+
+    def add_circle_filled(self, *a, **kw):
+        self.circles += 1
+        return self._real.add_circle_filled(*a, **kw)
+
+    def add_image(self, *a, **kw):
+        self.images += 1
+        return self._real.add_image(*a, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _draw_counts(h, n=1):
+    spy = {}
+    real = imgui.get_window_draw_list
+
+    def patched():
+        dl = real()
+        if "s" not in spy:
+            spy["s"] = _DrawSpy(dl)
+        return spy["s"]
+
+    imgui.get_window_draw_list = patched
+    try:
+        frame(lambda: h._render_map(h.state.archive, h.archive_obj), n=n)
+    finally:
+        imgui.get_window_draw_list = real
+    return spy.get("s")
+
+
+class _ResidentCache(_CountingCache):
+    """Everything already decoded, which is the steady state."""
+
+    def peek(self, name):
+        return _FakeTex()
+
+
+def test_thumbnail_mode_draws_no_dots_at_all(gui):
+    """Not "fewer dots" - NONE. A picture and a dot competing for the same
+    entry is what made the atlas fight itself on every pan."""
+    h = _map_harness(n=400)
+    h.state.archive.map_thumb_px = 32
+    h.thumb_cache = _ResidentCache()
+
+    h.state.archive.map_thumbs = False
+    plain = _draw_counts(h)
+    assert plain.circles > 0 and plain.images == 0
+
+    h.state.archive.map_thumbs = True
+    atlas = _draw_counts(h)
+    assert atlas.images > 0, "no thumbnails drawn at all"
+    assert atlas.circles == 0, f"{atlas.circles} dots drawn under the pictures"
+
+
+def test_the_atlas_replaces_the_density_layer_too(gui):
+    """Draw is disabled while the atlas is on, so an old setting must not keep
+    painting underneath it."""
+    h = _map_harness(n=400)
+    h.state.archive.map_thumbs = True
+    h.state.archive.map_render = "density"
+    h.thumb_cache = _ResidentCache()
+    counts = _draw_counts(h)
+    assert counts.images > 0
+    assert counts.circles == 0
+
+
+def test_panning_does_not_change_which_entries_the_atlas_shows(gui):
+    """Cells are binned in UNIT space, so a pan slides the pictures without
+    reshuffling which entry stands for which cell."""
+    h = _map_harness(n=400)
+    h.state.archive.map_thumbs = True
+    h.state.archive.map_thumb_px = 32
+    h.thumb_cache = _ResidentCache()
+    pts = h._map_points(h.archive_obj, h.map_layout_service, h.state.archive)
+    size = imgui.ImVec2(600.0, 320.0)
+
+    (_ux, _uy, first), _cell = h._atlas_plan(h.state.archive, pts, size)
+    h.state.archive.map_center_x += 0.13
+    h.state.archive.map_center_y -= 0.07
+    (_ux2, _uy2, second), _cell2 = h._atlas_plan(h.state.archive, pts, size)
+    assert np.array_equal(first, second)
+
+
+def test_zooming_within_a_level_keeps_the_same_entries(gui):
+    h = _map_harness(n=400)
+    h.state.archive.map_thumbs = True
+    h.state.archive.map_thumb_px = 32
+    pts = h._map_points(h.archive_obj, h.map_layout_service, h.state.archive)
+    size = imgui.ImVec2(600.0, 320.0)
+
+    h.state.archive.map_zoom = 2.0
+    (_a, _b, first), cell_a = h._atlas_plan(h.state.archive, pts, size)
+    h.state.archive.map_zoom = 2.4
+    (_c, _d, second), cell_b = h._atlas_plan(h.state.archive, pts, size)
+    assert cell_a == cell_b
+    assert np.array_equal(first, second)
+
+
+def test_only_a_few_thumbnails_are_decoded_per_frame(gui):
+    """A JPEG decode is ~1 ms and a zoom changes every cell's winner at once,
+    so an unbounded fetch is what made the wheel unusable."""
+    from ui.archive_window import ATLAS_NEW_PER_FRAME
+
+    h = _map_harness(n=400)
+    h.state.archive.map_thumbs = True
+    h.state.archive.map_thumb_px = 32
+    cache = _CountingCache()          # nothing resident: every cell is a miss
+    h.thumb_cache = cache
+    frame(lambda: h._render_map(h.state.archive, h.archive_obj), n=1)
+    assert 0 < cache.asked <= ATLAS_NEW_PER_FRAME, cache.asked
+
+
+def test_a_resident_thumbnail_costs_no_decode(gui):
+    """Steady state must not re-fetch: peek is what makes the budget affect
+    only genuinely new cells."""
+    h = _map_harness(n=400)
+    h.state.archive.map_thumbs = True
+    h.state.archive.map_thumb_px = 32
+    cache = _ResidentCache()
+    h.thumb_cache = cache
+    frame(lambda: h._render_map(h.state.archive, h.archive_obj), n=2)
+    assert cache.asked == 0, "it decoded thumbnails it already had"
+
+
+# --- the atlas must SETTLE: a working set larger than the cache never does --
+
+class _RealisticCache:
+    """A real LRU, so eviction is visible. Counts decodes per frame."""
+
+    def __init__(self):
+        from services.thumb_cache import ThumbCache
+        self._c = ThumbCache(lambda name: _FakeTex(), capacity=256)
+        self.decodes = 0
+
+    def reserve(self, n):
+        self._c.reserve(n)
+
+    def peek(self, name):
+        return self._c.peek(name)
+
+    def get(self, name):
+        if name not in self._c._items:
+            self.decodes += 1
+        return self._c.get(name)
+
+    @property
+    def capacity(self):
+        return self._c.capacity
+
+
+def _big_map(px, n=8000):
+    """A map big enough to ASK for more cells than the cache can hold.
+
+    Both numbers matter: the projection concentrates entries, so a small
+    archive or a short canvas occupies only a few hundred cells and settles
+    even with the budget removed - which is a test that cannot fail.
+    """
+    h = _map_harness(n=n)
+    h._MAP_H = 900.0
+    h.state.archive.map_thumbs = True
+    h.state.archive.map_thumb_px = px
+    h.thumb_cache = _RealisticCache()
+    return h
+
+
+def _settle(h, limit=400):
+    """-> frames taken until a frame decodes nothing, or None."""
+    cache = h.thumb_cache
+    for i in range(limit):
+        cache.decodes = 0
+        frame(lambda: h._render_map(h.state.archive, h.archive_obj))
+        if cache.decodes == 0:
+            return i
+    return None
+
+
+@pytest.mark.parametrize("px", [ATLAS_PX_MIN, 32, ATLAS_PX_MAX])
+def test_the_atlas_stops_decoding_once_it_is_full(gui, px):
+    """The bug the user saw as a sweep of thumbnails flashing forever.
+
+    At the small end of the slider the atlas wants more cells than the cache
+    can hold, so every frame evicts the cells it drew and re-decodes them.
+    """
+    assert _settle(_big_map(px)) is not None, f"never settled at {px}px"
+
+
+def test_a_settled_atlas_survives_the_hover_card(gui):
+    """The hover card calls get() on entries that are not cell winners. With
+    no headroom each one evicts a cell that is still on screen, which the
+    NEXT frame then decodes again."""
+    h = _big_map(32)
+    assert _settle(h) is not None
+
+    cache = h.thumb_cache
+    arc = h.archive_obj
+    total = 0
+    for row in range(0, 300, 7):
+        cache.get(arc.thumb_key(row))     # what _map_hover_card does
+        cache.decodes = 0                 # count only what the FRAME redoes
+        frame(lambda: h._render_map(h.state.archive, h.archive_obj))
+        total += cache.decodes
+    assert total == 0, f"{total} cells re-decoded by hovering"
+
+
+def test_the_atlas_working_set_fits_the_cache():
+    """The budget and its headroom must leave the cache able to hold a whole
+    frame. Raising one without the other puts the flashing straight back."""
+    from services.thumb_cache import MAX_CAPACITY
+    assert ATLAS_BUDGET + ATLAS_HEADROOM <= MAX_CAPACITY
+
+
+def test_the_atlas_settles_again_after_a_zoom(gui):
+    """Zooming brings new cells into view, so it costs decodes - but a
+    BOUNDED number. Perpetual churn is the defect."""
+    h = _big_map(32)
+    h.state.archive.map_zoom = 4.0
+    assert _settle(h) is not None
+    for _ in range(12):
+        h.state.archive.map_zoom /= 1.25
+        frame(lambda: h._render_map(h.state.archive, h.archive_obj))
+    assert _settle(h) is not None, "still churning after a zoom out"
+
+
+def test_the_cache_is_reserved_for_the_LEVEL_not_the_viewport(gui):
+    """Zoomed in, most of a level's cells are off screen. Reserving only the
+    visible ones shrinks the cache and evicts the rest of the level, so
+    panning or zooming back out decodes it all again.
+    """
+    h = _big_map(32)
+    ast = h.state.archive
+    assert _settle(h) is not None
+    for _ in range(14):
+        ast.map_zoom *= 1.3
+        frame(lambda: h._render_map(ast, h.archive_obj))
+    assert _settle(h) is not None
+
+    rect = _map_rect(h)
+    pts = h._map_points(h.archive_obj, h.map_layout_service, ast)
+    (ux, _uy, win), _cell = h._atlas_plan(
+        ast, pts, imgui.ImVec2(rect[2], rect[3]))
+    xs, ys = h._map_to_screen(ast, pts.unit, imgui.ImVec2(rect[0], rect[1]),
+                              imgui.ImVec2(rect[2], rect[3]))
+    on = ((xs >= rect[0]) & (xs <= rect[0] + rect[2])
+          & (ys >= rect[1]) & (ys <= rect[1] + rect[3]))
+    assert int(on.sum()) < len(win), "not zoomed in far enough to tell"
+    assert h.thumb_cache.capacity >= len(win)
+
+
+def test_returning_to_a_zoom_level_reuses_most_of_it(gui):
+    """Cells off screen must stay resident. Reserving only the VISIBLE count
+    shrinks the cache as you zoom in and evicts the level you came from, so
+    coming back decodes it from scratch.
+
+    Not zero: crossing a level genuinely introduces new cells, and two full
+    levels do not both fit. The invariant is that the bulk is REUSED.
+    """
+    h = _big_map(32)
+    assert _settle(h) is not None
+    for _ in range(6):
+        h.state.archive.map_zoom *= 1.15
+        frame(lambda: h._render_map(h.state.archive, h.archive_obj))
+    assert _settle(h) is not None
+
+    cache = h.thumb_cache
+    seen = 0
+    for _ in range(6):
+        h.state.archive.map_zoom /= 1.15
+        cache.decodes = 0
+        frame(lambda: h._render_map(h.state.archive, h.archive_obj))
+        seen += cache.decodes
+    assert seen < ATLAS_BUDGET // 4, f"{seen} decodes returning to a level"

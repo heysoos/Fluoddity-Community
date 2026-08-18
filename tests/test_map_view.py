@@ -361,3 +361,190 @@ def test_the_winner_of_a_cell_really_is_in_that_cell():
         if counts[cell]:
             assert flat[win[cell]] == cell
             assert values[win[cell]] == values[flat == cell].max()
+
+
+# ---- dots must not sit under the pictures -------------------------------
+
+def test_a_point_whose_cell_drew_a_thumbnail_is_covered():
+    flat = np.array([0, 0, 1, 2], dtype=np.int64)
+    on = np.array([True, True, True, True])
+    drawn = {0, 2}
+    mask = mv.covered_by(flat, on, drawn)
+    assert mask.tolist() == [True, True, False, True]
+
+
+def test_a_point_off_the_canvas_is_never_covered():
+    """bin_points drops off-canvas points, so the mask has to be widened back
+    out to the full array the dots are drawn from."""
+    flat = np.array([0, 0], dtype=np.int64)          # only the on-canvas ones
+    on = np.array([True, False, True, False])
+    mask = mv.covered_by(flat, on, {0})
+    assert mask.tolist() == [True, False, True, False]
+
+
+def test_nothing_drawn_covers_nothing():
+    flat = np.array([0, 1], dtype=np.int64)
+    on = np.array([True, True])
+    assert not mv.covered_by(flat, on, set()).any()
+
+
+def test_covering_nothing_at_all_is_an_empty_mask():
+    mask = mv.covered_by(np.zeros(0, dtype=np.int64), np.zeros(0, dtype=bool),
+                         {1, 2})
+    assert mask.shape == (0,)
+
+
+# ---- the atlas is binned in UNIT space, quantised to zoom levels ---------
+#
+# Screen-space bins churn: a one-pixel pan moves every boundary, so each cell's
+# winner changes and the atlas reshuffles under the pointer. Quantising to
+# powers of two makes the assignment invariant under pan, and under zoom within
+# a level.
+
+@pytest.mark.parametrize("span,px", [(1000.0, 32.0), (640.0, 16.0),
+                                     (2000.0, 64.0), (300.0, 48.0)])
+def test_a_quantised_cell_is_between_one_and_two_thumbnails_wide(span, px):
+    c = mv.quantised_cell(span, px)
+    on_screen = c * span
+    assert px <= on_screen < 2 * px
+
+
+def test_a_quantised_cell_is_a_power_of_two():
+    c = mv.quantised_cell(1000.0, 32.0)
+    inv = 1.0 / c
+    assert abs(inv - round(inv)) < 1e-9
+    assert round(inv) & (round(inv) - 1) == 0
+
+
+def test_zooming_within_a_level_does_not_change_the_cell():
+    """The whole point: continuous zoom must not reshuffle the pictures."""
+    # Both inside one level: the boundaries sit at powers of two, which for
+    # 32px is a span of 1024.
+    a = mv.quantised_cell(1100.0, 32.0)
+    b = mv.quantised_cell(2000.0, 32.0)
+    assert a == b
+    assert mv.quantised_cell(1000.0, 32.0) != a   # 1024 is the boundary
+
+
+def test_crossing_a_level_halves_the_cell():
+    a = mv.quantised_cell(1000.0, 32.0)
+    b = mv.quantised_cell(4000.0, 32.0)
+    assert b < a
+
+
+def test_a_cell_never_exceeds_the_whole_map():
+    assert mv.quantised_cell(10.0, 64.0) == 1.0
+
+
+# ---- the winners themselves ---------------------------------------------
+
+def _unit(pairs):
+    return np.array(pairs, dtype=np.float32)
+
+
+def test_each_occupied_cell_yields_its_highest_value_entry():
+    unit = _unit([[0.1, 0.1], [0.2, 0.1], [0.6, 0.6]])
+    values = np.array([0.2, 0.9, 0.5], dtype=np.float32)
+    ux, uy, win = mv.atlas_winners(unit, values, (0.5, 0.5))
+    assert len(win) == 2
+    order = np.argsort(ux)
+    assert win[order][0] == 1          # 0.9 beat 0.2 in the first cell
+    assert win[order][1] == 2
+
+
+def test_the_cell_origin_is_returned_in_unit_space():
+    unit = _unit([[0.6, 0.3]])
+    ux, uy, win = mv.atlas_winners(unit, np.array([1.0], np.float32), (0.25, 0.25))
+    assert ux[0] == pytest.approx(0.5)
+    assert uy[0] == pytest.approx(0.25)
+
+
+def test_panning_cannot_change_the_winners():
+    """Membership is in unit space, which panning does not touch."""
+    rs = np.random.RandomState(0)
+    unit = rs.rand(300, 2).astype(np.float32)
+    values = rs.rand(300).astype(np.float32)
+    a = mv.atlas_winners(unit, values, (0.125, 0.125))
+    b = mv.atlas_winners(unit, values, (0.125, 0.125))
+    assert np.array_equal(a[2], b[2])
+
+
+def test_an_empty_map_yields_no_cells():
+    ux, uy, win = mv.atlas_winners(np.zeros((0, 2), np.float32),
+                                   np.zeros(0, np.float32), (0.25, 0.25))
+    assert len(ux) == len(uy) == len(win) == 0
+
+
+# --- the atlas cell is SQUARE ON SCREEN and crosses ONE level at a time ----
+
+def test_atlas_cells_are_square_on_screen_however_wide_the_canvas():
+    """A cell drawn as a rectangle stretches the thumbnail inside it."""
+    for w, h in ((1480.0, 320.0), (600.0, 320.0), (2560.0, 200.0)):
+        cx, cy = mv.atlas_cell(w, h, 32.0)
+        assert cx * w == pytest.approx(cy * h, rel=0.02), (w, h)
+
+
+def test_a_zoom_octave_crosses_exactly_one_level():
+    """One reshuffle per octave, not two.
+
+    Quantising the two axes independently crosses x and y at DIFFERENT zooms,
+    so an octave reshuffles the whole atlas twice - and each reshuffle is a
+    visible sweep of re-decoding. On this canvas the old pair gave three
+    distinct cell sizes over the same span.
+    """
+    w, h = 1480.0, 320.0
+    seen = {mv.atlas_cell(w * z, h * z, 32.0)
+            for z in np.linspace(1.0, 1.999, 60)}
+    assert len(seen) == 2, seen
+    old = {(mv.quantised_cell(w * z, 32.0), mv.quantised_cell(h * z, 32.0))
+           for z in np.linspace(1.0, 1.999, 60)}
+    assert len(old) == 3
+
+
+def test_the_atlas_cell_still_halves_across_an_octave():
+    a = mv.atlas_cell(1000.0, 400.0, 32.0)
+    b = mv.atlas_cell(2000.0, 800.0, 32.0)
+    assert b[0] == pytest.approx(a[0] / 2.0)
+    assert b[1] == pytest.approx(a[1] / 2.0)
+
+
+def test_a_finer_level_keeps_every_winner_the_coarser_one_had():
+    """Subdividing must REUSE what is already decoded: the coarse winner is
+    still the winner of exactly one of its sub-cells. Without this a zoom
+    re-decodes the whole map instead of half of it."""
+    rs = np.random.RandomState(3)
+    unit = rs.rand(4000, 2).astype(np.float32)
+    values = rs.rand(4000).astype(np.float32)
+    coarse = set(mv.atlas_winners(unit, values, (0.125, 0.125))[2].tolist())
+    fine = set(mv.atlas_winners(unit, values, (0.0625, 0.0625))[2].tolist())
+    assert coarse <= fine
+
+
+def test_the_atlas_draws_no_more_cells_than_a_budget():
+    """The working set must FIT the cache. A map asking for more pictures
+    than can be held evicts its own cells and re-decodes them forever."""
+    rs = np.random.RandomState(4)
+    unit = rs.rand(6000, 2).astype(np.float32)
+    values = rs.rand(6000).astype(np.float32)
+    ux, uy, win = mv.atlas_winners(unit, values, (0.01, 0.01), budget=200)
+    assert len(win) == 200
+
+
+def test_the_budget_keeps_the_most_novel_cells():
+    rs = np.random.RandomState(5)
+    unit = rs.rand(3000, 2).astype(np.float32)
+    values = rs.rand(3000).astype(np.float32)
+    full = mv.atlas_winners(unit, values, (0.02, 0.02))[2]
+    cut = mv.atlas_winners(unit, values, (0.02, 0.02), budget=50)[2]
+    assert len(cut) == 50
+    assert set(cut.tolist()) <= set(full.tolist())
+    assert min(values[cut]) >= np.sort(values[full])[-50]
+
+
+def test_a_budget_larger_than_the_cell_count_changes_nothing():
+    rs = np.random.RandomState(6)
+    unit = rs.rand(200, 2).astype(np.float32)
+    values = rs.rand(200).astype(np.float32)
+    a = mv.atlas_winners(unit, values, (0.25, 0.25))
+    b = mv.atlas_winners(unit, values, (0.25, 0.25), budget=10_000)
+    assert np.array_equal(a[2], b[2])

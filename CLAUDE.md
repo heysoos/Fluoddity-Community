@@ -1458,6 +1458,35 @@ mechanics these caveats assume.
   Colour and Draw must stay orthogonal - that rule is about the DENSITY
   heatmap silently overriding the Colour combo, and it does not apply to a
   layer that replaces the marks outright.
+  **The working set MUST fit the cache, and the visible cell count is set by
+  the SLIDER and the canvas - not by the zoom or the archive.** It is
+  `(canvas_w/px) * (canvas_h/px)`, so at the 16px end of the slider a map asks
+  for ~1700 cells against `MAX_CAPACITY` 1024: the atlas then evicts the cells
+  it just drew and re-decodes them for as long as it is open, which reads as a
+  sweep of thumbnails flashing forever. `atlas_winners` therefore takes a
+  `budget` (`ATLAS_BUDGET`, 640) and keeps the most novel cells, so the map
+  goes SPARSE rather than churning, and `ATLAS_BUDGET + ATLAS_HEADROOM` must
+  stay under `MAX_CAPACITY` - raising one without the other puts the flashing
+  straight back. The headroom exists because `_map_hover_card` and
+  `_render_map_selection` call `get()` on entries that are not cell winners;
+  with the reserve set to exactly the drawn count, every hover evicts a cell
+  that is still on screen and the next frame decodes it again. The reserve is
+  the whole PLAN, not the cells on screen - reserving the viewport shrinks the
+  cache as you zoom in and evicts the level you came from.
+  **Both axes quantise off ONE level.** Quantising them apart crosses x and y
+  at different zooms, so an octave reshuffles the whole atlas twice instead of
+  once, and each reshuffle is a visible sweep; it also makes the cell a
+  RECTANGLE, which stretches the thumbnail inside it. `atlas_cell` takes the
+  power of two on x and scales y by the canvas aspect - ROUNDED, because the
+  caller scales both spans by the zoom and an unrounded ratio is a fresh cache
+  key every frame. A finer level KEEPS every winner the coarser one had (the
+  coarse winner is still the winner of one of its sub-cells), so a zoom-in
+  only decodes the new sub-cells; the budget is what breaks that subset
+  relation, which is why returning to a level is cheap rather than free.
+  A thumbnail decode is 0.399 ms measured over 300 real 160px JPEGs, so
+  `ATLAS_NEW_PER_FRAME` is 8. PIL `draft()` is NOT worth it for time (0.31 ms
+  at 1/4) but cuts decoded pixels 16x, which is the lever if the budget ever
+  needs to be much larger than the cache.
   **The cost the user actually felt was the atlas's own work, never the
   scatter.** The scatter was present in both states, so it cannot explain a
   toggle; do not repeat that diagnosis. Re-measure by timing points-only,
