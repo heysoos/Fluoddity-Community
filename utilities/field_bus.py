@@ -44,6 +44,11 @@ class FieldBus:
         self._dirty = True
         self._pass_count = 0
         self._scale = 0.0
+        self._thumbs = {}       # layer uid -> (texture, framebuffer)
+        self._thumbs_on = False
+        self._inspect_src = {}  # layer uid -> the texture its source produced
+        self._blit = None
+        self._blit_vao = None
 
     # -- public ---------------------------------------------------------
 
@@ -242,14 +247,84 @@ class FieldBus:
             tex = source.evaluate(self, layer, frame)
             layer.error = getattr(source, "error", None)
             if tex is None:
+                self._inspect_src.pop(layer.uid, None)
                 continue
+            self._inspect_src[layer.uid] = tex
             if tex is self._scratch:
                 self._pass_count += 1
             self.composite_one(tex, layer)
             self._pass_count += 1
+            self._capture_thumbnail(layer.uid, tex)
 
         self._dirty = False
         return True
+
+    # -- previews --------------------------------------------------------
+
+    THUMB_MAX = 96
+
+    def set_thumbnails_enabled(self, on: bool) -> None:
+        """Row previews only fill while the layer list is open."""
+        if on == self._thumbs_on:
+            return
+        self._thumbs_on = on
+        if not on:
+            for tex, fbo in self._thumbs.values():
+                fbo.release()
+                tex.release()
+            self._thumbs.clear()
+        self.mark_dirty()
+
+    def thumbnail_for(self, layer):
+        entry = self._thumbs.get(layer.uid)
+        return entry[0] if entry else None
+
+    def inspect(self, layer, view: str):
+        """The texture the Inspect panel should draw for `layer`."""
+        if view == "destination":
+            return self._tex
+        if layer.error:
+            return None
+        return self._inspect_src.get(layer.uid)
+
+    def _capture_thumbnail(self, uid, src_tex) -> None:
+        if not self._thumbs_on:
+            return
+        w, h = src_tex.size
+        scale = min(1.0, self.THUMB_MAX / max(w, h, 1))
+        size = (max(1, int(w * scale)), max(1, int(h * scale)))
+        entry = self._thumbs.get(uid)
+        if entry is None or entry[0].size != size:
+            if entry is not None:
+                entry[1].release()
+                entry[0].release()
+            tex = self.ctx.texture(size, 4, dtype="f4")
+            tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self._thumbs[uid] = (tex, self.ctx.framebuffer(color_attachments=[tex]))
+        tex, fbo = self._thumbs[uid]
+        self._ensure_blit()
+        previous_filter = src_tex.filter
+        src_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        src_tex.use(location=0)
+        tryset(self._blit, "src", 0)
+        fbo.color_mask = (True, True, True, True)
+        fbo.use()
+        self.ctx.disable(moderngl.BLEND)
+        self._blit_vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
+        src_tex.filter = previous_filter
+
+    def _ensure_blit(self) -> None:
+        if self._blit is not None:
+            return
+        self._blit = self.ctx.program(
+            vertex_shader=read_shader("shaders/canvas.vert"),
+            fragment_shader=(
+                "#version 430\n"
+                "in vec2 texcoord;\nout vec4 fragColor;\n"
+                "uniform sampler2D src;\n"
+                "void main(){ fragColor = texture(src, texcoord); }\n"),
+        )
+        self._blit_vao = self.ctx.vertex_array(self._blit, [])
 
     def _source_for_layer(self, layer):
         """The layer's source object, rebuilt only if its KIND changed.
@@ -270,11 +345,24 @@ class FieldBus:
         live = {l.uid for l in layers}
         for uid in [u for u in self._sources if u not in live]:
             self._sources.pop(uid)[1].release()
+            self._inspect_src.pop(uid, None)
+            entry = self._thumbs.pop(uid, None)
+            if entry is not None:
+                entry[1].release()
+                entry[0].release()
 
     def cleanup(self) -> None:
+        self.set_thumbnails_enabled(False)
+        if self._blit_vao is not None:
+            self._blit_vao.release()
+            self._blit_vao = None
+        if self._blit is not None:
+            self._blit.release()
+            self._blit = None
         for _key, source in self._sources.values():
             source.release()
         self._sources.clear()
+        self._inspect_src.clear()
         self._release_target()
         if self._composite_vao is not None:
             self._composite_vao.release()

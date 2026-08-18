@@ -16,6 +16,9 @@ class FieldStackWindowMixin:
         expanded, opened = imgui.begin("Field Stack", True)
         if not opened:
             self.state.preferences.show_field_stack = False
+            # Row previews cost nothing once nobody is looking at them.
+            if getattr(self, "field_bus", None) is not None:
+                self.field_bus.set_thumbnails_enabled(False)
             imgui.end()
             return
         if expanded:
@@ -36,6 +39,8 @@ class FieldStackWindowMixin:
     def _draw_field_stack(self, collect):
         prefs = self.state.preferences
         stack = self.state.field_stack
+        if getattr(self, "field_bus", None) is not None:
+            self.field_bus.set_thumbnails_enabled(True)
         layout.push_settings_width()
 
         names = [n for n, _ in SCALES]
@@ -71,11 +76,15 @@ class FieldStackWindowMixin:
         imgui.text_disabled(self._tag(
             f"{passes} passes | {res[0]}x{res[1]}", collect))
 
+        self._draw_inspect(stack, collect)
+
         imgui.pop_item_width()
 
     def _draw_layer_row(self, layer, collect) -> bool:
         uid = layer.uid
         changed_any = False
+
+        self._draw_thumbnail(layer, collect)
 
         changed, layer.enabled = imgui.checkbox(f"##en{uid}", layer.enabled)
         changed_any |= changed
@@ -134,6 +143,45 @@ class FieldStackWindowMixin:
         if changed_any:
             self._mark_dirty()
         return remove
+
+    def _draw_thumbnail(self, layer, collect) -> None:
+        """The row's 48px preview: hover peeks, click pins the Inspect panel."""
+        bus = getattr(self, "field_bus", None)
+        thumb = bus.thumbnail_for(layer) if bus is not None else None
+        if thumb is None:
+            return
+        imgui.image(thumb.glo, imgui.ImVec2(48, 48))
+        if imgui.is_item_hovered():
+            imgui.begin_tooltip()
+            imgui.image(thumb.glo, imgui.ImVec2(256, 256))
+            imgui.end_tooltip()
+        if imgui.is_item_clicked():
+            self._inspect_uid = layer.uid
+        imgui.same_line()
+
+    def _draw_inspect(self, stack, collect) -> None:
+        bus = getattr(self, "field_bus", None)
+        uid = getattr(self, "_inspect_uid", None)
+        if bus is None or uid is None:
+            return
+        layer = next((l for l in stack.layers if l.uid == uid), None)
+        if layer is None:
+            self._inspect_uid = None
+            return
+
+        imgui.separator()
+        views = ["source", "mapped", "destination"]
+        view = getattr(self, "_inspect_view", 0)
+        _, view = imgui.combo(self._tag("Inspect##fieldinspect", collect),
+                              view, views)
+        self._inspect_view = view
+        # "mapped" shows the raw source until Stage 2, where optical flow makes
+        # a vector-field view worth drawing with the arrow renderer.
+        tex = bus.inspect(layer, views[view])
+        if tex is not None:
+            imgui.image(tex.glo, imgui.ImVec2(384, 384))
+        if imgui.button(self._tag("Close##fieldinspect", collect)):
+            self._inspect_uid = None
 
     def _draw_layer_params(self, layer, collect) -> bool:
         changed_any = False
