@@ -16,6 +16,7 @@ from simulation_runner import SimulationRunner
 from camera_input import process_camera_input
 from controller_input import ControllerCam, process_controller_input
 from utilities.advanced_drawing import AdvancedDrawingProcessor
+from utilities.field_bus import FieldBus
 from state import view_modes
 
 
@@ -156,6 +157,8 @@ class App:
         self._last_projection_size = 0
         self._explore_was_enabled = False
         self.advanced_drawing_processor = AdvancedDrawingProcessor(self.ctx)
+        self.field_bus = FieldBus(self.ctx)
+        self.ui.field_bus = self.field_bus
         self.ui.multi_load_service = self.multi_load_service
         self.ui.tournament_service = self.tournament_service
         self.ui.advanced_drawing_processor = self.advanced_drawing_processor
@@ -179,6 +182,7 @@ class App:
             param_lock_service=self.param_lock_service,
             tournament_service=self.tournament_service,
             auto_service=None,  # set by _ensure_auto_service()
+            field_bus=self.field_bus,
         )
         # Archive switching is orchestration, so CommandHandler asks for it
         # rather than reaching into App.
@@ -195,7 +199,8 @@ class App:
             self.sim, self.camera, self.video_service,
             self.command_handler, self.window,
             advanced_drawing_processor=self.advanced_drawing_processor,
-            controller_cam=self.controller_cam
+            controller_cam=self.controller_cam,
+            field_bus=self.field_bus,
         )
 
         # Frame timing
@@ -1061,12 +1066,12 @@ class App:
         self.last_update_time = current_time
         process_camera_input(ui_state, self.window, self.ui.keybindings,
                              self.sim.view_tex, dt)
-        # The controller camera is only read by the shader-driven field, so
-        # that is the one condition worth a joystick scan for.
-        adv = ui_state.preferences
+        # The controller camera is only read by a shader field source, so that
+        # is the one condition worth a joystick scan for.
         process_controller_input(
             self.controller_cam, self.joystick_state, dt,
-            active=adv.advanced_drawing_enabled and adv.shader_driven_field)
+            active=any(l.enabled and l.source == "shader"
+                       for l in ui_state.field_stack.layers))
 
         # 3.2. Check if pending video should start
         cmd = self.command_handler
@@ -1193,7 +1198,7 @@ class App:
 
         # 5.0.1 Force/Strafe field view modes: override view_tex with field texture
         if ui_state.sim.current_view_option in view_modes.FIELD_VIEWS:
-            field_tex = self.advanced_drawing_processor.field_texture
+            field_tex = self.field_bus.field_texture
             if field_tex is not None:
                 self.sim.view_tex = field_tex
             else:
@@ -1285,7 +1290,7 @@ class App:
             width, height = glfw.get_framebuffer_size(self.window)
             adv_prefs = ui_state.preferences
             adv_active = adv_prefs.advanced_drawing_enabled
-            field_tex = self.advanced_drawing_processor.field_texture
+            field_tex = self.field_bus.field_texture
             # Use field_texture for force/strafe targets, canvas for trails
             if adv_active and not adv_prefs.advanced_draw_canvas and field_tex is not None:
                 arrow_texture = field_tex
@@ -1619,6 +1624,10 @@ class App:
         # expression that produces it, so a service that never got built would
         # otherwise raise here and skip every step below.
         self._step("audio", lambda: self.audio_runtime.close())
+        # A lambda, not a bound method: the attribute lookup has to happen
+        # INSIDE the guard, or a missing field raises while the argument is
+        # evaluated and skips every step below it.
+        self._step("field bus", lambda: self.field_bus.cleanup())
         self._step("advanced drawing", self.advanced_drawing_processor.cleanup)
         self._step("video", self.video_service.cleanup)
         self._step("ui", self.ui.cleanup)

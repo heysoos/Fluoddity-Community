@@ -3,6 +3,8 @@ import glfw
 import numpy as np
 from state import view_modes
 
+from services import field_sources
+
 
 class SimulationRunner:
     """Runs physics simulation steps with frame assembly and video recording.
@@ -12,7 +14,8 @@ class SimulationRunner:
     """
 
     def __init__(self, sim, camera, video_service, command_handler, window,
-                 advanced_drawing_processor=None, controller_cam=None):
+                 advanced_drawing_processor=None, controller_cam=None,
+                 field_bus=None):
         self.sim = sim
         self.camera = camera
         self.video_service = video_service
@@ -20,6 +23,7 @@ class SimulationRunner:
         self.window = window
         self.advanced_drawing_processor = advanced_drawing_processor
         self.controller_cam = controller_cam
+        self.field_bus = field_bus
 
         # Mouse tracking for draw trail mode
         self.prev_mouse_tex_coords = (0.0, 0.0)
@@ -52,29 +56,17 @@ class SimulationRunner:
         erase_mode = (draw_mode and ui_state.mouse_right_held
                       and not ui_state.mouse_left_held)
 
-        # Advanced Drawing: force/strafe field update (once per render frame, not per physics frame)
+        # The field bus rebuilds from its stack once per render frame, with no
+        # gate on any window being open. Off under a tournament grid: tiles are
+        # isolated worlds, so one shared field would be scored in place of the
+        # genome and its entries could not be reproduced.
+        self._rebuild_field_bus(ui_state, mouse_tex_coords)
+
+        # Advanced Drawing: brush strokes onto the force/strafe field
         if self.advanced_drawing_processor is not None:
             adv_prefs = ui_state.preferences
 
-            if adv_prefs.advanced_drawing_enabled and adv_prefs.shader_driven_field:
-                # Shader-driven field: run override shader every render frame
-                cam = self.controller_cam
-                self.advanced_drawing_processor.process_override(
-                    canvas_width=self.sim.can.size[0],
-                    canvas_height=self.sim.can.size[1],
-                    shader_name=adv_prefs.field_override_shader,
-                    frame_count=self.sim.frame_count,
-                    mouse_pos=mouse_tex_coords,
-                    prev_mouse_pos=self.prev_mouse_tex_coords,
-                    draw_size=adv_prefs.draw_size,
-                    draw_power=adv_prefs.draw_power,
-                    brush_mode=adv_prefs.brush_mode,
-                    fixed_direction_heading=adv_prefs.fixed_direction_heading,
-                    tiling_mode=tiling_mode,
-                    camera_pos=tuple(cam.pos) if cam else (0.0, 0.0, 0.0),
-                    camera_dir=tuple(cam.dir) if cam else (0.0, 0.0, 1.0),
-                )
-            elif adv_prefs.advanced_drawing_enabled and (
+            if adv_prefs.advanced_drawing_enabled and (
                 adv_prefs.advanced_draw_force_field or adv_prefs.advanced_draw_strafe_field
             ):
                 # Normal drawing mode: draw/erase to field texture
@@ -231,15 +223,40 @@ class SimulationRunner:
             trail_overlay_strength=ui_state.preferences.trail_overlay_strength,
             brush_mode=adv_prefs.brush_mode if advanced_active else 0,
             fixed_direction_heading=adv_prefs.fixed_direction_heading if advanced_active else 0.0,
-            field_texture=(self.advanced_drawing_processor.field_texture
-                           if self.advanced_drawing_processor is not None else None),
-            advanced_drawing_resources_initialized=(
-                self.advanced_drawing_processor is not None
-                and self.advanced_drawing_processor.field_texture is not None),
+            field_texture=self.field_texture,
+            advanced_drawing_resources_initialized=self.field_texture is not None,
             force_field_checked=adv_prefs.advanced_draw_force_field if advanced_active else False,
             strafe_field_checked=adv_prefs.advanced_draw_strafe_field if advanced_active else False,
             draw_target_overlay_opacity=adv_prefs.draw_target_overlay_opacity if advanced_active else 0.0,
         )
+
+    def _rebuild_field_bus(self, ui_state, mouse_tex_coords) -> None:
+        """Rebuild the injected field from its layer stack, once per frame."""
+        if self.field_bus is None:
+            return
+        if ui_state.tournament.enabled:
+            self.field_bus.rebuild(None, 0, 0, 1.0, None)
+            return
+        cam = self.controller_cam
+        self.field_bus.rebuild(
+            ui_state.field_stack,
+            self.sim.can.size[0], self.sim.can.size[1],
+            ui_state.preferences.field_bus_scale,
+            field_sources.FrameContext(
+                time=self.sim.time,
+                frame_count=self.sim.frame_count,
+                mouse=mouse_tex_coords,
+                prev_mouse=self.prev_mouse_tex_coords,
+                canvas_texture=self.sim.can,
+                camera_pos=tuple(cam.pos) if cam else (0.0, 0.0, 0.0),
+                camera_dir=tuple(cam.dir) if cam else (0.0, 0.0, 1.0),
+            ),
+        )
+
+    @property
+    def field_texture(self):
+        """The injected field the sim samples, or None when nothing injects."""
+        return self.field_bus.field_texture if self.field_bus is not None else None
 
     def _run_physics_step(self, ui_state, draw_mode, mouse_tex_coords,
                            draw_power_value, tiling_mode, step_index,
@@ -292,7 +309,7 @@ class SimulationRunner:
             fill_mode=canvas_fill,
             fill_direction_type=ui_state.fill_direction_type,
             canvas_draw_active=canvas_draw_active,
-            field_texture = self.advanced_drawing_processor.field_texture,
+            field_texture=self.field_texture,
             force_field_strength=adv_prefs.force_field_strength,
             strafe_field_strength=adv_prefs.strafe_field_strength,
         )

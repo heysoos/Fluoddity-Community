@@ -26,6 +26,10 @@ class FrameContext:
     mouse: tuple[float, float]
     prev_mouse: tuple[float, float]
     canvas_texture: object | None
+    # The controller camera. Bundled march.frag raymarches from it, so a shader
+    # source left without one renders a black frame.
+    camera_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    camera_dir: tuple[float, float, float] = (0.0, 0.0, 1.0)
 
 
 @dataclass
@@ -149,6 +153,8 @@ class _ProgramSource:
         tryset(prog, "frame_count", int(frame.frame_count))
         tryset(prog, "mouse", tuple(float(v) for v in frame.mouse))
         tryset(prog, "prev_mouse", tuple(float(v) for v in frame.prev_mouse))
+        tryset(prog, "camera_pos", tuple(float(v) for v in frame.camera_pos))
+        tryset(prog, "camera_dir", tuple(float(v) for v in frame.camera_dir))
         for param in params_for(layer):
             value = layer.params.get(param.name)
             if value is None:

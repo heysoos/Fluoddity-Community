@@ -17,7 +17,7 @@ class CommandHandler:
     def __init__(self, sim, camera, ui, rule_manager, entity_picker,
                  video_service, config_saver, multi_load_service, user_configs_dir,
                  field_handler=None, param_lock_service=None, tournament_service=None,
-                 auto_service=None):
+                 auto_service=None, field_bus=None):
         self.sim = sim
         self.camera = camera
         self.ui = ui
@@ -28,6 +28,7 @@ class CommandHandler:
         self.multi_load_service = multi_load_service
         self.user_configs_dir = user_configs_dir
         self.field_handler = field_handler
+        self.field_bus = field_bus
         self.param_lock_service = param_lock_service
         self.tournament_service = tournament_service
         self.auto_service = auto_service
@@ -262,8 +263,8 @@ class CommandHandler:
             if self.rule_manager.has_rules():
                 self.sim.apply_rule(self.rule_manager.get_current_rule())
             self.camera.reload()
-            if self.field_handler and self.field_handler.adv_draw:
-                self.field_handler.adv_draw.reload()
+            if self.field_bus is not None:
+                self.field_bus.reload_shaders()
             # A partial rollout across a shader swap is not a valid sample.
             if self.auto_service is not None:
                 self.auto_service.abort_generation()
