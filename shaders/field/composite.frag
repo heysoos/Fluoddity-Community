@@ -17,19 +17,24 @@ uniform float sign_mul;   // +1 attract, -1 repel
 uniform float blur_lod;   // mip level of the pre-filter
 uniform vec2  texel;
 uniform bool  scalar_out; // destination is scalar: contribute the magnitude
+uniform int   src_channels; // 0 = read .xy / .rgb, 1 = read .zw
+
+vec4 fetch(vec2 uv){
+    vec4 c = textureLod(src, uv, blur_lod);
+    return (src_channels == 1) ? vec4(c.zw, 0.0, 1.0) : c;
+}
 
 float scalar_at(vec2 uv){
-    vec3 c = textureLod(src, uv, blur_lod).rgb;
-    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+    return dot(fetch(uv).rgb, vec3(0.2126, 0.7152, 0.0722));
 }
 
 void main(){
     vec2 v;
     if (mapping == 0) {
-        v = texture(src, texcoord).rg;
+        v = fetch(texcoord).rg;
     } else if (mapping == 1) {
         // Hue as angle, value as magnitude. The historical PNG field encoding.
-        vec4 c = texture(src, texcoord);
+        vec4 c = fetch(texcoord);
         float a = c.r * 6.28318530718;
         v = vec2(cos(a), sin(a)) * c.b;
     } else if (mapping == 4) {

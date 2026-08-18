@@ -107,6 +107,8 @@ class FieldBus:
         tryset(prog, "blur_lod", float(layer.blur))
         tryset(prog, "texel", (1.0 / self._res[0], 1.0 / self._res[1]))
         tryset(prog, "scalar_out", layer.destination in self.SCALAR_DESTINATIONS)
+        tryset(prog, "src_channels",
+               1 if layer.params.get("_channels") == "zw" else 0)
 
         # The mask is set BEFORE use(): moderngl applies a framebuffer's stored
         # state when it is bound, so a mask set afterwards misses this pass.
