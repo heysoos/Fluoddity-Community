@@ -143,6 +143,27 @@ mechanics these caveats assume.
   84% of a tile's trail. `tests/test_tile_isolation_gl.py` runs 647/8, 647/3
   and 641/7 on purpose.
 
+- **The frame-constant uniforms go up once per FRAME, and the cache covers
+  EXACTLY what `apply_state` hands over.** The physics runs `speedmult` steps
+  between two rendered frames and nothing in `SimState` moves across them, so
+  uploading the setting structs per step was 138 `tryset` calls per step
+  against 35.5 now. It buys **3.5x** where the CPU is the limit (0.444 ->
+  0.128 ms/step at world size 0.05) and **nothing at all** at the default 0.40,
+  where 240k particles make the step GPU-bound - the saving is real either way,
+  it is just hidden behind the GPU. Three traps. The mark is the PROGRAM the
+  uniforms went to, never a flag: `sim` keeps one entity-update program per set
+  of shader defines and `realloc_brain_buffers` swaps between them, so a flag
+  would hand a program pulled from that cache whatever it was last given.
+  Anything reached by a path OTHER than `apply_state` must stay per-step -
+  `reset()` moves `RESET_SEED` and `apply_tournament()` rewrites the grid, and
+  caching either one is caught by `tests/test_reset_seed.py` and
+  `tests/test_tournament_cohort_colour.py`, a long way from the code that broke
+  them. Arguments stay per-step too, which is what keeps the rule statable. The
+  multi-load trail values advance with progress every step and are excluded on
+  those grounds, as are `frame_count`, `WRITE_RULES` and `fill_mode`. The brain
+  uniforms are excluded because `set_brain_scales` changes the layout WITHOUT
+  changing the program. Guarded by `tests/test_uniform_caching_gl.py`.
+
 - **`V_MAX` caps the WHOLE STEP, because STRAFE IS ADDED STRAIGHT TO POSITION
   and never touches `e.vel`.** A cap on velocity alone caps nothing a strafing
   preset does: at `V_MAX = 1e-9` the default preset still covered 78% of its
