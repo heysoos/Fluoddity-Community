@@ -12,7 +12,7 @@ class EntityPicker:
 
         Args:
             entity_buffer: GPU buffer containing entity data
-            entity_stride: Number of floats per entity (e.g., 12 for pos:2 + vel:2 + size:1 + padding:3 + color:4)
+            entity_stride: Number of floats per entity (8: pos:2 + vel:2 + size:1 + hue:1 + sat:1 + padding:1)
         """
         self.entity_buffer = entity_buffer
         self.entity_stride = entity_stride
@@ -28,7 +28,8 @@ class EntityPicker:
         self.entity_buffer = entity_buffer
 
     def find_nearest_entity(self, tex_coords: tuple[float, float],
-                            canvas_aspect: float) -> tuple[int, tuple[float, float], float]:
+                            canvas_aspect: float,
+                            active_count: int) -> tuple[int, tuple[float, float], float]:
         """Find the entity closest to given texture coordinates.
 
         Args:
@@ -36,6 +37,9 @@ class EntityPicker:
             canvas_aspect: Canvas width / height. Required, not defaulted: a
                 caller that omits it silently picks the wrong particle
                 everywhere except the centre of a square canvas.
+            active_count: Number of active entities. The cohort is a pure
+                function of the index and is no longer stored, so this is what
+                recovers it.
 
         Returns:
             Tuple of (entity_index, (pos_x, pos_y), cohort_normalized)
@@ -66,9 +70,11 @@ class EntityPicker:
         nearest_idx = int(distances_sq.argmin())
 
         # Extract position and cohort for the nearest entity
-        # Entity structure: pos(2) + vel(2) + size(1) + cohort(1) + padding(2) + color(4)
         pos_x = float(xs[nearest_idx])  # Already in world space [-1, 1]
         pos_y = float(ys[nearest_idx])
-        cohort_normalized = float(ent_cache[nearest_idx * self.entity_stride + 5])  # Index 5 is cohort field
+        # The struct no longer carries a cohort. reset() used to store
+        # get_cohort(index)/cohorts, which is exactly index/ACTIVE_COUNT - a
+        # pure function of the index, so it is recomputed rather than read.
+        cohort_normalized = float(nearest_idx) / float(max(active_count, 1))
 
         return (nearest_idx, (pos_x, pos_y), cohort_normalized)

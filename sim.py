@@ -13,7 +13,7 @@ from utilities.gl_helpers import read_shader, shader_prepend, prepend_defines, t
 from state import SimState
 
 # Global constants
-SIZE_OF_ENTITY_STRUCT = 4*12  # 4 bytes per 32bit value. 12 values (pos:2, vel:2, size:1, padding:3, color:4)
+SIZE_OF_ENTITY_STRUCT = 4*8  # 4 bytes per 32bit value. 8 values (pos:2, vel:2, size:1, hue:1, sat:1, padding:1)
 SIZE_OF_RULE_STRUCT = 4*4*20  # 4 bytes per float32. 4 floats per vec4. 20 vec4s per rule
 # One MultiLoadConfig in entity_update.glsl: 11 PhysicsSetting * 7 floats,
 # 6 ints, 3 floats. Defined once - the reserve and the zero-fill below both

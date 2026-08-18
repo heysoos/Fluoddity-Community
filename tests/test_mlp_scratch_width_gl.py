@@ -18,6 +18,12 @@ moderngl = pytest.importorskip("moderngl")
 from services.brains import REGISTRY, default_layout, layout_defines  # noqa: E402
 from services.brains.mlp import MAX_WIDTH, scratch_width  # noqa: E402
 
+from sim import SIZE_OF_ENTITY_STRUCT
+
+# Never hardcoded: the entity struct has been resized once already,
+# and a stale stride reads other fields as positions rather than failing.
+STRIDE = SIZE_OF_ENTITY_STRUCT // 4
+
 M = REGISTRY["mlp"]
 N = 256
 
@@ -184,10 +190,17 @@ def test_a_deep_stack_actually_drives_particles(sim, ctx):
     sim.apply_rule(M.random(np.random.default_rng(7), layout))
     sim.reset_seed = 0.0
     sim.reset()
+    # reset() clears the canvases and zeroes frame_count; the PARTICLES are
+    # reset by the shader on the frame_count == 0 step. Reading the buffer
+    # before that step reads whatever the driver last left in it - which for
+    # the first modality on a fresh Sim is uninitialised VRAM, and compared
+    # against real positions it clears or misses the threshold by luck.
+    sim.entity_update(ctx)                  # frame_count == 0: this IS the reset
+    ctx.finish()
 
     def positions():
         return np.frombuffer(sim.entities.read(), dtype=np.float32
-                             ).reshape(-1, 12)[: sim.entity_count, 0:2].copy()
+                             ).reshape(-1, STRIDE)[: sim.entity_count, 0:2].copy()
 
     before = positions()
     for _ in range(60):

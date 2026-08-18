@@ -6,10 +6,14 @@ struct Entity {
     vec2 pos;
     vec2 vel;
     float size;
-    float cohort;      // Normalized cohort value (0-1) for parameter sweep calculations
-    float padding[2];  // Align to 16-byte boundary for vec4
-    vec4 color;
-};  // Total: 48 bytes (12 floats)
+    float hue;         // The brain's axial term, scaled by HUE_SENSITIVITY
+    float sat;         // Stored ONLY because reset() draws a desaturated
+                       // particle where the update writes 0.8, and a hazard
+                       // respawns them continuously. Free: the vec2 members
+                       // force an 8-byte alignment, so this slot is padding
+                       // otherwise.
+    float padding;
+};  // Total: 32 bytes (8 floats)
 layout(std430, binding = 0) buffer EntityBuffer {
     Entity entities[];
 };
@@ -65,7 +69,10 @@ void main() {
 
     uv = particle_uv;
     pos_vel=vec4(entity_pos,entity_vel);
-    view_col=entities[instance_id].color;
+    // Brightness and alpha are the same for every particle, so they are
+    // supplied here rather than stored 600k times.
+    view_col = vec4(entities[instance_id].hue,
+                    entities[instance_id].sat, 1.0, 0.045);
 
     // Home tile box, matching tournament_home_tile()/tournament_tile_box() in
     // entity_update.glsl. The fragment stage clips deposits to this box.

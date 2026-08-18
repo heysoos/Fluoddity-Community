@@ -143,6 +143,31 @@ mechanics these caveats assume.
   84% of a tile's trail. `tests/test_tile_isolation_gl.py` runs 647/8, 647/3
   and 641/7 on purpose.
 
+- **The entity struct is 32 bytes, and slimming it bought NO MEASURABLE
+  SPEED.** `cohort` is a pure function of the index that `get_cohort()` already
+  computes, and `color` was a vec4 whose brightness (1.0) and alpha (0.045)
+  were the same constants for 600k particles every frame - so both went, and
+  the vertex shaders rebuild the vec4. That is a third off entity-buffer
+  traffic exactly as upstream claims, and the buffer is NOT the bottleneck:
+  1.377 -> 1.354 ms/step at the default world size (inside noise), nothing at
+  density 4.0, 1.2% at 8.0. The step is dominated by the two `get_can()` taps
+  and the brush splat. Keep it for the 16 bytes per particle of VRAM and the
+  two redundant fields, not for frame time; do not quote 33% as a speedup.
+  **SATURATION is still stored, and that is not an oversight** - `reset()`
+  writes a DESATURATED particle where the update writes 0.8, and `HAZARD_RATE`
+  respawns particles continuously, so hardcoding 0.8 would change what a
+  hazard-heavy preset looks like. It is free: the `vec2` members force an
+  8-byte alignment, so the slot is padding either way. Two traps, both of which
+  bit. Four files hardcoded a stride of `12`, and a stale stride does not fail
+  - it reads other fields AS positions, so two GPU tests passed in isolation
+  and failed in a full run on whatever the misaligned columns held; guarded by
+  `tests/test_entity_struct.py::test_nobody_hardcodes_the_stride`. And
+  `sim.reset()` clears the canvases and zeroes `frame_count` but never touches
+  the entity buffer - the particles are reset by the shader on the
+  `frame_count == 0` step - so a snapshot taken between the two reads
+  uninitialised VRAM, which is a coin toss that the old 48-byte allocation
+  happened to keep winning.
+
 - **The frame-constant uniforms go up once per FRAME, and the cache covers
   EXACTLY what `apply_state` hands over.** The physics runs `speedmult` steps
   between two rendered frames and nothing in `SimState` moves across them, so

@@ -22,6 +22,12 @@ from sim import Sim
 from state import SimState
 from services.config_saver import ConfigSaver
 
+from sim import SIZE_OF_ENTITY_STRUCT
+
+# Never hardcoded: the entity struct has been resized once already,
+# and a stale stride reads other fields as positions rather than failing.
+STRIDE = SIZE_OF_ENTITY_STRUCT // 4
+
 STEPS = 600
 CASES = ["LavaLamp", "Streamers", "Adrift", "Critters"]
 
@@ -38,7 +44,7 @@ def measure(ctx, sim, saver, name):
         sim.apply_state(st)
         sim.update(ctx)
     ents = np.frombuffer(sim.entities.read(), dtype=np.float32)
-    pos = ents.reshape(-1, 12)[: sim.entity_count, 0:2]
+    pos = ents.reshape(-1, STRIDE)[: sim.entity_count, 0:2]
     d = (1.0 - np.abs(pos)).min(axis=1)
     tex = sim.can_textures[0]
     w, h = tex.size

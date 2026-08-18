@@ -10,6 +10,12 @@ Needs a real GL context, so it skips where there is none (CI).
 import numpy as np
 import pytest
 
+from sim import SIZE_OF_ENTITY_STRUCT
+
+# Never hardcoded: the entity struct has been resized once already,
+# and a stale stride reads other fields as positions rather than failing.
+STRIDE = SIZE_OF_ENTITY_STRUCT // 4
+
 moderngl = pytest.importorskip("moderngl")
 
 MODALITIES = ["fourier", "gabor", "lenia", "mlp"]
@@ -47,14 +53,21 @@ def run(sim, ctx, name, steps=60, mut=0.0):
     sim.apply_rule(m.random(np.random.default_rng(4), layout))
     sim.reset_seed = 0.0
     sim.reset()
+    # reset() clears the canvases and zeroes frame_count; the PARTICLES are
+    # reset by the shader on the frame_count == 0 step. Reading the buffer
+    # before that step reads whatever the driver last left in it - which for
+    # the first modality on a fresh Sim is uninitialised VRAM, and compared
+    # against real positions it clears or misses the threshold by luck.
+    sim.entity_update(ctx)                  # frame_count == 0: this IS the reset
+    ctx.finish()
 
     before = np.frombuffer(sim.entities.read(), dtype=np.float32
-                           ).reshape(-1, 12)[: sim.entity_count, 0:2].copy()
+                           ).reshape(-1, STRIDE)[: sim.entity_count, 0:2].copy()
     for _ in range(steps):
         sim.apply_state(st)
         sim.update(ctx)
     after = np.frombuffer(sim.entities.read(), dtype=np.float32
-                          ).reshape(-1, 12)[: sim.entity_count, 0:2].copy()
+                          ).reshape(-1, STRIDE)[: sim.entity_count, 0:2].copy()
     return before, after
 
 
@@ -64,7 +77,8 @@ def test_every_modality_drives_the_particles(sim, ctx, name):
     assert np.all(np.isfinite(after)), f"{name} produced non-finite positions"
     moved = np.linalg.norm(after - before, axis=1)
     assert float(moved.mean()) > 1e-4, (
-        f"{name} left the particles where they started - the brain is silent"
+        f"{name} left the particles where they started - the brain is silent "
+        f"(mean |dpos| {moved.mean():.3e}, max {moved.max():.3e})"
     )
 
 
@@ -105,14 +119,21 @@ def test_a_switch_leaves_a_brain_that_actually_RUNS(sim, ctx, name):
     sim.apply_rule(None)                    # exactly what the switch does
     sim.reset_seed = 0.0
     sim.reset()
+    # reset() clears the canvases and zeroes frame_count; the PARTICLES are
+    # reset by the shader on the frame_count == 0 step. Reading the buffer
+    # before that step reads whatever the driver last left in it - which for
+    # the first modality on a fresh Sim is uninitialised VRAM, and compared
+    # against real positions it clears or misses the threshold by luck.
+    sim.entity_update(ctx)                  # frame_count == 0: this IS the reset
+    ctx.finish()
 
     before = np.frombuffer(sim.entities.read(), dtype=np.float32
-                           ).reshape(-1, 12)[: sim.entity_count, 0:2].copy()
+                           ).reshape(-1, STRIDE)[: sim.entity_count, 0:2].copy()
     for _ in range(60):
         sim.apply_state(st)
         sim.update(ctx)
     after = np.frombuffer(sim.entities.read(), dtype=np.float32
-                          ).reshape(-1, 12)[: sim.entity_count, 0:2].copy()
+                          ).reshape(-1, STRIDE)[: sim.entity_count, 0:2].copy()
 
     assert np.all(np.isfinite(after)), name
     assert float(np.linalg.norm(after - before, axis=1).mean()) > 1e-4, (

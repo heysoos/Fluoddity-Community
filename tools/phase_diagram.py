@@ -219,7 +219,7 @@ class Harness:
 
     def read_particles(self) -> tuple[np.ndarray, np.ndarray]:
         """(pos, vel) for the fixed subsample. The struct is pos:2, vel:2,
-        size:1, pad:3, color:4."""
+        size:1, hue:1, sat:1, pad:1."""
         raw = np.frombuffer(self.sim.entities.read(), dtype=np.float32)
         rows = raw.reshape(-1, self.stride)[self.sub]
         return rows[:, 0:2].copy(), rows[:, 2:4].copy()

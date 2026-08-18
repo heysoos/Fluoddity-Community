@@ -6,10 +6,14 @@ struct Entity {
     vec2 pos;
     vec2 vel;
     float size;
-    float cohort;      // Normalized cohort value (0-1) for parameter sweep calculations
-    float padding[2];  // Align to 16-byte boundary for vec4
-    vec4 color;
-};  // Total: 48 bytes (12 floats)
+    float hue;         // The brain's axial term, scaled by HUE_SENSITIVITY
+    float sat;         // Stored ONLY because reset() draws a desaturated
+                       // particle where the update writes 0.8, and a hazard
+                       // respawns them continuously. Free: the vec2 members
+                       // force an 8-byte alignment, so this slot is padding
+                       // otherwise.
+    float padding;
+};  // Total: 32 bytes (8 floats)
 // The brain buffer and its uniforms live in shaders/brains/_header.glsl,
 // which is prepended ahead of every brain_*.glsl.
 layout(std430, binding = 0) buffer EntityBuffer {
@@ -505,7 +509,6 @@ void reset(uint index){
     float cohort_val = get_cohort(index);
     float aspect = sqrt(canvas_resolution.x/canvas_resolution.y);
 
-    vec4 color=vec4(0,0,1,.045);
     //set pos and vel to random values on a small disk
     float cohort_scale = 0.019;//Size of each disk
     // RESET_SEED shifts every draw below. It is 0.0 outside auto-tournament
@@ -553,7 +556,9 @@ void reset(uint index){
     }
 
     //store to persistent entity buffer
-    entities[index]=Entity(pos,vel,size,cohort_val/float(cohorts),float[2](0,0),color);
+    //Hue 0 and saturation 0: the same desaturated particle the vec4
+    //color=vec4(0,0,1,.045) drew. A hazard respawn makes this visible.
+    entities[index]=Entity(pos,vel,size,0.0,0.0,0.0);
 }
 
 // Per-particle brain mutation lives in shaders/brains/_header.glsl as
@@ -629,7 +634,7 @@ void main() {
 
     // Inactive entities get zeroed out. Position offscreen so they don't accidentally get clicked on
     if (index >= ACTIVE_COUNT) {
-        entities[index] = Entity(vec2(10000), vec2(0), 0.0, 0.0, float[2](0,0), vec4(0));
+        entities[index] = Entity(vec2(10000), vec2(0), 0.0, 0.0, 0.0, 0.0);
         return;
     }
     Entity e=entities[index];
@@ -704,18 +709,16 @@ void main() {
     strafe *= 1./SQRT_WORLD_SIZE*calculate_setting(get_particle_global_force_mult(),e.pos,cohort)/20.;
 
 
-    //e.color is interpreted as vec4(hue,saturation,brightness,alpha)
-    //We just set brightness to 1 and modulate hue and saturation
-    e.color.x = get_particle_hue_sensitivity()*col_params.x;//hue can be anything
-    //Hardcoding saturation for now. 
-    //low saturation arises naturally due to a mix of hues from different particles. 
+    //The particle stores hue and saturation; the vertex shaders supply the
+    //brightness and alpha, which were the same constants for every particle.
+    e.hue = get_particle_hue_sensitivity()*col_params.x;//hue can be anything
+    //Hardcoding saturation for now.
+    //low saturation arises naturally due to a mix of hues from different particles.
     //Use col_params.y for something else?
-    //e.color.y = sin(col_params.y)/2.+.5;//saturation must be 0..1
-    e.color.y = .8;
+    //e.sat = sin(col_params.y)/2.+.5;//saturation must be 0..1
+    e.sat = .8;
 
-    if(get_particle_color_by_cohort()) {e.color.x = hash(vec2(floor(cohort)));} //just assign a random hue to each cohort
-    e.color.z=1;//brightness 1.
-    e.color.w=0.045; //low alpha
+    if(get_particle_color_by_cohort()) {e.hue = hash(vec2(floor(cohort)));} //just assign a random hue to each cohort
 
     //Accelerate: Apply drag and add force to e.vel,
     //
@@ -819,7 +822,7 @@ void main() {
     if(!(all(lessThan(abs(e.pos), vec2(1e6))) &&
          all(lessThan(abs(e.vel), vec2(1e6))) &&
          abs(e.size) < 1e6 &&
-         all(lessThan(abs(e.color), vec4(1e6))))){
+         abs(e.hue) < 1e6 && abs(e.sat) < 1e6)){
         reset(index);
         return;
     }

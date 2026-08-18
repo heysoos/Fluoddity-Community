@@ -14,7 +14,7 @@ import pytest
 
 from services.entity_picker import EntityPicker
 
-STRIDE = 12          # pos2 vel2 size1 cohort1 pad2 color4
+STRIDE = 8           # pos2 vel2 size1 hue1 sat1 pad1
 
 
 class FakeBuffer:
@@ -22,10 +22,9 @@ class FakeBuffer:
 
     def __init__(self, positions):
         rows = []
-        for i, (x, y) in enumerate(positions):
+        for (x, y) in positions:
             row = [0.0] * STRIDE
             row[0], row[1] = x, y
-            row[5] = float(i)          # cohort
             rows.append(row)
         self._blob = struct.pack(f"<{len(rows) * STRIDE}f",
                                  *[v for row in rows for v in row])
@@ -42,18 +41,28 @@ CLICK = (0.72, 0.62)
 
 def test_a_wide_canvas_picks_the_particle_under_the_pointer():
     picker = EntityPicker(FakeBuffer(WIDE), STRIDE)
-    idx, _, _ = picker.find_nearest_entity(CLICK, 4.0)
+    idx, _, _ = picker.find_nearest_entity(CLICK, 4.0, len(WIDE))
     assert idx == 1
 
 
 def test_a_square_canvas_is_unchanged():
     picker = EntityPicker(FakeBuffer(WIDE), STRIDE)
-    idx, _, _ = picker.find_nearest_entity(CLICK, 1.0)
+    idx, _, _ = picker.find_nearest_entity(CLICK, 1.0, len(WIDE))
     assert idx == 0
 
 
 def test_the_position_returned_is_world_space_not_the_scaled_probe():
     """The caller feeds this straight to the sliders, which are in world space."""
     picker = EntityPicker(FakeBuffer(WIDE), STRIDE)
-    _, pos, _ = picker.find_nearest_entity(CLICK, 4.0)
+    _, pos, _ = picker.find_nearest_entity(CLICK, 4.0, len(WIDE))
     assert pos == pytest.approx((1.0, 0.0))
+
+
+def test_the_cohort_comes_from_the_index_now_that_it_is_not_stored():
+    """reset() used to store get_cohort(index)/cohorts, which is exactly
+    index/ACTIVE_COUNT. Upstream recomputes the UNNORMALISED get_cohort here
+    instead, which would hand update_sliders_from_particle a value up to
+    `cohorts` where it expects 0..1."""
+    picker = EntityPicker(FakeBuffer(WIDE), STRIDE)
+    _, _, cohort = picker.find_nearest_entity(CLICK, 4.0, 8)
+    assert cohort == pytest.approx(1 / 8)          # nearest is index 1 of 8

@@ -18,7 +18,7 @@ import pytest
 
 from sim import SIZE_OF_ENTITY_STRUCT
 
-STRIDE = SIZE_OF_ENTITY_STRUCT // 4      # 12 floats: pos2 vel2 size1 pad3 col4
+STRIDE = SIZE_OF_ENTITY_STRUCT // 4      # 8 floats: pos2 vel2 size1 hue1 sat1 pad1
 
 
 def _shader_src():
