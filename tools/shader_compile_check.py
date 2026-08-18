@@ -29,6 +29,7 @@ def assemble(entity_count: int = 600000) -> str:
     """Mirror of sim.setup_shaders. shader_prepend inserts after the #version
     line, so the LAST prepend lands FIRST in the compiled source."""
     src = read_shader("shaders/entity_update.glsl")
+    src = shader_prepend(src, read_shader("shaders/cohort_audio.glsl"))
     src = shader_prepend(src, read_shader("shaders/brains/_dispatch.glsl"))
     for brain in BRAINS:
         src = shader_prepend(src, read_shader(f"shaders/brains/{brain}.glsl"))

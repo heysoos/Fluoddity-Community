@@ -1,9 +1,14 @@
 """The cohort mask: a selection over the normalised cohort axis."""
+import re
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from services import cohort_audio as ca
 from services.cohort_tiling import MAX_COHORTS
+
+SHADERS = Path(__file__).resolve().parent.parent / "shaders"
 
 
 def test_the_mask_is_as_wide_as_the_cohort_cap():
@@ -321,3 +326,67 @@ def test_a_masked_row_carries_the_bounds_modulate_clamps_to():
         target.hard_lo if target.hard_lo is not None else target.lo)
     assert float(hi) == pytest.approx(
         target.hard_hi if target.hard_hi is not None else target.hi)
+
+
+def _ca_defines():
+    src = (SHADERS / "cohort_audio.glsl").read_text(encoding="utf-8")
+    return {m.group(1): int(m.group(2)) for m in
+            re.finditer(r"#define\s+CA_(\w+)\s+(\d+)\s*$", src, re.MULTILINE)}
+
+
+def test_the_shader_and_python_agree_on_the_row_order():
+    """Neither side can check this at runtime; a stale row reads the wrong
+    parameter's modulation with nothing raising."""
+    defines = _ca_defines()
+    for name in ("SLOTS", "STRIDE"):
+        defines.pop(name, None)
+    assert defines == {name: i for i, name
+                       in enumerate(ca.COHORT_AUDIO_PARAMS)}
+
+
+def test_the_shader_agrees_on_the_buffer_geometry():
+    src = (SHADERS / "cohort_audio.glsl").read_text(encoding="utf-8")
+    assert f"#define CA_SLOTS {ca.MASK_SLOTS}" in src
+    assert f"#define CA_STRIDE {ca.MASK_SLOTS + 1}" in src
+
+
+def test_the_shader_binds_a_free_slot():
+    src = (SHADERS / "cohort_audio.glsl").read_text(encoding="utf-8")
+    assert "binding = 5" in src
+    for taken in ("binding = 0", "binding = 2", "binding = 3", "binding = 4"):
+        assert taken not in src
+
+
+def test_the_shader_clamps_to_the_bounds_the_row_carries():
+    """Without this a subtract row reaches values the global path clamps."""
+    src = (SHADERS / "cohort_audio.glsl").read_text(encoding="utf-8")
+    assert "clamp(" in src.split("float cohort_audio(")[1]
+
+
+def test_every_maskable_parameter_is_wrapped_at_its_call_site():
+    """A parameter with a row but no wrapper is a control that does nothing."""
+    src = (SHADERS / "entity_update.glsl").read_text(encoding="utf-8")
+    for name in ca.COHORT_AUDIO_PARAMS:
+        assert f"CA_{name}" in src, name
+
+
+def test_the_unmaskable_parameters_are_not_wrapped():
+    src = (SHADERS / "entity_update.glsl").read_text(encoding="utf-8")
+    for name in ("TRAIL_PERSISTENCE", "TRAIL_DIFFUSION", "TIME_SCALE"):
+        assert f"CA_{name}" not in src
+
+
+def test_both_assemblers_prepend_the_include():
+    """sim.py is not the only one. tools/shader_compile_check.py mirrors the
+    chain, and a miss there silently stops the compile check covering this."""
+    root = SHADERS.parent
+    for path in ("sim.py", "tools/shader_compile_check.py"):
+        src = (root / path).read_text(encoding="utf-8")
+        assert "shaders/cohort_audio.glsl" in src, path
+
+
+def test_calculate_setting_itself_is_untouched():
+    """It must stay character-identical across two shaders and sim.py."""
+    src = (SHADERS / "entity_update.glsl").read_text(encoding="utf-8")
+    body = src.split("float calculate_setting(")[1].split("\n}")[0]
+    assert "cohort_audio" not in body

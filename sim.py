@@ -206,9 +206,12 @@ class Sim:
         self.entity_update_source = read_shader('shaders/entity_update.glsl')
         # shader_prepend inserts right after the #version line, so the LAST
         # prepend ends up FIRST. Reading bottom-up, the resulting file order is:
-        #   fourier4_4, _header, fourier, gabor, lenia, mlp, _dispatch, entity_update
+        #   fourier4_4, _header, fourier, gabor, lenia, mlp, _dispatch,
+        #   cohort_audio, entity_update
         # which is what every declaration needs: hash() before _header uses it,
         # the brain functions before _dispatch branches on them.
+        self.entity_update_source = shader_prepend(
+            self.entity_update_source, read_shader('shaders/cohort_audio.glsl'))
         self.entity_update_source = shader_prepend(
             self.entity_update_source, read_shader('shaders/brains/_dispatch.glsl'))
         for _brain in ('mlp', 'lenia', 'gabor', 'fourier'):
