@@ -2,6 +2,8 @@
 import glfw
 import numpy as np
 
+from state.render_params import PaletteParams, MaskParams
+
 
 class SimulationRunner:
     """Runs physics simulation steps with frame assembly and video recording.
@@ -11,7 +13,8 @@ class SimulationRunner:
     """
 
     def __init__(self, sim, camera, video_service, command_handler, window,
-                 advanced_drawing_processor=None, controller_cam=None):
+                 advanced_drawing_processor=None, controller_cam=None,
+                 particle_mask=None):
         self.sim = sim
         self.camera = camera
         self.video_service = video_service
@@ -19,9 +22,20 @@ class SimulationRunner:
         self.window = window
         self.advanced_drawing_processor = advanced_drawing_processor
         self.controller_cam = controller_cam
+        self.particle_mask = particle_mask
 
         # Mouse tracking for draw trail mode
         self.prev_mouse_tex_coords = (0.0, 0.0)
+
+        # Incoming Spout texture for shaders/field_override/spout.frag.
+        # The orchestrator refreshes this each frame; None means no sender.
+        self.external_field_texture = None
+
+        # Per-frame appearance snapshots, refreshed once per rendered frame in
+        # run_simulation_frame and read by every physics step within it.
+        self._palette_params = None
+        self._mask_params = None
+        self._mask_texture = None
 
     def run_simulation_frame(self, ui_state, sweep_mode, sweep_reticle_pos,
                               sweep_reticle_visible, screen_aspect,
@@ -72,6 +86,10 @@ class SimulationRunner:
                     tiling_mode=tiling_mode,
                     camera_pos=tuple(cam.pos) if cam else (0.0, 0.0, 0.0),
                     camera_dir=tuple(cam.dir) if cam else (0.0, 0.0, 1.0),
+                    external_texture=self.external_field_texture,
+                    spout_field_mode=adv_prefs.spout_field_mode,
+                    spout_field_scale=adv_prefs.spout_field_scale,
+                    spout_strafe_scale=adv_prefs.spout_strafe_scale,
                 )
             elif adv_prefs.advanced_drawing_enabled and (
                 adv_prefs.advanced_draw_force_field or adv_prefs.advanced_draw_strafe_field
@@ -106,6 +124,25 @@ class SimulationRunner:
                 self.advanced_drawing_processor.clear_force_field()
             if ui_state.request_clear_strafe_field:
                 self.advanced_drawing_processor.clear_strafe_field()
+
+        # Palette and activity mask, refreshed once per rendered frame for the
+        # same reason the field override is: with motion blur on, the physics
+        # steps below run several times per frame, and regenerating a mask
+        # per step would be wasted work on an unchanged input.
+        #
+        # The mask deliberately uses the incoming Spout texture whether or not
+        # spout.frag is the selected field override. The field decides where
+        # particles go; the mask decides how much they do there. Independent
+        # controls, one source texture.
+        self._palette_params = PaletteParams.from_preferences(ui_state.preferences)
+        self._mask_params = MaskParams.from_preferences(ui_state.preferences)
+        self._mask_texture = None
+        if self.particle_mask is not None:
+            self._mask_texture = self.particle_mask.update(
+                self.sim.can.size[0], self.sim.can.size[1],
+                self._mask_params,
+                external_texture=self.external_field_texture,
+            )
 
         # Handle clear canvas request
         if ui_state.request_clear_canvas:
@@ -300,6 +337,9 @@ class SimulationRunner:
             field_texture = self.advanced_drawing_processor.field_texture,
             force_field_strength=adv_prefs.force_field_strength,
             strafe_field_strength=adv_prefs.strafe_field_strength,
+            palette=self._palette_params,
+            mask=self._mask_params,
+            mask_texture=self._mask_texture,
         )
 
         # Check for deferred entity selection only on first physics step

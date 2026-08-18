@@ -243,4 +243,134 @@ class AdvancedDrawingWindowMixin:
                             imgui.set_item_default_focus()
                     imgui.end_combo()
 
+                if prefs.field_override_shader == "spout.frag":
+                    self._render_spout_field_controls(prefs)
+
+            # Independent of the field override: the field decides where
+            # particles go, the mask decides how much they do there.
+            self._render_activity_mask_controls(prefs)
+
         imgui.end()
+
+    def _render_spout_field_controls(self, prefs):
+        """Controls for spout.frag: how the incoming texture becomes a field.
+
+        Only shown when spout.frag is the selected override shader. Requires
+        the app to have been started with --spout-in <sender name>.
+        """
+        imgui.separator()
+        imgui.text_disabled("Spout field source")
+        self._delayed_tooltip(
+            "Drives the force/strafe field from an incoming Spout sender "
+            "(start with --spout-in <name>). Send a vvvv shader here and it "
+            "steers the particles."
+        )
+
+        modes = ["Channels (rg / ba)", "Luminance gradient", "Gradient perpendicular"]
+        imgui.set_next_item_width(-1)
+        if imgui.begin_combo("##spout_field_mode", modes[prefs.spout_field_mode]):
+            for i, label in enumerate(modes):
+                selected = (i == prefs.spout_field_mode)
+                if imgui.selectable(label, selected)[0]:
+                    prefs.spout_field_mode = i
+                if selected:
+                    imgui.set_item_default_focus()
+            imgui.end_combo()
+        self._delayed_tooltip(
+            "Channels: r,g are force xy and b,a are strafe zw -- exact, for a "
+            "purpose-made vector field.\n"
+            "Luminance gradient: particles climb toward bright regions -- reads "
+            "well from arbitrary imagery.\n"
+            "Gradient perpendicular: particles circulate along contours instead "
+            "of climbing them."
+        )
+
+        _, prefs.spout_field_scale = imgui.slider_float(
+            "Force##spout_field_scale", prefs.spout_field_scale, 0.0, 4.0
+        )
+        _, prefs.spout_strafe_scale = imgui.slider_float(
+            "Strafe##spout_strafe_scale", prefs.spout_strafe_scale, 0.0, 4.0
+        )
+
+    def _render_activity_mask_controls(self, prefs):
+        """Controls for the per-region activity mask.
+
+        Independent of the field override -- the mask uses the incoming Spout
+        texture whether or not spout.frag is selected, and works with no
+        sender at all via the vignette.
+        """
+        imgui.separator()
+        if not imgui.collapsing_header("Activity Mask"):
+            return
+        self._delayed_tooltip(
+            "Weights how much particles do in each part of the canvas, from "
+            "an incoming Spout texture and/or a vignette. A bias, not a "
+            "stencil -- Floor sets how alive the quiet areas stay."
+        )
+
+        sources = ["Spout feed", "Vignette", "Max (feed, vignette)",
+                   "Feed x vignette"]
+        imgui.set_next_item_width(-1)
+        if imgui.begin_combo("##mask_source", sources[prefs.mask_source]):
+            for i, label in enumerate(sources):
+                selected = (i == prefs.mask_source)
+                if imgui.selectable(label, selected)[0]:
+                    prefs.mask_source = i
+                if selected:
+                    imgui.set_item_default_focus()
+            imgui.end_combo()
+
+        _, prefs.mask_ink = imgui.slider_float(
+            "Ink##mask_ink", prefs.mask_ink, 0.0, 1.0
+        )
+        self._delayed_tooltip(
+            "How much particle alpha follows the mask. The strongest control "
+            "here: alpha gates trail deposition as well as display, so quiet "
+            "regions lay down weaker trails, which weakens the sensor "
+            "attraction there, which draws particles back toward the busy "
+            "areas on their own."
+        )
+        _, prefs.mask_force = imgui.slider_float(
+            "Force##mask_force", prefs.mask_force, 0.0, 1.0
+        )
+        self._delayed_tooltip(
+            "How much particle force follows the mask -- agitation rather "
+            "than presence."
+        )
+        _, prefs.mask_pull = imgui.slider_float(
+            "Pull##mask_pull", prefs.mask_pull, 0.0, 2.0
+        )
+        self._delayed_tooltip(
+            "Drift up the mask gradient, toward the busier regions. A nudge "
+            "on top of the emergent effect of Ink, not a wall."
+        )
+
+        _, prefs.mask_floor = imgui.slider_float(
+            "Floor##mask_floor", prefs.mask_floor, 0.0, 1.0
+        )
+        self._delayed_tooltip(
+            "Activity level where the mask is dark. 1.0 is a flat field (no "
+            "effect), 0.0 kills the empty areas entirely, in between keeps "
+            "them quietly alive."
+        )
+        _, prefs.mask_gamma = imgui.slider_float(
+            "Gamma##mask_gamma", prefs.mask_gamma, 0.2, 4.0
+        )
+        _, prefs.mask_blur = imgui.slider_float(
+            "Blur##mask_blur", prefs.mask_blur, 0.0, 8.0
+        )
+        self._delayed_tooltip(
+            "Softens the source into regions rather than outlines. Raise it "
+            "on hard-edged imagery so the particles are enriched by the input "
+            "instead of tracing it."
+        )
+
+        _, prefs.mask_vignette = imgui.slider_float(
+            "Vignette##mask_vignette", prefs.mask_vignette, 0.0, 1.0
+        )
+        _, prefs.mask_vignette_softness = imgui.slider_float(
+            "Vignette Soft##mask_vig_soft", prefs.mask_vignette_softness, 0.0, 1.0
+        )
+
+        if prefs.mask_ink <= 0.0 and prefs.mask_force <= 0.0 and prefs.mask_pull <= 0.0:
+            imgui.text_disabled("Inactive - raise Ink, Force or Pull")

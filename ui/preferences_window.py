@@ -303,11 +303,69 @@ class PreferencesWindowMixin:
             if watercolor_active:
                 imgui.end_disabled()
 
+            self._render_palette_controls()
+
         imgui.end()
 
         # Restore normal window background color if it was changed
         if recording_active or video_pending:
             imgui.pop_style_color()
+
+    def _render_palette_controls(self):
+        """Palette section: fold particle hue into a band around one colour.
+
+        Lives on preferences rather than sim state so that loading a physics
+        config cannot change it -- in live use the palette follows the host
+        show, and a preset recall must not fight that.
+        """
+        prefs = self.state.preferences
+        imgui.separator()
+        if not imgui.collapsing_header("Palette"):
+            return
+        self._delayed_tooltip(
+            "Bends particle hue into a band around a single colour, instead "
+            "of the simulation's own full spectrum. Driven over OSC in the "
+            "VJ setup so the particles follow the show's colour."
+        )
+
+        _, prefs.palette_mix = imgui.slider_float(
+            "Mix##palette", prefs.palette_mix, 0.0, 1.0, format="%.2f"
+        )
+        self._delayed_tooltip(
+            "0 = the simulation's own hues, untouched. 1 = fully palette-driven."
+        )
+
+        if prefs.palette_mix <= 0.0:
+            imgui.text_disabled("Inactive - raise Mix")
+            return
+
+        imgui.indent(20)
+        _, prefs.palette_hue = imgui.slider_float(
+            "Hue##palette", prefs.palette_hue, 0.0, 1.0, format="%.3f"
+        )
+        _, prefs.palette_spread = imgui.slider_float(
+            "Spread##palette", prefs.palette_spread, 0.0, 0.5, format="%.3f"
+        )
+        self._delayed_tooltip(
+            "Hue band half-width, in turns of the wheel. 0.5 spans everything; "
+            "small values give a tight single-hue family. Narrow is also what "
+            "keeps overlapping particles from washing out to white -- they "
+            "become neighbouring hues rather than opposite ones."
+        )
+        _, prefs.palette_stops = imgui.slider_int(
+            "Stops##palette", prefs.palette_stops, 0, 8
+        )
+        self._delayed_tooltip(
+            "0 or 1 = a continuous band. 2 or more quantizes it into that many "
+            "discrete hues -- Spread 0.5 with Stops 2 gives a complementary pair."
+        )
+        _, prefs.palette_sat = imgui.slider_float(
+            "Saturation##palette", prefs.palette_sat, 0.0, 1.0, format="%.2f"
+        )
+        _, prefs.palette_value = imgui.slider_float(
+            "Value##palette", prefs.palette_value, 0.0, 1.0, format="%.2f"
+        )
+        imgui.unindent(20)
 
     def _get_key_combo(self, action: str, modifier: str = "") -> str:
         """

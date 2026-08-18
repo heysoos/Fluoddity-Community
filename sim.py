@@ -9,6 +9,11 @@ from state import SimState
 SIZE_OF_ENTITY_STRUCT = 4*12  # 4 bytes per 32bit value. 12 values (pos:2, vel:2, size:1, padding:3, color:4)
 SIZE_OF_RULE_STRUCT = 4*4*20  # 4 bytes per float32. 4 floats per vec4. 20 vec4s per rule
 
+# Channels in the canvas and brush trail maps. 2 = RG32F, holding the velocity
+# vector only. Set back to 4 to restore the old RGBA32F layout, which also
+# restores the density channel that frame_assembly.frag's emboss used to read.
+CANVAS_COMPONENTS = 2
+
 class Sim:
     def __init__(self, ctx: moderngl.Context, world_size: float = 1.0, canvas_aspect_ratio: str = "1:1"):
         self.ctx = ctx
@@ -73,11 +78,21 @@ class Sim:
         self.multi_load_buffer.bind_to_storage_buffer(3)  # Binding 3 matches shader layout
         self.multi_load_rule_buffer.bind_to_storage_buffer(4)  # Binding 4 for multi-load rules
 
-        # Create double-buffered canvas textures (4-channel float32)
+        # Create double-buffered canvas textures (2-channel float32)
         # We ping-pong between these to avoid reading and writing the same texture
+        #
+        # RG32F, not RGBA32F. The trail map only ever needs the velocity vector:
+        # the sensor taps in entity_update.glsl read .xy and nothing else, and
+        # canvas.frag's draw/fill modes write .xy. The old .z and .w channels
+        # were brush.frag's `vec4(vel, .01, 1)`, i.e. accumulated kernel weight
+        # at two different scales -- w was always exactly 100*z, so the pair
+        # carried one quantity between them and the physics read neither.
+        # This is the hottest memory traffic in the sim (two sensor taps per
+        # particle per frame, plus a five-tap blur per pixel), so halving the
+        # bytes per texel is worth more than the channels cost to keep.
         self.can_textures = [
-            self.ctx.texture(canvas_shape, 4, dtype='f4'),
-            self.ctx.texture(canvas_shape, 4, dtype='f4')
+            self.ctx.texture(canvas_shape, CANVAS_COMPONENTS, dtype='f4'),
+            self.ctx.texture(canvas_shape, CANVAS_COMPONENTS, dtype='f4')
         ]
         for tex in self.can_textures:
             tex.repeat_x = True
@@ -92,8 +107,8 @@ class Sim:
         self.can = self.can_textures[0]
         self.canvas = self.can_framebuffers[1]  # Write to buffer 1, read from buffer 0 initially
 
-        # Create brush texture and framebuffer
-        self.brush_tex = self.ctx.texture(canvas_shape, 4, dtype='f4')
+        # Create brush texture and framebuffer (RG32F, see canvas note above)
+        self.brush_tex = self.ctx.texture(canvas_shape, CANVAS_COMPONENTS, dtype='f4')
         self.brush_tex.repeat_x = True
         self.brush_tex.repeat_y = True
         self.brush = self.ctx.framebuffer([self.brush_tex])
@@ -127,6 +142,7 @@ class Sim:
         tryset(self.entity_update_program, 'canvas_resolution', canvas_shape)
         tryset(self.entity_update_program, 'canvas', 1)
         tryset(self.entity_update_program, 'field_texture', 5)
+        tryset(self.entity_update_program, 'mask_tex', 6)
 
         # 2. Brush update shaders (instanced rendering)
         self.brush_vertex_source = read_shader('shaders/brush.vert')
@@ -165,7 +181,8 @@ class Sim:
     def entity_update(self, ctx: moderngl.Context, multi_load_service=None,
                       is_preview_active=False, field_texture_bound=False,
                       force_field_strength: float = 1.0,
-                      strafe_field_strength: float = 1.0):
+                      strafe_field_strength: float = 1.0,
+                      palette=None, mask=None, mask_texture_bound=False):
         '''
         Run a single physics update on all particles
         '''
@@ -213,6 +230,23 @@ class Sim:
         # Appearance settings from sim state (now part of physics config)
         tryset(self.entity_update_program, 'HUE_SENSITIVITY', self._state.hue_sensitivity)
         tryset(self.entity_update_program, 'COLOR_BY_COHORT', self._state.color_by_cohort)
+
+        # Palette and activity mask (state/render_params.py). These come from
+        # preferences rather than sim state, so a physics config load cannot
+        # change the show's colour. None means default, i.e. no effect.
+        tryset(self.entity_update_program, 'PALETTE_MIX', palette.mix if palette else 0.0)
+        if palette is not None and palette.active:
+            tryset(self.entity_update_program, 'PALETTE_HUE', palette.hue)
+            tryset(self.entity_update_program, 'PALETTE_SAT', palette.sat)
+            tryset(self.entity_update_program, 'PALETTE_VALUE', palette.value)
+            tryset(self.entity_update_program, 'PALETTE_SPREAD', palette.spread)
+            tryset(self.entity_update_program, 'PALETTE_STOPS', float(palette.stops))
+
+        mask_on = mask is not None and mask.active and mask_texture_bound
+        tryset(self.entity_update_program, 'MASK_ACTIVE', mask_on)
+        tryset(self.entity_update_program, 'MASK_INK', mask.ink if mask_on else 0.0)
+        tryset(self.entity_update_program, 'MASK_FORCE', mask.force if mask_on else 0.0)
+        tryset(self.entity_update_program, 'MASK_PULL', mask.pull if mask_on else 0.0)
 
 
 
@@ -335,7 +369,8 @@ class Sim:
                canvas_draw_active: bool = True,
                field_texture=None,
                force_field_strength: float = 1.0,
-               strafe_field_strength: float = 1.0):
+               strafe_field_strength: float = 1.0,
+               palette=None, mask=None, mask_texture=None):
         # Bind the current read buffer for sampling (will write to the other one)
         self.can_textures[self.can_read_index].use(location=1)
         self.brush_tex.use(location=3)
@@ -343,6 +378,10 @@ class Sim:
         # Bind advanced drawing field texture if available
         if field_texture is not None:
             field_texture.use(location=5)
+
+        # Bind the activity mask if one was generated this frame
+        if mask_texture is not None:
+            mask_texture.use(location=6)
 
         current_time = time.time()
         self.time = current_time - self.start_time_stamp
@@ -352,7 +391,9 @@ class Sim:
         self.entity_update(ctx, multi_load_service, is_preview_active,
                            field_texture_bound=field_texture is not None,
                            force_field_strength=force_field_strength,
-                           strafe_field_strength=strafe_field_strength)
+                           strafe_field_strength=strafe_field_strength,
+                           palette=palette, mask=mask,
+                           mask_texture_bound=mask_texture is not None)
 
         ctx.disable(moderngl.BLEND)
         self.can_update(ctx, draw_mode, mouse_pos, prev_mouse_pos, draw_size, draw_power,

@@ -96,11 +96,21 @@ class AdvancedDrawingProcessor:
                          brush_mode, fixed_direction_heading,
                          tiling_mode,
                          camera_pos=(0.0, 0.0, 0.0),
-                         camera_dir=(0.0, 0.0, 1.0)):
+                         camera_dir=(0.0, 0.0, 1.0),
+                         external_texture=None,
+                         spout_field_mode=1,
+                         spout_field_scale=1.0,
+                         spout_strafe_scale=0.0):
         """Run the selected override shader to generate the field texture.
 
         Called once per render frame (not per physics step). Replaces the
         field texture contents entirely (no blending).
+
+        Args:
+            external_texture: optional ModernGL texture bound as ``external_tex``,
+                used by shaders/field_override/spout.frag to drive the field
+                from an incoming Spout sender. Ignored by shaders that don't
+                declare the uniform (tryset drops it silently).
         """
         self._ensure_resources(canvas_width, canvas_height)
         self._ensure_override_resources(shader_name)
@@ -128,6 +138,16 @@ class AdvancedDrawingProcessor:
         tryset(ovr["program"], "fill_mode", False)
         tryset(ovr["program"], "camera_pos", camera_pos)
         tryset(ovr["program"], "camera_dir", camera_dir)
+
+        # External (Spout) source for spout.frag. Bound on unit 0; the field
+        # FBO is the render target, so there is no conflict with it.
+        if external_texture is not None:
+            external_texture.use(location=0)
+        tryset(ovr["program"], "external_tex", 0)
+        tryset(ovr["program"], "spout_connected", external_texture is not None)
+        tryset(ovr["program"], "spout_field_mode", int(spout_field_mode))
+        tryset(ovr["program"], "spout_field_scale", float(spout_field_scale))
+        tryset(ovr["program"], "spout_strafe_scale", float(spout_strafe_scale))
 
         # Render with no blending (fully replace field contents)
         self.ctx.disable(moderngl.BLEND)

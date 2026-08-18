@@ -50,6 +50,38 @@ class PreferencesState:
     shader_driven_field: bool = False  # Use a frag shader to override the field texture
     field_override_shader: str = "march.frag"  # Currently selected field override shader filename
 
+    # Spout field source (shaders/field_override/spout.frag, needs --spout-in)
+    spout_field_mode: int = 1  # 0=channels (rg/ba), 1=luminance gradient, 2=perpendicular
+    spout_field_scale: float = 1.0  # Force field strength from the incoming texture
+    spout_strafe_scale: float = 0.0  # Strafe field strength (0 = force only)
+
+    # Palette: bend particle hue toward an external colour (the VJ rig's
+    # `edgecol`), so the particles sit in the show's colour family instead of
+    # running their own full-spectrum rainbow. Driven over OSC in live use.
+    # These live here rather than on SimState deliberately: SimState's
+    # appearance fields are saved into physics configs and overwritten on load
+    # (config_saver.py), and a preset recall must not change the show's colour.
+    palette_mix: float = 0.0  # 0 = untouched simulation hues (default, a no-op)
+    palette_hue: float = 0.0  # Target hue, 0..1 around the wheel
+    palette_sat: float = 0.8  # Target saturation
+    palette_value: float = 1.0  # Target brightness
+    palette_spread: float = 0.15  # Hue band half-width in turns (0.5 = whole wheel)
+    palette_stops: int = 0  # 0/1 = continuous band; 2+ quantizes it into that many hues
+
+    # Activity mask: how much each region of the canvas gets to do. A bias,
+    # not a stencil -- mask_floor sets the activity level outside the mask, so
+    # empty areas stay alive at a controlled level rather than going dead.
+    # Source is the incoming Spout texture and/or a built-in vignette.
+    mask_ink: float = 0.0  # How much particle alpha follows the mask (0 = off)
+    mask_force: float = 0.0  # How much particle force follows the mask (0 = off)
+    mask_pull: float = 0.0  # Containment pull up the mask gradient
+    mask_floor: float = 0.3  # Activity level where the mask is dark
+    mask_gamma: float = 1.0  # Contrast on the mask (>1 tightens toward bright areas)
+    mask_blur: float = 2.0  # Blur radius in mask texels -- softens shapes into regions
+    mask_vignette: float = 0.0  # Radial falloff strength
+    mask_vignette_softness: float = 0.5  # Radial falloff width
+    mask_source: int = 0  # 0=feed, 1=vignette, 2=max(feed,vignette), 3=feed*vignette
+
     # Physics slider group collapsed states (True = expanded/open, False = collapsed)
     physics_group_basics: bool = True  # Default: open (trail sensors + mutation)
     physics_group_forces: bool = True  # Default: open (global force mult, drag)

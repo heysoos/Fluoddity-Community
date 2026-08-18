@@ -51,6 +51,24 @@ uniform PhysicsSetting MUTATION_SCALE_SETTING;
 uniform PhysicsSetting HAZARD_RATE_SETTING;
 uniform float HUE_SENSITIVITY;
 uniform bool COLOR_BY_COHORT;
+
+// Palette: bend particle hue into a band around an external colour, so the
+// particles sit in the host show's colour family instead of running a full
+// spectrum. PALETTE_MIX 0 leaves the hues above untouched.
+uniform float PALETTE_MIX;
+uniform float PALETTE_HUE;
+uniform float PALETTE_SAT;
+uniform float PALETTE_VALUE;
+uniform float PALETTE_SPREAD;   // band half-width in turns; 0.5 = whole wheel
+uniform float PALETTE_STOPS;    // 0/1 = continuous, 2+ = quantize the band
+
+// Activity mask: a per-region weight on how much each particle does.
+// .x = activity (already floored), .zw = its gradient. See particle_mask.frag.
+uniform sampler2D mask_tex;
+uniform bool MASK_ACTIVE;
+uniform float MASK_INK;    // how much particle alpha follows the mask
+uniform float MASK_FORCE;  // how much particle force follows the mask
+uniform float MASK_PULL;   // containment strength up the mask gradient
 uniform bool DISABLE_SYMMETRY;
 uniform int ABSOLUTE_ORIENTATION; // 0=Off, 1=Y axis, 2=Radial
 uniform float ORIENTATION_MIX; // Blend factor for orientation calculations
@@ -331,6 +349,19 @@ vec4 get_field(vec2 p){
     return texture(field_texture, uv);
 }
 
+//Sample the activity mask. Same canvas-space -> UV mapping as get_field():
+//the mask target is the canvas scaled down by a constant, so its aspect
+//matches and one mapping serves both.
+vec4 get_mask(vec2 p){
+    if(!MASK_ACTIVE)return vec4(1,1,0,0);
+    vec2 res=textureSize(mask_tex,0);
+    float ca = res.x / res.y;
+    vec2 half_extent = vec2(sqrt(ca), 1.0 / sqrt(ca));
+    vec2 uv = p / (2.0 * half_extent) + 0.5;
+    if(get_particle_boundary_conditions() == 2) uv = fract(uv);
+    return texture(mask_tex, uv);
+}
+
 vec2 safenorm(vec2 p){
     return length(p)==0?vec2(0):normalize(p);
 }
@@ -539,6 +570,37 @@ void main() {
     e.color.z=1;//brightness 1.
     e.color.w=0.045; //low alpha
 
+    //PALETTE: fold the hue above into a band around PALETTE_HUE. Whatever the
+    //simulation produced still selects a position *within* the band, so
+    //cohorts stay distinguishable; they just stop being distinguished by
+    //arbitrary spectrum. Keeping the band narrow is also what prevents
+    //additive overlap washing out to white -- overlapping particles are now
+    //neighbouring hues rather than opposite ones.
+    if(PALETTE_MIX > 0.0){
+        float base_hue = e.color.x;
+        float t = fract(base_hue);
+        if(PALETTE_STOPS >= 2.0) t = floor(t*PALETTE_STOPS)/PALETTE_STOPS;
+        float banded = PALETTE_HUE + (t-0.5)*PALETTE_SPREAD*2.0;
+        e.color.x = mix(base_hue, banded, PALETTE_MIX);//hsv2rgb wraps via fract
+        e.color.y = mix(e.color.y, PALETTE_SAT, PALETTE_MIX);
+        e.color.z = mix(e.color.z, PALETTE_VALUE, PALETTE_MIX);
+    }
+
+    //ACTIVITY MASK: weight what this particle does by where it is. A bias,
+    //not a stencil -- mask.x already carries the floor, so the quiet areas
+    //stay alive at whatever level was dialled in.
+    //Scaling alpha matters more than it looks: alpha gates trail *deposition*
+    //(brush.frag discards on w==0) as well as display, so a low-activity
+    //region lays down weaker trails, which weakens the sensor attraction
+    //there, which draws particles back toward the active regions on their
+    //own. The confinement is emergent; MASK_PULL is only a nudge on top.
+    vec4 mask_sample = get_mask(e.pos);
+    float activity = mask_sample.x;
+    float force_weight = mix(1.0, activity, MASK_FORCE);
+    force *= force_weight;
+    strafe *= force_weight;
+    e.color.w *= mix(1.0, activity, MASK_INK);
+
     //Accelerate: Apply drag and add force to e.vel,
     e.vel = e.vel*calculate_setting(get_particle_drag(),e.pos,cohort) + force;
     //Move: add e.vel and strafe to e.pos
@@ -549,6 +611,9 @@ void main() {
     vec4 draw_sample =get_field(e.pos);
     e.vel += .01*force_field_strength*draw_sample.xy;
     e.pos += .01*strafe_field_strength*draw_sample.zw;
+
+    //Mask containment: drift up the activity gradient, toward the busy areas.
+    e.vel += .01*MASK_PULL*mask_sample.zw;
 
     //BOUNDARY_CONDITIONS_MODE:  0-1-2 == BOUNCE-RESET-WRAP
     float ca = canvas_resolution.x / canvas_resolution.y;

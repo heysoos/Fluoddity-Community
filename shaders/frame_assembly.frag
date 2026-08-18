@@ -87,9 +87,28 @@ vec2 canvas_uv_to_screen(vec2 canvas_uv) {
 }
 
 // Estimate gradient of scalar field using central differences (takes .z component as scalar)
+// Height field the emboss lighting is computed from.
+//
+// This used to be the canvas .z channel -- accumulated brush kernel weight,
+// i.e. how much trail had been laid down. The canvas is RG32F now (see
+// CANVAS_COMPONENTS in sim.py) and carries only the velocity vector, so height
+// comes from trail magnitude instead. It reads the same way over most of the
+// frame, since dense trail regions are also locally aligned ones. Where it
+// differs is a region packed with trails running in opposing directions: those
+// cancel in .xy and now emboss flat, where before they stood proud.
+//
+// The scale differs from the old channel too, and emboss strength is set by
+// the gradient's size relative to EMBOSS_INTENSITY, so a config saved before
+// this change may need its Emboss Intensity re-dialled.
+float emboss_height(sampler2D tex, vec2 tex_uv) {
+    return length(texture(tex, tex_uv).xy);
+}
+
 vec2 gradient(sampler2D tex, vec2 tex_uv, float epsilon) {
-    float dx = (texture(tex, tex_uv + vec2(epsilon, 0.0)).z - texture(tex, tex_uv - vec2(epsilon, 0.0)).z) / (2.0 * epsilon);
-    float dy = (texture(tex, tex_uv + vec2(0.0, epsilon)).z - texture(tex, tex_uv - vec2(0.0, epsilon)).z) / (2.0 * epsilon);
+    float dx = (emboss_height(tex, tex_uv + vec2(epsilon, 0.0))
+              - emboss_height(tex, tex_uv - vec2(epsilon, 0.0))) / (2.0 * epsilon);
+    float dy = (emboss_height(tex, tex_uv + vec2(0.0, epsilon))
+              - emboss_height(tex, tex_uv - vec2(0.0, epsilon))) / (2.0 * epsilon);
     return vec2(dx, dy);
 }
 

@@ -4,3 +4,7 @@ imgui-bundle>=1.0.0
 numpy>=1.24.0
 Pillow>=10.0.0
 pyopengl>=3.1.0
+
+# vvvv bridge (optional — only needed for --spout-out/--spout-in/--osc-port)
+SpoutGL>=0.1.1
+python-osc>=1.8.0

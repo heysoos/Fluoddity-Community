@@ -15,7 +15,16 @@ from simulation_runner import SimulationRunner
 from camera_input import process_camera_input
 from controller_input import ControllerCam, process_controller_input, find_joystick
 from utilities.advanced_drawing import AdvancedDrawingProcessor
+from utilities.particle_mask import ParticleMask
+from services.preset_index import PresetIndex
 
+# Raw OSC addresses for preset selection. Not ParamSpecs: selecting a preset is
+# an action, not a value, so these are polled and edge-detected rather than
+# written onto a state object.
+PRESET_ADDRESSES = ["preset", "presets/refresh"]
+
+# How often the preset list is re-sent to vvvv, in seconds.
+PRESET_REPUBLISH_SECONDS = 5.0
 
 class App:
     """Main application orchestrator.
@@ -25,17 +34,32 @@ class App:
     screenshot state machines.
     """
 
-    def __init__(self):
+    def __init__(self, args=None):
+        self.args = args
         # Initialize GLFW
         if not glfw.init():
             raise Exception("GLFW initialization failed")
-        self.window = glfw.create_window(800, 600, "Fluoddity", None, None)
+
+        # Render resolution follows the window framebuffer size throughout the
+        # camera path, so --width/--height size the window to the resolution you
+        # want out. --offscreen hides it for shows; drive it over OSC instead.
+        width = getattr(args, "width", None) or 800
+        height = getattr(args, "height", None) or 600
+        offscreen = getattr(args, "offscreen", False)
+        if offscreen:
+            glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
+
+        self.window = glfw.create_window(width, height, "Fluoddity", None, None)
         if not self.window:
             glfw.terminate()
             raise Exception("GLFW window creation failed")
 
         glfw.make_context_current(self.window)
-        glfw.swap_interval(1)  # Enable vsync
+        # Physics advances per frame rather than on a measured dt, so disabling
+        # vsync changes the look as well as the framerate — speedmult will need
+        # retuning. Two vsynced processes on one GPU also beat against each
+        # other, which is why offscreen mode turns it off.
+        glfw.swap_interval(0 if (offscreen or getattr(args, "no_vsync", False)) else 1)
 
         # Initialize ModernGL
         self.ctx = moderngl.create_context()
@@ -68,6 +92,9 @@ class App:
         self.arrow_debug_service = ArrowDebugService(self.ctx)
         self.multi_load_service = MultiLoadService()
         self.advanced_drawing_processor = AdvancedDrawingProcessor(self.ctx)
+        # Per-region activity mask. Allocates nothing until a mask control is
+        # dialled off zero, so it is free when unused.
+        self.particle_mask = ParticleMask(self.ctx)
         self.ui.multi_load_service = self.multi_load_service
         self.ui.advanced_drawing_processor = self.advanced_drawing_processor
 
@@ -97,7 +124,8 @@ class App:
             self.sim, self.camera, self.video_service,
             self.command_handler, self.window,
             advanced_drawing_processor=self.advanced_drawing_processor,
-            controller_cam=self.controller_cam
+            controller_cam=self.controller_cam,
+            particle_mask=self.particle_mask
         )
 
         # Frame timing
@@ -122,6 +150,73 @@ class App:
         self._load_default_config()
         self.sim.reload()
         self.sim.reset()
+
+        # vvvv bridge (Spout texture out/in, OSC parameter control)
+        self.spout_out = None
+        self.spout_in = None
+        self.osc = None
+        self.mod = None
+        # Numbered preset list for OSC selection. Built regardless of the
+        # bridge so the indices are available to anything else that wants them.
+        self.preset_index = PresetIndex(self.app_configs_dir,
+                                        self.user_configs_dir)
+        self._last_preset_request = None
+        self._last_refresh_seq = 0
+        self._publish_queue = []
+        self._presets_last_publish = 0.0
+        self._fps_counter = 0
+        self._fps_last_report = time.time()
+        self._init_bridge()
+
+    def _init_bridge(self):
+        """Set up Spout and OSC if the corresponding flags were given.
+
+        Everything here is opt-in: with no bridge flags the app behaves exactly
+        as it did before.
+        """
+        args = self.args
+        if args is None:
+            return
+        if not (args.spout_out or args.spout_in or args.osc_port):
+            return
+
+        try:
+            from bridge import SpoutOut, SpoutIn, OscControl, ModMatrix
+            from bridge.args import resolve_return
+            from bridge.fluoddity_params import specs_from_registry, extra_groups
+            from bridge.mod_matrix import RAW_ADDRESSES
+        except ImportError as exc:
+            print(f"!! vvvv bridge requested but unavailable: {exc}")
+            print("   pip install SpoutGL python-osc")
+            return
+
+        if args.spout_out:
+            size = glfw.get_framebuffer_size(self.window)
+            self.spout_out = SpoutOut(self.ctx, args.spout_out, size,
+                                      invert=not args.no_invert)
+            print(f"Spout sender '{args.spout_out}' at {size[0]}x{size[1]}")
+
+        if args.spout_in:
+            self.spout_in = SpoutIn(self.ctx, args.spout_in,
+                                    invert=not args.no_invert)
+            print(f"Spout receiver '{args.spout_in}' "
+                  f"(select spout.frag under Advanced Drawing to use it)")
+
+        if args.osc_port:
+            from ui.physics_params import PHYSICS_PARAMS
+            return_host, return_port = resolve_return(args)
+            physics_specs = specs_from_registry(PHYSICS_PARAMS)
+            self.osc = OscControl(physics_specs,
+                                  port=args.osc_port, prefix=args.osc_prefix,
+                                  host=args.osc_host, return_host=return_host,
+                                  return_port=return_port,
+                                  verbose=args.osc_verbose,
+                                  groups=extra_groups(),
+                                  raw_addresses=RAW_ADDRESSES + PRESET_ADDRESSES)
+            # Beat-locked modulation, evaluated per frame against the physics
+            # registry. Inert until vvvv sends a /mod/ row with nonzero depth.
+            self.mod = ModMatrix(physics_specs)
+            self.publish_presets()
 
     def _ensure_default_config(self):
         """Ensure _Default.json exists in physics_configs directory. Create it if missing."""
@@ -150,15 +245,186 @@ class App:
         while not glfw.window_should_close(self.window):
             glfw.poll_events()
             self.orchestrate_frame()
+
+            # Publish once per *displayed* frame, deliberately not from
+            # SimulationRunner._process_assembled_frame: with motion blur that
+            # runs once per accumulation sample, so sending there would stream
+            # partially accumulated frames. camera.assembled_texture holds the
+            # finished frame — tonemapped, bloomed, and free of ImGui chrome.
+            if self.spout_out is not None:
+                self.spout_out.send(self.camera.assembled_texture)
+            self._report_fps()
+
             glfw.swap_buffers(self.window)
 
         self.cleanup()
+
+    def publish_presets(self, announce: bool = False):
+        """Send the numbered preset list back to vvvv.
+
+        Repeated on a slow heartbeat (see _report_fps) as well as at startup
+        and on /fluoddity/presets/refresh, so a receiver that appears later
+        still gets it. The whole list goes as one comma-separated string --
+        131 bundled presets come to ~1.1 kB, well inside a UDP datagram.
+
+        Args:
+            announce: log it. False for the heartbeat, which would otherwise
+                print every few seconds forever.
+        """
+        if self.osc is None:
+            return
+        prefix = self.osc.prefix
+        count = len(self.preset_index)
+        queue = [(f"{prefix}/presets/count", count)]
+
+        # The whole list on one address, for receivers that can take it.
+        names = self.preset_index.name_list()
+        queue.append((f"{prefix}/presets/names", names))
+
+        # Queued, not sent. vvvv's OSCget takes one datagram per frame off its
+        # UDP node -- a burst arriving inside a single frame is reduced to its
+        # first message and the rest are dropped. That is why /presets/count
+        # (sent first) always arrived and nothing after it ever did, while
+        # /fps and /preset/name were fine: those are sent on their own.
+        self._publish_queue = queue
+        self._presets_last_publish = time.time()
+        if announce:
+            print(f"[fluobridge] publishing {count} presets to vvvv "
+                  f"({len(queue)} messages, one per frame)")
+
+    def _pump_publish_queue(self):
+        """Emit one queued telemetry message per frame.
+
+        Deliberately one, not a batch: see publish_presets(). At 60 fps the
+        full preset list goes out in about a third of a second, and it is
+        re-queued on a slow heartbeat anyway.
+        """
+        if self.osc is None or not self._publish_queue:
+            return
+        address, value = self._publish_queue.pop(0)
+        self.osc.send(address, value)
+
+    def _poll_preset_requests(self, ui_state):
+        """Act on /fluoddity/preset and /fluoddity/presets/refresh.
+
+        Selection is edge-detected on the index rather than treated as a bang:
+        vvvv's OSCsend re-fires whenever anything in its message changes, and
+        reloading the same preset every frame would fight the UI and stutter.
+
+        The load itself goes through the UI's own request flags, so it takes
+        the identical path as choosing from the Load menu -- rule, physics,
+        appearance and the config's field texture. This runs before
+        process_commands() in the frame, so the flags are picked up this frame.
+        """
+        if self.osc is None:
+            return
+
+        # Triggered by message arrival, not by the value changing: this is a
+        # bang, and vvvv's OSCsend only transmits on change, so a constant 1
+        # wired to it would fire once and then never again.
+        seq = self.osc.raw_seq("presets/refresh")
+        if seq != self._last_refresh_seq:
+            self._last_refresh_seq = seq
+            self.preset_index.refresh()
+            self.publish_presets()
+
+        requested = self.osc.raw("preset")
+        if not requested:
+            return
+        index = requested[0]
+        if index == self._last_preset_request:
+            return
+        self._last_preset_request = index
+
+        entry = self.preset_index.get(index)
+        if entry is None:
+            print(f"[fluobridge] preset index {index} out of range "
+                  f"(0..{len(self.preset_index) - 1})")
+            return
+        filename, category = entry
+        ui_state.request_load_file = True
+        ui_state.load_filename = filename
+        ui_state.load_category = category
+        # Keep the watercolor mode that is on screen rather than the one baked
+        # into the config. Seven of the shipped presets store
+        # watercolor_mode = true, and loading them would flip the whole frame to
+        # a white ground mid-show. Fluoddity's own Load menu already pins it
+        # this way (ui/menu_bar.py, "Preserve current watercolor mode"), which
+        # is why browsing presets in the app never inverts; this makes OSC
+        # selection behave identically. Watercolor stays a mode you choose with
+        # the V key, and presets no longer overrule it.
+        ui_state.load_watercolor_override = ui_state.sim.watercolor_mode
+        self.osc.send(f"{self.osc.prefix}/preset/name", filename)
+        print(f"[fluobridge] preset {int(index)}: {category}/{filename}")
+
+    def _report_fps(self):
+        """Send /fluoddity/fps back to vvvv once a second as a liveness signal."""
+        if self.osc is None:
+            return
+        self._fps_counter += 1
+        now = time.time()
+        elapsed = now - self._fps_last_report
+        if elapsed >= 1.0:
+            self.osc.send(f"{self.osc.prefix}/fps", self._fps_counter / elapsed)
+            self._fps_counter = 0
+            self._fps_last_report = now
+            # Re-publish the preset list on a slow heartbeat. Publishing only
+            # at startup meant anything that started later -- vvvv reloading a
+            # patch, or a diagnostic listener -- never saw it, while fps kept
+            # arriving and made the channel look healthy. ~1.1 kB every few
+            # seconds on loopback is free.
+            if now - self._presets_last_publish >= PRESET_REPUBLISH_SECONDS:
+                self.publish_presets(announce=False)
 
     def orchestrate_frame(self):
         """Main orchestration logic - reads UI state, coordinates components."""
 
         # 1. Get current UI state
         ui_state = self.ui.get_state()
+
+        # 1.5. Apply OSC-driven parameters.
+        #
+        # This must happen *after* get_state() and before sim.apply_state().
+        # Writing to self.ui.state instead would route values through the ImGui
+        # sliders, which silently clamp to the current (user-adjustable) slider
+        # range and can be blocked by ParameterLockService. Injecting here
+        # sidesteps both. The trade-off: the sliders won't visually track
+        # OSC-driven values, so they stay usable as a manual override without
+        # fighting the controller.
+        if self.osc is not None:
+            # Specs carry their own destination: physics and structure go to
+            # SimState, palette and mask to preferences. Palette on
+            # preferences is deliberate -- loading a physics config overwrites
+            # SimState's appearance fields, and a preset recall must not
+            # change the colour the whole show is running in.
+            targets = {"sim": ui_state.sim, "preferences": ui_state.preferences}
+            if self.mod is not None:
+                # Applies OSC first, then overrides only the parameters the
+                # modulation matrix actually drives. With no /mod/ rows sent
+                # this is exactly osc.apply().
+                self.mod.apply(self.osc, ui_state.sim, targets)
+            else:
+                self.osc.apply(ui_state.sim, targets)
+            for verb in self.osc.drain_commands():
+                if verb == "quit":
+                    # Graceful shutdown so cleanup() runs and the Spout sender
+                    # is released. A force-kill skips that and leaves a stale
+                    # registry entry, which silently renames the next run to
+                    # <name>_1 -- invisible to a receiver watching <name>.
+                    print("[fluobridge] quit requested over OSC")
+                    glfw.set_window_should_close(self.window, True)
+            # Must precede process_commands() below, which consumes the load
+            # request flags this sets.
+            self._poll_preset_requests(ui_state)
+            self._pump_publish_queue()
+
+        # 1.6. Pull the incoming Spout frame, if any. Stays entirely on the GPU:
+        # spout.frag samples this texture directly when it is the selected field
+        # override shader. Deliberately not routed through write_field_data(),
+        # which is a numpy round trip meant for save/load, not live use.
+        if self.spout_in is not None:
+            self.sim_runner.external_field_texture = self.spout_in.receive()
+
         tiling_mode = (ui_state.sim.current_view_option == 3)
 
         # 2. Process one-shot commands
@@ -402,12 +668,33 @@ class App:
         ui_state = self.ui.get_state()
         save_preferences(ui_state.preferences)
 
+        if self.spout_out is not None:
+            self.spout_out.close()
+        if self.spout_in is not None:
+            self.spout_in.close()
+        if self.osc is not None:
+            self.osc.close()
+
         self.advanced_drawing_processor.cleanup()
+        self.particle_mask.cleanup()
         self.video_service.cleanup()
         self.ui.cleanup()
         glfw.terminate()
 
 
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(
+        prog="Fluoddity",
+        description="Fluoddity — GPU particle simulation for generative art.")
+    try:
+        from bridge.args import add_bridge_args
+        add_bridge_args(parser)
+    except ImportError:
+        pass
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    app = App()
+    app = App(args=parse_args())
     app.run()
