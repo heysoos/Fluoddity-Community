@@ -14,7 +14,7 @@ from state.audio_in_state import to_dict as rig_to_dict
 from command_handler import CommandHandler
 from simulation_runner import SimulationRunner
 from camera_input import process_camera_input
-from controller_input import ControllerCam, process_controller_input, find_joystick
+from controller_input import ControllerCam, process_controller_input
 from utilities.advanced_drawing import AdvancedDrawingProcessor
 
 
@@ -178,7 +178,9 @@ class App:
         self.command_handler.apply_brain_layout = self._apply_brain_layout
         # Xbox controller (FPS camera for shader-driven field)
         self.controller_cam = ControllerCam()
-        self.joystick_state = {'joystick_id': find_joystick(), 'prev_buttons': []}
+        # Discovered on the first frame that reads it, never here: the scan
+        # initialises GLFW's joystick backend, which is a device enumeration.
+        self.joystick_state = {'joystick_id': None, 'prev_buttons': []}
 
         self.sim_runner = SimulationRunner(
             self.sim, self.camera, self.video_service,
@@ -1024,7 +1026,12 @@ class App:
         self.last_update_time = current_time
         process_camera_input(ui_state, self.window, self.ui.keybindings,
                              self.sim.view_tex, dt)
-        process_controller_input(self.controller_cam, self.joystick_state, dt)
+        # The controller camera is only read by the shader-driven field, so
+        # that is the one condition worth a joystick scan for.
+        adv = ui_state.preferences
+        process_controller_input(
+            self.controller_cam, self.joystick_state, dt,
+            active=adv.advanced_drawing_enabled and adv.shader_driven_field)
 
         # 3.2. Check if pending video should start
         cmd = self.command_handler

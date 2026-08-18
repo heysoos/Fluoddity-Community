@@ -95,7 +95,13 @@ BUTTON_START = 7
 
 
 def find_joystick():
-    """Find the first connected joystick."""
+    """Find the first connected joystick.
+
+    The first call is not cheap and its cost is not ours to bound: GLFW
+    initialises its joystick backend here, and on Windows that is a DirectInput
+    enumeration which waits on every HID node the machine has. Call it only
+    when the controller is about to be read.
+    """
     for jid in range(glfw.JOYSTICK_1, glfw.JOYSTICK_LAST + 1):
         if glfw.joystick_present(jid):
             name = glfw.get_joystick_name(jid)
@@ -114,14 +120,23 @@ def apply_deadzone(value):
     return sign * (abs(value) - DEADZONE) / (1.0 - DEADZONE)
 
 
-def process_controller_input(controller_cam, joystick_state, dt):
+def process_controller_input(controller_cam, joystick_state, dt, active=True):
     """Update controller camera based on Xbox controller input.
+
+    Returns before touching GLFW when `active` is false. The first call to any
+    GLFW joystick function initialises the platform's joystick backend, which
+    on Windows enumerates every HID device on the machine and waits on each one
+    - unbounded time for a camera nothing is reading. See find_joystick.
 
     Args:
         controller_cam: ControllerCam instance to update.
         joystick_state: Mutable dict with 'joystick_id' and 'prev_buttons'.
         dt: Delta time in seconds.
+        active: Whether anything reads controller_cam this frame.
     """
+    if not active:
+        return
+
     jid = joystick_state['joystick_id']
 
     # Check connection, try to reconnect if lost
