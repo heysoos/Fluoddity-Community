@@ -136,10 +136,73 @@ def test_a_rig_written_before_this_feature_loads_as_all_cohorts():
     assert ca.is_full(m.cohorts)
 
 
+def test_a_mask_is_stored_as_runs_rather_than_a_slot_per_line():
+    """json.dumps(indent=2) puts every entry on its own line, so a bitmap made
+    a two-row rig 340 lines long."""
+    from services.audio_mapping import Mapping
+    from state.audio_in_state import _mapping_to_dict
+
+    m = Mapping(signal="bass", target="SENSOR_GAIN")
+    m.cohorts[:] = False
+    for cell in range(32):
+        ca.paint(m.cohorts, cell, 64, True)
+
+    stored = _mapping_to_dict(m)["cohorts"]
+    assert stored == [[0, 72]], stored
+
+
+def test_runs_survive_a_pattern_with_gaps():
+    from services.audio_mapping import Mapping
+    from state.audio_in_state import _mapping_from_dict, _mapping_to_dict
+
+    m = Mapping(signal="bass", target="SENSOR_GAIN")
+    m.cohorts[:] = False
+    for cell in range(0, 64, 4):
+        ca.paint(m.cohorts, cell, 64, True)
+
+    d = _mapping_to_dict(m)
+    assert len(d["cohorts"]) == 16
+    back = _mapping_from_dict(d)
+    assert np.array_equal(back.cohorts, m.cohorts)
+
+
+def test_an_empty_mask_stores_as_no_runs_at_all():
+    from services.audio_mapping import Mapping
+    from state.audio_in_state import _mapping_from_dict, _mapping_to_dict
+
+    m = Mapping(signal="bass", target="SENSOR_GAIN")
+    m.cohorts[:] = False
+    d = _mapping_to_dict(m)
+    assert d["cohorts"] == []
+    assert ca.is_empty(_mapping_from_dict(d).cohorts)
+
+
+def test_a_rig_holding_the_old_bitmap_still_loads():
+    """Ranges replaced a 144-entry list. Rigs saved on it must not be lost."""
+    from state.audio_in_state import _mapping_from_dict
+
+    bitmap = [1 if i < 72 else 0 for i in range(ca.MASK_SLOTS)]
+    m = _mapping_from_dict({"signal": "bass", "target": "SENSOR_GAIN",
+                            "cohorts": bitmap})
+    assert m is not None
+    assert ca.covers(m.cohorts, 0, 64)
+    assert not ca.covers(m.cohorts, 63, 64)
+
+
+def test_a_run_reaching_past_the_mask_is_clipped_not_fatal():
+    from state.audio_in_state import _mapping_from_dict
+
+    m = _mapping_from_dict({"signal": "bass", "target": "SENSOR_GAIN",
+                            "cohorts": [[-5, 9999]]})
+    assert m is not None
+    assert ca.is_full(m.cohorts)
+
+
 def test_a_malformed_mask_falls_back_to_all_cohorts():
     """One bad row must not lose the rig."""
     from state.audio_in_state import _mapping_from_dict
-    for bad in ("nonsense", [1, 2, 3], [None] * ca.MASK_SLOTS, {}):
+    for bad in ("nonsense", [1, 2, 3], [None] * ca.MASK_SLOTS, {},
+                [["a", "b"]], [[1, 2, 3]]):
         m = _mapping_from_dict({"signal": "bass", "target": "SENSOR_GAIN",
                                 "cohorts": bad})
         assert m is not None, bad

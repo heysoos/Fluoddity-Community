@@ -226,6 +226,15 @@ unmasked row adds nothing to the file and every existing rig loads as
 all-cohorts with no migration. `PERSISTED_FIELDS` is unchanged - the mask rides
 inside `mappings`, which is already there.
 
+**It is stored as half-open RUN RANGES**, `[[0, 72]]` for the first half of the
+axis. A rig is written with a json indent, which puts every list entry on its
+own line, so the slot-per-entry bitmap this started as made a two-row split rig
+**340 lines** where ranges make it **60**. Ranges also read as what they are.
+`read_mask` accepts the bitmap forever, since rigs were saved on it; the two are
+told apart by shape, not by a version field. An empty list is a mask with no
+runs, which is an idle row - a FULL mask writes no key at all, which is why
+those two never collide.
+
 The mask takes part in `Mapping.__eq__` like every other field, so
 `_save_last_rig`'s value diff sees a mask edit as the change it is.
 

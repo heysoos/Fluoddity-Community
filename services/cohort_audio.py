@@ -72,6 +72,58 @@ def is_empty(mask: np.ndarray) -> bool:
     return not bool(np.any(mask))
 
 
+def mask_to_runs(mask: np.ndarray) -> list[list[int]]:
+    """The set slots as half-open [lo, hi) ranges.
+
+    A rig is written with json indent, which puts every list entry on its own
+    line - a slot-per-entry bitmap made a two-row rig 340 lines long. Ranges
+    are also readable: [[0, 72]] is the first half of the axis.
+    """
+    runs: list[list[int]] = []
+    start = None
+    for i in range(MASK_SLOTS):
+        if mask[i]:
+            if start is None:
+                start = i
+        elif start is not None:
+            runs.append([start, i])
+            start = None
+    if start is not None:
+        runs.append([start, MASK_SLOTS])
+    return runs
+
+
+def _is_runs(raw: list) -> bool:
+    return all(
+        isinstance(p, (list, tuple)) and len(p) == 2
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                for v in p)
+        for p in raw
+    )
+
+
+def read_mask(mask: np.ndarray, raw) -> None:
+    """Fill `mask` in place from a stored value; leave it alone if malformed.
+
+    Two forms are accepted forever: ranges, and the slot-per-entry bitmap that
+    rigs written before ranges carry. An empty list is a mask with no runs,
+    which is an idle row - a FULL mask writes no key at all.
+    """
+    if not isinstance(raw, list):
+        return
+    if _is_runs(raw):
+        mask[:] = False
+        for lo_raw, hi_raw in raw:
+            lo = max(0, min(MASK_SLOTS, int(lo_raw)))
+            hi = max(0, min(MASK_SLOTS, int(hi_raw)))
+            if hi > lo:
+                mask[lo:hi] = True
+        return
+    if len(raw) == MASK_SLOTS and all(
+            isinstance(v, (int, float, bool)) for v in raw):
+        mask[:] = [bool(v) for v in raw]
+
+
 def build_arrays(mappings, targets, signals, states, strengths,
                  global_strength: float, dt: float, deaf, n_cohorts: int,
                  held=(), rate_scale: float = 1.0,

@@ -105,7 +105,7 @@ class AudioInState:
 
 def _mapping_to_dict(m: Mapping) -> dict:
     """`uid` is in-session only, so a loaded rig mints fresh ones."""
-    from services.cohort_audio import is_full
+    from services.cohort_audio import is_full, mask_to_runs
 
     out = {
         "signal": m.signal, "target": m.target, "mode": m.mode,
@@ -120,7 +120,7 @@ def _mapping_to_dict(m: Mapping) -> dict:
     }
     # Only when something is painted out, so an unmasked row adds nothing.
     if not is_full(m.cohorts):
-        out["cohorts"] = [int(v) for v in m.cohorts]
+        out["cohorts"] = mask_to_runs(m.cohorts)
     return out
 
 
@@ -133,13 +133,9 @@ _SHAPER_FLOATS = ("attack", "release", "threshold", "hold", "rate")
 
 def _read_mask(m, raw) -> None:
     """A malformed mask leaves the mapping on every cohort, never drops it."""
-    from services.cohort_audio import MASK_SLOTS
+    from services.cohort_audio import read_mask
 
-    if not isinstance(raw, list) or len(raw) != MASK_SLOTS:
-        return
-    if not all(isinstance(v, (int, float, bool)) for v in raw):
-        return
-    m.cohorts[:] = [bool(v) for v in raw]
+    read_mask(m.cohorts, raw)
 
 
 def _mapping_from_dict(d) -> Mapping | None:
