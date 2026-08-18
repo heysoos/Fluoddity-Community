@@ -1221,6 +1221,25 @@ mechanics these caveats assume.
   FIRST push and restored whole — restoring per-entry would put back the
   previous *entry's* sliders rather than the user's.
 
+- **The gallery's grid has a 48px FLOOR, and `ThumbCache.reserve` is the other
+  half of it.** The size slider runs 16..160; at and below `GALLERY_LIST_MAX`
+  the gallery draws a LIST rather than a grid, one thumbnail per row, which the
+  clipper caps near 30 however the window is sized. That floor is what bounds
+  the grid: a frame touching more than the cache's `capacity` evicts every
+  texture and re-decodes the whole visible set on the next one, forever, and at
+  32px in a wide window the grid would ask for 400+. Neither half works alone -
+  even at the floor a 2560-wide window asks for around 350, past the historical
+  256 - so the gallery calls `reserve()` with the count it is about to draw,
+  BEFORE drawing any of it, and the cache raises capacity to `MAX_CAPACITY`.
+  The sort modes come from `services/gallery_sort.GALLERY_SORTS`, read by the
+  Sort combo AND by the list's column headers, which both write the one
+  `sort_by`/`sort_desc` pair: a second list of modes is what would let a header
+  and the combo mean different things, and switching view would reorder the
+  gallery under the pointer. Column visibility, width and order are ImGui's own
+  table settings and live in `imgui.ini`. Guarded by
+  `tests/test_thumb_cache.py`, `tests/test_gallery_sort.py` and
+  `tests/test_archive_window_render.py`.
+
 - **A wheel event reaches the zoom AND the scrollbar, unless a child eats it.**
   ImGui scrolls the hovered window during `NewFrame`, so a canvas that reads
   `io.mouse_wheel` to zoom also scrolls the panel it sits in — which reads as

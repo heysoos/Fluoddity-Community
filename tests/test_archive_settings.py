@@ -56,6 +56,27 @@ def test_the_map_view_travels_with_the_archive():
         assert name in PERSISTED_FIELDS
 
 
+def test_the_gallery_size_and_sort_direction_travel_with_the_archive():
+    """A 13000-entry archive wants the list; an empty one wants big tiles."""
+    for name in ("thumb_size", "sort_desc"):
+        assert name in PERSISTED_FIELDS
+
+    a = ArchiveState()
+    a.thumb_size = 24
+    a.sort_desc = False
+    b = ArchiveState()
+    b.apply_settings(a.to_settings())
+    assert b.thumb_size == 24
+    assert b.sort_desc is False
+
+
+def test_a_brand_new_archive_state_looks_like_the_old_fixed_gallery():
+    """96 was the hardcoded tile size, and descending was the only order."""
+    a = ArchiveState()
+    assert a.thumb_size == 96
+    assert a.sort_desc is True
+
+
 # ---- tolerance of files written by other versions -----------------------
 
 def test_a_missing_field_keeps_its_current_value():

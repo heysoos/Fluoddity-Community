@@ -11,13 +11,15 @@ import numpy as np
 import pytest
 from imgui_bundle import imgui
 
+from services.gallery_sort import GALLERY_SORTS
 from services.goal_source import GoalList
 from state.archive_state import ArchiveState
 from state.sim_state import SimState
 from state.auto_tournament_state import AutoTournamentState
 from state.tournament_state import TournamentState
 from ui import layout
-from ui.archive_window import ArchiveWindowMixin
+from ui.archive_window import (GALLERY_COLUMNS, GALLERY_LIST_MAX,
+                               GALLERY_TABLE, ArchiveWindowMixin)
 from ui.auto_tournament_window import AutoTournamentWindowMixin
 
 
@@ -1678,3 +1680,278 @@ def test_the_browser_summary_is_not_printed_twice(gui):
         imgui.text_wrapped = real
     assert not any("1.2 MB" in t for t in seen)
     assert any("8 / 20000 entries" in t for t in seen)
+
+
+# ---- the size slider, and the list at the small end ---------------------
+#
+# The slider scales the grid; at and below GALLERY_LIST_MAX the gallery becomes
+# a detail table instead. Vertex counts cannot tell those apart - the window is
+# whatever size an earlier test left it - so these assert on what was CALLED.
+
+def table_ids(fn, n=3):
+    """Every begin_table id `fn` emits."""
+    seen = []
+    real = imgui.begin_table
+
+    def spy(str_id, *a, **kw):
+        seen.append(str_id)
+        return real(str_id, *a, **kw)
+
+    imgui.begin_table = spy
+    try:
+        frame(fn, n=n)
+    finally:
+        imgui.begin_table = real
+    return seen
+
+
+def slider_int_labels(fn, n=3):
+    seen = []
+    real = imgui.slider_int
+
+    def spy(label, *a, **kw):
+        seen.append(label)
+        return real(label, *a, **kw)
+
+    imgui.slider_int = spy
+    try:
+        frame(fn, n=n)
+    finally:
+        imgui.slider_int = real
+    return seen
+
+
+class _CountingCache:
+    """Records what the gallery reserved and what it then asked for."""
+
+    def __init__(self):
+        self.reserved = []
+        self.asked = 0
+
+    def reserve(self, n):
+        self.reserved.append(int(n))
+
+    def get(self, name):
+        self.asked += 1
+        return _FakeTex()
+
+
+@pytest.mark.parametrize("size", [16, 24, 32, GALLERY_LIST_MAX])
+def test_the_list_view_renders_at_every_small_size(gui, size):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.state.archive.thumb_size = size
+    h.thumb_cache = _CountingCache()
+    assert frame(h.render_archive_window) > host_only()
+
+
+@pytest.mark.parametrize("size", [GALLERY_LIST_MAX + 1, 96, 160])
+def test_the_grid_renders_at_every_large_size(gui, size):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.state.archive.thumb_size = size
+    h.thumb_cache = _CountingCache()
+    assert frame(h.render_archive_window) > host_only()
+
+
+def test_the_small_end_draws_a_table_and_the_large_end_does_not(gui):
+    """The flip is the feature; a size that only scaled tiles would pass every
+    render test above while doing nothing."""
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.thumb_cache = _CountingCache()
+
+    h.state.archive.thumb_size = 32
+    assert GALLERY_TABLE in table_ids(h.render_archive_window)
+
+    h.state.archive.thumb_size = 96
+    assert GALLERY_TABLE not in table_ids(h.render_archive_window)
+
+
+def test_the_size_slider_is_drawn(gui):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    assert any("thumb_size" in s
+               for s in slider_int_labels(h.render_archive_window))
+
+
+def test_both_ends_of_the_slider_have_a_clickable_icon(gui):
+    """Drawn glyphs, so there is no button label to catch."""
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    ids = invisible_button_labels(h.render_archive_window)
+    assert "##gallery_list_icon" in ids
+    assert "##gallery_grid_icon" in ids
+
+
+def test_the_gallery_reserves_room_before_it_asks_for_thumbnails(gui):
+    """A frame that touches more than the cache holds evicts every texture and
+    re-decodes the lot on the next one."""
+    h = Harness(archive=_populated(n=64))
+    h.state.archive.show_browser = True
+    h.state.archive.thumb_size = 96
+    cache = _CountingCache()
+    h.thumb_cache = cache
+    frame(h.render_archive_window)
+    assert cache.reserved, "the gallery never reserved anything"
+    assert max(cache.reserved) >= cache.asked / 3.0
+
+
+def test_a_cache_with_no_reserve_still_renders(gui):
+    """The map's hover card and the selection panel share this cache, and a
+    test double need not grow a method to keep the gallery drawing."""
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+
+    class _Old:
+        def get(self, name):
+            return _FakeTex()
+
+    h.thumb_cache = _Old()
+    assert frame(h.render_archive_window) > host_only()
+
+
+# ---- sorting ------------------------------------------------------------
+
+@pytest.mark.parametrize("mode", sorted(GALLERY_SORTS) + ["nonsense"])
+@pytest.mark.parametrize("size", [32, 96])
+def test_every_sort_mode_renders_in_both_views(gui, mode, size):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.state.archive.sort_by = mode
+    h.state.archive.thumb_size = size
+    assert frame(h.render_archive_window) > host_only()
+
+
+@pytest.mark.parametrize("desc", [True, False])
+def test_both_sort_directions_render_in_both_views(gui, desc):
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.state.archive.sort_desc = desc
+    for size in (32, 96):
+        h.state.archive.thumb_size = size
+        assert frame(h.render_archive_window) > host_only()
+
+
+def test_the_sort_combo_offers_every_declared_mode(gui):
+    """Derived from the registry, so a mode reachable only from a column header
+    cannot quietly go missing from the grid."""
+    seen = []
+    real = imgui.combo
+
+    def spy(label, current, items, *a, **kw):
+        if label == "Sort":
+            seen.append(list(items))
+        return real(label, current, items, *a, **kw)
+
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    imgui.combo = spy
+    try:
+        frame(h.render_archive_window)
+    finally:
+        imgui.combo = real
+
+    assert seen, "the Sort combo was never drawn"
+    wanted = {GALLERY_SORTS[m].label for m in GALLERY_SORTS}
+    assert set(seen[-1]) == wanted
+
+
+def test_the_list_and_the_grid_draw_the_same_order(gui):
+    """One sort_by behind both, so switching view never reorders anything."""
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.state.archive.sort_by = "source"
+    h.state.archive.thumb_size = 32
+    frame(h.render_archive_window)
+    listed = [i for i, _ in h._sorted_entries(h.state.archive, h.archive_obj)]
+    h.state.archive.thumb_size = 96
+    frame(h.render_archive_window)
+    gridded = [i for i, _ in h._sorted_entries(h.state.archive, h.archive_obj)]
+    assert listed == gridded
+
+
+# ---- a column header writes the same field the combo does ---------------
+#
+# The render tests never click a header, so specs_dirty is always False there.
+# These drive the mapping directly.
+
+class _FakeCol:
+    def __init__(self, index, direction):
+        self.column_index = index
+        self.sort_direction = direction
+
+
+class _FakeSpecs:
+    def __init__(self, col):
+        self._col = col
+        self.specs_count = 0 if col is None else 1
+        self.specs_dirty = True
+
+    def get_specs(self, n):
+        return self._col
+
+
+def _click_header(monkeypatch, ast, index, direction):
+    specs = _FakeSpecs(_FakeCol(index, direction))
+    monkeypatch.setattr(imgui, "table_get_sort_specs", lambda: specs)
+    ArchiveWindowMixin._read_sort_specs(ast)
+    return specs
+
+
+@pytest.mark.parametrize("index,mode", [
+    (n, mode) for n, (_, mode) in enumerate(GALLERY_COLUMNS) if mode])
+def test_a_sortable_header_selects_its_own_mode(monkeypatch, index, mode):
+    ast = ArchiveState()
+    ast.sort_by = "novelty"
+    _click_header(monkeypatch, ast, index, imgui.SortDirection.ascending)
+    assert ast.sort_by == mode
+
+
+def test_a_header_carries_its_direction_across():
+    """The arrow beside the combo and the header must agree, or switching view
+    reverses the gallery."""
+    ast = ArchiveState()
+    for direction, want in ((imgui.SortDirection.ascending, False),
+                            (imgui.SortDirection.descending, True)):
+        specs = _FakeSpecs(_FakeCol(1, direction))
+        import unittest.mock as _m
+        with _m.patch.object(imgui, "table_get_sort_specs", lambda: specs):
+            ArchiveWindowMixin._read_sort_specs(ast)
+        assert ast.sort_desc is want
+
+
+def test_the_thumbnail_column_does_not_sort(monkeypatch):
+    """It has no mode, and writing an empty sort_by would fall the gallery back
+    to novelty on every click of it."""
+    ast = ArchiveState()
+    ast.sort_by = "goal"
+    _click_header(monkeypatch, ast, 0, imgui.SortDirection.ascending)
+    assert ast.sort_by == "goal"
+
+
+def test_a_header_click_is_consumed(monkeypatch):
+    """Left dirty, ImGui hands the same click back every frame and the arrow
+    button beside the combo could never win."""
+    specs = _click_header(monkeypatch, ArchiveState(), 1,
+                          imgui.SortDirection.ascending)
+    assert specs.specs_dirty is False
+
+
+def test_a_table_that_is_not_sorting_is_harmless(monkeypatch):
+    """table_get_sort_specs answers None when the table has no sort."""
+    ast = ArchiveState()
+    ast.sort_by = "brain"
+    monkeypatch.setattr(imgui, "table_get_sort_specs", lambda: None)
+    ArchiveWindowMixin._read_sort_specs(ast)
+    assert ast.sort_by == "brain"
+
+
+def test_a_dirty_spec_with_no_columns_is_harmless(monkeypatch):
+    ast = ArchiveState()
+    ast.sort_by = "brain"
+    specs = _FakeSpecs(None)
+    monkeypatch.setattr(imgui, "table_get_sort_specs", lambda: specs)
+    ArchiveWindowMixin._read_sort_specs(ast)
+    assert ast.sort_by == "brain"
+    assert specs.specs_dirty is False

@@ -11,6 +11,8 @@ from imgui_bundle import imgui
 
 from services import map_view, save_targets
 from services.archive_library import safe_name
+from services.gallery_sort import (DEFAULT_SORT, GALLERY_SORTS,
+                                   sort_entries)
 from ui import layout
 from ui.notices import BAD as _BAD
 from ui.notices import DIM as _DIM
@@ -26,6 +28,29 @@ ALPHA_TOOLTIP = "How strongly parent choice favours novel entries."
 EXPORT_TOOLTIP = "Saves this entry to your configs folder, under a name you pick."
 
 SEED_TOOLTIP = "Starts Auto (Prompt) mode's search from this genome."
+
+
+# The gallery's tile size, in pixels. 160 is what a thumbnail holds
+# (services/archive_io.THUMB_PX); past it there is nothing more to see.
+GALLERY_SIZE_MIN = 16
+GALLERY_SIZE_MAX = 160
+# At and below this the gallery is a detail list instead of a grid. The grid
+# therefore has a FLOOR, and that is what bounds how many thumbnails one frame
+# can ask for - see ThumbCache.reserve.
+GALLERY_LIST_MAX = 48
+GALLERY_H = 360.0
+GALLERY_TABLE = "gallery_list"
+# (column label, the sort mode its header selects; "" for a column that does
+# not sort). The modes are GALLERY_SORTS keys, so a header and the combo can
+# never mean different things.
+GALLERY_COLUMNS = (
+    ("Thumb", ""),
+    ("#", "id"),
+    ("Source", "source"),
+    ("Brain", "brain"),
+    ("Novelty", "novelty"),
+    ("Goal", "goal"),
+)
 
 
 def archive_row_model(ast) -> dict:
@@ -733,53 +758,130 @@ class ArchiveWindowMixin:
         The order only changes when the archive does, so it must not be
         recomputed every frame.
         """
-        key = (ast.sort_by, ast.pinned_only, getattr(arc, "revision", None))
+        key = (ast.sort_by, ast.sort_desc, ast.pinned_only,
+               getattr(arc, "revision", None))
         hit = getattr(self, "_sort_cache", None)
         if hit is not None and hit[0] is arc and hit[1] == key:
             return hit[2]
 
-        entries = list(enumerate(arc.entries))
-        if ast.pinned_only:
-            entries = [(i, e) for i, e in entries if e.pinned]
-        keyfn = {"novelty": lambda p: -p[1].novelty,
-                 "liveness": lambda p: -p[1].liveness,
-                 "recency": lambda p: -p[1].ts}.get(ast.sort_by,
-                                                    lambda p: -p[1].novelty)
-        out = sorted(entries, key=keyfn)
+        out = sort_entries(arc, ast.sort_by, ast.sort_desc, ast.pinned_only)
         self._sort_cache = (arc, key, out)
         return out
 
-    _THUMB = 96.0
-
     def _render_gallery(self, ast, arc):
-        modes = ["novelty", "recency", "liveness"]
-        idx = modes.index(ast.sort_by) if ast.sort_by in modes else 0
-        right = layout.row_right_edge()
+        self._render_gallery_toolbar(ast)
+        if ast.thumb_size <= GALLERY_LIST_MAX:
+            self._render_gallery_list(ast, arc)
+        else:
+            self._render_gallery_grid(ast, arc)
+        self._render_gallery_selection(ast, arc)
+
+    # ---- the toolbar ---------------------------------------------------
+
+    def _render_gallery_toolbar(self, ast):
+        # The size row. The slider is ##-labelled, so it owes nothing to
+        # WIDEST_LABEL; the icons are what say which end is which.
+        if self._size_icon("##gallery_list_icon", "list"):
+            ast.thumb_size = GALLERY_SIZE_MIN
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Smallest size: a list with the details.")
+        imgui.same_line()
+        # Off the frame height, so the track scales with the font rather than
+        # with whatever the widest label in the panel happens to be.
+        imgui.set_next_item_width(imgui.get_frame_height() * 8.0)
+        ch, size = imgui.slider_int("##thumb_size", int(ast.thumb_size),
+                                    GALLERY_SIZE_MIN, GALLERY_SIZE_MAX, "%d px")
+        if ch:
+            ast.thumb_size = int(size)
+        imgui.same_line()
+        if self._size_icon("##gallery_grid_icon", "grid"):
+            ast.thumb_size = GALLERY_SIZE_MAX
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Largest size, which is what a thumbnail holds.")
+
+        # The sort row. The combo takes the width its label leaves, so the
+        # direction and the filter start a row of their own.
+        modes = list(GALLERY_SORTS)
+        idx = (modes.index(ast.sort_by) if ast.sort_by in modes
+               else modes.index(DEFAULT_SORT))
         layout.push_settings_width("Sort")
-        ch, idx = imgui.combo("Sort", idx, ["Novelty", "Recency", "Liveness"])
+        ch, idx = imgui.combo("Sort", idx,
+                              [GALLERY_SORTS[m].label for m in modes])
         imgui.pop_item_width()
         if ch:
             ast.sort_by = modes[idx]
-        layout.wrap_row(right, layout.button_width("Pinned only") + self._THUMB)
+
+        right = layout.row_right_edge()
+        if imgui.arrow_button("##sort_dir",
+                              imgui.Dir.down if ast.sort_desc else imgui.Dir.up):
+            ast.sort_desc = not ast.sort_desc
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Reverse the order.")
+        layout.wrap_row(right, layout.button_width("Pinned only"))
         _, ast.pinned_only = imgui.checkbox("Pinned only", ast.pinned_only)
 
+    @staticmethod
+    def _size_icon(str_id: str, kind: str) -> bool:
+        """A drawn glyph that snaps the size slider to its end.
+
+        There is no icon font, so both are laid out in the draw list.
+        """
+        h = imgui.get_frame_height()
+        p = imgui.get_cursor_screen_pos()
+        clicked = imgui.invisible_button(str_id, imgui.ImVec2(h, h))
+        col = (imgui.IM_COL32(225, 225, 232, 255) if imgui.is_item_hovered()
+               else imgui.IM_COL32(150, 150, 158, 255))
+        dl = imgui.get_window_draw_list()
+        pad = round(h * 0.26)
+        span = h - 2 * pad
+        x0, y0 = p.x + pad, p.y + pad
+        if kind == "list":
+            bar = max(1.0, round(span * 0.18))
+            for k in range(3):
+                y = y0 + k * (span - bar) * 0.5
+                dl.add_rect_filled(imgui.ImVec2(x0, y),
+                                   imgui.ImVec2(x0 + span, y + bar), col)
+        else:
+            cell = max(1.0, round((span - max(1.0, span * 0.2)) * 0.5))
+            gap = span - 2 * cell
+            for cx in (0, 1):
+                for cy in (0, 1):
+                    ax, ay = x0 + cx * (cell + gap), y0 + cy * (cell + gap)
+                    dl.add_rect_filled(imgui.ImVec2(ax, ay),
+                                       imgui.ImVec2(ax + cell, ay + cell), col)
+        return clicked
+
+    # ---- the two views -------------------------------------------------
+
+    @staticmethod
+    def _reserve_thumbs(cache, n: int) -> None:
+        """Hold room for a whole frame's thumbnails before asking for any.
+
+        A frame that touches more than the cache holds evicts every texture and
+        re-decodes the visible set on the next one.
+        """
+        fn = getattr(cache, "reserve", None)
+        if fn is not None:
+            fn(int(n))
+
+    def _render_gallery_grid(self, ast, arc):
         cache = getattr(self, "thumb_cache", None)
-        imgui.begin_child("gallery", imgui.ImVec2(0, 360))
+        size = float(ast.thumb_size)
+        imgui.begin_child("gallery", imgui.ImVec2(0, GALLERY_H))
         # Rows fit the window rather than a fixed six, so a narrow panel wraps
         # instead of clipping the right-hand thumbnails.
         style = imgui.get_style()
-        step = self._THUMB + style.item_spacing.x
+        step = size + style.item_spacing.x
         per_row = max(1, int(imgui.get_content_region_avail().x / step))
         items = self._sorted_entries(ast, arc)
+        row_h = size + style.item_spacing.y
+        self._reserve_thumbs(cache, per_row * (int(GALLERY_H / row_h) + 2))
         # CLIPPED to the rows on screen, rather than capped. This used to draw
         # the first 240 and stop: an archive of 1121 scrolled to a fifth of
-        # itself and simply ended, with nothing on screen saying so. Drawing
-        # them all instead is not the fix either - ThumbCache holds 256
-        # textures, so a frame that touches more evicts every one of them and
-        # reloads the lot on the next frame.
+        # itself and simply ended, with nothing on screen saying so.
         n_rows = (len(items) + per_row - 1) // per_row
         clipper = imgui.ListClipper()
-        clipper.begin(n_rows, self._THUMB + style.item_spacing.y)
+        clipper.begin(n_rows, row_h)
         while clipper.step():
             for r in range(clipper.display_start, clipper.display_end):
                 for c in range(per_row):
@@ -793,10 +895,9 @@ class ArchiveWindowMixin:
                            if cache is not None else None)
                     if tex is not None:
                         imgui.image(imgui.ImTextureRef(tex.glo),
-                                    imgui.ImVec2(self._THUMB, self._THUMB))
+                                    imgui.ImVec2(size, size))
                     else:
-                        imgui.button(f"#{e.id}##g{i}",
-                                     imgui.ImVec2(self._THUMB, self._THUMB))
+                        imgui.button(f"#{e.id}##g{i}", imgui.ImVec2(size, size))
                     if imgui.is_item_hovered():
                         imgui.set_tooltip(
                             f"#{e.id}  {e.source}\nnovelty {e.novelty:.3f}\n"
@@ -809,43 +910,130 @@ class ArchiveWindowMixin:
         clipper.end()
         imgui.end_child()
 
-        if 0 <= ast.selected_entry_id < len(arc.entries):
-            sel = arc.entries[ast.selected_entry_id]
-            imgui.separator()
-            # The ENTRY's id, not the row: the row is how the app addresses it,
-            # the id is what the archive calls it.
-            imgui.text(f"Selected #{sel.id}")
-            # The brain this creature was AUTHORED under, named on every
-            # selection rather than only on a foreign one: an archive pools
-            # layouts, so "which brain is this?" is a question about any entry,
-            # and the gallery tile itself has nowhere to say it. Only on a
-            # click - the hover preview writes a row per pointer position.
-            sig = arc.layout_at(ast.selected_entry_id)
-            if arc.is_native(ast.selected_entry_id):
-                imgui.text_colored(imgui.ImVec4(*_DIM), f"{sig} brain")
+    def _render_gallery_list(self, ast, arc):
+        """The small end of the slider: one row per entry, with the details.
+
+        No tooltip - the columns carry what the grid's tooltip says.
+        """
+        cache = getattr(self, "thumb_cache", None)
+        size = float(ast.thumb_size)
+        flags = (imgui.TableFlags_.hideable | imgui.TableFlags_.reorderable
+                 | imgui.TableFlags_.resizable | imgui.TableFlags_.sortable
+                 | imgui.TableFlags_.row_bg | imgui.TableFlags_.scroll_y
+                 | imgui.TableFlags_.borders_inner_v)
+        if not imgui.begin_table(GALLERY_TABLE, len(GALLERY_COLUMNS), flags,
+                                 imgui.ImVec2(0, GALLERY_H)):
+            return
+        imgui.table_setup_scroll_freeze(0, 1)
+        for label, mode in GALLERY_COLUMNS:
+            if mode:
+                imgui.table_setup_column(label)
             else:
-                # Hovering borrows this brain; only a click keeps it, and with
-                # the toggle off nothing runs at all.
-                imgui.text_colored(
-                    imgui.ImVec4(*_DIM),
-                    f"{sig} brain - click to switch to it" if ast.live_preview
-                    else f"{sig} brain - turn on Live preview to run it")
-            right = layout.row_right_edge()
-            if imgui.button("Save as config..."):
-                self.open_save_popup(save_targets.ARCHIVE_ENTRY,
-                                     arg=ast.selected_entry_id)
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(EXPORT_TOOLTIP)
-            layout.wrap_row(right, layout.button_width("Seed a run from here"))
-            if imgui.button("Seed a run from here"):
-                ast.seed_entry_id = ast.selected_entry_id
-            if imgui.is_item_hovered():
-                imgui.set_tooltip(SEED_TOOLTIP)
-            layout.wrap_row(right, layout.button_width("Delete"))
-            if imgui.button("Delete"):
-                ast.delete_entry_id = ast.selected_entry_id
-            if imgui.is_item_hovered():
-                imgui.set_tooltip("Remove this entry and its thumbnail.")
+                imgui.table_setup_column(
+                    label, imgui.TableColumnFlags_.no_sort
+                    | imgui.TableColumnFlags_.width_fixed, size)
+        imgui.table_headers_row()
+        self._read_sort_specs(ast)
+
+        items = self._sorted_entries(ast, arc)
+        row_h = max(size, imgui.get_frame_height())
+        self._reserve_thumbs(cache, int(GALLERY_H / row_h) + 4)
+        clipper = imgui.ListClipper()
+        clipper.begin(len(items), row_h)
+        while clipper.step():
+            for n in range(clipper.display_start, clipper.display_end):
+                i, e = items[n]
+                imgui.table_next_row(0, row_h)
+                imgui.table_next_column()
+                imgui.push_id(i)
+                # The whole ROW is the hit target, and the selection is drawn.
+                pos = imgui.get_cursor_pos()
+                changed, _ = imgui.selectable(
+                    "##row", i == ast.selected_entry_id,
+                    imgui.SelectableFlags_.span_all_columns
+                    | imgui.SelectableFlags_.allow_overlap,
+                    imgui.ImVec2(0.0, row_h))
+                # Read before the thumbnail is drawn over it.
+                if imgui.is_item_hovered():
+                    ast.preview_entry_id = i
+                if changed:
+                    ast.selected_entry_id = i
+                    if ast.live_preview:
+                        ast.load_entry_id = i
+                imgui.set_cursor_pos(pos)
+                tex = (cache.get(arc.thumb_key(i))
+                       if cache is not None else None)
+                if tex is not None:
+                    imgui.image(imgui.ImTextureRef(tex.glo),
+                                imgui.ImVec2(size, size))
+                else:
+                    imgui.dummy(imgui.ImVec2(size, size))
+                for text in (f"#{e.id}", e.source, arc.layout_at(i),
+                             f"{e.novelty:.3f}", e.goal or "-"):
+                    imgui.table_next_column()
+                    imgui.text(text)
+                imgui.pop_id()
+        clipper.end()
+        imgui.end_table()
+
+    @staticmethod
+    def _read_sort_specs(ast) -> None:
+        """A header click writes the same sort_by the combo does.
+
+        One field behind both, so switching view never reorders anything.
+        """
+        specs = imgui.table_get_sort_specs()
+        if specs is None or not specs.specs_dirty:
+            return
+        if specs.specs_count > 0:
+            col = specs.get_specs(0)
+            n = int(col.column_index)
+            if 0 <= n < len(GALLERY_COLUMNS) and GALLERY_COLUMNS[n][1]:
+                ast.sort_by = GALLERY_COLUMNS[n][1]
+                ast.sort_desc = (col.sort_direction
+                                 == imgui.SortDirection.descending)
+        specs.specs_dirty = False
+
+    # ---- what a click selected -----------------------------------------
+
+    def _render_gallery_selection(self, ast, arc):
+        if not (0 <= ast.selected_entry_id < len(arc.entries)):
+            return
+        sel = arc.entries[ast.selected_entry_id]
+        imgui.separator()
+        # The ENTRY's id, not the row: the row is how the app addresses it,
+        # the id is what the archive calls it.
+        imgui.text(f"Selected #{sel.id}")
+        # The brain this creature was AUTHORED under, named on every selection
+        # rather than only on a foreign one: an archive pools layouts, so
+        # "which brain is this?" is a question about any entry. Only on a click
+        # - the hover preview writes a row per pointer position.
+        sig = arc.layout_at(ast.selected_entry_id)
+        if arc.is_native(ast.selected_entry_id):
+            imgui.text_colored(imgui.ImVec4(*_DIM), f"{sig} brain")
+        else:
+            # Hovering borrows this brain; only a click keeps it, and with the
+            # toggle off nothing runs at all.
+            imgui.text_colored(
+                imgui.ImVec4(*_DIM),
+                f"{sig} brain - click to switch to it" if ast.live_preview
+                else f"{sig} brain - turn on Live preview to run it")
+        right = layout.row_right_edge()
+        if imgui.button("Save as config..."):
+            self.open_save_popup(save_targets.ARCHIVE_ENTRY,
+                                 arg=ast.selected_entry_id)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(EXPORT_TOOLTIP)
+        layout.wrap_row(right, layout.button_width("Seed a run from here"))
+        if imgui.button("Seed a run from here"):
+            ast.seed_entry_id = ast.selected_entry_id
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(SEED_TOOLTIP)
+        layout.wrap_row(right, layout.button_width("Delete"))
+        if imgui.button("Delete"):
+            ast.delete_entry_id = ast.selected_entry_id
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Remove this entry and its thumbnail.")
 
     # Summits are brighter than the expeditions they sit among, and records get
     # their own hue because a record can be set in any regime.

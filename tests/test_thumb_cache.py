@@ -1,6 +1,6 @@
 import numpy as np
 
-from services.thumb_cache import ThumbCache
+from services.thumb_cache import MAX_CAPACITY, ThumbCache
 
 
 class _FakeTex:
@@ -103,3 +103,39 @@ def test_invalidating_something_absent_is_harmless():
     c, _ = cache()
     c.invalidate("never-loaded.jpg")
     assert len(c) == 0
+
+
+# ---- reserve --------------------------------------------------------------
+#
+# The gallery's tile size is a slider, so how many thumbnails one frame draws
+# is not knowable here. A frame that touches more than `capacity` evicts every
+# texture and re-decodes the whole visible set on the next frame, forever.
+
+
+def test_reserve_raises_capacity_to_fit_the_frame():
+    c, _ = cache(capacity=3)
+    c.reserve(40)
+    assert c.capacity == 40
+
+
+def test_reserve_never_drops_below_the_capacity_it_was_built_with():
+    """The floor is the construction capacity: a small frame must not shrink
+    the cache, or scrolling back up re-decodes what was just on screen."""
+    c, _ = cache(capacity=256)
+    c.reserve(4)
+    assert c.capacity == 256
+
+
+def test_reserve_clamps_at_the_ceiling():
+    c, _ = cache(capacity=3)
+    c.reserve(10_000_000)
+    assert c.capacity == MAX_CAPACITY
+
+
+def test_nothing_is_evicted_after_reserving_room_for_the_frame():
+    c, made = cache(capacity=2)
+    c.reserve(6)
+    for name in "abcdef":
+        c.get(name)
+    assert len(c) == 6
+    assert not any(t.released for t in made)

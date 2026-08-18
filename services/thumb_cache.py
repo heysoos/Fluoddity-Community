@@ -11,6 +11,10 @@ from __future__ import annotations
 
 from collections import OrderedDict
 
+# The most textures the cache will hold however small the gallery's tiles get.
+# 160px RGB, so this is roughly 80 MB.
+MAX_CAPACITY = 1024
+
 
 def gl_loader(ctx, stores):
     """The real loader: read a thumbnail JPEG into an RGB texture.
@@ -46,7 +50,18 @@ class ThumbCache:
     def __init__(self, loader, capacity: int = 256):
         self._load = loader
         self.capacity = int(capacity)
+        # reserve() may raise the capacity but never take it below this.
+        self._floor = int(capacity)
         self._items: OrderedDict = OrderedDict()
+
+    def reserve(self, n: int) -> None:
+        """Hold room for `n` thumbnails in one frame.
+
+        A frame that touches more than `capacity` evicts every texture and
+        re-decodes the whole visible set on the next one. Call this with the
+        count about to be drawn, before drawing any of it.
+        """
+        self.capacity = max(self._floor, min(int(n), MAX_CAPACITY))
 
     def __len__(self) -> int:
         return len(self._items)
