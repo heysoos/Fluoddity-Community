@@ -474,3 +474,64 @@ installed; without it the panel says so and everything else runs unchanged.
       it, which is why the rig seemed to save only sometimes.)
 - [ ] Load a preset in one copy and close it last: that preset is what comes
       back next launch.
+
+## Archive browser: gallery sizing, the wheel, and the map atlas
+
+Launch with the venv interpreter - `umap-learn` is installed there and nowhere
+else, so any other interpreter shows the Layout combo as PCA-only:
+
+```
+.venv/Scripts/python.exe main.py
+```
+
+### A. The wheel (fix; check first, it is the quickest)
+- [ ] **a.** Open Extras > Archive Browser, Map tab. Make the window SHORT
+      enough to scroll, and scroll it to the MIDDLE - at the top a wheel-up
+      moves nothing and everything looks fine either way.
+- [ ] **b.** Wheel over the map canvas: the map zooms and the panel behind it
+      does NOT move. Both directions.
+- [ ] **c.** Wheel over the panel outside the canvas: it scrolls normally. The
+      failure this guards is over-claiming the wheel and making the browser
+      unscrollable.
+- [ ] **d.** Start a wheel gesture over the canvas and run the pointer off it
+      mid-gesture: the panel should not lurch.
+
+### B. Gallery size and list mode
+- [ ] **e.** Gallery tab: the size slider sits between a list glyph and a grid
+      glyph. Clicking either glyph snaps to that end.
+- [ ] **f.** Drag it up and down: tiles scale; at 48px and below it becomes a
+      table. Default (96) looks exactly as it always did.
+- [ ] **g.** Small sizes on a WIDE, TALL window: scrolling stays smooth. Stutter
+      means the thumbnail cache is thrashing.
+- [ ] **h.** Table: right-click a header for show/hide. Hide a column, reopen
+      the app, it stays hidden (ImGui keeps this in imgui.ini).
+- [ ] **i.** Click column headers to sort; switch back to grid - the order is
+      the same and the Sort combo agrees. The arrow beside it flips direction.
+- [ ] **j.** Hover a row with Live preview on: it previews. Click: it keeps.
+      Same as the grid.
+- [ ] **k.** Reopen an archive: its size and sort come back.
+
+### C. The map layout
+- [ ] **l.** Layout combo offers PCA and UMAP. On PCA everything is as before.
+- [ ] **m.** Switch to UMAP on a large archive: the readout says "fitting...",
+      the UI STAYS RESPONSIVE, and the map swaps when it lands. A freeze means
+      the fit is on the frame loop.
+- [ ] **n.** The result should visibly cluster where PCA was one blob.
+- [ ] **o.** Close and reopen the archive: the UMAP map returns instantly, in
+      the same orientation. A relayout or a mirrored map is the bug.
+- [ ] **p.** Readout shows "fitted at N of M" as entries are admitted; it
+      refits itself once M is a quarter past N.
+- [ ] **q.** Relayout: refits under UMAP, and does something visible under PCA
+      too.
+- [ ] **r.** Switch archives: the map is the new archive's, not the old one's.
+
+### D. The thumbnail atlas
+- [ ] **s.** Thumbnails checkbox: one picture per cell, dots elsewhere.
+- [ ] **t.** Size slider 16..64 changes the cell size.
+- [ ] **u.** Zoom in: cells subdivide and more pictures appear.
+- [ ] **v.** The Colour combo still works with thumbnails on - it must not be
+      overridden by the picture layer.
+- [ ] **w.** A big archive is no slower to draw than a small one at the same
+      zoom. The count follows the viewport, not the entry count.
+
+Numbers behind the UMAP choice: `python -m tools.measure_map_layout`.
