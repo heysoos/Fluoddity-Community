@@ -2363,7 +2363,7 @@ def test_hovering_a_picture_picks_that_picture(gui):
     size = imgui.ImVec2(rect[2], rect[3])
 
     shown = h._atlas_shown
-    _pts, (ux, uy, win), cell = shown
+    _arc, _pts, (ux, uy, win), cell = shown
     sx, sy = h._map_to_screen(ast, np.stack([ux, uy], axis=1), origin, size)
     fx, fy = h._map_to_screen(
         ast, np.stack([ux + cell[0], uy + cell[1]], axis=1), origin, size)
@@ -2455,7 +2455,7 @@ def test_the_hover_card_gets_the_entry_whose_picture_is_under_the_pointer(gui):
     origin, size = imgui.ImVec2(rect[0], rect[1]), imgui.ImVec2(rect[2], rect[3])
     disp = imgui.get_io().display_size
 
-    _pts, (ux, uy, win), cell = h._atlas_shown
+    _arc, _pts, (ux, uy, win), cell = h._atlas_shown
     sx, sy = h._map_to_screen(ast, np.stack([ux, uy], axis=1), origin, size)
     fx, fy = h._map_to_screen(
         ast, np.stack([ux + cell[0], uy + cell[1]], axis=1), origin, size)
@@ -2503,7 +2503,8 @@ def test_the_visible_set_is_capped_to_what_the_cache_holds(gui):
                      np.zeros(n, dtype=np.int64), np.arange(n), None, nov)
     ast.map_zoom = 1.0
     _a, _b, _c, _d, live = h._atlas_rects(
-        ast, (stub, plan, cell), imgui.ImVec2(rect[0], rect[1]),
+        ast, (h.archive_obj, stub, plan, cell),
+        imgui.ImVec2(rect[0], rect[1]),
         imgui.ImVec2(rect[2], rect[3]))
     assert len(live) <= ATLAS_BUDGET, len(live)
 
@@ -2526,8 +2527,67 @@ def test_zooming_in_keeps_filling_every_cell_in_view(gui):
         pts = h._map_points(h.archive_obj, h.map_layout_service, ast)
         cell = _mv.atlas_cell(size.x * z, size.y * z, float(ast.map_thumb_px))
         full = _mv.atlas_winners(pts.unit, pts.novelty, cell)
-        _a, _b, _c, _d, want = h._atlas_rects(ast, (pts, full, cell),
+        _a, _b, _c, _d, want = h._atlas_rects(ast, (h.archive_obj, pts, full, cell),
                                               origin, size)
         assert len(want), f"nothing visible at {z}x"
         drawn = _images_drawn(h)
         assert drawn >= len(want), (z, drawn, len(want))
+
+
+def test_switching_archive_drops_the_previous_atlas(gui):
+    """The snapshot holds the OLD archive's rows. Switching to a smaller
+    archive then indexes past the end of its entry list, mid-frame."""
+    h = _big_map(32, n=3000)
+    assert _settle(h) is not None
+    assert h._atlas_shown is not None
+
+    smaller = _populated(200)
+    rng = np.random.default_rng(1)
+    e = rng.normal(size=(200, 8)).astype(np.float32)
+    smaller.embeddings = e / np.linalg.norm(e, axis=1, keepdims=True)
+    h.archive_obj = smaller
+    h.map_layout_service.bind(smaller, None, "clip-b32")
+    h.map_layout_service.update(smaller)
+    h._map_cache = None
+
+    frame(lambda: h._render_map(h.state.archive, h.archive_obj))
+
+
+def _first_column_width(h):
+    """Where the second column starts, minus where the first did.
+
+    Read off a real frame: the thumbnail column's width is a table SETTING,
+    restored from imgui.ini, so setting it up with an initial width does not
+    move a column the table already has a width for.
+    """
+    xs = []
+    real = imgui.table_next_column
+
+    def spy():
+        out = real()
+        xs.append(imgui.get_cursor_screen_pos().x)
+        return out
+
+    imgui.table_next_column = spy
+    try:
+        frame(h.render_archive_window)
+    finally:
+        imgui.table_next_column = real
+    return (xs[1] - xs[0]) if len(xs) > 1 else 0.0
+
+
+@pytest.mark.parametrize("small,big", [(16, 32), (24, GALLERY_LIST_MAX)])
+def test_the_thumbnail_column_follows_the_size_slider(gui, small, big):
+    """It used to keep whatever width the table had stored, so the pictures
+    grew and the column they sat in did not."""
+    h = Harness(archive=_populated())
+    h.state.archive.show_browser = True
+    h.thumb_cache = _ResidentCache()
+
+    h.state.archive.thumb_size = small
+    narrow = _first_column_width(h)
+    h.state.archive.thumb_size = big
+    wide = _first_column_width(h)
+
+    assert narrow > 0 and wide > 0, (narrow, wide)
+    assert wide - narrow == pytest.approx(big - small, abs=2.0), (narrow, wide)

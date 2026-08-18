@@ -952,8 +952,15 @@ class ArchiveWindowMixin:
             if mode:
                 imgui.table_setup_column(label)
             else:
+                # no_resize is what makes the width FOLLOW the slider: a
+                # resizable column's width is a table setting restored from
+                # imgui.ini, so the width set up here would only ever apply to
+                # a table that had none, and the pictures grew inside a column
+                # that did not. The handle is no loss - the slider is the
+                # control, and one the next frame overrules is not.
                 imgui.table_setup_column(
                     label, imgui.TableColumnFlags_.no_sort
+                    | imgui.TableColumnFlags_.no_resize
                     | imgui.TableColumnFlags_.width_fixed, size)
         imgui.table_headers_row()
         self._read_sort_specs(ast)
@@ -1317,7 +1324,7 @@ class ArchiveWindowMixin:
         the whole PLAN instead leaves gaps exactly where you zoom in, since
         the cells in view need not be among the map's most novel.
         """
-        pts, (ux, uy, win), cell = shown
+        _arc, pts, (ux, uy, win), cell = shown
         corner = np.stack([ux, uy], axis=1)
         sx, sy = self._map_to_screen(ast, corner, origin, size)
         # y is flipped by _map_to_screen, so the cell's top edge comes from
@@ -1342,7 +1349,7 @@ class ArchiveWindowMixin:
         shown = getattr(self, "_atlas_shown", None)
         if shown is None:
             return -1
-        pts, (_ux, _uy, win), _cell = shown
+        _arc, pts, (_ux, _uy, win), _cell = shown
         if not len(win):
             return -1
         sx, fy, fx, sy, _live = self._atlas_rects(ast, shown, origin, size)
@@ -1391,8 +1398,13 @@ class ArchiveWindowMixin:
             return
         plan, cell_u = self._atlas_plan(ast, pts, size)
         shown = getattr(self, "_atlas_shown", None)
+        # The snapshot names rows of the archive it was built from. Switching
+        # archive replaces the entry list - a shorter one indexes past the end
+        # mid-frame - so the previous atlas is dropped rather than held.
+        if shown is not None and shown[0] is not arc:
+            self._atlas_shown = shown = None
         if len(plan[2]):
-            cand = (pts, plan, cell_u)
+            cand = (arc, pts, plan, cell_u)
             _sx, _fy, _fx, _sy, live = self._atlas_rects(ast, cand, origin,
                                                          size)
             # A constant reserve, never the visible count: sizing the cache to
@@ -1409,7 +1421,7 @@ class ArchiveWindowMixin:
         # Everything from the SNAPSHOT, positions and rows alike: switching
         # PCA to UMAP replaces `pts`, and the plan on screen still belongs to
         # the old one until the new one is complete.
-        spts, (_ux, _uy, win), _cell = shown
+        _arc, spts, (_ux, _uy, win), _cell = shown
         if not len(win):
             return
         sx, fy, fx, sy, live = self._atlas_rects(ast, shown, origin, size)
