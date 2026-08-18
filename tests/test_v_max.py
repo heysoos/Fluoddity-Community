@@ -105,7 +105,10 @@ def test_the_limit_covers_strafe_and_not_just_velocity():
     """Strafe is added STRAIGHT TO POSITION. Capping e.vel alone caps nothing a
     strafing preset does - with V Max at zero its particles keep flying."""
     accelerate = SHADER.index("e.vel = e.vel*drag_ts + force*force_gain;")
-    hop = SHADER.index("vec2 hop = strafe*calculate_setting(get_particle_strafe_power(")
+    # Anchored on the statement, not on what computes its scalar - this asserts
+    # ORDER, and a wrapper around the setting is not a change of order.
+    hop = SHADER.index("vec2 hop = strafe*")
+    assert "get_particle_strafe_power(" in SHADER[hop:hop + 200]
     delta = SHADER.index("vec2 step_delta = e.vel + hop;")
     clamp = SHADER.index("if(vraw < vm.max_value && smag > vlim)")
     move = SHADER.index("e.pos += step_delta*TIME_SCALE;")
