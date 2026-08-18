@@ -9,16 +9,37 @@ from utilities.field_texture_io import is_field_nonzero, save_field_png as _save
 
 MAX_FIELD_SNAPSHOTS = 20  # Max clipboard entries with non-None field snapshots
 
+# The legacy field texture packed force in .xy and strafe in .zw of one buffer,
+# so a brush layer reads the pair its destination used to occupy.
+_BRUSH_CHANNELS = {"force": "xy", "strafe": "zw"}
+
+
+def ensure_brush_layer(stack, destination: str):
+    """Add a brush layer for `destination` if the stack has none.
+
+    Selecting Force Field in Drawing Controls and painting has to put paint
+    somewhere; without a brush layer the stroke would reach no destination.
+    """
+    for layer in stack.layers:
+        if layer.source == "brush" and layer.destination == destination:
+            return layer
+    from state.field_stack import FieldLayer
+    layer = FieldLayer(
+        source="brush", destination=destination, mapping="rg_direct",
+        blend="replace", params={"_channels": _BRUSH_CHANNELS[destination]})
+    stack.layers.append(layer)
+    return layer
+
 
 class FieldHandler:
     """Manages field texture persistence across config save/load/preview/clipboard.
 
-    Operates on the AdvancedDrawingProcessor's GPU field texture. All methods
-    are no-ops when adv_draw is None (fields disabled).
+    Operates on the BRUSH SOURCE's buffer, which is the one field-injection
+    source with memory. All methods are no-ops when no brush layer exists.
     """
 
-    def __init__(self, adv_draw, sim, param_lock_service=None):
-        self.adv_draw = adv_draw
+    def __init__(self, field_bus, sim, param_lock_service=None):
+        self.field_bus = field_bus
         self.sim = sim
         self.param_lock_service = param_lock_service
         self.cache = FieldTextureCache(max_size=20)
@@ -36,9 +57,18 @@ class FieldHandler:
         self._last_copied_field_strengths = None  # (force, strafe) or None
 
     @property
+    def _brush(self):
+        """The brush source's buffer, or None when no brush layer exists."""
+        return self.field_bus.brush_source() if self.field_bus is not None else None
+
+    @property
     def _has_field_tex(self):
-        """Whether the GPU field texture exists and is initialized."""
-        return self.adv_draw is not None and self.adv_draw.field_texture is not None
+        brush = self._brush
+        return brush is not None and brush.snapshot() is not None
+
+    def _mark_dirty(self):
+        if self.field_bus is not None:
+            self.field_bus.mark_dirty()
 
     def _write_field_with_locks(self, new_data):
         """Write field data to GPU, respecting force/strafe field locks.
@@ -54,13 +84,13 @@ class FieldHandler:
             return  # Both locked, write nothing
 
         if not block_force and not block_strafe:
-            self.adv_draw.write_field_data(new_data)
+            self._brush.write(new_data); self._mark_dirty()
             return
 
         # Partial lock: preserve locked channels from existing GPU state
-        existing = self.adv_draw.snapshot_field_data()
+        existing = self._brush.snapshot()
         if existing is None:
-            self.adv_draw.write_field_data(new_data)
+            self._brush.write(new_data); self._mark_dirty()
             return
 
         merged = new_data.copy()
@@ -68,7 +98,7 @@ class FieldHandler:
             merged[:, :, 0:2] = existing[:, :, 0:2]
         else:
             merged[:, :, 2:4] = existing[:, :, 2:4]
-        self.adv_draw.write_field_data(merged)
+        self._brush.write(merged); self._mark_dirty()
 
     def _should_skip_clear(self):
         """Whether clear_fields should be skipped due to field locks."""
@@ -103,7 +133,7 @@ class FieldHandler:
             )
             return None, None
 
-        field_data = self.adv_draw.snapshot_field_data()
+        field_data = self._brush.snapshot()
         if field_data is not None and is_field_nonzero(field_data):
             field_strengths = (
                 ui_state.preferences.force_field_strength,
@@ -148,24 +178,35 @@ class FieldHandler:
         self.cache.invalidate(filepath)
 
     def apply_for_config(self, config, json_filepath, ui_state):
-        """Load and apply field texture from a file-based config.
+        """Install the config's layer stack and its brush buffer.
 
-        Reads the companion _fields.png via cache (pre-resized to current
-        canvas dimensions). Lazily initializes GPU resources if needed.
-        Clears field texture if no PNG exists. Respects field locks.
+        A config with no stack but a companion _fields.png predates the stack
+        and becomes two brush layers over that texture, so every preset
+        already on disk opens with the field it was saved with.
         """
-        canvas_dim_x,canvas_dim_y = self.sim.get_canvas_dimensions()
+        from services.config_saver import legacy_brush_stack
+        from state.field_stack import stack_from_dict
+
+        canvas_dim_x, canvas_dim_y = self.sim.get_canvas_dimensions()
         field_data = self.cache.get(json_filepath, canvas_dim_y, canvas_dim_x)
 
+        stack_dict = getattr(config, "field_stack", {}) or {}
+        if not stack_dict and field_data is not None:
+            stack_dict = legacy_brush_stack()
+        ui_state.field_stack.layers = list(stack_from_dict(stack_dict).layers)
+        self._mark_dirty()
+
         if field_data is not None:
-            if self.adv_draw:
-                if self.adv_draw.field_texture is None:
-                    canvas_dim_x,canvas_dim_y = self.sim.get_canvas_dimensions()
-                    self.adv_draw.ensure_initialized(canvas_dim_x,canvas_dim_y)
+            # The stack was installed a moment ago, so the brush's buffer does
+            # not exist until the next rebuild - and the paint has to land now.
+            if self.field_bus is not None:
+                self.field_bus.ensure_brush_source(ui_state.field_stack)
+            if self._brush is not None:
                 self._write_field_with_locks(field_data)
         else:
             if self._has_field_tex and not self._should_skip_clear():
-                self.adv_draw.clear_fields()
+                self._brush.clear()
+                self._mark_dirty()
 
         # Apply field strengths from config (respects locks)
         if config.force_field_strength is not None:
@@ -183,15 +224,12 @@ class FieldHandler:
         Respects field locks.
         """
         if self._last_copied_field_data is not None:
-            if self.adv_draw:
-                if self.adv_draw.field_texture is None:
-                    canvas_dim_x,canvas_dim_y = self.sim.get_canvas_dimensions()
-                    self.adv_draw.ensure_initialized(canvas_dim_x,canvas_dim_y)
+            if self._brush is not None:
                 self._write_field_with_locks(self._last_copied_field_data)
         else:
             # Cached field is None (all zeros) - clear if initialized, skip if not
             if self._has_field_tex and not self._should_skip_clear():
-                self.adv_draw.clear_fields()
+                self._brush.clear(); self._mark_dirty()
 
         # Restore field strengths (respects locks)
         if self._last_copied_field_strengths is not None:
@@ -203,14 +241,14 @@ class FieldHandler:
     def clear_fields(self):
         """Clear the GPU field texture to zeros (if initialized)."""
         if self._has_field_tex:
-            self.adv_draw.clear_fields()
+            self._brush.clear(); self._mark_dirty()
 
     # --- File preview cache/restore ---
 
     def cache_for_preview(self, ui_state):
         """Cache current field state before starting file preview."""
         if self._has_field_tex:
-            self._cached_field_data = self.adv_draw.snapshot_field_data()
+            self._cached_field_data = self._brush.snapshot()
         else:
             self._cached_field_data = None
         self._cached_field_strengths = (
@@ -221,7 +259,7 @@ class FieldHandler:
     def restore_from_preview(self, ui_state):
         """Restore cached field state when clearing file preview."""
         if self._has_field_tex and self._cached_field_data is not None:
-            self.adv_draw.write_field_data(self._cached_field_data)
+            self._brush.write(self._cached_field_data); self._mark_dirty()
 
         if self._cached_field_strengths is not None:
             ui_state.preferences.force_field_strength = self._cached_field_strengths[0]
@@ -237,7 +275,7 @@ class FieldHandler:
     def cache_for_clipboard_preview(self, ui_state):
         """Cache current field state before starting clipboard preview."""
         if self._has_field_tex:
-            self._clipboard_cached_field_data = self.adv_draw.snapshot_field_data()
+            self._clipboard_cached_field_data = self._brush.snapshot()
         else:
             self._clipboard_cached_field_data = None
         self._clipboard_cached_field_strengths = (
@@ -248,7 +286,7 @@ class FieldHandler:
     def restore_from_clipboard_preview(self, ui_state):
         """Restore cached field state when clearing clipboard preview."""
         if self._has_field_tex and self._clipboard_cached_field_data is not None:
-            self.adv_draw.write_field_data(self._clipboard_cached_field_data)
+            self._brush.write(self._clipboard_cached_field_data); self._mark_dirty()
         self._clipboard_cached_field_data = None
 
         if self._clipboard_cached_field_strengths is not None:
@@ -272,14 +310,11 @@ class FieldHandler:
             ui_state: For writing force/strafe field strength preferences.
         """
         if field_snapshot is not None:
-            if self.adv_draw:
-                if self.adv_draw.field_texture is None:
-                    canvas_dim_x,canvas_dim_y = self.sim.get_canvas_dimensions()
-                    self.adv_draw.ensure_initialized(canvas_dim_x,canvas_dim_y)
+            if self._brush is not None:
                 self._write_field_with_locks(field_snapshot)
         else:
             if self._has_field_tex and not self._should_skip_clear():
-                self.adv_draw.clear_fields()
+                self._brush.clear(); self._mark_dirty()
 
         if config.force_field_strength is not None:
             self._write_field_strengths(
@@ -303,14 +338,11 @@ class FieldHandler:
             print(f"Failed to load field image: {filepath}")
             return
 
-        if self.adv_draw is None:
-            print("Warning: advanced drawing processor not available")
+        if self._brush is None:
+            print("Warning: no brush layer to load a field image into")
             return
 
-        if self.adv_draw.field_texture is None:
-            self.adv_draw.ensure_initialized(canvas_dim_x,canvas_dim_y)
-
-        existing = self.adv_draw.snapshot_field_data()
+        existing = self._brush.snapshot()
         if existing is None:
             existing = np.zeros((canvas_dim_y, canvas_dim_x, 4), dtype=np.float32)
 
@@ -321,7 +353,7 @@ class FieldHandler:
             existing[:, :, 2] = cartesian[:, :, 0]
             existing[:, :, 3] = cartesian[:, :, 1]
 
-        self.adv_draw.write_field_data(existing)
+        self._brush.write(existing); self._mark_dirty()
         print(f"Loaded {target} field from image: {filepath}")
 
     def enforce_snapshot_cap(self, config_clipboard):

@@ -44,17 +44,21 @@ class AdvancedDrawingProcessor:
                 brush_mode, fixed_direction_heading,
                 force_field_active, strafe_field_active,
                 tiling_mode, erase_mode,
-                fill_mode=False, fill_direction_type=0):
-        """Draw to the force/strafe field texture. Called once per render frame.
+                fill_mode=False, fill_direction_type=0, target_fbo=None):
+        """Draw a stroke into `target_fbo`, the brush source's own buffer.
 
         Uses a two-pass approach:
           Pass 1 (erase): no blending, outputs vec4(0) in circle, discard outside
           Pass 2 (draw/fill): additive blending (ONE, ONE), outputs delta
+
+        With no target there is no brush layer to paint into, so nothing runs.
         """
+        if target_fbo is None:
+            return
         self._ensure_resources(canvas_width, canvas_height)
         r = self._resources
 
-        r["field_fbo"].use()
+        target_fbo.use()
 
         # Set common uniforms
         tryset(r["program"], "mouse", mouse_pos)

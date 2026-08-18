@@ -171,7 +171,7 @@ class App:
         # Create delegated handlers
         self.param_lock_service = ParameterLockService()
         self.field_handler = FieldHandler(
-            self.advanced_drawing_processor, self.sim,
+            self.field_bus, self.sim,
             param_lock_service=self.param_lock_service)
         self.ui.param_lock_service = self.param_lock_service
         self.command_handler = CommandHandler(

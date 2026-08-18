@@ -174,6 +174,21 @@ class FieldBus:
                 return source
         return None
 
+    def ensure_brush_source(self, stack):
+        """Materialise the brush layer's buffer without waiting for a rebuild.
+
+        Loading a config installs a stack and writes its saved paint in the
+        same call, which is before the next rebuild would have created the
+        source to write into.
+        """
+        resident = self.brush_source()
+        if resident is not None:
+            return resident
+        for layer in getattr(stack, "layers", []):
+            if layer.source == "brush":
+                return self._source_for_layer(layer)
+        return None
+
     def reload_shaders(self) -> None:
         """Recompile the composite and every user shader. Bound to the V key."""
         if self._composite_vao is not None:

@@ -328,6 +328,17 @@ class _BrushSource:
         if self._fbo is not None:
             self._fbo.clear()
 
+    def clear_channels(self, which: str) -> None:
+        """Zero one channel pair, leaving the other pair's paint alone."""
+        data = self.snapshot()
+        if data is None:
+            return
+        if which == "xy":
+            data[:, :, 0:2] = 0.0
+        else:
+            data[:, :, 2:4] = 0.0
+        self.write(data)
+
     def release(self) -> None:
         if self._fbo is not None:
             self._fbo.release()

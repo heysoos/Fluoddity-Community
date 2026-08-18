@@ -544,10 +544,10 @@ class CommandHandler:
         # A partial rollout is not a valid fitness sample.
         if self.auto_service is not None:
             self.auto_service.abort_generation()
-        # Reinitialize field texture at new canvas dimensions (if it exists)
-        if self.field_handler and self.field_handler._has_field_tex:
-            canvas_dim_x, canvas_dim_y = self.sim.get_canvas_dimensions()
-            self.field_handler.adv_draw.ensure_initialized(canvas_dim_x, canvas_dim_y)
+        # The bus sizes itself from the canvas on its next rebuild; the brush
+        # keeps its paint at whatever resolution it was painted at.
+        if self.field_bus is not None:
+            self.field_bus.mark_dirty()
         self.ui._last_applied_world_size = ui_state.preferences.world_size
         self.ui._last_applied_particle_density = ui_state.preferences.particle_density
         w, h = self.sim.get_canvas_dimensions()
