@@ -250,3 +250,56 @@ def test_a_build_without_umap_opens_every_archive_exactly_as_before():
     a = ArchiveState()
     assert a.map_layout == "pca"
     assert a.map_thumbs is True
+
+
+# ---- which brain this archive was being searched under -------------------
+
+def test_the_layout_signature_travels_with_the_archive():
+    """The app remembers which archive you were in; without this it does not
+    remember which brain you were working on in it."""
+    assert "layout_signature" in PERSISTED_FIELDS
+    a = ArchiveState()
+    a.layout_signature = "mlp-n16.8.8-a0.0.0"
+    b = ArchiveState()
+    b.apply_settings(a.to_settings())
+    assert b.layout_signature == "mlp-n16.8.8-a0.0.0"
+
+
+def test_an_archive_with_no_recorded_layout_reads_as_empty():
+    """Every archive written before this one has no such key, and must open
+    exactly as it always did."""
+    s = ArchiveState()
+    assert s.layout_signature == ""
+    s.apply_settings({"alpha": 3.0})
+    assert s.layout_signature == ""
+
+
+def test_saving_records_the_LIVE_layout_not_a_stale_field(tmp_path):
+    """The field is a readout on the way out. Trusting whatever was last put
+    in it files the layout the archive just left."""
+    from main import App
+    from services.brains import BrainLayout, default_layout
+    from state.preferences_state import PreferencesState
+
+    gabor = BrainLayout("gabor", (12,), 168)
+
+    class _Bag:
+        pass
+
+    app = _Bag()
+    app.sim = _Bag()
+    app.sim.brain_layout = gabor
+    app.archive_store = ArchiveStore(tmp_path / "arc", default_layout())
+    app.archive = None
+    app.imgep_driver = None
+
+    ui = _Bag()
+    ui.archive = ArchiveState()
+    ui.archive.layout_signature = "fourier-n10"      # stale
+    ui.preferences = PreferencesState()
+
+    App._save_archive_settings(app, ui)
+
+    written = app.archive_store.load_settings()
+    app.archive_store.close()
+    assert written["layout_signature"] == "gabor-n12"

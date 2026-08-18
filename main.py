@@ -480,6 +480,12 @@ class App:
         """
         if self.archive_store is None:
             return
+        # From the SIM, not from whatever was last put in the field: this is a
+        # readout of the brain the archive is on, and a stale one files the
+        # layout it just left.
+        layout = getattr(getattr(self, "sim", None), "brain_layout", None)
+        if layout is not None:
+            ui_state.archive.layout_signature = layout.signature()
         settings = ui_state.archive.to_settings()
         self.archive_store.save_settings(settings)
         # A change made after the last generation would otherwise never reach
@@ -653,12 +659,11 @@ class App:
             self._refresh_driver_specs(layout)
             return True
 
-        # Said out loud because it is the one change that silently redirects
-        # where a run's results are filed: the archive is keyed by signature,
-        # so entries admitted after this land in a different directory and the
-        # previous brain's stop being reachable as parents. Nothing else
-        # records that it happened - a run config names the layout it ran
-        # under, but only once a run starts.
+        # Said out loud because it redirects where a run's results are filed:
+        # entries admitted after this land in a different signature directory
+        # and the previous brain's stop being reachable as parents. The
+        # archive's own settings record which brain it ended on, but not that
+        # the change happened, nor when.
         running = (getattr(ui_state.archive, "running", False)
                    or getattr(ui_state.auto_tournament, "running", False))
         print(f"[brain] layout {current.signature()} -> {layout.signature()}"

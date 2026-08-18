@@ -96,6 +96,13 @@ class ArchiveState:
     # File > Load previews a preset. Only outside tournament mode, where the
     # canvas is one simulation rather than a grid of them.
     live_preview: bool = False
+    # The brain this archive was last SEARCHED under. A readout on the way out
+    # and a command on the way in: the app remembers which archive you were in,
+    # and without this it does not remember which brain you were working on in
+    # it - so an archive of one modality reopens under another with no native
+    # entries. Empty means not recorded, which is every archive written before
+    # this one.
+    layout_signature: str = ""
     # CONTINUOUS, not a one-shot: the entry under the pointer right now, or -1.
     # CommandHandler compares it against what it is already showing, so the UI
     # does not have to track transitions itself.
@@ -245,7 +252,7 @@ PERSISTED_FIELDS = (
     # is most of what "open it in its last state" means once the archive is
     # large enough that the map does not fit on screen.
     "show_browser", "sort_by", "sort_desc", "pinned_only", "live_preview",
-    "thumb_size",
+    "layout_signature", "thumb_size",
     "map_zoom", "map_center_x", "map_center_y",
     "map_color_by", "map_filter", "map_render",
     "map_layout", "map_thumbs", "map_thumb_px",
