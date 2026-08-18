@@ -29,7 +29,7 @@ class _FakeApp:
         self.goal_list = None
         self.archive_store = None
         self.thumb_cache = None
-        self.archive_projection = None
+        self.map_layout_service = None
         self.imgep_driver = None
         self._last_projection_size = 0
         self.ui = _Bag()
@@ -113,7 +113,7 @@ def test_the_gallery_gets_everything_it_draws_from(root):
     open_browser(app, ui)
     assert app.ui.archive_obj is app.archive
     assert app.ui.thumb_cache is not None
-    assert app.ui.archive_projection is not None
+    assert app.ui.map_layout_service is not None
     # The live preview reads the archive through the command handler.
     assert app.command_handler.archive is app.archive
 

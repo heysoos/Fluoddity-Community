@@ -173,7 +173,7 @@ class Harness(ArchiveWindowMixin, AutoTournamentWindowMixin):
         self.archive_goals = goals
         self.archive_service = None
         self.archive_unavailable = unavailable
-        self.archive_projection = None
+        self.map_layout_service = None
         self.archive_goal_point = None
         self.thumb_cache = None
 
@@ -531,59 +531,64 @@ def test_the_pinned_only_filter_keeps_only_pins(gui):
 
 # ---- the map -----------------------------------------------------------
 
-def _spread(arc, seed=0):
-    """Give the fake archive embeddings with real structure, and a projection
-    fitted to them."""
-    from services.archive_projection import Projection
+def _spread(arc, seed=0, engine="pca"):
+    """Embeddings with real structure, and the layout service fitted to them.
+
+    The SERVICE, not a bare Projection: it is what the window asks for, and a
+    stand-in would exercise a path that does not ship.
+    """
+    from services.map_layout_service import MapLayoutService
 
     rng = np.random.default_rng(seed)
     e = rng.normal(size=(len(arc.entries), 8)).astype(np.float32)
     e[:, 0] *= 6.0
     e[:, 1] *= 3.0
     arc.embeddings = e / np.linalg.norm(e, axis=1, keepdims=True)
-    proj = Projection()
-    proj.fit(arc.embeddings)
-    return proj
+    svc = MapLayoutService()
+    svc.bind(arc, None, "clip-b32")      # None: these tests write no cache
+    svc.configure(engine)
+    svc.update(arc)
+    return svc
 
 
 def test_the_map_says_so_when_there_is_nothing_to_project(gui):
-    """The guard message renders, but the scatter does not - "Refit projection"
+    """The guard message renders, but the scatter does not - "Relayout"
     only exists on the drawing path, so it is the precise signal."""
     h = Harness(archive=_populated(n=2))
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
-    assert "Refit projection" not in labels
+    assert "Relayout" not in labels
 
 
 def test_an_unfitted_projection_does_not_stack_every_point_at_the_origin(gui):
-    """Projection.transform returns zeros before it is fitted. Rendering that
-    would pile the whole archive in one corner and look like a bug rather than
-    an unbuilt map."""
-    from services.archive_projection import Projection
+    """transform returns zeros before anything is fitted. Rendering that would
+    pile the whole archive in one corner and look like a bug rather than an
+    unbuilt map."""
+    from services.map_layout_service import MapLayoutService
 
     h = Harness(archive=_populated())
-    h.archive_projection = Projection()          # never fitted
-    assert h.archive_projection.fitted is False
+    h.map_layout_service = MapLayoutService()    # bound to nothing, never fitted
+    assert h.map_layout_service.fitted is False
     labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
-    assert "Refit projection" not in labels
+    assert "Relayout" not in labels
 
 
 def test_a_fitted_projection_does_draw_the_scatter(gui):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
-    assert "Refit projection" in labels
+    assert "Relayout" in labels
 
 
 def test_the_map_renders_a_fitted_archive(gui):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     assert frame(lambda: h._render_map(h.state.archive, h.archive_obj)) > host_only()
 
 
 def test_the_map_draws_the_goal_marker(gui):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     without = frame(lambda: h._render_map(h.state.archive, h.archive_obj))
     h.archive_goal_point = h.archive_obj.embeddings[0].copy()
     assert frame(lambda: h._render_map(h.state.archive, h.archive_obj)) > without
@@ -599,14 +604,14 @@ def test_the_map_renders_through_the_archive_window(gui):
     """The Map tab is only reached via the tab bar, which is where a begin/end
     imbalance in _render_map would corrupt the frame."""
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.show_browser = True
     assert frame(h.render_archive_window) > host_only()
 
 
 def test_the_map_prompts_you_to_click_when_nothing_is_selected(gui):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
     assert "Save as config...##map" not in labels
 
@@ -615,7 +620,7 @@ def test_clicking_a_dot_shows_that_entrys_image_and_actions(gui):
     """A dot is a position; without the picture the map says where something
     sits but never what it is."""
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.selected_entry_id = 5
     labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
     assert "Save as config...##map" in labels
@@ -624,7 +629,7 @@ def test_clicking_a_dot_shows_that_entrys_image_and_actions(gui):
 
 def test_the_map_selection_falls_back_to_a_placeholder_without_a_thumbnail(gui):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.selected_entry_id = 5
 
     class _Cache:
@@ -639,7 +644,7 @@ def test_the_map_selection_falls_back_to_a_placeholder_without_a_thumbnail(gui):
 def test_a_stale_selection_does_not_break_the_map(gui):
     """The entry may have been deleted since it was picked."""
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.selected_entry_id = 9999
     assert frame(lambda: h._render_map(h.state.archive, h.archive_obj)) > host_only()
 
@@ -848,11 +853,11 @@ def test_the_map_renders_zoomed_in(gui):
     """Zooming pushes most points off the canvas; they must be clipped rather
     than drawn over the rest of the tab, and the frame must still balance."""
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.map_zoom = 40.0
     h.state.archive.map_center_x = 0.2
     labels = button_labels(lambda: h._render_map(h.state.archive, h.archive_obj))
-    assert "Refit projection" in labels
+    assert "Relayout" in labels
     assert "maphome" in invisible_button_labels(
         lambda: h._render_map(h.state.archive, h.archive_obj))
 
@@ -887,7 +892,7 @@ def test_the_hover_card_renders_without_a_thumbnail(gui):
 def test_the_map_reuses_its_projection_between_frames():
     h = Harness(archive=_populated())
     proj = _spread(h.archive_obj)
-    h.archive_projection = proj
+    h.map_layout_service = proj
     first = h._map_points(h.archive_obj, proj, h.state.archive)
     assert h._map_points(h.archive_obj, proj, h.state.archive) is first
 
@@ -906,7 +911,8 @@ def test_refitting_the_projection_invalidates_the_map():
     h = Harness(archive=_populated())
     proj = _spread(h.archive_obj)
     first = h._map_points(h.archive_obj, proj, h.state.archive)
-    proj.fit(h.archive_obj.embeddings)          # bumps proj.version
+    proj.request_refit()                        # bumps proj.version
+    proj.update(h.archive_obj)
     assert h._map_points(h.archive_obj, proj, h.state.archive) is not first
 
 
@@ -1185,7 +1191,7 @@ def _mapped(h):
 @pytest.mark.parametrize("mode", ["source", "novelty", "liveness"])
 def test_the_map_renders_in_every_colour_mode(gui, mode):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.map_color_by = mode
     assert frame(_mapped(h)) > host_only()
 
@@ -1193,7 +1199,7 @@ def test_the_map_renders_in_every_colour_mode(gui, mode):
 @pytest.mark.parametrize("mode", ["points", "density", "points+density"])
 def test_the_map_renders_in_every_draw_mode(gui, mode):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.map_render = mode
     assert frame(_mapped(h)) > host_only()
 
@@ -1203,14 +1209,14 @@ def test_the_map_renders_under_every_filter(gui, mode):
     """Including the ones whose extra control only appears for them, and the
     ones that can select nothing."""
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.map_filter = mode
     frame(_mapped(h))
 
 
 def test_a_filter_that_matches_nothing_says_so_instead_of_drawing_a_broken_map(gui):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     ast = h.state.archive
     ast.map_filter = "goal"
     ast.map_filter_goal = "nothing has this goal"
@@ -1224,7 +1230,7 @@ def test_the_map_controls_do_not_clash_with_the_windows_other_ids(
     responding to the mouse - see the ID caveat in CLAUDE.md. Per filter,
     because each one reveals a different extra control."""
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.show_browser = True
     h.state.archive.map_filter = filt
     assert id_clashes(monkeypatch, h.render_archive_window) == {}
@@ -1279,7 +1285,7 @@ def test_the_legend_draws_a_ramp_when_colouring_by_a_number(gui):
     """A ramp with no scale is unreadable. color_button, not text: imgui.text
     renders "##" literally and a block glyph depends on the font."""
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.map_color_by = "novelty"
     with_ramp = frame(_mapped(h))
     h.state.archive.map_color_by = "source"
@@ -1289,7 +1295,7 @@ def test_the_legend_draws_a_ramp_when_colouring_by_a_number(gui):
 def test_the_legend_says_how_much_is_hidden(gui):
     """A filtered map that does not say so misrepresents the archive."""
     h = Harness(archive=_populated(n=40))
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.map_filter = "novel"
     h.state.archive.map_novel_pct = 25
     seen = []
@@ -1384,7 +1390,7 @@ def test_density_draws_nothing_when_every_point_is_off_canvas():
 @pytest.mark.parametrize("mode", ["source", "novelty", "liveness"])
 def test_the_density_map_renders_in_every_colour_mode(gui, mode):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.map_color_by = mode
     h.state.archive.map_render = "points+density"
     assert frame(_mapped(h)) > host_only()
@@ -1410,7 +1416,7 @@ def test_the_map_canvas_is_a_child_with_no_scrollbar(gui, monkeypatch):
 
     monkeypatch.setattr(imgui, "begin_child", spy)
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     frame(_mapped(h))
 
     flags = seen.get("map_canvas")
@@ -1462,10 +1468,10 @@ def test_the_explore_tab_keeps_its_buttons_at_the_minimum_width(gui):
 
 def test_the_map_keeps_its_buttons_at_the_minimum_width(gui):
     h = Harness(archive=_populated())
-    h.archive_projection = _spread(h.archive_obj)
+    h.map_layout_service = _spread(h.archive_obj)
     h.state.archive.selected_entry_id = 0
     labels = narrow_button_labels(_mapped(h))
-    assert "Refit projection" in labels
+    assert "Relayout" in labels
     assert "maphome" in invisible_button_labels(_mapped(h))
     assert "Save as config...##map" in labels and "Delete##map" in labels
 
@@ -1487,17 +1493,18 @@ def test_the_auto_tab_keeps_its_buttons_at_the_minimum_width(gui):
 def _map_harness(n=40):
     """A populated archive with a FITTED projection, so the map actually draws
     dots rather than the "not enough entries" line."""
-    from services.archive_projection import Projection
+    from services.map_layout_service import MapLayoutService
 
     arc = _populated(n)
     rng = np.random.default_rng(0)
     e = rng.normal(size=(n, 8)).astype(np.float32)
     e /= np.linalg.norm(e, axis=1, keepdims=True)
     arc.embeddings = e
-    proj = Projection()
-    proj.fit(e)
+    svc = MapLayoutService()
+    svc.bind(arc, None, "clip-b32")
+    svc.update(arc)
     h = Harness(archive=arc)
-    h.archive_projection = proj
+    h.map_layout_service = svc
     return h
 
 
@@ -1958,3 +1965,103 @@ def test_a_dirty_spec_with_no_columns_is_harmless(monkeypatch):
     ArchiveWindowMixin._read_sort_specs(ast)
     assert ast.sort_by == "brain"
     assert specs.specs_dirty is False
+
+
+# ---- the layout engine and the thumbnail atlas --------------------------
+
+def _mapped_with(h):
+    return lambda: h._render_map(h.state.archive, h.archive_obj)
+
+
+def test_the_map_offers_a_layout_engine_and_a_relayout_button(gui, monkeypatch):
+    h = _map_harness()
+    labels = _combo_labels(monkeypatch, _mapped_with(h))
+    assert "Layout##map" in labels
+    assert "Relayout" in button_labels(_mapped_with(h))
+
+
+def test_relayout_asks_the_service_rather_than_fitting_in_the_frame(gui):
+    h = _map_harness()
+    h.state.archive.refit_projection_requested = False
+    imgui.new_frame()
+    imgui.begin("host", True)
+    h._render_map(h.state.archive, h.archive_obj)
+    imgui.end()
+    imgui.render()
+    # The button only sets the one-shot; CommandHandler forwards it.
+    assert hasattr(h.map_layout_service, "request_refit")
+
+
+def test_the_toolbar_says_which_engine_and_how_stale(gui):
+    h = _map_harness()
+    text = h.map_layout_service.status()
+    assert "PCA" in text and "fitted" in text
+
+
+@pytest.mark.parametrize("px", [16, 32, 64])
+def test_the_map_renders_with_thumbnails_at_every_size(gui, px):
+    h = _map_harness()
+    h.state.archive.map_thumbs = True
+    h.state.archive.map_thumb_px = px
+    h.thumb_cache = _CountingCache()
+    assert frame(_mapped_with(h)) > host_only()
+
+
+def test_the_atlas_reserves_before_it_asks_for_a_single_thumbnail(gui):
+    h = _map_harness(n=200)
+    h.state.archive.map_thumbs = True
+    h.state.archive.map_thumb_px = 32
+    cache = _CountingCache()
+    h.thumb_cache = cache
+    frame(_mapped_with(h))
+    assert cache.reserved, "the atlas never reserved"
+    assert max(cache.reserved) >= cache.asked / 3.0
+
+
+@pytest.mark.parametrize("n", [200, 600])
+def test_the_atlas_asks_for_no_more_thumbnails_than_there_are_cells(gui, n):
+    """The count follows the VIEWPORT, not the archive - which is the whole
+    reason a 20000-entry archive can draw an atlas at all.
+
+    Against the CELL count rather than a ratio between two archive sizes: a
+    ratio also passes when both are unbounded.
+    """
+    px = 32
+    h = _map_harness(n=n)
+    h.state.archive.map_thumbs = True
+    h.state.archive.map_thumb_px = px
+    rect = _map_rect(h)
+    assert rect, "map canvas never drew its hit target"
+    cells = max(1, int(rect[2] // px)) * max(1, int(rect[3] // px))
+
+    cache = _CountingCache()
+    h.thumb_cache = cache
+    frames = 2
+    frame(_mapped_with(h), n=frames)
+    assert cache.asked <= cells * frames, (cache.asked, cells)
+    assert max(cache.reserved) <= cells, (cache.reserved, cells)
+
+
+def test_a_bigger_archive_does_not_ask_for_more_than_the_canvas_holds(gui):
+    """The point of the bound: entries can grow without the picture cost."""
+    px = 32
+    asks = []
+    for n in (200, 2000):
+        h = _map_harness(n=n)
+        h.state.archive.map_thumbs = True
+        h.state.archive.map_thumb_px = px
+        cache = _CountingCache()
+        h.thumb_cache = cache
+        frame(_mapped_with(h), n=1)
+        asks.append(cache.asked)
+    assert asks[1] <= asks[0] * 2, asks
+    assert asks[1] < 2000
+
+
+def test_thumbnails_off_asks_for_nothing(gui):
+    h = _map_harness(n=200)
+    h.state.archive.map_thumbs = False
+    cache = _CountingCache()
+    h.thumb_cache = cache
+    frame(_mapped_with(h))
+    assert cache.asked == 0

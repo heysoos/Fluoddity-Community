@@ -113,6 +113,12 @@ class ArchiveState:
     map_color_by: str = "source"     # source | novelty | liveness
     map_filter: str = "all"          # all | recent | novel | kept | goal | source
     map_render: str = "points"       # points | density | points+density
+    # Which engine lays the map out. See services/map_layout.py; "pca" is the
+    # default and the fallback, so a build without umap-learn is unchanged.
+    map_layout: str = "pca"          # pca | umap
+    # One representative thumbnail per occupied screen cell.
+    map_thumbs: bool = False
+    map_thumb_px: int = 32
     # Low, because a large archive spans few generations: a default that shows
     # everything is a filter that filters nothing.
     map_recent_gens: int = 50        # for filter "recent"
@@ -239,5 +245,6 @@ PERSISTED_FIELDS = (
     "thumb_size",
     "map_zoom", "map_center_x", "map_center_y",
     "map_color_by", "map_filter", "map_render",
+    "map_layout", "map_thumbs", "map_thumb_px",
     "map_recent_gens", "map_novel_pct", "map_filter_goal", "map_filter_source",
 )

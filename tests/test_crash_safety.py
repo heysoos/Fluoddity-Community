@@ -46,6 +46,7 @@ class _App:
     _write_crash_log = App._write_crash_log
     _cleanup_safely = App._cleanup_safely
     _save_last_rig = App._save_last_rig
+    _close_map_layout = App._close_map_layout
 
     def __init__(self, boom=None):
         self.window = object()

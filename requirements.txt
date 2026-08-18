@@ -9,3 +9,5 @@ onnxruntime-directml>=1.20
 tokenizers>=0.20
 cmaes>=0.11
 PyAudioWPatch>=0.2.12.8
+# Optional, lazily imported: the map's UMAP layout falls back to PCA.
+umap-learn>=0.5

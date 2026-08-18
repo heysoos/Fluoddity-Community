@@ -37,7 +37,7 @@ class CommandHandler:
         self.archive = None
         self.archive_store = None
         self.goal_list = None
-        self.archive_projection = None
+        self.map_layout_service = None
         # Which run's physics is already on disk, and the configs read back for
         # the preview. Both are per-archive and cleared on a switch.
         self._run_physics_written = ""
@@ -1070,8 +1070,8 @@ class CommandHandler:
         if ast.chase_tile >= 0 and not drv.chase(int(ast.chase_tile)):
             ast.warning = "nothing captured yet - chase needs one generation first"
         if (ast.refit_projection_requested and self.archive is not None
-                and self.archive_projection is not None):
-            self.archive_projection.fit(self.archive.embeddings)
+                and self.map_layout_service is not None):
+            self.map_layout_service.request_refit()
 
         if ast.seed_entry_id >= 0:
             self._seed_from_archive(ast)

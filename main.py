@@ -140,7 +140,7 @@ class App:
         self.archive = None
         self.archive_store = None
         self.goal_list = None
-        self.archive_projection = None
+        self.map_layout_service = None
         self.thumb_cache = None
         # Brain Inspector: None until the window is first opened, False if it
         # could not be built (a diagnostic panel must not take the app down).
@@ -359,8 +359,8 @@ class App:
         """
         from services.archive import Archive
         from services.archive_io import ArchiveStore
-        from services.archive_projection import Projection
         from services.goal_source import GoalList
+        from services.map_layout_service import MapLayoutService
         from services.thumb_cache import ThumbCache, gl_loader
 
         from services.archive_io import migrate_archive
@@ -389,9 +389,13 @@ class App:
         self.archive_store = store
         self.archive = archive
         self.goal_list = goals
-        self.archive_projection = Projection()
-        self.archive_projection.fit(archive.embeddings)
-        self._last_projection_size = len(archive)
+        # ONE service across every switch - it owns a worker thread - and it
+        # is rebound rather than rebuilt. Entry ids restart in each archive, so
+        # bind() is what drops the previous archive's positions.
+        if self.map_layout_service is None:
+            self.map_layout_service = MapLayoutService()
+        self.map_layout_service.bind(archive, path / "map_layout.npz",
+                                     store.encoder)
         # Keyed by signature, because one archive holds every brain and each
         # of them has a 000000.jpg.
         self.thumb_cache = ThumbCache(gl_loader(self.ctx, archive.stores),
@@ -402,12 +406,12 @@ class App:
             self.imgep_driver.goals = goals
         self.ui.archive_obj = archive
         self.ui.archive_goals = goals
-        self.ui.archive_projection = self.archive_projection
+        self.ui.map_layout_service = self.map_layout_service
         self.ui.thumb_cache = self.thumb_cache
         self.command_handler.archive = archive
         self.command_handler.archive_store = store
         self.command_handler.goal_list = goals
-        self.command_handler.archive_projection = self.archive_projection
+        self.command_handler.map_layout_service = self.map_layout_service
 
     def _archive_path_for(self, name, ast):
         """The directory for `name`, falling back to 'default' when it is gone."""
@@ -837,6 +841,24 @@ class App:
             return max(1, int(svc.sim_steps_per_frame))
         return 1
 
+    def _close_map_layout(self):
+        svc = getattr(self, "map_layout_service", None)
+        if svc is not None:
+            svc.shutdown()
+
+    def _update_map_layout(self, ui_state):
+        """Decide whether the map needs laying out again, once per frame.
+
+        Per frame rather than per generation: browsing an archive with no
+        search running still has to draw a map, and the engine combo has to
+        take effect when it is moved rather than at the next generation.
+        """
+        svc = self.map_layout_service
+        if self.archive is None or svc is None:
+            return
+        svc.configure(ui_state.archive.map_layout)
+        svc.update(self.archive)
+
     def _record_settings_version(self, ui_state):
         """One settings version per generation, and only if something moved.
 
@@ -855,15 +877,6 @@ class App:
         svc = self.auto_service
         gen = svc.generation
 
-        # Refit every 500 admissions, not per frame (Projection.fit sign-aligns
-        # to the previous components, so the map doesn't mirror itself). Also
-        # refit once while unfitted so a cold archive doesn't wait 500 entries.
-        proj = self.archive_projection
-        if self.archive is not None and proj is not None:
-            grown = len(self.archive) - self._last_projection_size
-            if grown >= 500 or (not proj.fitted and len(self.archive) > 2):
-                proj.fit(self.archive.embeddings)
-                self._last_projection_size = len(self.archive)
         if self.imgep_driver is not None:
             g = getattr(self.imgep_driver, "_goal", None)
             self.ui.archive_goal_point = g.embedding if g is not None else None
@@ -960,6 +973,7 @@ class App:
                 self.auto_service.pause()
         self._auto_was_enabled = auto.enabled
         self._follow_auto_encoder(ui_state)
+        self._update_map_layout(ui_state)
 
         # Extras > Archive Browser. Before process_commands, which is where the
         # browser's own flags are read, and cleared first so a failure to open
@@ -1570,6 +1584,9 @@ class App:
         # closing it after the flush cannot race the archive.
         if self.auto_service is not None:
             self._step("close scoring thread", self.auto_service.close)
+        # getattr, and the check INSIDE the step: a raise out here would skip
+        # every step below it, which is the whole reason each one is guarded.
+        self._step("close map layout thread", self._close_map_layout)
         if self.archive_store is not None:
             self._step("close archive store", self.archive_store.close)
         if self.thumb_cache is not None:

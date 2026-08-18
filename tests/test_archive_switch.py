@@ -100,7 +100,7 @@ class _FakeApp:
         self.goal_list = _FakeGoals(log)
         self.archive_store = _FakeStore(log)
         self.thumb_cache = _FakeCache(log)
-        self.archive_projection = None
+        self.map_layout_service = None
         self._last_projection_size = 0
         self.ui = _Bag()
         self.command_handler = _Bag()
@@ -200,11 +200,11 @@ def test_the_switch_repoints_every_holder(roots):
     assert app.goal_list is driver.goals
     assert app.ui.archive_obj is app.archive
     assert app.ui.archive_goals is app.goal_list
-    assert app.ui.archive_projection is app.archive_projection
+    assert app.ui.map_layout_service is app.map_layout_service
     assert app.ui.thumb_cache is app.thumb_cache
     assert app.command_handler.archive is app.archive
     assert app.command_handler.goal_list is app.goal_list
-    assert app.command_handler.archive_projection is app.archive_projection
+    assert app.command_handler.map_layout_service is app.map_layout_service
 
 
 def test_the_driver_instance_survives_the_switch(roots):

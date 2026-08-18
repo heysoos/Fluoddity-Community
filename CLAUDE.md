@@ -1369,9 +1369,48 @@ mechanics these caveats assume.
   `services/map_view.py` therefore offers filtering (fewer points), a novelty /
   liveness colour ramp, and a log-scaled density heatmap — all opt-in, with the
   historical scatter as every default. Filtering renormalises to the filtered
-  subset, so narrowing also expands what is left. UMAP was considered and not
-  used: PCA's `transform()` is a matmul, so a new entry places instantly against
-  stable axes, while UMAP is non-parametric and its refit relayouts everything.
+  subset, so narrowing also expands what is left. **Crowding is not the only
+  complaint, and this caveat used to claim it was**: PCA also fails to
+  SEPARATE, which no amount of filtering answers — see the UMAP caveat below,
+  which is how that half is fixed. PCA remains the default because its
+  `transform()` is a matmul, so a new entry places instantly against stable
+  axes.
+
+- **UMAP lays out a SNAPSHOT; kNN places everything admitted after it.** PCA
+  holds 46% of the variance at every archive size, which through two linear
+  axes of a CLIP space does not SEPARATE - a different complaint from crowding,
+  and the one filtering cannot answer. Over six archives UMAP roughly DOUBLES
+  kNN(10) preservation at every size (`default`: 13.6 -> 29.2% at 500,
+  4.8 -> 9.0% at 2000, 2.2 -> 5.2% at 4800), for a fit of 1-7.5 s.
+  `python -m tools.measure_map_layout`. Note the absolute number falls with n
+  for BOTH engines - two dimensions cannot hold a 512-d neighbourhood - so read
+  the engines against each other at one size, never across sizes.
+  `umap.transform` is never called and no reducer is pickled: entries admitted
+  after a fit are placed at the mean 2-D position of their nearest neighbours
+  in the FULL space, so `<archive>/map_layout.npz` holds only numbers and
+  cannot break across a library upgrade. **A refit is seeded and aligned or it
+  is useless** - `init=` the previous layout, then Procrustes onto it, because
+  UMAP rotates AND mirrors between fits and a rearranged map is a new map;
+  that, not fit time, is what made UMAP unusable the first time it was tried.
+  It refits on exactly three triggers - no cache, 25% growth, or the Relayout
+  button - never on admission. **Relayout reaches PCA too**, or the button does
+  nothing under the default engine. The fit runs on a worker and is handed a
+  COPY, and the map keeps drawing what it has until one lands, so `_drawing`
+  falls back to PCA rather than to a blank canvas. Positions are keyed by
+  `(layout signature, id)`: an id is unique only inside one brain's directory
+  and the map pools every layout. A cache from another encoder is discarded,
+  since at equal width a foreign vector is silently wrong.
+
+- **The map atlas draws one thumbnail per CELL, so its cost follows the
+  VIEWPORT and never the archive.** `bin_points` bins in SCREEN space at
+  `cell_px = map_thumb_px`, `cell_argmax` takes each occupied cell's most
+  novel entry, and `ThumbCache.reserve` is called with the occupied-cell count
+  before any of them is fetched - the same bound the gallery relies on. Zoom
+  subdivides for free, because the binning is in screen space. Thumbnails are
+  a THIRD axis, not a Draw mode: a picture layer that overrode the Colour combo
+  is the defect that split Colour from Draw in the first place. A test that
+  compares the ask between two archive SIZES is not a bound - it passes when
+  both are unbounded; assert against the cell count.
 
 - **Colour and Draw are ORTHOGONAL: the heatmap carries the same colour the
   dots would, and count moves to the ALPHA channel.** A density map coloured by

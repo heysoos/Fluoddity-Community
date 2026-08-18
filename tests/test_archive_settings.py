@@ -226,3 +226,23 @@ def test_loading_with_no_store_is_a_no_op():
     App._load_archive_settings(_App(), ui)
     App._save_archive_settings(_App(), ui)
     assert ui.archive.alpha == ArchiveState().alpha
+
+
+def test_the_map_layout_and_atlas_travel_with_the_archive():
+    for name in ("map_layout", "map_thumbs", "map_thumb_px"):
+        assert name in PERSISTED_FIELDS
+
+    a = ArchiveState()
+    a.map_layout = "umap"
+    a.map_thumbs = True
+    a.map_thumb_px = 48
+    b = ArchiveState()
+    b.apply_settings(a.to_settings())
+    assert (b.map_layout, b.map_thumbs, b.map_thumb_px) == ("umap", True, 48)
+
+
+def test_a_build_without_umap_opens_every_archive_exactly_as_before():
+    """pca is the default, so nothing changes until it is asked for."""
+    a = ArchiveState()
+    assert a.map_layout == "pca"
+    assert a.map_thumbs is False

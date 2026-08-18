@@ -310,3 +310,54 @@ def test_with_alpha_replaces_only_the_alpha_byte():
     got = int(mv.with_alpha(np.array([src]), 77)[0])
     assert got & 0xFFFFFF == src & 0xFFFFFF
     assert (got >> 24) & 255 == 77
+
+
+# ---- the thumbnail atlas ------------------------------------------------
+#
+# One representative picture per occupied screen cell, so the count is bounded
+# by the VIEWPORT rather than by the archive.
+
+def test_cell_argmax_picks_the_highest_value_in_each_cell():
+    flat = np.array([0, 0, 1, 1, 1], dtype=np.int64)
+    values = np.array([0.1, 0.9, 0.5, 0.2, 0.7], dtype=np.float32)
+    win, counts = mv.cell_argmax(flat, values, 3)
+    assert win[0] == 1        # 0.9 beats 0.1
+    assert win[1] == 4        # 0.7 beats 0.5 and 0.2
+    assert counts.tolist() == [2, 3, 0]
+
+
+def test_cell_argmax_marks_an_empty_cell_rather_than_pointing_at_row_zero():
+    """A -1 is what lets the caller skip a cell. Zero is a real row."""
+    win, counts = mv.cell_argmax(np.array([2], dtype=np.int64),
+                                       np.array([0.5], dtype=np.float32), 4)
+    assert counts.tolist() == [0, 0, 1, 0]
+    assert win[0] == -1 and win[1] == -1 and win[3] == -1
+    assert win[2] == 0
+
+
+def test_cell_argmax_over_nothing_is_all_empty():
+    win, counts = mv.cell_argmax(np.zeros(0, dtype=np.int64),
+                                       np.zeros(0, dtype=np.float32), 3)
+    assert win.tolist() == [-1, -1, -1]
+    assert counts.tolist() == [0, 0, 0]
+
+
+def test_cell_argmax_agrees_with_the_other_reducers_on_which_cells_are_full():
+    rs = np.random.RandomState(0)
+    flat = rs.randint(0, 12, size=200).astype(np.int64)
+    values = rs.rand(200).astype(np.float32)
+    win, counts = mv.cell_argmax(flat, values, 12)
+    _means, mean_counts = mv.cell_means(flat, values, 12)
+    assert counts.tolist() == mean_counts.tolist()
+    assert ((win >= 0) == (counts > 0)).all()
+
+
+def test_the_winner_of_a_cell_really_is_in_that_cell():
+    rs = np.random.RandomState(1)
+    flat = rs.randint(0, 8, size=120).astype(np.int64)
+    values = rs.rand(120).astype(np.float32)
+    win, counts = mv.cell_argmax(flat, values, 8)
+    for cell in range(8):
+        if counts[cell]:
+            assert flat[win[cell]] == cell
+            assert values[win[cell]] == values[flat == cell].max()

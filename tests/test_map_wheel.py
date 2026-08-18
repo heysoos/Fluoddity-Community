@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from imgui_bundle import imgui
 
-from services.archive_projection import Projection
+from services.map_layout_service import MapLayoutService
 from tests.test_archive_window_render import Harness, _populated
 
 HOST = "wheelhost"
@@ -40,9 +40,11 @@ class _Rig:
         # "off the canvas" probe lands back on it.
         self.h._MAP_H = 90.0
         rs = np.random.RandomState(0)
-        self.h.archive_projection = Projection()
-        self.h.archive_projection.fit(rs.randn(64, 8).astype(np.float32))
         self.h.archive_obj.embeddings = rs.randn(64, 8).astype(np.float32)
+        svc = MapLayoutService()
+        svc.bind(self.h.archive_obj, None, "clip-b32")
+        svc.update(self.h.archive_obj)
+        self.h.map_layout_service = svc
         self.hit = {}
         self._real_ib = imgui.invisible_button
 

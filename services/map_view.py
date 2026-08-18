@@ -231,3 +231,19 @@ def density_alpha(counts: np.ndarray) -> np.ndarray:
     t = density_intensity(counts)
     a = DENSITY_ALPHA_MIN + (DENSITY_ALPHA_MAX - DENSITY_ALPHA_MIN) * t
     return a.astype(np.int64)
+
+
+def cell_argmax(flat: np.ndarray, values: np.ndarray, ncells: int):
+    """Index of the highest-`values` point per cell. -> (winners, counts).
+
+    A winner of -1 marks an empty cell, because 0 is a real row. This is what
+    picks the one entry whose thumbnail stands for a cell of the atlas, so the
+    picture count follows the VIEWPORT and never the archive.
+    """
+    counts = np.bincount(flat, minlength=ncells).astype(np.int32)
+    win = np.full(ncells, -1, dtype=np.int64)
+    if len(flat):
+        # Descending, so the LAST write per cell is that cell's maximum.
+        order = np.argsort(values, kind="stable")
+        win[flat[order]] = order
+    return win, counts

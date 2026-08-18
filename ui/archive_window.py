@@ -13,6 +13,7 @@ from services import map_view, save_targets
 from services.archive_library import safe_name
 from services.gallery_sort import (DEFAULT_SORT, GALLERY_SORTS,
                                    sort_entries)
+from services.map_layout import ENGINE_LABELS, ENGINES
 from ui import layout
 from ui.notices import BAD as _BAD
 from ui.notices import DIM as _DIM
@@ -40,6 +41,10 @@ GALLERY_SIZE_MAX = 160
 GALLERY_LIST_MAX = 48
 GALLERY_H = 360.0
 GALLERY_TABLE = "gallery_list"
+# The map atlas's thumbnail size, in pixels. The cell size IS the thumbnail
+# size, which is what bounds the count by the viewport.
+ATLAS_PX_MIN = 16
+ATLAS_PX_MAX = 64
 # (column label, the sort mode its header selects; "" for a column that does
 # not sort). The modes are GALLERY_SORTS keys, so a header and the combo can
 # never mean different things.
@@ -1055,7 +1060,7 @@ class ArchiveWindowMixin:
     _MAP_CLICK_SLOP = 4.0
 
     def _render_map(self, ast, arc):
-        proj = getattr(self, "archive_projection", None)
+        proj = getattr(self, "map_layout_service", None)
         # proj.fitted, not just proj: an unfitted Projection transforms
         # everything to the origin, which reads as a broken map rather than an
         # unbuilt one.
@@ -1066,6 +1071,7 @@ class ArchiveWindowMixin:
 
         self._render_map_toolbar(ast)
         self._render_map_controls(ast, arc)
+        self._render_atlas_controls(ast)
 
         pts = self._map_points(arc, proj, ast)
         if pts is None:
@@ -1100,14 +1106,49 @@ class ArchiveWindowMixin:
         self._render_map_selection(ast, arc)
 
     def _render_map_toolbar(self, ast):
+        svc = getattr(self, "map_layout_service", None)
         right = layout.row_right_edge()
-        if imgui.button("Refit projection"):
-            ast.refit_projection_requested = True
+
+        # Which engine lays the map out. UMAP is optional, so it is offered
+        # only when it is there - a control that cannot do what it offers is
+        # worse than no control.
+        engines = [e for e in ENGINES if e == "pca" or self._umap_available()]
+        cur = ast.map_layout if ast.map_layout in engines else "pca"
+        imgui.set_next_item_width(self._MAP_COMBO_W)
+        changed, i = imgui.combo("Layout##map", engines.index(cur),
+                                 [ENGINE_LABELS[e] for e in engines])
+        if changed:
+            ast.map_layout = engines[i]
         if imgui.is_item_hovered():
-            imgui.set_tooltip("Recompute the projection over the current archive.")
+            imgui.set_tooltip(
+                "PCA is instant and linear; UMAP separates clusters and is"
+                "\nfitted in the background."
+                if len(engines) > 1 else
+                "UMAP needs umap-learn installed.")
+
+        layout.wrap_row(right, layout.button_width("Relayout"))
+        busy = bool(svc is not None and svc.fitting)
+        imgui.begin_disabled(busy)
+        if imgui.button("Relayout"):
+            ast.refit_projection_requested = True
+        imgui.end_disabled()
+        if imgui.is_item_hovered():
+            imgui.set_tooltip("Lay the map out again over the whole archive.")
+
+        if svc is not None:
+            status = svc.status()
+            layout.wrap_row(right, imgui.calc_text_size(status).x)
+            imgui.text_colored(imgui.ImVec4(*(_BAD if svc.error else _DIM)),
+                               status)
+
         hint = f"{ast.map_zoom:.1f}x - scroll to zoom, drag to pan"
         layout.wrap_row(right, imgui.calc_text_size(hint).x)
         imgui.text_colored(imgui.ImVec4(*_DIM), hint)
+
+    @staticmethod
+    def _umap_available() -> bool:
+        from services.map_layout import UmapLayout
+        return UmapLayout.available()
 
     _HOME_PX = 22.0
     _HOME_PAD = 6.0
@@ -1190,6 +1231,9 @@ class ArchiveWindowMixin:
             for x, y, c in zip(px, py, pc):
                 draw.add_circle_filled(imgui.ImVec2(x, y), 3.0, c)
 
+        if ast.map_thumbs:
+            self._draw_atlas(ast, arc, draw, pts, xs, ys, sel, origin, size)
+
         best_i, best_d = -1, 1e9
         if hovering and len(sel):
             mouse = imgui.get_mouse_pos()
@@ -1216,6 +1260,47 @@ class ArchiveWindowMixin:
             return int(pts.idx[best_i]), clicked
         return -1, False
 
+    def _draw_atlas(self, ast, arc, draw, pts, xs, ys, sel, origin, size):
+        """One representative thumbnail per occupied cell.
+
+        The count follows the VIEWPORT, never the archive: at 32px cells a
+        490x320 canvas holds at most 150 of them however many entries there
+        are. Binning is in SCREEN space, so zooming in splits cells and
+        reveals more with no new gesture.
+        """
+        cache = getattr(self, "thumb_cache", None)
+        if cache is None or not len(sel):
+            return
+        px = float(max(ATLAS_PX_MIN, min(ATLAS_PX_MAX, int(ast.map_thumb_px))))
+        flat, on, nx, ny, cell = map_view.bin_points(
+            xs[sel], ys[sel], origin, size, px)
+        if not len(flat):
+            return
+        # The cell's most novel entry stands for it - the same ranking the
+        # gallery and the eviction pass use.
+        rows = pts.idx[sel][on]
+        novelty = np.array([arc.entries[i].novelty for i in rows],
+                           dtype=np.float32)
+        win, counts = map_view.cell_argmax(flat, novelty, nx * ny)
+        live = np.flatnonzero(counts > 0)
+        self._reserve_thumbs(cache, len(live))
+        for c in live.tolist():
+            row = int(rows[win[c]])
+            tex = cache.get(arc.thumb_key(row))
+            if tex is None:
+                continue
+            cx = origin.x + (c % nx) * cell
+            cy = origin.y + (c // nx) * cell
+            draw.add_image(imgui.ImTextureRef(tex.glo),
+                           imgui.ImVec2(cx, cy),
+                           imgui.ImVec2(cx + cell, cy + cell))
+            if counts[c] > 1:
+                # A cell standing for several entries says so, or the atlas
+                # reads as one-picture-per-creature at every zoom.
+                draw.add_rect(imgui.ImVec2(cx, cy),
+                              imgui.ImVec2(cx + cell, cy + cell),
+                              imgui.IM_COL32(255, 255, 255, 40))
+
     def _map_points(self, arc, proj, ast):
         """-> a map_view.MapPoints, or None if the filter matched nothing.
 
@@ -1241,7 +1326,7 @@ class ArchiveWindowMixin:
             self._map_cache = (arc, proj, key, None)
             return None
 
-        pts = proj.transform(arc.embeddings[idx])
+        pts = proj.transform_rows(arc, idx)
         if not len(pts):
             return None
         lo = pts.min(axis=0)
@@ -1306,6 +1391,24 @@ class ArchiveWindowMixin:
             imgui.set_tooltip("Dots, or a heatmap of the same colours.")
 
         self._render_map_filter_arg(ast, arc)
+
+    def _render_atlas_controls(self, ast) -> None:
+        """Thumbnails are a THIRD axis, not a Draw mode: a picture layer that
+        overrode the Colour combo is the defect that shape guards against."""
+        right = layout.row_right_edge()
+        _, ast.map_thumbs = imgui.checkbox("Thumbnails", ast.map_thumbs)
+        if imgui.is_item_hovered():
+            imgui.set_tooltip(
+                "One picture per cell of the map, so it can be read at a"
+                "\nglance. Zoom in to split the cells.")
+        if not ast.map_thumbs:
+            return
+        layout.wrap_row(right, layout.labelled_width(self._MAP_COMBO_W, "Size"))
+        imgui.set_next_item_width(self._MAP_COMBO_W)
+        ch, px = imgui.slider_int("Size##atlas", int(ast.map_thumb_px),
+                                  ATLAS_PX_MIN, ATLAS_PX_MAX, "%d px")
+        if ch:
+            ast.map_thumb_px = int(px)
 
     def _render_map_filter_arg(self, ast, arc) -> None:
         """The one extra control the chosen filter needs, and nothing else."""
