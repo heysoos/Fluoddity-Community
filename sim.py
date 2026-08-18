@@ -36,8 +36,8 @@ class Sim:
         self.setup_shaders()
 
         # View options (for UI combo box)
-        self.view_options = [self.can, self.brush_tex]
-        self.view_option_labels = ['Canvas (Persistent particle trails)', 'Brush (Trails laid down this frame)']
+        self.view_options = [self.can]
+        self.view_option_labels = ['Canvas (Persistent particle trails)']
 
         # Current state (will be updated by apply_state each frame)
         self._state = SimState()
@@ -152,15 +152,9 @@ class Sim:
         ]
         self.can_read_index = 0  # Index of texture to read from (write to the other)
 
-        # Aliases for backward compatibility
-        self.can = self.can_textures[0]
+        # `can` is a PROPERTY, not an alias: the read index moves under
+        # double-buffering and a captured reference goes stale silently.
         self.canvas = self.can_framebuffers[1]  # Write to buffer 1, read from buffer 0 initially
-
-        # Create brush texture and framebuffer. RG32F, as the canvas.
-        self.brush_tex = self.ctx.texture(canvas_shape, 2, dtype='f4')
-        self.brush_tex.repeat_x = True
-        self.brush_tex.repeat_y = True
-        self.brush = self.ctx.framebuffer([self.brush_tex])
 
         # For camera to use (will be updated each frame to point to the most recently written buffer)
         self.view_tex = self.can_textures[self.can_read_index]
@@ -170,9 +164,9 @@ class Sim:
             fb.use()
             self.ctx.clear()
 
-        #reestablish view options for canvas/brush view modes
+        #reestablish view options for canvas view mode
         # Note: view_options[0] will be updated dynamically to point to current read buffer
-        self.view_options = [self.can_textures[self.can_read_index], self.brush_tex]
+        self.view_options = [self.can_textures[self.can_read_index]]
     def _entity_program_for(self, layout):
         """The entity-update program compiled for `layout`, built once and kept.
 
@@ -394,9 +388,13 @@ class Sim:
         self.entity_update_program.run(num_workgroups)
 
     def brush_update(self, ctx: moderngl.Context):
-        self.brush.use()
-        ctx.clear(0.0, 0.0, 0.0, 0.0)
+        """Deposit this step's trail into the framebuffer update() has bound.
 
+        It no longer owns a framebuffer of its own. The intermediate brush
+        texture that canvas.frag used to read back is gone; the deposit is
+        added straight on top of the decayed canvas, weighted in brush.frag by
+        the same (1 - trail_persistence) canvas.frag decayed it by.
+        """
         # Pass frame count to shader for initialization
         tryset(self.brush_update_program, 'frame_count', self.frame_count)
 
@@ -405,17 +403,42 @@ class Sim:
         tryset(self.brush_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
         tryset(self.brush_update_program, 'TOURNAMENT_ACTIVE', float(self.entity_count))
 
-        # Always use additive blending
+        # ONE, ONE: the weight the old SRC_ALPHA factor supplied is now in the
+        # fragment, which is why brush.frag squares the kernel explicitly.
         ctx.enable(moderngl.BLEND)
-        ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
+        ctx.blend_func = moderngl.ONE, moderngl.ONE
         ctx.blend_equation = moderngl.FUNC_ADD
 
         self.brush_vao.render(mode=moderngl.TRIANGLE_FAN, instances=self.entity_count, vertices=4)
 
+    def _set_trail_persistence(self, trail_persistence, multi_load_service) -> None:
+        """Push TRAIL_PERSISTENCE_SETTING to every program that reads it.
+
+        The decay and the deposit are two halves of one moving average and now
+        live in two shaders, so the struct has to reach both or the halves
+        disagree about the gain.
+        """
+        min_val, max_val = self._get_slider_range('Trail Persistence', 0.0, 1.0)
+        sweeps_live = (self._state.parameter_sweeps_enabled
+                       and not (multi_load_service and multi_load_service.is_active()))
+        for program in (self.canvas_update_program, self.brush_update_program):
+            tryset(program, 'TRAIL_PERSISTENCE_SETTING.slider_value', trail_persistence)
+            tryset(program, 'TRAIL_PERSISTENCE_SETTING.min_value', min_val)
+            tryset(program, 'TRAIL_PERSISTENCE_SETTING.max_value', max_val)
+            for axis in ('x_sweep', 'y_sweep', 'cohort_sweep'):
+                source = {'x_sweep': self._state.x_sweeps,
+                          'y_sweep': self._state.y_sweeps,
+                          'cohort_sweep': self._state.cohort_sweeps}[axis]
+                tryset(program, f'TRAIL_PERSISTENCE_SETTING.{axis}',
+                       source.get('TRAIL_PERSISTENCE', 0.0) if sweeps_live else 0.0)
+            # Jitter applies whether or not the sweeps UI is enabled.
+            tryset(program, 'TRAIL_PERSISTENCE_SETTING.jitter',
+                   self._state.jitters.get('TRAIL_PERSISTENCE', 0.0))
+
     def can_update(self, ctx: moderngl.Context, draw_mode: bool = False, mouse_pos: tuple[float, float] = None,
                    prev_mouse_pos: tuple[float, float] = None, draw_size: float = 0.1, draw_power: float = 0.0,
                    multi_load_service=None, is_preview_active = False, tiling_mode: bool = False,
-                   strong_determinism: bool = False,
+                   strong_determinism: bool = False,   # accepted and unused; update() owns the buffers
                    brush_mode: int = 0, fixed_direction_heading: float = 0.0,
                    erase_mode: bool = False, fill_mode: bool = False, fill_direction_type: int = 0,
                    canvas_draw_active: bool = True):
@@ -431,8 +454,10 @@ class Sim:
                 or self._canvas_uniforms_on is not self.canvas_update_program):
             # Boundary conditions mode for wrap behavior
             tryset(self.canvas_update_program, 'BOUNDARY_CONDITIONS_MODE', self._state.boundary_conditions)
-            # The same clock entity_update runs on.
+            # The same clock entity_update runs on, and brush.frag raises the
+            # persistence to it as well.
             tryset(self.canvas_update_program, 'TIME_SCALE', self._state.TIME_SCALE)
+            tryset(self.brush_update_program, 'TIME_SCALE', self._state.TIME_SCALE)
 
             # Multi-load mode: calculate weighted average trail settings
             if multi_load_active:
@@ -441,22 +466,12 @@ class Sim:
                 trail_persistence = self._state.TRAIL_PERSISTENCE
                 trail_diffusion = self._state.TRAIL_DIFFUSION
 
-            # Assign TRAIL_PERSISTENCE as a PhysicsSetting struct
-            min_val, max_val = self._get_slider_range('Trail Persistence', 0.0, 1.0)
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.slider_value', trail_persistence)
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.min_value', min_val)
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.max_value', max_val)
-            # Only apply sweeps if parameter sweeps UI is enabled AND not in multi-load mode
-            if self._state.parameter_sweeps_enabled and not (multi_load_service and multi_load_service.is_active()):
-                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.x_sweep', self._state.x_sweeps.get('TRAIL_PERSISTENCE', 0.0))
-                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.y_sweep', self._state.y_sweeps.get('TRAIL_PERSISTENCE', 0.0))
-                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.cohort_sweep', self._state.cohort_sweeps.get('TRAIL_PERSISTENCE', 0.0))
-            else:
-                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.x_sweep', 0.0)
-                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.y_sweep', 0.0)
-                tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.cohort_sweep', 0.0)
-            # Always apply jitter (independent of parameter_sweeps_enabled)
-            tryset(self.canvas_update_program, 'TRAIL_PERSISTENCE_SETTING.jitter', self._state.jitters.get('TRAIL_PERSISTENCE', 0.0))
+            # BOTH programs, because the trail's average is split between them:
+            # canvas.frag keeps trail_persistence and brush.frag adds 1 minus
+            # it. Feeding only the canvas leaves the brush reading a zeroed
+            # struct, which reads as slider_value 0 - so the deposit arrives
+            # unattenuated, 30x to 1000x over, and nothing raises.
+            self._set_trail_persistence(trail_persistence, multi_load_service)
 
             # Assign TRAIL_DIFFUSION as a PhysicsSetting struct
             min_val, max_val = self._get_slider_range('Trail Diffusion', 0.0, 1.0)
@@ -476,7 +491,6 @@ class Sim:
             tryset(self.canvas_update_program, 'TRAIL_DIFFUSION_SETTING.jitter', self._state.jitters.get('TRAIL_DIFFUSION', 0.0))
 
             tryset(self.canvas_update_program, 'can_tex', 1)
-            tryset(self.canvas_update_program, 'brush_tex', 3)
             self._canvas_uniforms_on = self.canvas_update_program
 
         # Pass frame count to shader for initialization
@@ -500,25 +514,10 @@ class Sim:
         tryset(self.canvas_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
         tryset(self.canvas_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
 
-        if strong_determinism:
-            # Double-buffer: write to the opposite buffer from the one we're reading
-            write_index = 1 - self.can_read_index
-            self.can_framebuffers[write_index].use()
-            self.canvas_vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
-
-            # Swap buffers: the one we just wrote to becomes the new read buffer
-            self.can_read_index = write_index
-
-            # Update aliases and view options to point to current read buffer
-            self.can = self.can_textures[self.can_read_index]
-            self.canvas = self.can_framebuffers[1 - self.can_read_index]
-            self.view_options[0] = self.can_textures[self.can_read_index]
-            if self._state.current_view_option == 0:
-                self.view_tex = self.can_textures[self.can_read_index]
-        else:
-            # Single-buffer: read and write same texture (non-deterministic but faster)
-            self.can_framebuffers[self.can_read_index].use()
-            self.canvas_vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
+        # The framebuffer is already bound by update(), and the swap belongs to
+        # it too: the brush pass deposits into this same target afterwards, so
+        # neither pass can be the one that decides the buffer has finished.
+        self.canvas_vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
 
     def update(self, ctx, draw_mode: bool = False, mouse_pos: tuple[float, float] = None,
                prev_mouse_pos: tuple[float, float] = None, draw_size: float = 0.1, draw_power: float = 0.0,
@@ -532,7 +531,6 @@ class Sim:
                strafe_field_strength: float = 1.0):
         # Bind the current read buffer for sampling (will write to the other one)
         self.can_textures[self.can_read_index].use(location=1)
-        self.brush_tex.use(location=3)
 
         # Bind advanced drawing field texture if available
         if field_texture is not None:
@@ -541,18 +539,35 @@ class Sim:
         current_time = time.time()
         self.time = current_time - self.start_time_stamp
 
-        self.brush_update(ctx)
-        ctx.memory_barrier()
+        # Move the particles, then decay the trail, then deposit onto it. The
+        # deposit has to follow the decay now that there is no intermediate
+        # texture to hold it, which is why the particles move FIRST: a particle
+        # paints where it has arrived rather than where it set off.
         self.entity_update(ctx, multi_load_service, is_preview_active,
                            field_texture_bound=field_texture is not None,
                            force_field_strength=force_field_strength,
                            strafe_field_strength=strafe_field_strength)
+        ctx.memory_barrier()
+
+        # One bind for both passes. Under strong determinism they write the
+        # buffer that is NOT being read; otherwise read and write are the same
+        # texture, which is the faster and racier setting.
+        write_index = 1 - self.can_read_index if strong_determinism else self.can_read_index
+        self.can_framebuffers[write_index].use()
 
         ctx.disable(moderngl.BLEND)
         self.can_update(ctx, draw_mode, mouse_pos, prev_mouse_pos, draw_size, draw_power,
                         multi_load_service, is_preview_active, tiling_mode, strong_determinism,
                         brush_mode, fixed_direction_heading, erase_mode, fill_mode,
                         fill_direction_type, canvas_draw_active)
+        self.brush_update(ctx)
+
+        if strong_determinism:
+            self.can_read_index = write_index
+            self.canvas = self.can_framebuffers[1 - self.can_read_index]
+            self.view_options[0] = self.can_textures[self.can_read_index]
+            if self._state.current_view_option == 0:
+                self.view_tex = self.can_textures[self.can_read_index]
         self.frame_count += 1
 
         # Increment multi-load progress if active
@@ -574,8 +589,6 @@ class Sim:
             fb.use()
             self.ctx.clear(0, 0, 0, 0)
         self.frame_count = 0
-        self.brush.use()
-        self.ctx.clear(0, 0, 0, 0)
         old_fbo.use()
 
     def reload(self):
@@ -1135,6 +1148,16 @@ class Sim:
         """The grid side length. Read by the Brain window, whose Source list is
         one entry per tile while the grid is running."""
         return max(1, int(getattr(self, "_tournament_grid", 1) or 1))
+
+    @property
+    def can(self):
+        """The canvas texture currently holding the trail.
+
+        A property rather than an attribute: under double-buffering the read
+        index moves every step, and anything that captured the texture object
+        would keep drawing the buffer from before the swap.
+        """
+        return self.can_textures[self.can_read_index]
 
     @property
     def brain_layout(self):

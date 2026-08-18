@@ -33,6 +33,7 @@ from .auto_tournament_window import AutoTournamentWindowMixin
 from .archive_window import ArchiveWindowMixin
 from .brain_window import BrainWindowMixin
 from .audio_reactive_window import AudioReactiveWindowMixin
+from state import view_modes
 
 
 @dataclass
@@ -393,7 +394,7 @@ class UI(
                 self._request_load_config = True
             elif key == self.keybindings.get_key("toggle_watercolor"):
                 # Toggle watercolor mode (only in camera views, not field views)
-                if self.state.sim.current_view_option in (2, 3):
+                if self.state.sim.current_view_option in view_modes.WATERCOLOR_VIEWS:
                     self.state.sim.watercolor_mode = not self.state.sim.watercolor_mode
             elif key == self.keybindings.get_key("reload_shaders"):
                 # Reload shaders

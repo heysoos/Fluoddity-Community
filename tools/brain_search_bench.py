@@ -45,7 +45,7 @@ import numpy as np
 # resolves only when `ui` is imported first. Prime it, as tests/conftest.py does.
 import ui  # noqa: F401,E402
 
-VIEW_CAM_BRUSH = 2      # what tournament mode forces (main.py section 5.1.5)
+from state.view_modes import CAMERA as VIEW_CAM_BRUSH  # one home: state/view_modes.py
 WINDOW_PX = 512         # only has to exist; the capture re-renders at grid*224
 
 DEFAULT_PROMPTS = (

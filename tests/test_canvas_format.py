@@ -1,12 +1,15 @@
-"""The canvas and the brush are RG32F, and the trail is a velocity field.
+"""The canvas is RG32F, and the trail is a velocity field.
 
-Halving them from RGBA32F is worth 5-16% of the sim step (see CLAUDE.md), and
-it is safe only because nothing reads a third channel: the brain senses .xy,
-the canvas view draws atan(y,x) and length(xy), and the alpha the blend needs
-comes from the FRAGMENT rather than from the target.
+Halving it from RGBA32F is worth 5-16% of the sim step (see CLAUDE.md), and it
+is safe only because nothing reads a third channel: the brain senses .xy and
+the canvas view draws atan(y,x) and length(xy).
 
 Going back to four components would not fail anywhere - it would just quietly
 cost the frame time again - so the format is asserted rather than assumed.
+
+There is no brush texture any more. The deposit goes straight into the canvas
+framebuffer, which is why the blend weight moved out of the alpha channel and
+into the fragment.
 """
 from pathlib import Path
 
@@ -16,19 +19,32 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_the_canvas_and_brush_are_two_component():
+def test_both_canvas_buffers_are_two_component():
     src = (ROOT / "sim.py").read_text(encoding="utf-8")
-    assert src.count("self.ctx.texture(canvas_shape, 2, dtype='f4')") == 3, (
-        "both canvas buffers and the brush must be RG32F"
+    assert src.count("self.ctx.texture(canvas_shape, 2, dtype='f4')") == 2, (
+        "both canvas buffers must be RG32F, and nothing else is allocated here"
     )
     assert "canvas_shape, 4" not in src
 
 
-def test_the_brush_still_writes_the_blend_weight():
-    """The blend is SRC_ALPHA, ONE. The target has no alpha, but the FACTOR is
-    the fragment's - zero it and every deposit multiplies to nothing."""
+def test_the_brush_squares_the_kernel_itself():
+    """The blend used to be SRC_ALPHA, ONE with alpha = kernel_func, so the
+    kernel was applied TWICE - once in the output and once by the blend. The
+    blend is ONE, ONE now, so the second application has to be explicit or
+    every deposit is softer and broader than it was."""
     src = (ROOT / "shaders" / "brush.frag").read_text(encoding="utf-8")
-    assert "brush_out = vec4(vel, 0, 1) * kernel_func;" in src
+    assert "kernel_func * kernel_func" in src
+
+
+def test_the_brush_carries_the_deposits_share_of_the_average():
+    """canvas.frag decays by trail_persistence and no longer adds anything, so
+    the (1 - p) half of that one moving average has to be applied here."""
+    src = (ROOT / "shaders" / "brush.frag").read_text(encoding="utf-8")
+    assert "(1.0 - p)" in src
+    assert "TRAIL_PERSISTENCE_SETTING" in src, (
+        "computed per fragment, not taken as a whole-canvas uniform: sweeps and "
+        "jitter make it vary across the canvas"
+    )
 
 
 # ---- the driver assumption the whole change rests on ----------------------

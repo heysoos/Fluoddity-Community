@@ -27,7 +27,7 @@ from services.genome import random_genome
 from services.genome_spec import DIM, decode, encode
 
 # What tournament mode forces, and therefore what CLIP is really handed.
-VIEW_CAM_BRUSH = 2
+from state.view_modes import CAMERA as VIEW_CAM_BRUSH  # one home: state/view_modes.py
 WINDOW_PX = 1024
 
 

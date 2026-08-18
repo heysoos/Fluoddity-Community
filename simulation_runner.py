@@ -1,6 +1,7 @@
 """Simulation runner: physics stepping, frame assembly, and video recording."""
 import glfw
 import numpy as np
+from state import view_modes
 
 
 class SimulationRunner:
@@ -224,7 +225,9 @@ class SimulationRunner:
             tiling_scale=self.camera.compute_tiling_scale(),
             canvas_resolution=self.sim.get_canvas_dimensions(),
             tonemap_softness=ui_state.preferences.tonemap_softness,
-            trail_tex=(self.sim.can if ui_state.sim.current_view_option == 6 else None),
+            trail_tex=(self.sim.can
+                       if ui_state.sim.current_view_option == view_modes.CAMERA_TRAILS
+                       else None),
             trail_overlay_strength=ui_state.preferences.trail_overlay_strength,
             brush_mode=adv_prefs.brush_mode if advanced_active else 0,
             fixed_direction_heading=adv_prefs.fixed_direction_heading if advanced_active else 0.0,

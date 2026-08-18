@@ -16,6 +16,7 @@ from simulation_runner import SimulationRunner
 from camera_input import process_camera_input
 from controller_input import ControllerCam, process_controller_input
 from utilities.advanced_drawing import AdvancedDrawingProcessor
+from state import view_modes
 
 
 # The ceiling an automatic mode holds the hue gain to while it is scoring.
@@ -944,7 +945,7 @@ class App:
 
         # 1. Get current UI state
         ui_state = self.ui.get_state()
-        tiling_mode = (ui_state.sim.current_view_option == 3)
+        tiling_mode = (ui_state.sim.current_view_option == view_modes.CAMERA_TILED)
 
         # 1.5. Auto-mode enable edge. MUST run before process_commands, which
         # clears the one-shot start_requested flag. Also forces square tiles -
@@ -1157,13 +1158,13 @@ class App:
         self.camera.trail_overlay_strength = ui_state.preferences.trail_overlay_strength
 
         # 5.0.1 Force/Strafe field view modes: override view_tex with field texture
-        if ui_state.sim.current_view_option in (4, 5):
+        if ui_state.sim.current_view_option in view_modes.FIELD_VIEWS:
             field_tex = self.advanced_drawing_processor.field_texture
             if field_tex is not None:
                 self.sim.view_tex = field_tex
             else:
                 # Field texture not initialized yet — fall back to canvas view
-                ui_state.sim.current_view_option = 0
+                ui_state.sim.current_view_option = view_modes.CANVAS
 
         # 5.1. Multi-load conflict prevention
         if ui_state.multi_load.multi_load_enabled:
@@ -1178,8 +1179,8 @@ class App:
         # 16-tile grid and desyncs click->tile mapping. Force a plain camera view, and
         # frame the whole grid when tournament is first switched on.
         if ui_state.tournament.enabled:
-            if ui_state.sim.current_view_option == 3:
-                ui_state.sim.current_view_option = 2
+            if ui_state.sim.current_view_option == view_modes.CAMERA_TILED:
+                ui_state.sim.current_view_option = view_modes.CAMERA
                 ui_state.camera.cam_brush_mode = True
                 # Suppress the "leaving tiling mode" camera fmod below, which would
                 # otherwise clobber the framing reset we are about to apply.
@@ -1222,7 +1223,8 @@ class App:
         sweep_reticle_pos = (sweep_reticle_x, sweep_reticle_y)
 
         # Reposition camera when leaving tiling mode
-        if self.prev_view_option == 3 and ui_state.sim.current_view_option != 3:
+        if (self.prev_view_option == view_modes.CAMERA_TILED
+                and ui_state.sim.current_view_option != view_modes.CAMERA_TILED):
             ui_state.camera.position[0] = np.fmod(ui_state.camera.position[0] + 100.0, 2.0) - 1.0
             ui_state.camera.position[1] = np.fmod(ui_state.camera.position[1] + 100.0, 2.0) - 1.0
         self.prev_view_option = ui_state.sim.current_view_option

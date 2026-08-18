@@ -143,6 +143,35 @@ mechanics these caveats assume.
   84% of a tile's trail. `tests/test_tile_isolation_gl.py` runs 647/8, 647/3
   and 641/7 on purpose.
 
+- **The trail is ONE moving average SPLIT ACROSS TWO SHADERS, and removing the
+  brush texture bought NOTHING.** `canvas.frag` keeps `trail_persistence` and
+  `brush.frag` adds `1 - trail_persistence` of this step's deposit straight
+  into the same framebuffer, so `update()` binds it once and owns the
+  double-buffer swap; neither pass may bind a target of its own. Measured over
+  ten alternating runs the step is **0.799 ms against 0.793** - no change, with
+  a slightly heavier upper tail, because the step is 70% brush RASTERISATION
+  and the middleman only ever cost one full-resolution read (4.3% of the step
+  is the whole canvas pass) plus one clear. It was adopted for parity with
+  upstream, not for speed; do not re-attempt it expecting a win.
+  **The deposit's weight is computed PER FRAGMENT in `brush.frag`, from its own
+  copy of `calculate_setting`.** Upstream passes one `trail_persistence`
+  uniform for the whole canvas, which is wrong wherever a sweep or jitter is
+  on - the setting is position-dependent, and the two halves of one average
+  must agree at every texel. `frag_world` IS `canvas.frag`'s
+  `entity_space_pos`, so the two copies are evaluated at the same point;
+  `tests/test_trail_deposit.py` asserts they stay character-identical.
+  Three traps. The struct must be pushed to BOTH programs - feeding only the
+  canvas leaves the brush reading an all-zero struct, which is a valid one
+  meaning `slider_value` 0, so `(1 - p)` is 1 and every deposit lands 30x to
+  1000x over with nothing raising anywhere; it took comparing canvas energy
+  against the old pipeline to see it, and every source-level test passed while
+  it was live. The blend is `ONE, ONE` now, so the kernel that `SRC_ALPHA` used
+  to apply a second time is squared explicitly. And the particles now MOVE
+  BEFORE they paint, where they used to paint before they moved - a one-step
+  shift in the whole preset library that CANNOT be measured, because the
+  splatting races and two runs of identical code already differ by more than
+  the effect.
+
 - **The entity struct is 32 bytes, and slimming it bought NO MEASURABLE
   SPEED.** `cohort` is a pure function of the index that `get_cohort()` already
   computes, and `color` was a vec4 whose brightness (1.0) and alpha (0.045)

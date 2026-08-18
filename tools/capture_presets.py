@@ -36,7 +36,7 @@ import ui  # noqa: F401,E402
 
 # What tournament mode forces (main.py section 5.1.5), and therefore what CLIP
 # is really handed: camera view, particles over trails.
-VIEW_CAM_BRUSH = 2
+from state.view_modes import CAMERA as VIEW_CAM_BRUSH  # one home: state/view_modes.py
 WINDOW_PX = 1024
 
 

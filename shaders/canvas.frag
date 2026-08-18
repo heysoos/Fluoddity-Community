@@ -2,7 +2,6 @@
 
 in vec2 texcoord;
 
-uniform sampler2D brush_tex;
 uniform sampler2D can_tex;
 out vec4 can_out;
 
@@ -275,7 +274,6 @@ void main() {
         return;
     }
 
-    vec4 brush_color = texture(brush_tex, texcoord);
     vec4 can_color;
     // Map texcoord to entity space for parameter sweeps
     float _ca = canvas_resolution.x / canvas_resolution.y;
@@ -302,7 +300,10 @@ void main() {
     if (TIME_SCALE != 1.0) {
         trail_persistence = pow(trail_persistence, TIME_SCALE);
     }
-    can_out = can_color * trail_persistence + (1 - trail_persistence) * brush_color;
+    //DECAY ONLY. The deposit is added straight into this framebuffer by the
+    //brush pass that runs next, weighted by the SAME (1 - trail_persistence)
+    //at the same texel - see brush.frag, which repeats the calculation.
+    can_out = can_color * trail_persistence;
 
     // Draw trail mode: add velocity based on mouse drag
     if (draw_mode && canvas_draw_active && draw_power > 0.0) {

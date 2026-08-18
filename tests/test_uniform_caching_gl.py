@@ -18,7 +18,10 @@ import sim as sim_module
 from state import SimState
 
 ENTITY_ONLY = "AXIAL_FORCE_SETTING.slider_value"
-CANVAS_ONLY = "TRAIL_PERSISTENCE_SETTING.slider_value"
+# Trail PERSISTENCE now goes to two programs - canvas.frag decays by it and
+# brush.frag weights the deposit by it - so it is no longer a one-program
+# probe. Diffusion still is.
+CANVAS_ONLY = "TRAIL_DIFFUSION_SETTING.slider_value"
 
 
 @pytest.fixture(scope="module")

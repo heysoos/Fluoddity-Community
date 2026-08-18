@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 class SimState:
     """State for simulation parameters that UI controls."""
     going: bool = True
-    current_view_option: int = 2  # 0=can, 1=brush_tex, 2=cam_brush
+    current_view_option: int = 1  # see state/view_modes.py
 
     # Physics parameters
     AXIAL_FORCE: float = 0.371

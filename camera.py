@@ -4,6 +4,7 @@ from utilities.gl_helpers import read_shader, tryset
 import moderngl
 from state import CameraState
 from utilities.frame_assembler import FrameAssembler
+from state import view_modes
 
 class Camera:
     def __init__(self, ctx, sim, window):
@@ -201,7 +202,8 @@ class Camera:
             tonemap_softness=tonemap_softness,
         )
 
-    def render(self, sim_going: bool = True, current_view_option: int = 2,
+    def render(self, sim_going: bool = True,
+               current_view_option: int = view_modes.CAMERA,
                 sweep_mode: bool = False, sweep_reticle_pos: tuple = (0.5, 0.5),
                 sweep_reticle_visible: bool = False, screen_aspect: float = 1.0,
                 watercolor_mode: bool = False, ink_weight: float = 1.0,
@@ -252,7 +254,7 @@ class Camera:
                 tiling_scale=self.compute_tiling_scale(),
                 canvas_resolution=self.sim.get_canvas_dimensions(),
                 tonemap_softness=tonemap_softness,
-                trail_tex=(self.sim.can if current_view_option == 6 else None),
+                trail_tex=(self.sim.can if current_view_option == view_modes.CAMERA_TRAILS else None),
                 trail_overlay_strength=self.trail_overlay_strength
             )
             # assemble_frame returns the texture immediately when total_samples=1

@@ -87,7 +87,7 @@ class FrameAssembler:
             input_texture: moderngl.Texture to accumulate (PRE-gamma)
             total_samples: Number of frames in accumulation cycle
             current_sample_index: 0-indexed sample number (0 to total_samples-1)
-            view_mode: Current view mode (0=can, 1=brush_tex, 2=cam_brush)
+            view_mode: Current view mode; see state/view_modes.py
             sweep_mode: Whether parameter sweeps are active
             sweep_reticle_pos: (x, y) screen UV position of sweep reticle
             sweep_reticle_visible: Whether to show the reticle
