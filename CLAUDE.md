@@ -680,10 +680,22 @@ mechanics these caveats assume.
   writes made while the archive stays open — deleting one entry from the
   browser — where a rescore per click is the same stall back again. A periodic
   flush stamps nothing either, since it runs mid-generation and the column
-  would be dirty on the next candidate. An open trusts the column only when
-  **every** layout directory claims the same count, it matches what actually
-  loaded, and reconciliation dropped nothing — otherwise it rescores exactly as
-  before, which is also what a new close path that forgets `closing` costs. On
+  would be dirty on the next candidate. An open trusts the column when
+  **every** layout directory claims the same count and it matches what
+  actually loaded — otherwise it rescores exactly as before, which is also
+  what a new close path that forgets `closing` costs.
+  **A DROPPED ROW IS NOT A REASON TO RESCORE, and requiring that cost 4.4x on
+  every open.** An index row with no vectors is the ordinary record of a
+  REMOVAL — a browser delete, or an eviction — and `index.jsonl` is
+  append-only, so it stays for the rest of the archive's life: one deleted
+  entry made the archive re-score itself on every open and on every
+  cross-brain click, for good. Measured on a real 7145-entry archive with 69
+  deletions, an open went **697 ms → 158 ms** with nothing on disk touched.
+  The COUNT is what carries the safety, and it is enough on its own: the
+  column is written in the same call as the rescore that produced it, so a
+  stamp means "this file's column covers exactly this file's ids", and the
+  other direction — a vector row the index lost, where FEWER load than the
+  stamp claims — fails the count check. Do not put `not dropped` back. On
   a reopened archive the trusted column is bit-identical to the rescore it
   replaces, both sides reading the same fp16 vectors; entries admitted in
   memory were scored at fp32 and differ by under 2e-3, two orders below

@@ -657,14 +657,23 @@ class Archive:
             if got:
                 claims.add(claim)
 
-        # The stored column is exact only if the last writer had just rescored
-        # AND wrote every directory in that one pass AND nothing has gone
-        # missing since - so one shared count, matching what loaded. Anything
-        # else, including an archive written before this was recorded, rescores
-        # as it always did: an entry's at-admission novelty was scored against
-        # however much archive existed at the time, under one layout, and is
-        # not on a comparable scale. See CLAUDE.md.
-        self._novelty_clean = not dropped and claims <= {self._n}
+        # The stored column is exact if the last writer had just rescored AND
+        # wrote every directory in that one pass - one shared count, matching
+        # what loaded. Anything else, including an archive written before this
+        # was recorded, rescores as it always did: an entry's at-admission
+        # novelty was scored against however much archive existed at the time,
+        # under one layout, and is not on a comparable scale. See CLAUDE.md.
+        #
+        # `dropped` is deliberately NOT part of this. An index row with no
+        # vectors is the ordinary record of a REMOVAL - a browser delete or an
+        # eviction - and index.jsonl is append-only, so it is there for the
+        # rest of the archive's life. Counting it as inconsistency made one
+        # deleted entry cost a full rescore at every open, forever. The count
+        # is what carries the safety: the column is written in the same call
+        # as the rescore that produced it, so a stamp means "this file's
+        # column covers exactly this file's ids", and fewer loading than the
+        # stamp claims is what fails the check.
+        self._novelty_clean = claims <= {self._n}
         if not self._novelty_clean:
             self.rescore_all()
         if dropped:

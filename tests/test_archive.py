@@ -621,20 +621,6 @@ def test_admitting_after_the_close_dirties_the_column_again(tmp_path):
     assert calls == [1], "21 entries scored as 20 is not a comparable scale"
 
 
-def test_a_dropped_entry_forces_a_rescore(tmp_path):
-    """Reconciliation removed a row, so the stored column was scored against a
-    set the archive no longer holds - whatever count the file claims."""
-    store, a = _scattered_store(tmp_path, n=20, stamped=20)
-    a.maybe_flush(force=True, closing=True)
-    # one more reaches the append-only index but not the vectors, as an
-    # unclean exit leaves it
-    a.consider(cand([0, 0, 0, 0, 0, 0, 0, 1], dim=8), novelty=1.0)
-    store.close()
-
-    _, calls = _reopen(tmp_path)
-    assert calls == [1]
-
-
 def test_a_count_that_does_not_match_forces_a_rescore(tmp_path):
     """The stamp is a claim about the whole archive, so it is checked against
     what actually loaded rather than believed."""
@@ -713,3 +699,50 @@ def test_rescoring_moves_the_revision():
     partial = a.revision
     a.refresh(2)
     assert a.revision > partial
+
+
+def test_deleting_an_entry_does_not_poison_the_archive_forever(tmp_path):
+    """The user's case. Deleting from the browser drops the vectors and the
+    thumbnail, but index.jsonl is append-only so the row stays - and that row
+    is then a "dropped entry" at every load for the rest of the archive's
+    life. Treating it as inconsistency cost a full O(n^2) rescore on every
+    open and on every cross-brain click, forever."""
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    a._remove(3)
+    a._remove(7)
+    a.maybe_flush(force=True, closing=True)
+    store.close()
+
+    b, calls = _reopen(tmp_path)
+    assert len(b) == 18
+    assert calls == [], "two deletions must not force a rescore of the rest"
+
+
+def test_an_entry_lost_before_its_vectors_were_written_is_simply_gone(tmp_path):
+    """An unclean exit leaves index rows the vectors file never got. Those
+    entries were never in the stored column either, so the column still
+    describes exactly what loaded."""
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    a.maybe_flush(force=True, closing=True)
+    a.consider(cand([0, 0, 0, 0, 0, 0, 0, 1], dim=8), novelty=1.0)
+    store.close()
+
+    b, calls = _reopen(tmp_path)
+    assert len(b) == 20
+    assert calls == []
+
+
+def test_a_vector_row_the_index_lost_still_forces_a_rescore(tmp_path):
+    """The other direction, and the one that IS inconsistent: fewer entries
+    load than the column was scored against, so what is left is on a scale
+    that no longer matches."""
+    store, a = _scattered_store(tmp_path, n=20, stamped=20)
+    a.maybe_flush(force=True, closing=True)
+    store.close()
+
+    kept = [ln for ln in store.index_path.read_text().splitlines() if ln.strip()]
+    store.index_path.write_text("\n".join(kept[:-4]) + "\n")
+
+    b, calls = _reopen(tmp_path)
+    assert len(b) == 16
+    assert calls == [1], "16 entries scored as 20 is not a comparable scale"
