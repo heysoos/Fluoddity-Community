@@ -196,7 +196,7 @@ Plain dataclasses. No logic, just fields with defaults.
 | `fourier4_4.glsl` | Compute shader: trail diffusion via Fourier convolution |
 | `canvas.vert/.frag` | Trail rendering to canvas texture |
 | `camera.vert/.frag` | View texture generation from canvas (camera transform) |
-| `frame_assembly.vert/.frag` | Final composite: gamma, emboss, sweep reticle, motion blur accumulation |
+| `frame_assembly.vert/.frag` | Final composite: gamma, sweep reticle, motion blur accumulation |
 | `brush.vert/.frag` | Mouse drawing brush rendering |
 | `cam_brush.vert/.frag` | Camera-space brush overlay (draw trail cursor) |
 | `arrow_debug.vert/.frag` | Debug arrow overlay for trail flow vectors |

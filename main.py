@@ -1276,14 +1276,6 @@ class App:
     def _render_camera_view(self, ui_state, sweep_mode, sweep_reticle_pos,
                              sweep_reticle_visible, screen_aspect, tiling_mode):
         """Render the camera view to screen."""
-        emboss_mode = ui_state.sim.emboss_mode
-        if emboss_mode == 1:
-            emboss_tex = self.sim.can
-        elif emboss_mode == 2:
-            emboss_tex = self.sim.brush_tex
-        else:
-            emboss_tex = None
-
         draw_trail_mode = ui_state.preferences.mouse_mode == "Draw Trail"
 
         width, height = glfw.get_framebuffer_size(self.window)
@@ -1300,10 +1292,6 @@ class App:
             screen_aspect=screen_aspect,
             watercolor_mode=ui_state.sim.watercolor_mode,
             ink_weight=ui_state.sim.ink_weight,
-            emboss_tex=emboss_tex,
-            emboss_mode=emboss_mode,
-            emboss_intensity=ui_state.sim.emboss_intensity,
-            emboss_smoothness=ui_state.sim.emboss_smoothness,
             draw_trail_mode=draw_trail_mode,
             draw_size=ui_state.preferences.draw_size,
             mouse_screen_coords=mouse_screen_coords,

@@ -238,19 +238,6 @@ mechanics these caveats assume.
   particle's 0.01 deposit. RGB32F is not a required renderable format.
   Guarded by `tests/test_canvas_format.py`.
 
-- **Emboss's height field is `100 * length(canvas.xy)`, and the 100 is
-  load-bearing.** It used to be the canvas `.z`, a `0.01 * coverage` channel
-  the RG canvas no longer has. Flow magnitude is `|velocity| * coverage`, so
-  the gain makes the two agree at `|velocity| = 0.01`, the middle of the
-  library's range. Without it the field is beyond the slider: the shading
-  compares the gradient to `0.5/I^5`, so a SMALLER field needs a LARGER
-  intensity, and the two shipped emboss presets would want 1.09 and 2.27
-  against a slider that stops at 1. `Core/Adrift` (0.584 → 0.423) and
-  `Advanced/DrawOnMe` (0.656 → 0.866) were re-solved by bisecting on the
-  RENDERED result until each matched its old strength — 15.9% and 33.4% of the
-  image's own brightness — because the gradient-ratio arithmetic got the
-  direction of the correction backwards.
-
 - **`canvas_view_rect` returns a GL texture coordinate (v=0 at the BOTTOM);
   `tex_to_screen` returns top-down window coordinates.** The flip cancels
   exactly when the canvas is centred, so a centred camera validates any

@@ -121,11 +121,10 @@ Sync is the thing only a person can confirm, so use material with a hard beat.
 ## 8. Appearance & View
 - [ ] **a.** Color by Cohort toggle (hides Hue Sensitivity when on)
 - [ ] **b.** Watercolor Mode toggle (V key), shows Ink Weight when on
-- [ ] **c.** Emboss Mode combo (Off/Canvas/Brush), shows Intensity + Smoothness when on
-- [ ] **d.** Brightness slider affects output
-- [ ] **e.** Exposure slider works
-- [ ] **f.** View option dropdown cycles views
-- [ ] **g.** Tiling mode (view option 3): camera wraps, exiting wraps position back to center
+- [ ] **c.** Brightness slider affects output
+- [ ] **d.** Exposure slider works
+- [ ] **e.** View option dropdown cycles views
+- [ ] **f.** Tiling mode (view option 3): camera wraps, exiting wraps position back to center
 
 ## 9. Preferences
 - [ ] **a.** World size change triggers full rebuild (expensive, console output)

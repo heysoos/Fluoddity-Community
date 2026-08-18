@@ -50,9 +50,6 @@ class SimState:
     # PhysicsConfig.from_dict(), which still answers True for them.
     color_by_cohort: bool = False
     watercolor_mode: bool = False
-    emboss_mode: int = 0  # 0=Off, 1=Canvas (Trails), 2=Brush (Particles)
-    emboss_intensity: float = 0.5
-    emboss_smoothness: float = 0.1
 
     # User notes (saved with physics config)
     notes: str = ""

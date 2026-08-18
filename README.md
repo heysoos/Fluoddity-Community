@@ -27,7 +27,6 @@ Any advice or criticism is welcome. This is a toy I made for myself and I am mor
  - parameter sweeps mode allows varying physics sliders across the canvas. X and Y sweeps for exploring 2d parameter space.
  - variable physics frequency with motion blur
  - ffmpeg based video recording
- - Emboss visual effect (currently the only use for traditional density trails)
  - Experimental system for mixing different saved configs.
  - Tournament mode: run a grid of creatures side by side and breed from the ones you like, by hand or by CLIP.
  - Swappable particle brains: Fourier, Gabor, Lenia or MLP.

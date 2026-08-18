@@ -1,5 +1,5 @@
 Full text -> force field pipeline (sdf font?)
-CRITICAL- Emboss and particle selection are not aspect adjusted
+CRITICAL- particle selection is not aspect adjusted
 cohort isolation view
 -Text entry box with absolute orientation -> Text
 -Threshold particles to be invisible.

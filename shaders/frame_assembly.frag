@@ -1,7 +1,6 @@
 #version 330 core
 uniform sampler2D input_frame;
 uniform sampler2D accumulation_buffer;
-uniform sampler2D emboss_tex;       // Texture for emboss (canvas or brush, based on mode)
 uniform sampler2D field_texture;                    // Force/Strafe field (.xy=force, .zw=strafe)
 uniform bool advanced_drawing_resources_initialized; // True when field_texture has valid data
 uniform bool force_field_checked;   // Whether Force Field checkbox is active
@@ -33,10 +32,6 @@ uniform float fixed_direction_heading;
 // Camera state for screen-to-canvas UV conversion
 uniform vec2 camera_position;       // Camera position in world space
 uniform float camera_zoom;          // Camera zoom level
-
-// Emboss parameters
-uniform float EMBOSS_INTENSITY;     // Emboss effect intensity
-uniform float EMBOSS_SMOOTHNESS;    // Emboss sampling epsilon
 
 // Tiling mode parameters
 uniform bool tiling_mode_enabled;   // Whether tiling mode is active
@@ -86,31 +81,6 @@ vec2 canvas_uv_to_screen(vec2 canvas_uv) {
     vec2 ndc = (world_pos - camera_position*vec2(1,-1)) / camera_zoom;
     // NDC to screen UV coordinates (0 to 1)
     return ndc * 0.5 + 0.5;
-}
-
-// Central-difference gradient of the emboss height field.
-//
-// The height is FLOW MAGNITUDE - the same quantity the canvas view draws as
-// brightness. It used to be the canvas .z, a particle-coverage channel that no
-// longer exists: the canvas is RG32F and carries velocity only.
-//
-// The 100 is not cosmetic and is not free to change. The old channel was
-// 0.01*coverage and this one is |velocity|*coverage, so they agree at
-// |velocity| = 0.01 - the middle of the preset library's range. Without it the
-// field is too small for the Emboss Intensity slider to reach: the shading
-// compares the gradient against 0.5/I^5, so a smaller field needs a LARGER I,
-// and the two shipped emboss presets would need 1.09 and 2.27 against a slider
-// that stops at 1. See CLAUDE.md.
-#define EMBOSS_HEIGHT_GAIN 100.0
-float emboss_height(sampler2D tex, vec2 tex_uv) {
-    return EMBOSS_HEIGHT_GAIN * length(texture(tex, tex_uv).xy);
-}
-vec2 gradient(sampler2D tex, vec2 tex_uv, float epsilon) {
-    float dx = (emboss_height(tex, tex_uv + vec2(epsilon, 0.0))
-              - emboss_height(tex, tex_uv - vec2(epsilon, 0.0))) / (2.0 * epsilon);
-    float dy = (emboss_height(tex, tex_uv + vec2(0.0, epsilon))
-              - emboss_height(tex, tex_uv - vec2(0.0, epsilon))) / (2.0 * epsilon);
-    return vec2(dx, dy);
 }
 
 vec3 sweep_overlay(vec2 uv_coord) {
@@ -186,40 +156,7 @@ vec3 safenorm(vec3 n){
     float l = length(n);
     return l>0?n/l:vec3(0);
 }
-// Compute tiled UV for sampling the single-tile texture with domain repetition
-vec2 tiled_sample_uv_emboss(vec2 screen_uv) {
-    // Convert screen UV to NDC (-1 to 1)
-    vec2 ndc = (screen_uv - 0.5) * 2.0;
-    // Apply zoom
-    ndc *= camera_zoom;
-    // Apply camera position offset (world space)
-    vec2 world = ndc + camera_position * vec2(1.0, -1.0);
-    // Convert to entity space
-    world *= tiling_scale;
-    // Wrap to [0, 1] using per-axis cell size (area-preserving entity bounds)
-    float ca = canvas_resolution.x / canvas_resolution.y;
-    vec2 cell_size = vec2(2.0 * sqrt(ca), 2.0 / sqrt(ca));
-    return fract((world + cell_size * 0.5) / cell_size);
-}
 
-vec3 emboss(vec2 uv){
-    // Early return if emboss is disabled (mode=Off or intensity=0)
-    if (EMBOSS_INTENSITY == 0.0) {
-        return vec3(.0);
-    }
-    vec2 canv_uv;
-    if (tiling_mode_enabled) {
-        // In tiling mode, use tiled UV for emboss texture
-        canv_uv = tiled_sample_uv_emboss(uv);
-    } else {
-        canv_uv = (view_mode == 2 || view_mode == 3 || view_mode == 6) ? screen_to_canvas_uv(uv) : uv;
-    }
-    vec2 grad = gradient(emboss_tex, canv_uv, .01*EMBOSS_SMOOTHNESS);
-    grad *= max(abs(canv_uv-.5).x,abs(canv_uv-.5).y)>.5?0:1;
-    vec3 fakenorm = normalize(vec3(grad.x,.5/pow(EMBOSS_INTENSITY,5.),grad.y));
-    //fakenorm = vec3(0,1,0);
-    return vec3(1.74)*max(0,dot(fakenorm,normalize(vec3(1,1.,-1))));
-}
 // Tiling mode: sample color with edge blending for seamless tiling.
 // Handles particles whose sprites hang over the edge of the canonical tile.
 vec3 sample_tiled_color(vec2 screen_uv) {
@@ -345,8 +282,6 @@ void main() {
         #define INK_CONSTANT 10
         current_color = exp(INK_WEIGHT*INK_CONSTANT * current_color);
     }
-    // Emboss always uses the original screen UV, not the tiled sample UV
-    current_color = current_color*(EMBOSS_INTENSITY!=0?emboss(uv):vec3(1));//emboss(uv)*EMBOSS_INTENSITY+1-EMBOSS_INTENSITY);
     // Divide by number of samples (for averaging)
     current_color /= float(TOTAL_SAMPLES);
     
