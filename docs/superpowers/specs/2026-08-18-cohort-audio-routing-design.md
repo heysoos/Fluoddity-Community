@@ -32,6 +32,17 @@ The mask is a property of one mapping, alongside its shaper. Nothing about the
 band, the target or the rig as a whole is scoped; two mappings on the same
 target may carry different masks.
 
+The case that shape exists for: bass ADDS to Sensor Gain over the first half of
+the cohorts while highs SUBTRACT from Sensor Gain over the second half. That is
+one Sensor Gain row with two bands bound, and two drawer tabs carrying a mode
+and a mask each. Nothing about it is a special case - for a cohort in the first
+half only the bass row contributes to `A`, in the second half only the hi row
+does, and `gain` stays 1 because neither is a multiply row.
+
+Masks may OVERLAP, and where they do the contributions sum, as they already do
+for two unmasked rows on one target. A cohort in NO mask gets `gain 1,
+offset 0` and sits at the slider value.
+
 ## 1. The mask
 
 144 bools per mapping - `MAX_COHORTS` from `services/cohort_tiling.py`, the
