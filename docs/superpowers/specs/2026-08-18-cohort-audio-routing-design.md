@@ -105,6 +105,28 @@ here; see section 6.
 
 ## 3. Where each piece lands
 
+### Which parameters can carry a mask
+
+Not all of them, and the panel must say so. A parameter is maskable only if it
+reaches a `calculate_setting` call site inside `entity_update.glsl`, where a
+cohort exists to index with. Ten do:
+
+```
+SENSOR_GAIN  SENSOR_ANGLE  SENSOR_DISTANCE  MUTATION_SCALE  GLOBAL_FORCE_MULT
+DRAG  AXIAL_FORCE  LATERAL_FORCE  STRAFE_POWER  HAZARD_RATE
+```
+
+Three modulation targets are left out and cannot be masked at any cost:
+`TRAIL_PERSISTENCE` and `TRAIL_DIFFUSION` are evaluated in `canvas.frag`, which
+has no cohort - the trail is a property of a texel, not of a particle - and
+`TIME_SCALE` is a `plain_uniform`, one float for the whole canvas. `V_MAX` is
+absent for a different reason: it is `off_at_max`, so `physics_targets()`
+already excludes it from modulation entirely.
+
+Their drawer tabs draw no strip and say why, rather than offering a control that
+does nothing - which is the "declared but never read" defect CLAUDE.md names
+twice.
+
 New `services/cohort_audio.py` owns everything conceptual:
 
 ```python
@@ -141,8 +163,12 @@ New `ui/cohort_strip.py` holding the paint widget and nothing else.
 Changed, minimally:
 
 - `services/audio_mapping.py` - one optional field on `Mapping`.
-- `services/audio_runtime.py` - one call to `build_arrays`, one extra return
-  value.
+- `services/audio_runtime.py` - one call to `build_arrays`, parked on
+  `self.cohort_audio`. NOT an extra return value: `update()` is unpacked into a
+  pair at its one call site, so widening the tuple would touch `main.py` in a
+  way that has to be undone rather than deleted.
+- `main.py` - one line, `sim.set_cohort_audio(self.audio_runtime.cohort_audio)`
+  after `apply_state`.
 - `state/audio_in_state.py` - the mask in `_mapping_to_dict` and its loader.
 - `ui/audio_reactive_window.py` - one call into the strip from the drawer tab,
   and a marker on the signal chip.
@@ -235,8 +261,8 @@ In the order that leaves the app runnable at every step:
 
 1. Delete the strip call and the chip marker in `ui/audio_reactive_window.py`;
    delete `ui/cohort_strip.py`.
-2. Delete the `build_arrays` call and the extra return value in
-   `services/audio_runtime.py`.
+2. Delete the `build_arrays` call and `self.cohort_audio` in
+   `services/audio_runtime.py`, and the one line in `main.py`.
 3. Delete the buffer reserve, the bind and the write in `sim.py`.
 4. Delete the `cohort_audio(...)` wrappers in `shaders/entity_update.glsl`, the
    prepend, and `shaders/cohort_audio.glsl`.
