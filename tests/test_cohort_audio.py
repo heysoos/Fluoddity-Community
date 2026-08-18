@@ -87,3 +87,66 @@ def test_every_maskable_param_is_a_real_modulation_target():
 
     keys = {t.key for t in physics_targets(SimState())}
     assert set(ca.COHORT_AUDIO_PARAMS) <= keys
+
+
+def test_a_new_mapping_drives_every_cohort():
+    from services.audio_mapping import Mapping
+    m = Mapping(signal="bass", target="SENSOR_GAIN")
+    assert m.cohorts.shape == (ca.MASK_SLOTS,)
+    assert ca.is_full(m.cohorts)
+
+
+def test_two_mappings_do_not_share_one_mask():
+    from services.audio_mapping import Mapping
+    a = Mapping(signal="bass", target="SENSOR_GAIN")
+    b = Mapping(signal="hi", target="SENSOR_GAIN")
+    a.cohorts[:10] = False
+    assert ca.is_full(b.cohorts)
+
+
+def test_an_unmasked_mapping_writes_nothing_to_the_rig():
+    from services.audio_mapping import Mapping
+    from state.audio_in_state import _mapping_to_dict
+    d = _mapping_to_dict(Mapping(signal="bass", target="SENSOR_GAIN"))
+    assert "cohorts" not in d
+
+
+def test_a_mask_round_trips_through_the_rig():
+    from services.audio_mapping import Mapping
+    from state.audio_in_state import _mapping_from_dict, _mapping_to_dict
+    m = Mapping(signal="bass", target="SENSOR_GAIN")
+    for cell in range(32):
+        ca.paint(m.cohorts, cell, 64, False)
+
+    back = _mapping_from_dict(_mapping_to_dict(m))
+    assert back is not None
+    assert np.array_equal(back.cohorts, m.cohorts)
+
+
+def test_a_rig_written_before_this_feature_loads_as_all_cohorts():
+    from state.audio_in_state import _mapping_from_dict
+    m = _mapping_from_dict({"signal": "bass", "target": "SENSOR_GAIN",
+                            "mode": "add", "depth": 0.5})
+    assert m is not None
+    assert ca.is_full(m.cohorts)
+
+
+def test_a_malformed_mask_falls_back_to_all_cohorts():
+    """One bad row must not lose the rig."""
+    from state.audio_in_state import _mapping_from_dict
+    for bad in ("nonsense", [1, 2, 3], [None] * ca.MASK_SLOTS, {}):
+        m = _mapping_from_dict({"signal": "bass", "target": "SENSOR_GAIN",
+                                "cohorts": bad})
+        assert m is not None, bad
+        assert ca.is_full(m.cohorts), bad
+
+
+def test_a_mask_edit_is_a_rig_change():
+    """_save_last_rig diffs by value, so an edit has to be visible there."""
+    from services.audio_mapping import Mapping
+    from state.audio_in_state import AudioInState, to_dict
+    s = AudioInState()
+    s.mappings = [Mapping(signal="bass", target="SENSOR_GAIN")]
+    before = to_dict(s)
+    ca.paint(s.mappings[0].cohorts, 0, 64, False)
+    assert to_dict(s) != before

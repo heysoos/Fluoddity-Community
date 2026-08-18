@@ -105,7 +105,9 @@ class AudioInState:
 
 def _mapping_to_dict(m: Mapping) -> dict:
     """`uid` is in-session only, so a loaded rig mints fresh ones."""
-    return {
+    from services.cohort_audio import is_full
+
+    out = {
         "signal": m.signal, "target": m.target, "mode": m.mode,
         "depth": float(m.depth), "gain": float(m.gain),
         "enabled": bool(m.enabled),
@@ -116,6 +118,10 @@ def _mapping_to_dict(m: Mapping) -> dict:
             "wave": m.shaper.wave,
         },
     }
+    # Only when something is painted out, so an unmasked row adds nothing.
+    if not is_full(m.cohorts):
+        out["cohorts"] = [int(v) for v in m.cohorts]
+    return out
 
 
 # `rate_max` was already the Hz a full-scale band asks for, so it becomes
@@ -123,6 +129,17 @@ def _mapping_to_dict(m: Mapping) -> dict:
 _RENAMED_KINDS = {"lfo": "phase"}
 _RENAMED_FLOATS = {"rate_max": "rate"}
 _SHAPER_FLOATS = ("attack", "release", "threshold", "hold", "rate")
+
+
+def _read_mask(m, raw) -> None:
+    """A malformed mask leaves the mapping on every cohort, never drops it."""
+    from services.cohort_audio import MASK_SLOTS
+
+    if not isinstance(raw, list) or len(raw) != MASK_SLOTS:
+        return
+    if not all(isinstance(v, (int, float, bool)) for v in raw):
+        return
+    m.cohorts[:] = [bool(v) for v in raw]
 
 
 def _mapping_from_dict(d) -> Mapping | None:
@@ -152,13 +169,15 @@ def _mapping_from_dict(d) -> Mapping | None:
         if isinstance(sd.get("wave"), str):
             shaper.wave = sd["wave"]
     try:
-        return Mapping(
+        m = Mapping(
             signal=signal, target=target, mode=mode,
             depth=float(d.get("depth", 0.5)), gain=float(d.get("gain", 1.0)),
             shaper=shaper, enabled=bool(d.get("enabled", True)),
         )
     except (TypeError, ValueError):
         return None
+    _read_mask(m, d.get("cohorts"))
+    return m
 
 
 def to_dict(state: AudioInState) -> dict:
