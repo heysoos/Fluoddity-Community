@@ -270,10 +270,42 @@ mechanics these caveats assume.
   time. **Every `pow` is guarded on `ts == 1.0`**, because GLSL does not
   promise a correctly rounded `pow` and an unguarded `pow(x, 1.0)` would
   perturb the whole preset library by a bit or two; multiplying by exactly 1.0
-  needs no guard. `TRAIL_DIFFUSION` is deliberately NOT compensated — it is
-  off in almost every preset, and a Gaussian's variance adds rather than its
-  radius, so the slider's own nonlinear mapping would have to be inverted.
-  Guarded by `tests/test_time_scale.py`.
+  needs no guard.
+
+- **`TRAIL_DIFFUSION` is a THIRD thing on the clock, and "it is off in almost
+  every preset" was never true.** The blur is one step of an explicit heat
+  solve — `getBlur` returns `(1-a)*centre + a*neighbour_average` for
+  `a = 4/(4+K)` — so an uncompensated clock ran `1/ts` of them per unit of
+  simulated time and the trail smeared as `1/sqrt(ts)`. Measured on the shipped
+  shader over a fixed span, the spread in VARIANCE went 8.0 at `ts=1` to 16.0
+  at 0.5, 80 at 0.1 and 398 at 0.02 — **fifty times**, a seven-fold wider
+  trail, and the sensors read that field. The slider's distribution over the
+  131 presets is BIMODAL and the claim above had it backwards: **83 sit at
+  exactly 1.0, the maximum**, 47 at 0, one at 0.36. At 1.0 a single step moves
+  80% of a texel's mass into its neighbours.
+  Variance ADDS, which is what makes the correction linear in `a` even though
+  the slider's own mapping is not: `a_ts = ts*a`, solved back for `K` in
+  `time_scaled_K`. It is CAPPED at `a = 0.8` — the strongest step the slider
+  itself reaches — because the solve is explicit and `a` above 1 grows the
+  checkerboard mode without bound; a clock above 1.0 at full diffusion
+  therefore under-diffuses rather than blowing up, which is the price and not
+  a bug. Guarded by `tests/test_time_scale_diffusion_gl.py`, which ping-pongs
+  the WHOLE canvas.frag and measures the second moment — a source-level
+  reading cannot see this, because what is wrong is a property of the
+  recursion rather than of any one line.
+
+- **Four things in the step are still NOT on the clock, and they are the rest
+  of why a slower sim is a different creature.** `HAZARD_RATE` is a per-STEP
+  probability (36x the respawn rate per unit time at `ts=0.02`, 15 presets);
+  the advanced-drawing FORCE kick is added after the momentum filter with no
+  `force_gain`, so it settles at `c/(1-d^ts)` — 39x at `ts=0.02` — while its
+  strafe twin on the next line rides in `step_delta` and IS scaled, so the two
+  halves of one feature disagree; jitter is re-drawn per step from
+  `frame_count`; and negative drag (21 presets) alternates sign every step, so
+  its ripple is at the step rate and has no continuous-time meaning at all —
+  that last one is a limit, not a fix. The two look-ahead sample points
+  (`e.pos+e.vel` for `STRAFE_POWER`, `e.pos+step_delta` for `get_field`) are
+  also unscaled, which only bites under a sweep or a drawn field.
 
 - **A `plain_uniform` parameter is in `PHYSICS_PARAMS` but not in
   `PHYSICS_PARAM_NAMES`.** It is one float for the whole canvas, so there is
@@ -1401,16 +1433,35 @@ mechanics these caveats assume.
   and the map pools every layout. A cache from another encoder is discarded,
   since at equal width a foreign vector is silently wrong.
 
-- **The map atlas draws one thumbnail per CELL, so its cost follows the
-  VIEWPORT and never the archive.** `bin_points` bins in SCREEN space at
-  `cell_px = map_thumb_px`, `cell_argmax` takes each occupied cell's most
-  novel entry, and `ThumbCache.reserve` is called with the occupied-cell count
-  before any of them is fetched - the same bound the gallery relies on. Zoom
-  subdivides for free, because the binning is in screen space. Thumbnails are
-  a THIRD axis, not a Draw mode: a picture layer that overrode the Colour combo
-  is the defect that split Colour from Draw in the first place. A test that
-  compares the ask between two archive SIZES is not a bound - it passes when
-  both are unbounded; assert against the cell count.
+- **The map atlas REPLACES the scatter, and it is binned in UNIT space.** Two
+  things were wrong in the first version and both were reported as "clunky".
+  It drew dots as well - under the pictures, where they are invisible and still
+  cost a draw call - and a cell whose thumbnail had not arrived kept its dot,
+  so pictures and points visibly fought each other on every pan. Nothing is
+  drawn for a cell that has no picture yet. And cells were binned in SCREEN
+  space, where a ONE-PIXEL PAN moves every boundary, changes which entry wins
+  each cell, and reshuffles the whole atlas under the pointer.
+  `quantised_cell` picks a POWER-OF-TWO cell in unit space whose on-screen size
+  lands in `[px, 2*px)`, so the assignment is invariant under pan and under
+  zoom within a level, and `_atlas_plan` caches it until a level boundary is
+  crossed. Cost is then FLAT in archive size and below the plain scatter's:
+  0.52 ms against 5.92 ms at 13049 entries, because it draws a few hundred
+  images rather than 13049 circles. Only `ATLAS_NEW_PER_FRAME` thumbnails are
+  DECODED per frame - a JPEG decode is ~1 ms and crossing a level renews every
+  cell at once - and `ThumbCache.peek` is what keeps that budget off the
+  resident ones. `reserve` is still called with the visible-cell count, for the
+  reason the gallery calls it.
+  **It is a CHECKBOX that disables Colour and Draw, not a Draw mode.** Pictures
+  carry their own colour and their own marks, so both combos are dead while it
+  is on; leaving them live is a control that cannot do what it offers. The
+  earlier attempt made it a fourth `RENDER_MODES` entry on the grounds that
+  Colour and Draw must stay orthogonal - that rule is about the DENSITY
+  heatmap silently overriding the Colour combo, and it does not apply to a
+  layer that replaces the marks outright.
+  **The cost the user actually felt was the atlas's own work, never the
+  scatter.** The scatter was present in both states, so it cannot explain a
+  toggle; do not repeat that diagnosis. Re-measure by timing points-only,
+  atlas-plus-scatter and atlas-only in ONE process.
 
 - **Colour and Draw are ORTHOGONAL: the heatmap carries the same colour the
   dots would, and count moves to the ALPHA channel.** A density map coloured by

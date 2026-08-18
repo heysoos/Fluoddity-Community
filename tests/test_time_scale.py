@@ -60,6 +60,18 @@ def test_the_step_is_scaled_after_the_speed_cap():
     assert "e.pos += step_delta*TIME_SCALE;" in ENTITY
 
 
+def test_the_blur_runs_on_the_same_clock_as_the_decay():
+    """The trail's decay went on the clock and its diffusion did not, so a
+    slower sim drew the same creature smeared - the blur is one step of an
+    explicit heat solve, and halving the clock ran twice as many of them per
+    unit of simulated time. What the spread actually does is measured by
+    tests/test_time_scale_diffusion_gl.py, which runs the shader; this only
+    pins the wiring."""
+    assert "float time_scaled_K(float K)" in CANVAS
+    assert "getBlur(texcoord, can_tex,time_scaled_K(TRAIL_DIFFUSION))" in CANVAS
+    assert "if (TIME_SCALE == 1.0) { return K; }" in CANVAS
+
+
 def test_every_pow_is_guarded_so_that_one_is_bit_identical():
     """`pow(x, 1.0)` is NOT required to return x - GLSL does not promise a
     correctly rounded pow - so an unguarded one would perturb every preset in

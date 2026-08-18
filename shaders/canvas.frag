@@ -228,6 +228,21 @@ vec4 getBlur(vec2 pos, sampler2D sam,float diffusion_constant) {
     return (cc * K + nc + sc + wc + ec) / (4. + K);
 }
 
+// The blur is ONE step of an explicit heat solve - getBlur returns
+// (1-a)*centre + a*neighbour_average for a = 4/(4+K) - so a step covering ts
+// of the time must take ts of it. Variance ADDS, which is what makes the share
+// linear in a even though the slider's own mapping is not; this solves back
+// for the K that getBlur takes. CAPPED at the strongest step the slider itself
+// reaches (a = 0.8, K = 1): the solve is explicit, so a above 1 grows the
+// checkerboard mode without bound, and a clock above 1.0 at full diffusion
+// under-diffuses rather than blowing up.
+float time_scaled_K(float K){
+    //(4+K)/1.0 - 4.0 is not required to return K, and every preset in the
+    //library was made at 1.0.
+    if (TIME_SCALE == 1.0) { return K; }
+    return max(1.0, (4.0 + K)/TIME_SCALE - 4.0);
+}
+
 // Aspect-correct UV delta so length() is isotropic in entity space
 vec2 aspect_correct_uv(vec2 uv_delta) {
     float ca = canvas_resolution.x / canvas_resolution.y;
@@ -283,7 +298,7 @@ void main() {
     if(TRAIL_DIFFUSION>0){
         TRAIL_DIFFUSION= TRAIL_DIFFUSION*TRAIL_DIFFUSION;//better scaling for slider
         TRAIL_DIFFUSION = 4/(pow(5,(TRAIL_DIFFUSION))-1);//better scaling for slider
-        can_color = getBlur(texcoord, can_tex,TRAIL_DIFFUSION);
+        can_color = getBlur(texcoord, can_tex,time_scaled_K(TRAIL_DIFFUSION));
     }
     else{
         can_color = texture(can_tex,texcoord);
