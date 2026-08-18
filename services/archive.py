@@ -672,6 +672,38 @@ class Archive:
                   "index/vector row")
         return loaded, dropped
 
+    def retarget(self, layout) -> None:
+        """Point the archive at a different brain WITHOUT reloading it.
+
+        Every layout's entries are already here - load_from_store reads every
+        signature directory - so this changes only which rows are NATIVE. The
+        embeddings, the novelty column, the rejects ring and the thumbnails are
+        about PICTURES, and a picture does not stop being one because a
+        different brain is running.
+
+        `_novelty_clean` is deliberately left alone: nothing was admitted and
+        nothing removed, so every entry is still scored against exactly the set
+        now held.
+
+        A signature the archive has never held gets a store, because the next
+        admission writes its index row and thumbnail through it. The width is
+        recorded with setdefault - a directory that already loaded rows knows
+        its own width, and the running layout must not overwrite it.
+        """
+        from services.archive_io import ArchiveStore
+
+        sig = layout.signature()
+        if self.store is not None:
+            store = self._stores.get(sig)
+            if store is None:
+                store = ArchiveStore(self.store.base, signature=sig)
+                self._stores[sig] = store
+            self.store = store
+        self.layout = layout
+        self._widths.setdefault(sig, int(layout.length))
+        self._widen(int(layout.length))
+        self.revision += 1
+
     def _load_one(self, sig: str, store) -> tuple[int, int, int]:
         """Append one layout directory's entries.
 
