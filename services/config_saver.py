@@ -42,6 +42,26 @@ def _default_slider_ranges() -> dict[str, list[float]]:
     }
 
 
+def legacy_brush_stack() -> dict:
+    """The stack a pre-stack config with a _fields.png loads as.
+
+    The old field texture packed force in .xy and strafe in .zw of one image,
+    so it becomes two brush layers reading one buffer through different
+    channels - which is what the historical behaviour was.
+    """
+    from state.field_stack import new_uid
+    return {"layers": [
+        {"uid": new_uid(), "enabled": True, "source": "brush",
+         "params": {"_channels": "xy"}, "mapping": "rg_direct",
+         "destination": "force", "blend": "replace",
+         "strength": 1.0, "blur": 0.0, "sign": 1.0},
+        {"uid": new_uid(), "enabled": True, "source": "brush",
+         "params": {"_channels": "zw"}, "mapping": "rg_direct",
+         "destination": "strafe", "blend": "replace",
+         "strength": 1.0, "blur": 0.0, "sign": 1.0},
+    ]}
+
+
 @dataclass
 class PhysicsConfig:
     """Complete physics configuration: all state from Physics Settings window."""
@@ -115,6 +135,10 @@ class PhysicsConfig:
     # clips at the rails, so a coordinate lost there never comes back.
     brain_settings: dict = field(default_factory=dict)
 
+    # The field injection layer stack. Empty on every file written before it
+    # existed; a config with a companion _fields.png migrates to brush layers.
+    field_stack: dict = field(default_factory=dict)
+
     def to_dict(self) -> dict:
         """Convert config to JSON-serializable dict."""
         d = {
@@ -160,6 +184,7 @@ class PhysicsConfig:
             'rule': self.rule.flatten().tolist(),
             'brain_layout': self.brain_layout,
             'brain_settings': dict(self.brain_settings),
+            'field_stack': self.field_stack,
             'notes': self.notes,
         }
         if self.force_field_strength is not None:
@@ -247,6 +272,7 @@ class PhysicsConfig:
             strafe_field_strength=strafe_field_strength,
             brain_layout=str(data.get('brain_layout', '')),
             brain_settings=dict(data.get('brain_settings') or {}),
+            field_stack=dict(data.get('field_stack') or {}),
         )
 
     def to_json(self, indent: int = 2) -> str:
