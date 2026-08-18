@@ -18,8 +18,9 @@ from state.sim_state import SimState
 from state.auto_tournament_state import AutoTournamentState
 from state.tournament_state import TournamentState
 from ui import layout
-from ui.archive_window import (ATLAS_BUDGET, ATLAS_HEADROOM, ATLAS_PX_MAX,
-                               ATLAS_PX_MIN, GALLERY_COLUMNS,
+from ui.archive_window import (ATLAS_BUDGET, ATLAS_CACHE_CAPACITY,
+                               ATLAS_HEADROOM, ATLAS_NEW_PER_FRAME,
+                               ATLAS_PX_MAX, ATLAS_PX_MIN, GALLERY_COLUMNS,
                                GALLERY_LIST_MAX, GALLERY_TABLE,
                                ArchiveWindowMixin)
 from ui.auto_tournament_window import AutoTournamentWindowMixin
@@ -1743,6 +1744,9 @@ class _CountingCache:
     def reserve(self, n):
         self.reserved.append(int(n))
 
+    def peek(self, name):
+        return None            # always a miss; _ResidentCache is the other one
+
     def get(self, name):
         self.asked += 1
         return _FakeTex()
@@ -2040,8 +2044,11 @@ def test_the_atlas_asks_for_no_more_thumbnails_than_there_are_cells(gui, n):
     h.thumb_cache = cache
     frames = 2
     frame(_mapped_with(h), n=frames)
-    assert cache.asked <= cells * frames, (cache.asked, cells)
-    assert max(cache.reserved) <= cells, (cache.reserved, cells)
+    # The per-frame decode budget, not the cell count: the atlas fills a level
+    # over several frames and only shows it once complete.
+    assert cache.asked <= ATLAS_NEW_PER_FRAME * frames, cache.asked
+    # A CONSTANT reserve: bounded, and independent of the archive's size.
+    assert set(cache.reserved) == {ATLAS_BUDGET + ATLAS_HEADROOM}
 
 
 def test_a_bigger_archive_does_not_ask_for_more_than_the_canvas_holds(gui):
@@ -2208,9 +2215,11 @@ def test_a_resident_thumbnail_costs_no_decode(gui):
 class _RealisticCache:
     """A real LRU, so eviction is visible. Counts decodes per frame."""
 
-    def __init__(self):
+    def __init__(self, max_capacity=None):
         from services.thumb_cache import ThumbCache
-        self._c = ThumbCache(lambda name: _FakeTex(), capacity=256)
+        self._c = ThumbCache(lambda name: _FakeTex(), capacity=256,
+                             max_capacity=max_capacity
+                             or ATLAS_CACHE_CAPACITY)
         self.decodes = 0
 
     def reserve(self, n):
@@ -2241,6 +2250,7 @@ def _big_map(px, n=8000):
     h.state.archive.map_thumbs = True
     h.state.archive.map_thumb_px = px
     h.thumb_cache = _RealisticCache()
+    h.atlas_cache = h.thumb_cache      # one counter for the whole frame
     return h
 
 
@@ -2286,8 +2296,7 @@ def test_a_settled_atlas_survives_the_hover_card(gui):
 def test_the_atlas_working_set_fits_the_cache():
     """The budget and its headroom must leave the cache able to hold a whole
     frame. Raising one without the other puts the flashing straight back."""
-    from services.thumb_cache import MAX_CAPACITY
-    assert ATLAS_BUDGET + ATLAS_HEADROOM <= MAX_CAPACITY
+    assert ATLAS_BUDGET + ATLAS_HEADROOM <= ATLAS_CACHE_CAPACITY
 
 
 def test_the_atlas_settles_again_after_a_zoom(gui):
@@ -2302,29 +2311,20 @@ def test_the_atlas_settles_again_after_a_zoom(gui):
     assert _settle(h) is not None, "still churning after a zoom out"
 
 
-def test_the_cache_is_reserved_for_the_LEVEL_not_the_viewport(gui):
-    """Zoomed in, most of a level's cells are off screen. Reserving only the
-    visible ones shrinks the cache and evicts the rest of the level, so
-    panning or zooming back out decodes it all again.
-    """
+def test_the_cache_is_not_shrunk_by_zooming_in(gui):
+    """Zoomed in, most of a level's cells are off screen. Sizing the cache to
+    the VIEWPORT throws the rest of the level away, so panning or zooming back
+    out decodes it all again."""
     h = _big_map(32)
     ast = h.state.archive
     assert _settle(h) is not None
+    wide = h.thumb_cache.capacity
     for _ in range(14):
         ast.map_zoom *= 1.3
         frame(lambda: h._render_map(ast, h.archive_obj))
     assert _settle(h) is not None
-
-    rect = _map_rect(h)
-    pts = h._map_points(h.archive_obj, h.map_layout_service, ast)
-    (ux, _uy, win), _cell = h._atlas_plan(
-        ast, pts, imgui.ImVec2(rect[2], rect[3]))
-    xs, ys = h._map_to_screen(ast, pts.unit, imgui.ImVec2(rect[0], rect[1]),
-                              imgui.ImVec2(rect[2], rect[3]))
-    on = ((xs >= rect[0]) & (xs <= rect[0] + rect[2])
-          & (ys >= rect[1]) & (ys <= rect[1] + rect[3]))
-    assert int(on.sum()) < len(win), "not zoomed in far enough to tell"
-    assert h.thumb_cache.capacity >= len(win)
+    assert h.thumb_cache.capacity == wide
+    assert wide >= ATLAS_BUDGET
 
 
 def test_returning_to_a_zoom_level_reuses_most_of_it(gui):
@@ -2350,3 +2350,184 @@ def test_returning_to_a_zoom_level_reuses_most_of_it(gui):
         frame(lambda: h._render_map(h.state.archive, h.archive_obj))
         seen += cache.decodes
     assert seen < ATLAS_BUDGET // 4, f"{seen} decodes returning to a level"
+
+
+def test_hovering_a_picture_picks_that_picture(gui):
+    """The card must describe the thumbnail under the pointer, not whichever
+    hidden dot happens to be nearest it."""
+    h = _big_map(32, n=3000)
+    assert _settle(h) is not None
+    ast = h.state.archive
+    rect = _map_rect(h)
+    origin = imgui.ImVec2(rect[0], rect[1])
+    size = imgui.ImVec2(rect[2], rect[3])
+
+    shown = h._atlas_shown
+    _pts, (ux, uy, win), cell = shown
+    sx, sy = h._map_to_screen(ast, np.stack([ux, uy], axis=1), origin, size)
+    fx, fy = h._map_to_screen(
+        ast, np.stack([ux + cell[0], uy + cell[1]], axis=1), origin, size)
+
+    checked = 0
+    for k in range(0, len(win), max(1, len(win) // 20)):
+        mid = imgui.ImVec2((sx[k] + fx[k]) / 2.0, (sy[k] + fy[k]) / 2.0)
+        if not (origin.x <= mid.x <= origin.x + size.x
+                and origin.y <= mid.y <= origin.y + size.y):
+            continue
+        assert h._atlas_pick(ast, mid, origin, size) == int(win[k])
+        checked += 1
+    assert checked >= 5, f"only probed {checked} cells"
+
+
+def test_the_pointer_outside_every_cell_picks_nothing(gui):
+    h = _big_map(32, n=3000)
+    assert _settle(h) is not None
+    rect = _map_rect(h)
+    far = imgui.ImVec2(rect[0] - 500.0, rect[1] - 500.0)
+    got = h._atlas_pick(h.state.archive, far,
+                        imgui.ImVec2(rect[0], rect[1]),
+                        imgui.ImVec2(rect[2], rect[3]))
+    assert got == -1
+
+
+def _images_drawn(h, n=1):
+    spy = _draw_counts(h, n=n)
+    return 0 if spy is None else spy.images
+
+
+def test_a_half_decoded_level_is_never_put_on_screen(gui):
+    """The sweep: a plan was drawn as it filled, so a zoom or an engine
+    switch wiped new thumbnails across the map a row at a time. The atlas is
+    double-buffered - the previous level holds until the new one is whole."""
+    h = _big_map(32, n=3000)
+    assert _settle(h) is not None
+    before = _images_drawn(h)
+    assert before > 0
+
+    ast = h.state.archive
+    ast.map_zoom *= 4.0                      # a wholesale level change
+    counts = []
+    for _ in range(60):
+        counts.append(_images_drawn(h))
+        if h.thumb_cache.decodes == 0:
+            break
+        h.thumb_cache.decodes = 0
+    # Never a partial level: each frame drew either the old plan or the new
+    # one, and both are complete.
+    assert min(counts) > 0, counts
+    assert len(set(counts)) <= 2, f"drew {sorted(set(counts))} - a partial fill"
+
+
+def test_switching_projection_holds_the_old_pictures(gui):
+    """Switching PCA to UMAP replaces every position at once. Adopting it
+    before it is decoded is the vertical sweep."""
+    h = _big_map(32, n=3000)
+    assert _settle(h) is not None
+    steady = _images_drawn(h)
+
+    # A new projection: same archive, all-new coordinates.
+    svc = h.map_layout_service
+    rs = np.random.RandomState(7)
+    moved = rs.rand(len(h.archive_obj), 2).astype(np.float32)
+    svc.transform_rows = lambda arc, idx: moved[idx]
+    h._map_cache = None          # what a version bump does, without the setter
+
+    drawn = _images_drawn(h)
+    assert drawn > 0, "the map went blank while the new layout decoded"
+    assert abs(drawn - steady) <= 2, (drawn, steady)
+
+
+def test_the_hover_card_gets_the_entry_whose_picture_is_under_the_pointer(gui):
+    """Driven through _render_map, not _atlas_pick: the map used to resolve
+    the hover off the hidden scatter, so the card described a dot rather than
+    the thumbnail the pointer was actually over."""
+    h = _big_map(32, n=3000)
+    # The canvas must fit the DISPLAY: ImGui does not route a hover to an item
+    # clipped off it, so a 900px map in a 900px display hovers nowhere.
+    h._MAP_H = 420.0
+    assert _settle(h) is not None
+    ast = h.state.archive
+    rect = _map_rect(h)
+    # Settle AGAIN at this canvas: _map_rect renders at its own window size,
+    # so the level it plans is not the one _settle just filled, and the atlas
+    # would adopt the new one part-way through the probe.
+    assert _settle(h) is not None
+    origin, size = imgui.ImVec2(rect[0], rect[1]), imgui.ImVec2(rect[2], rect[3])
+    disp = imgui.get_io().display_size
+
+    _pts, (ux, uy, win), cell = h._atlas_shown
+    sx, sy = h._map_to_screen(ast, np.stack([ux, uy], axis=1), origin, size)
+    fx, fy = h._map_to_screen(
+        ast, np.stack([ux + cell[0], uy + cell[1]], axis=1), origin, size)
+
+    seen = []
+    real = type(h)._map_hover_card
+    type(h)._map_hover_card = lambda self, arc, row: seen.append(int(row))
+    try:
+        checked = 0
+        for k in range(0, len(win), max(1, len(win) // 12)):
+            mx, my = (sx[k] + fx[k]) / 2.0, (sy[k] + fy[k]) / 2.0
+            if not (origin.x + 4 <= mx <= min(origin.x + size.x, disp.x) - 4
+                    and origin.y + 4 <= my <= min(origin.y + size.y,
+                                                  disp.y) - 4):
+                continue
+            seen.clear()
+            _map_frame(h, (mx, my), False)
+            _map_frame(h, (mx, my), False)
+            # Both frames hover, so the card is drawn twice - what matters
+            # is that every one of them named the picture under the pointer.
+            assert seen and set(seen) == {int(_pts.idx[win[k]])}, (seen, k)
+            checked += 1
+    finally:
+        type(h)._map_hover_card = real
+    assert checked >= 4, f"only probed {checked} cells"
+
+
+def test_the_visible_set_is_capped_to_what_the_cache_holds(gui):
+    """The working set is the cells ON SCREEN, and one larger than the cache
+    evicts its own cells and re-decodes them forever. Built directly, because
+    a test window is not wide enough to ask for that many cells."""
+    from services import map_view as _mv
+    h = _big_map(16, n=8000)
+    ast = h.state.archive
+    rect = _map_rect(h)
+    pts = h._map_points(h.archive_obj, h.map_layout_service, ast)
+    n = ATLAS_BUDGET * 3
+    rs = np.random.RandomState(1)
+    unit = rs.rand(n, 2).astype(np.float32)
+    nov = rs.rand(n).astype(np.float32)
+    cell = (1.0 / 96.0, 1.0 / 96.0)
+    plan = _mv.atlas_winners(unit, nov, cell)
+    assert len(plan[2]) > ATLAS_BUDGET, len(plan[2])
+    stub = type(pts)(unit, pts.lo, pts.span,
+                     np.zeros(n, dtype=np.int64), np.arange(n), None, nov)
+    ast.map_zoom = 1.0
+    _a, _b, _c, _d, live = h._atlas_rects(
+        ast, (stub, plan, cell), imgui.ImVec2(rect[0], rect[1]),
+        imgui.ImVec2(rect[2], rect[3]))
+    assert len(live) <= ATLAS_BUDGET, len(live)
+
+
+def test_zooming_in_keeps_filling_every_cell_in_view(gui):
+    """Capping the whole PLAN by novelty leaves gaps exactly where you zoom:
+    the cells in view need not be among the map's most novel. Measured against
+    an UNCAPPED plan, or the assertion just re-reads the cap it is checking."""
+    from services import map_view as _mv
+    h = _big_map(32, n=8000)
+    h._MAP_H = 420.0
+    ast = h.state.archive
+    for z in (1.0, 2.0, 4.0, 8.0, 16.0):
+        ast.map_zoom = z
+        assert _settle(h) is not None, f"never settled at {z}x"
+        rect = _map_rect(h)
+        assert _settle(h) is not None
+        origin = imgui.ImVec2(rect[0], rect[1])
+        size = imgui.ImVec2(rect[2], rect[3])
+        pts = h._map_points(h.archive_obj, h.map_layout_service, ast)
+        cell = _mv.atlas_cell(size.x * z, size.y * z, float(ast.map_thumb_px))
+        full = _mv.atlas_winners(pts.unit, pts.novelty, cell)
+        _a, _b, _c, _d, want = h._atlas_rects(ast, (pts, full, cell),
+                                              origin, size)
+        assert len(want), f"nothing visible at {z}x"
+        drawn = _images_drawn(h)
+        assert drawn >= len(want), (z, drawn, len(want))

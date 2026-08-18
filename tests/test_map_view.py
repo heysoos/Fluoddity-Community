@@ -548,3 +548,20 @@ def test_a_budget_larger_than_the_cell_count_changes_nothing():
     a = mv.atlas_winners(unit, values, (0.25, 0.25))
     b = mv.atlas_winners(unit, values, (0.25, 0.25), budget=10_000)
     assert np.array_equal(a[2], b[2])
+
+
+def test_the_size_slider_is_continuous():
+    """Quantising the CELL makes the slider snap to a handful of values. Only
+    the ZOOM needs quantising - that is what a pan and a zoom must not
+    disturb. Moving the slider is a deliberate act and may rebin."""
+    sizes = {mv.atlas_cell(1480.0, 320.0, float(px))[0]
+             for px in range(16, 65)}
+    assert len(sizes) == 49
+
+
+def test_the_drawn_cell_stays_near_the_size_asked_for():
+    for px in (16, 24, 32, 48, 64):
+        for span in (700.0, 1000.0, 1480.0, 2560.0):
+            cx, _ = mv.atlas_cell(span, 320.0, float(px))
+            on_screen = cx * span
+            assert 0.7 * px <= on_screen <= 1.45 * px, (px, span, on_screen)

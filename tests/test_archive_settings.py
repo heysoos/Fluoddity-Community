@@ -242,7 +242,11 @@ def test_the_map_layout_and_atlas_travel_with_the_archive():
 
 
 def test_a_build_without_umap_opens_every_archive_exactly_as_before():
-    """pca is the default, so nothing changes until it is asked for."""
+    """pca is the default, so nothing changes until it is asked for.
+
+    The ATLAS is on by default - a map of pictures is what the map is for -
+    but it needs no optional package, so a build without umap is unaffected.
+    """
     a = ArchiveState()
     assert a.map_layout == "pca"
-    assert a.map_thumbs is False
+    assert a.map_thumbs is True

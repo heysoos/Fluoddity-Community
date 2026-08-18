@@ -536,8 +536,12 @@ else, so any other interpreter shows the Layout combo as PCA-only:
       atlas means the working set no longer fits the cache.
 - [ ] **w.** Move the pointer across a settled atlas: nothing redraws. The
       hover card's own picture must not cost a cell.
-- [ ] **x.** At the 16px end of the size slider the cells go sparse rather
-      than flashing - the most novel entry in each cell keeps its picture.
+- [ ] **x.** Drag the size slider slowly: the pictures resize CONTINUOUSLY,
+      not in two or three jumps.
+- [ ] **x2.** Switch Layout between PCA and UMAP: the old pictures hold and
+      are replaced all at once. No vertical sweep of thumbnails.
+- [ ] **x3.** Zoom right in: every cell on screen has a picture, and new
+      entries keep appearing rather than the same few.
 - [ ] **y.** A big archive is no slower to draw than a small one at the same
       zoom. The count follows the viewport, not the entry count.
 

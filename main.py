@@ -41,6 +41,13 @@ def put_back_auto_overrides(ui_state, prev_aspect, prev_speedmult,
         ui_state.sim.hue_sensitivity = prev_hue
 
 
+def _release(cache):
+    """Release a thumbnail cache if there is one. Both cleanup steps go
+    through this so the lookup can sit inside the guarded step."""
+    if cache is not None:
+        cache.release()
+
+
 def clamp_auto_hue(ui_state):
     """Hold the hue gain at or below AUTO_HUE_MAX while a mode is scoring.
 
@@ -142,6 +149,7 @@ class App:
         self.goal_list = None
         self.map_layout_service = None
         self.thumb_cache = None
+        self.atlas_cache = None
         # Brain Inspector: None until the window is first opened, False if it
         # could not be built (a diagnostic panel must not take the app down).
         self.brain_preview = None
@@ -362,6 +370,7 @@ class App:
         from services.goal_source import GoalList
         from services.map_layout_service import MapLayoutService
         from services.thumb_cache import ThumbCache, gl_loader
+        from ui.archive_window import ATLAS_CACHE_CAPACITY, ATLAS_TEX_PX
 
         from services.archive_io import migrate_archive
 
@@ -400,6 +409,13 @@ class App:
         # of them has a 000000.jpg.
         self.thumb_cache = ThumbCache(gl_loader(self.ctx, archive.stores),
                                       capacity=256)
+        # The map's own cache. Its textures are decoded small, so it can hold
+        # a picture for EVERY cell where the gallery's 160px ones cannot -
+        # which is the difference between an atlas that fills in and one that
+        # goes sparse and re-decodes itself.
+        self.atlas_cache = ThumbCache(
+            gl_loader(self.ctx, archive.stores, max_px=ATLAS_TEX_PX),
+            capacity=256, max_capacity=ATLAS_CACHE_CAPACITY)
 
         if self.imgep_driver is not None:
             self.imgep_driver.archive = archive
@@ -408,6 +424,7 @@ class App:
         self.ui.archive_goals = goals
         self.ui.map_layout_service = self.map_layout_service
         self.ui.thumb_cache = self.thumb_cache
+        self.ui.atlas_cache = self.atlas_cache
         self.command_handler.archive = archive
         self.command_handler.archive_store = store
         self.command_handler.goal_list = goals
@@ -450,8 +467,11 @@ class App:
             self.goal_list.save()
         if self.archive_store is not None:
             self.archive_store.close()
-        if self.thumb_cache is not None:
-            self.thumb_cache.release()
+        # Both caches: entry ids restart at 0 in every archive and the key
+        # derives from the id, so a kept texture shows the previous archive's
+        # picture.
+        _release(self.thumb_cache)
+        _release(getattr(self, "atlas_cache", None))
 
     def _save_archive_settings(self, ui_state):
         """Persist the Explore settings into the archive's own folder.
@@ -1589,8 +1609,11 @@ class App:
         self._step("close map layout thread", self._close_map_layout)
         if self.archive_store is not None:
             self._step("close archive store", self.archive_store.close)
-        if self.thumb_cache is not None:
-            self._step("release thumbnails", self.thumb_cache.release)
+        # The lookup goes INSIDE the lambda, for the reason given below: a
+        # raise out here skips every step under it.
+        self._step("release thumbnails", lambda: _release(self.thumb_cache))
+        self._step("release map thumbnails",
+                   lambda: _release(getattr(self, "atlas_cache", None)))
 
         # The lookup goes INSIDE the lambda: _step guards the call, not the
         # expression that produces it, so a service that never got built would

@@ -16,7 +16,7 @@ from collections import OrderedDict
 MAX_CAPACITY = 1024
 
 
-def gl_loader(ctx, stores):
+def gl_loader(ctx, stores, max_px: int | None = None):
     """The real loader: read a thumbnail JPEG into an RGB texture.
 
     `stores` maps a brain layout signature to the store that owns those
@@ -24,6 +24,12 @@ def gl_loader(ctx, stores):
     filename cannot identify a thumbnail: an id is unique inside one layout's
     directory and nowhere else, so every brain in an archive has a 000000.jpg
     and one cache keyed on the name alone would hand out the wrong picture.
+
+    `max_px` decodes at reduced scale through JPEG's own DCT scaling. It is
+    what lets the MAP hold a picture for every cell: a thumbnail drawn at 32px
+    does not need the stored 160, and the smaller texture is what the cache is
+    sized in. Draft only ever reduces by 1/2, 1/4 or 1/8, so the result is the
+    smallest such size still at or above `max_px`.
     """
 
     def load(key: str):
@@ -36,6 +42,8 @@ def gl_loader(ctx, stores):
                 return None
             path = store.thumb_path(name)
             with Image.open(path) as img:
+                if max_px:
+                    img.draft("RGB", (int(max_px), int(max_px)))
                 rgb = img.convert("RGB")
                 return ctx.texture(rgb.size, 3, rgb.tobytes())
         except Exception:
@@ -47,11 +55,16 @@ def gl_loader(ctx, stores):
 
 
 class ThumbCache:
-    def __init__(self, loader, capacity: int = 256):
+    def __init__(self, loader, capacity: int = 256,
+                 max_capacity: int = MAX_CAPACITY):
         self._load = loader
         self.capacity = int(capacity)
         # reserve() may raise the capacity but never take it below this.
         self._floor = int(capacity)
+        # Per instance, because the ceiling is a MEMORY budget and the map's
+        # textures are decoded small: the same number of them costs a fraction
+        # of the gallery's 160px ones.
+        self.max_capacity = max(int(capacity), int(max_capacity))
         self._items: OrderedDict = OrderedDict()
 
     def reserve(self, n: int) -> None:
@@ -61,7 +74,7 @@ class ThumbCache:
         re-decodes the whole visible set on the next one. Call this with the
         count about to be drawn, before drawing any of it.
         """
-        self.capacity = max(self._floor, min(int(n), MAX_CAPACITY))
+        self.capacity = max(self._floor, min(int(n), self.max_capacity))
 
     def __len__(self) -> int:
         return len(self._items)

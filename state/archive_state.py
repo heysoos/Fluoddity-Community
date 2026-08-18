@@ -118,7 +118,9 @@ class ArchiveState:
     map_layout: str = "pca"          # pca | umap
     # The atlas REPLACES the scatter while it is on: a picture and a dot
     # competing for the same entry is what made it flicker on every pan.
-    map_thumbs: bool = False
+    # On by default - a map of pictures is what the map is FOR, and the dots
+    # are the fallback.
+    map_thumbs: bool = True
     map_thumb_px: int = 32
     # Low, because a large archive spans few generations: a default that shows
     # everything is a filter that filters nothing.

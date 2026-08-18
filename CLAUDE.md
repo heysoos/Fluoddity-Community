@@ -1487,6 +1487,47 @@ mechanics these caveats assume.
   `ATLAS_NEW_PER_FRAME` is 8. PIL `draft()` is NOT worth it for time (0.31 ms
   at 1/4) but cuts decoded pixels 16x, which is the lever if the budget ever
   needs to be much larger than the cache.
+  **The map decodes its OWN thumbnails, small, and that is what lets every
+  cell have a picture.** `gl_loader(..., max_px=ATLAS_TEX_PX)` uses PIL's
+  `draft()`, which is JPEG DCT scaling rather than a resize: 80px from the
+  stored 160, an eighth of the memory. Draft is NOT a speed win - 0.31 ms
+  against 0.399 measured over 300 real thumbnails - it is a MEMORY win, and
+  memory is what bounds how many cells can hold a picture. The map therefore
+  keeps a SECOND `ThumbCache`; the gallery's 160px one is unchanged, and both
+  are released on an archive switch, since ids restart per archive.
+  `max_capacity` is per instance for the same reason - the ceiling is a memory
+  budget and these textures are not the gallery's size.
+  **The PLAN is uncapped and the VISIBLE set is capped.** Capping the plan by
+  novelty leaves gaps exactly where the map is zoomed IN, because the cells in
+  view need not be among the whole map's most novel - which reads as a zoom
+  that will not show you anything new. The plan is a few int arrays and costs
+  nothing to hold; the cap belongs in `_atlas_rects`, on the cells actually
+  drawn, which is the working set the cache has to hold. The reserve is a
+  CONSTANT, never the visible count: sizing the cache to the viewport shrinks
+  it as you zoom in and throws away the level you came from.
+  **The atlas is DOUBLE-BUFFERED, and that is what removes the sweep.** A plan
+  reaches the screen only once every picture in its VISIBLE cells is resident;
+  until then the previous snapshot keeps drawing, scaling with the zoom the way
+  map tiles do. Without it a wholesale change - a zoom level, or switching PCA
+  to UMAP - wiped new thumbnails across the map a row at a time. The snapshot
+  is `(pts, plan, cell)` and EVERYTHING is read from it, positions and `idx`
+  alike: switching projection replaces `pts`, so the current one's `idx` names
+  different entries. Only the visible cells are waited for - a level holds
+  thousands and none of the ones off screen are what the eye is on - and an
+  unreadable thumbnail counts as arrived, or one missing file holds the plan
+  back for good. First open is the exception: with nothing to fall back on it
+  adopts as it fills, since a blank canvas is worse than a fill.
+  **The hover reads the plan being DRAWN.** The scatter is not drawn in this
+  mode, so resolving a hover against it named an entry the user could not see.
+  **The SIZE slider is continuous because only the ZOOM is quantised.**
+  Quantising the cell snapped 49 slider positions onto 3 values. A pan or a
+  zoom may not disturb the binning; moving the slider is a deliberate act and
+  may rebin.
+  **`UmapLayout.available()` uses `find_spec`, never `import umap`.** That
+  import pulls in numba and llvmlite and costs **7.7 seconds**; the Layout
+  combo asks every frame whether to OFFER the engine, so the first Map frame
+  froze the whole app - on startup, since the browser reopens itself. The real
+  import happens inside `fit()`, which runs on a worker. 2.15 ms now.
   **The cost the user actually felt was the atlas's own work, never the
   scatter.** The scatter was present in both states, so it cannot explain a
   toggle; do not repeat that diagnosis. Re-measure by timing points-only,

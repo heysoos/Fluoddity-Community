@@ -290,7 +290,14 @@ def atlas_cell(span_x_px: float, span_y_px: float, cell_px: float):
     space - a cell quantised separately per axis is drawn as a rectangle,
     which stretches the thumbnail inside it.
     """
-    cx = quantised_cell(span_x_px, cell_px)
+    if span_x_px <= 0.0 or cell_px <= 0.0:
+        return 1.0, 1.0
+    # The ZOOM is quantised, not the cell. Quantising the cell snaps the size
+    # slider to a handful of values, and it is the zoom - not the slider -
+    # that must not disturb the binning: moving the slider is a deliberate
+    # act and may rebin, where a pan or a zoom may not.
+    level = float(2.0 ** np.round(np.log2(float(span_x_px))))
+    cx = min(1.0, float(cell_px) / level)
     if span_y_px <= 0.0:
         return cx, cx
     # ROUNDED: the caller scales both spans by the zoom, so the ratio is

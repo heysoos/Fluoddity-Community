@@ -221,11 +221,18 @@ class UmapLayout(_BaseLayout):
 
     @staticmethod
     def available() -> bool:
+        """Is umap installed? Asked EVERY FRAME by the Layout combo.
+
+        find_spec, never `import umap`: that pulls in numba and llvmlite and
+        costs seconds on the main thread, so importing it just to decide
+        whether to OFFER the engine froze the first Map frame. The real import
+        happens inside fit(), which runs on a worker.
+        """
+        import importlib.util
         try:
-            import umap  # noqa: F401
+            return importlib.util.find_spec("umap") is not None
         except Exception:
             return False
-        return True
 
     def fit(self, embeddings, keys=None, init_pos=None) -> bool:
         """-> did it fit? False when umap is absent or there is too little data.

@@ -45,17 +45,27 @@ GALLERY_TABLE = "gallery_list"
 # size, which is what bounds the count by the viewport.
 ATLAS_PX_MIN = 16
 ATLAS_PX_MAX = 64
+# The map decodes its own thumbnails SMALL, through JPEG's DCT scaling. A cell
+# is never drawn above ATLAS_PX_MAX, so a texture at ATLAS_TEX_PX is always at
+# least the drawn size - and at an eighth of the memory of the stored 160px
+# one, which is what lets every cell have a picture rather than the most novel
+# few.
+ATLAS_TEX_PX = 80
+ATLAS_CACHE_CAPACITY = 2048
 # The most pictures the atlas will draw at once, and the headroom left over
 # the top of them. The visible cell count is set by the size slider and the
-# canvas alone - at the small end it runs past anything the cache can hold,
-# and a working set larger than the cache evicts its own cells and re-decodes
-# them for as long as the map is open. The headroom is for the hover card and
-# the selection panel, which call get() on entries that are not cell winners.
-ATLAS_BUDGET = 640
-ATLAS_HEADROOM = 64
+# canvas alone, so it must be BOUNDED: a working set larger than the cache
+# evicts its own cells and re-decodes them for as long as the map is open.
+# The headroom is for the hover card and the selection panel, which call
+# get() on entries that are not cell winners.
+ATLAS_HEADROOM = 256
+ATLAS_BUDGET = ATLAS_CACHE_CAPACITY - ATLAS_HEADROOM
 # Thumbnails DECODED per frame. A JPEG decode is about a
 # millisecond, and a zoom changes every cell's winner at once.
-ATLAS_NEW_PER_FRAME = 8
+# Decoded per frame. A drafted decode is a third of a millisecond, and the
+# atlas is double-buffered, so this paces the fill of a level the user cannot
+# see yet rather than the one on screen.
+ATLAS_NEW_PER_FRAME = 24
 # (column label, the sort mode its header selects; "" for a column that does
 # not sort). The modes are GALLERY_SORTS keys, so a header and the combo can
 # never mean different things.
@@ -854,6 +864,17 @@ class ArchiveWindowMixin:
     # ---- the two views -------------------------------------------------
 
     @staticmethod
+    def _peek_thumb(cache, key):
+        """A look at the cache that does not count as a use.
+
+        Tolerant of a cache without `peek`, the same way `_reserve_thumbs` is
+        tolerant of one without `reserve`: a test double need not grow a
+        method to keep the window drawing.
+        """
+        fn = getattr(cache, "peek", None)
+        return fn(key) if fn is not None else cache.get(key)
+
+    @staticmethod
     def _reserve_thumbs(cache, n: int) -> None:
         """Hold room for a whole frame's thumbnails before asking for any.
 
@@ -1228,8 +1249,13 @@ class ArchiveWindowMixin:
             for x, y, c in zip(px, py, pc):
                 draw.add_circle_filled(imgui.ImVec2(x, y), 3.0, c)
 
-        best_i, best_d = -1, 1e9
-        if hovering and len(sel):
+        best_i, best_d, picked = -1, 1e9, -1
+        if hovering and ast.map_thumbs:
+            # The PICTURE under the pointer, not the nearest hidden dot: the
+            # cell's winner is what is drawn there, and a hover card showing
+            # some other entry is a card describing something you cannot see.
+            picked = self._atlas_pick(ast, imgui.get_mouse_pos(), origin, size)
+        elif hovering and len(sel):
             mouse = imgui.get_mouse_pos()
             d = np.abs(xs[sel] - mouse.x) + np.abs(ys[sel] - mouse.y)
             j = int(np.argmin(d))
@@ -1248,6 +1274,10 @@ class ArchiveWindowMixin:
         if self._render_map_home(ast, draw, origin, size):
             hovering = False
 
+        # The atlas resolves its own entry: the plan on screen may belong to
+        # an EARLIER points object, so this one's idx would name someone else.
+        if ast.map_thumbs:
+            return (picked, clicked) if hovering and picked >= 0 else (-1, False)
         # Through pts.idx: with a filter on, row i is not entry i, and hovering
         # the wrong entry is worse than not hovering at all.
         if hovering and best_i >= 0 and best_d < 12.0:
@@ -1266,65 +1296,131 @@ class ArchiveWindowMixin:
                                      size.y * ast.map_zoom,
                                      float(ast.map_thumb_px))
         key = (cell_u,)
-        hit = getattr(self, "_atlas_cache", None)
+        hit = getattr(self, "_atlas_plan_memo", None)
         # `pts` by identity, not by id(): CPython hands a freed object's
         # address to the next one of its type, so an id alone can collide.
         if hit is not None and hit[0] is pts and hit[1] == key:
             return hit[2]
-        plan = map_view.atlas_winners(pts.unit, pts.novelty, cell_u,
-                                      budget=ATLAS_BUDGET)
-        self._atlas_cache = (pts, key, (plan, cell_u))
+        # UNCAPPED: the plan is a few arrays of ints and costs nothing to
+        # hold, and capping it here is what left gaps where the map was
+        # zoomed in. The cap that matters is on the cells actually DRAWN.
+        plan = map_view.atlas_winners(pts.unit, pts.novelty, cell_u)
+        self._atlas_plan_memo = (pts, key, (plan, cell_u))
         return plan, cell_u
 
-    def _draw_atlas(self, ast, arc, draw, pts, origin, size):
-        """One thumbnail per occupied cell, and nothing else.
+    def _atlas_rects(self, ast, shown, origin, size):
+        """-> screen rects for a plan's cells, and which of them are visible.
 
-        Only ATLAS_NEW_PER_FRAME are DECODED per frame: a JPEG decode is about
-        a millisecond, and crossing a zoom level renews every cell at once.
-        A cell whose picture has not arrived draws NOTHING - a placeholder dot
-        would be the picture-versus-point flicker all over again.
+        The visible set is CAPPED, keeping the most novel: it is the working
+        set the cache has to hold, and one larger than the cache evicts its
+        own cells and re-decodes them for as long as the map is open. Capping
+        the whole PLAN instead leaves gaps exactly where you zoom in, since
+        the cells in view need not be among the map's most novel.
         """
-        cache = getattr(self, "thumb_cache", None)
-        if cache is None or not len(pts.idx):
-            return
-        (ux, uy, win), cell_u = self._atlas_plan(ast, pts, size)
-        if not len(win):
-            return
-
+        pts, (ux, uy, win), cell = shown
         corner = np.stack([ux, uy], axis=1)
         sx, sy = self._map_to_screen(ast, corner, origin, size)
-        # y is flipped by _map_to_screen, so the cell's top edge comes from its
-        # FAR corner in unit space.
-        far = np.stack([ux + cell_u[0], uy + cell_u[1]], axis=1)
+        # y is flipped by _map_to_screen, so the cell's top edge comes from
+        # its FAR corner in unit space.
+        far = np.stack([ux + cell[0], uy + cell[1]], axis=1)
         fx, fy = self._map_to_screen(ast, far, origin, size)
         on = ((fx >= origin.x) & (sx <= origin.x + size.x)
               & (sy >= origin.y) & (fy <= origin.y + size.y))
         live = np.flatnonzero(on)
-        # Room for the whole PLAN, not just the cells on screen: reserving the
-        # visible subset shrinks the cache as you zoom in and evicts the rest
-        # of the level, so zooming back out decodes it all again. The plan is
-        # capped at ATLAS_BUDGET, so this is bounded either way. The headroom
-        # is for the hover card's own get(), which would otherwise evict a
-        # cell that is still on screen.
-        self._reserve_thumbs(cache, len(win) + ATLAS_HEADROOM)
+        if len(live) > ATLAS_BUDGET:
+            keep = np.argpartition(pts.novelty[win[live]],
+                                   -ATLAS_BUDGET)[-ATLAS_BUDGET:]
+            live = live[np.sort(keep)]
+        return sx, fy, fx, sy, live
 
+    def _atlas_pick(self, ast, mouse, origin, size) -> int:
+        """-> the archive row whose picture is under `mouse`, or -1.
+
+        Read off the plan being DRAWN, never the one being decoded, so what
+        the card shows is what is on screen.
+        """
+        shown = getattr(self, "_atlas_shown", None)
+        if shown is None:
+            return -1
+        pts, (_ux, _uy, win), _cell = shown
+        if not len(win):
+            return -1
+        sx, fy, fx, sy, _live = self._atlas_rects(ast, shown, origin, size)
+        hit = ((mouse.x >= sx) & (mouse.x < fx)
+               & (mouse.y >= fy) & (mouse.y < sy))
+        j = np.flatnonzero(hit)
+        return int(pts.idx[win[j[0]]]) if len(j) else -1
+
+    def _atlas_ready(self, arc, pts, win, rows, cache):
+        """Decode what the cells in `rows` still need, up to this frame's
+        budget. -> is every one of their pictures resident now?
+
+        A plan is only put ON SCREEN once it is, which is what stops a
+        wholesale change - a zoom level, or switching PCA to UMAP - wiping
+        across the map one row of thumbnails at a time. Only the VISIBLE
+        cells are waited for; a level holds thousands, and none of the ones
+        off screen are what the eye is on.
+        """
         budget = ATLAS_NEW_PER_FRAME
-        peek = getattr(cache, "peek", None)
+        missing = 0
+        for row in win[rows].tolist():
+            key = arc.thumb_key(int(pts.idx[row]))
+            if self._peek_thumb(cache, key) is not None:
+                continue
+            if budget <= 0:
+                missing += 1
+                continue
+            budget -= 1
+            if cache.get(key) is None:
+                # An unreadable thumbnail never arrives; counting it as
+                # missing would hold the plan back for good.
+                continue
+        return missing == 0
+
+    def _draw_atlas(self, ast, arc, draw, pts, origin, size):
+        """One thumbnail per occupied cell, and nothing else.
+
+        Double-buffered: the plan being decoded is not the plan being drawn.
+        The previous one keeps its cells until the new one is complete, so a
+        level change rescales the pictures already on screen instead of
+        sweeping new ones across it. Nothing is ever drawn half-filled.
+        """
+        cache = getattr(self, "atlas_cache", None) or getattr(
+            self, "thumb_cache", None)
+        if cache is None or not len(pts.idx):
+            return
+        plan, cell_u = self._atlas_plan(ast, pts, size)
+        shown = getattr(self, "_atlas_shown", None)
+        if len(plan[2]):
+            cand = (pts, plan, cell_u)
+            _sx, _fy, _fx, _sy, live = self._atlas_rects(ast, cand, origin,
+                                                         size)
+            # A constant reserve, never the visible count: sizing the cache to
+            # the viewport shrinks it as you zoom in and evicts the level you
+            # came from, so zooming back out decodes it all again.
+            self._reserve_thumbs(cache, ATLAS_BUDGET + ATLAS_HEADROOM)
+            ready = self._atlas_ready(arc, pts, plan[2], live, cache)
+            # Nothing to hold on to yet - a first open - so fill in view
+            # rather than showing an empty canvas for a second.
+            if ready or shown is None:
+                self._atlas_shown = shown = cand
+        if shown is None:
+            return
+        # Everything from the SNAPSHOT, positions and rows alike: switching
+        # PCA to UMAP replaces `pts`, and the plan on screen still belongs to
+        # the old one until the new one is complete.
+        spts, (_ux, _uy, win), _cell = shown
+        if not len(win):
+            return
+        sx, fy, fx, sy, live = self._atlas_rects(ast, shown, origin, size)
         rows, x0, y0, x1, y1 = (win[live], sx[live], fy[live],
                                 fx[live], sy[live])
         for row, ax, ay, bx, by in zip(rows.tolist(), x0.tolist(), y0.tolist(),
                                        x1.tolist(), y1.tolist()):
-            key = arc.thumb_key(int(pts.idx[row]))
-            tex = peek(key) if peek is not None else None
-            if tex is None:
-                if budget <= 0:
-                    continue
-                budget -= 1
-                tex = cache.get(key)
-                if tex is None:
-                    continue
-            draw.add_image(imgui.ImTextureRef(tex.glo),
-                           imgui.ImVec2(ax, ay), imgui.ImVec2(bx, by))
+            tex = self._peek_thumb(cache, arc.thumb_key(int(spts.idx[row])))
+            if tex is not None:
+                draw.add_image(imgui.ImTextureRef(tex.glo),
+                               imgui.ImVec2(ax, ay), imgui.ImVec2(bx, by))
 
     def _map_points(self, arc, proj, ast):
         """-> a map_view.MapPoints, or None if the filter matched nothing.

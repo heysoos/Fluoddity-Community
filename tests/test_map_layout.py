@@ -4,6 +4,8 @@ UMAP lays out a SNAPSHOT. Entries admitted after a fit are placed by kNN
 interpolation rather than by umap.transform, so most of what is tested here is
 placement, alignment and the cache - none of which need umap installed.
 """
+import pathlib
+
 import numpy as np
 import pytest
 
@@ -267,3 +269,24 @@ def test_a_cache_replays_the_positions_it_stored(tmp_path):
     back = UmapLayout()
     assert back.adopt(LayoutCache.load(p, "clip-b32"), x, keys)
     assert np.allclose(back.transform(x, keys), want, atol=1e-4)
+
+
+def test_asking_whether_umap_exists_does_not_import_it():
+    """`import umap` pulls in numba and costs seconds. The Layout combo asks
+    this every frame to decide whether to offer UMAP at all, so the first Map
+    frame froze the whole app while it loaded a library nobody had chosen."""
+    import subprocess
+    import sys as _sys
+    code = (
+        "import sys, pathlib;"
+        "sys.path.insert(0, r'" + str(pathlib.Path(__file__).resolve().parents[1]) + "');"
+        "import ui;"   # prime the services/ui import cycle
+        "from services.map_layout import UmapLayout;"
+        "ok = UmapLayout.available();"
+        "print('AVAILABLE', ok, 'IMPORTED', 'umap' in sys.modules)"
+    )
+    r = subprocess.run([_sys.executable, "-c", code],
+                       capture_output=True, text=True)
+    out = r.stdout + r.stderr
+    assert "AVAILABLE True" in out, out
+    assert "IMPORTED False" in out, out
