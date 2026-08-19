@@ -40,6 +40,26 @@ signature-qualified. At 1650 entries that is ~140 ms of pure waste, and
 `rescore_all` is O(n^2) — see the `rescore_all()` caveat in `CLAUDE.md` for what
 it costs at capacity.
 
+**What `retarget()` costs instead, over a synthetic archive spanning all four
+modalities at 512-d**, walking every layout in both directions:
+
+| pooled entries | cold open | `retarget` | reload it replaces |
+|---|---|---|---|
+| 4000 (4 x 1000) | 336 ms | 0.014 ms | 221 ms |
+| 12000 (4 x 3000) | 1808 ms | 0.022 ms | 1737 ms |
+
+It is FLAT in archive size — the only work proportional to anything is the
+one-off `_widen` on the first move to a wider layout, which is why the first
+retarget of a session is a few times the rest. The embeddings, the novelty
+column and `_novelty_clean` come through every move untouched, and a genome
+still reads at its own width after a round trip through all four. Admitting
+after a move writes to the new signature's directory, and reopening cold under
+either brain recovers the right native set.
+
+These are random unit vectors, not CLIP embeddings — which is sound here only
+because `retarget` never touches novelty or separation. Do not reuse this
+harness for anything that ranks entries.
+
 ## Scope
 
 In scope:
