@@ -344,6 +344,33 @@ class FieldStackWindowMixin:
             return self._draw_image_picker(layer, collect)
         if layer.source == "webcam":
             return self._draw_webcam_picker(layer, collect)
+        if layer.source == "brush":
+            return self._draw_brush_controls(layer, collect)
+        return False
+
+    def _draw_brush_controls(self, layer, collect) -> bool:
+        """Where the paint comes from, and how to get rid of it.
+
+        A brush layer with nothing painted looks exactly like a broken one, and
+        nothing on the row said the paint is made in another window.
+        """
+        prefs = self.state.preferences
+        on = (prefs.advanced_drawing_enabled
+              and prefs.mouse_mode == "Draw Trail")
+        if on:
+            imgui.text_disabled(self._tag(
+                f"Painting: drag on the canvas##brushon{layer.uid}", collect))
+        else:
+            imgui.text_disabled(self._tag(
+                "Turn on Drawing Controls and Draw Trail to paint"
+                f"##brushoff{layer.uid}", collect))
+
+        if imgui.button(self._tag(f"Clear paint##brush{layer.uid}", collect)):
+            if layer.destination == "strafe":
+                self._request_clear_strafe_field = True
+            else:
+                self._request_clear_force_field = True
+        hints.tip("Erase everything painted into this layer.")
         return False
 
     def _webcam_devices(self):

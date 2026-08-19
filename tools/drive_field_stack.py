@@ -171,6 +171,7 @@ def main() -> int:
     if not step(app, 8, "stack reversed"):
         return finish(app)
 
+    _brush(app, stack)
     _webcam(app, stack)
 
     if not _roundtrip(app, stack):
@@ -181,6 +182,69 @@ def main() -> int:
     step(app, 10, "empty stack")
     print(f"  emptied -> {field(app)}")
     return finish(app)
+
+
+def _brush(app, stack) -> None:
+    """A stroke has to reach the brush layer's buffer.
+
+    Selecting Brush and seeing nothing is the expected behaviour when nothing
+    has been painted, which is indistinguishable from the feature being dead -
+    so the stroke path is driven here rather than assumed.
+
+    get_state() rebuilds the pointer every frame from glfw, so a fake stroke
+    has to be written AFTER it returns, not onto the state it produces.
+    """
+    from services.field_handler import ensure_brush_layer
+
+    put(app, [])
+    step(app, 2, "clear before painting")
+    ensure_brush_layer(app.ui.state.field_stack, "force")
+    app.field_bus.mark_dirty()
+
+    prefs = app.ui.state.preferences
+    prefs.mouse_mode = "Draw Trail"
+    prefs.advanced_drawing_enabled = True
+    prefs.advanced_draw_force_field = True
+    prefs.draw_power = 1.0
+    prefs.draw_size = 0.15
+
+    width, height = glfw.get_framebuffer_size(app.window)
+    pointer = {"pos": (width * 0.3, height * 0.5), "held": True}
+    real_get_state = app.ui.get_state
+
+    def faked():
+        state = real_get_state()
+        state.mouse_pos = pointer["pos"]
+        state.mouse_left_held = pointer["held"]
+        return state
+
+    app.ui.get_state = faked
+    try:
+        for i in range(24):
+            pointer["pos"] = (width * (0.3 + 0.015 * i), height * 0.5)
+            if not step(app, 1, "painting"):
+                return
+        pointer["held"] = False
+        step(app, 4, "after the stroke")
+    finally:
+        app.ui.get_state = real_get_state
+
+    brush = app.field_bus.brush_source()
+    snap = brush.snapshot() if brush is not None else None
+    painted = 0.0 if snap is None else float(np.abs(snap).max())
+    print(f"  brush: buffer max={painted:.4f} field={field(app)}")
+    if painted == 0.0:
+        fail("a stroke reached the brush layer's buffer as nothing")
+
+    # The one-shot is rebuilt by get_state() too, so it is set on the UI.
+    app.ui._request_clear_force_field = True
+    step(app, 3, "clear the paint")
+    snap = brush.snapshot() if brush is not None else None
+    after = 0.0 if snap is None else float(np.abs(snap).max())
+    print(f"  brush after Clear: buffer max={after:.4f}")
+    if painted > 0.0 and after != 0.0:
+        fail("Clear left paint behind")
+    prefs.advanced_drawing_enabled = False
 
 
 def _webcam(app, stack) -> None:

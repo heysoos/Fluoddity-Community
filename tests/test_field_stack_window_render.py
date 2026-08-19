@@ -410,3 +410,36 @@ def test_the_camera_list_is_not_enumerated_every_frame(gui):
     finally:
         webcam.list_devices = real
     assert len(calls) == 1, f"enumerated {len(calls)} times over five frames"
+
+
+def test_a_brush_layer_says_where_its_paint_comes_from(gui):
+    """An unpainted brush layer looks exactly like a broken one."""
+    harness, _ = draw(FieldStack(layers=[FieldLayer(source="brush")]),
+                      bus=_FakeBus())
+    assert any("Drawing Controls" in l or "drag on the canvas" in l
+               for l in harness.labels)
+    assert any("Clear paint" in l for l in harness.labels)
+
+
+def test_the_clear_button_asks_for_the_layers_own_destination(gui):
+    for destination, flag in (("force", "_request_clear_force_field"),
+                              ("strafe", "_request_clear_strafe_field")):
+        layer = FieldLayer(source="brush", destination=destination)
+        harness = _Harness(FieldStack(layers=[layer]), _FakeBus())
+        real = imgui.button
+
+        def click(label, *a, **kw):
+            real(label, *a, **kw)
+            return "Clear paint" in label
+
+        imgui.button = click
+        try:
+            imgui.new_frame()
+            imgui.begin("host", True)
+            with _headers_open(True):
+                harness.render_field_stack_window(collect=harness.labels)
+            imgui.end()
+            imgui.render()
+        finally:
+            imgui.button = real
+        assert getattr(harness, flag, False), f"{destination} did not ask"
