@@ -359,17 +359,31 @@ entire life bootstrapping.
 
 ## 5. Keep or revert
 
-`tell()` already counts `admitted`. Accumulate it while a layout expedition is
-live, and at `end_expedition`:
+`tell()` counts the admissions that cleared SEPARATION on their own. Accumulate
+that while a layout expedition is live, and as the expedition ends:
 
-- **admitted >= 1 -> keep.** The layout now has native entries, so ordinary
+- **separated >= 1 -> keep.** The layout now has native entries, so ordinary
   expansion breeds from it next generation with no special case anywhere.
-- **admitted 0 -> revert** to the parent layout, through a second retarget.
+- **separated 0 -> revert** to the parent layout, through a second retarget.
 
-The archive is already the judge and this adds no second opinion: admission
-means finite, viable, alive, and separated from everything stored. A layout
-that cannot produce one such tile in a whole expedition has answered the
-question.
+The archive is already the judge and this adds no second opinion: an admission
+that cleared separation means finite, viable, alive, and unlike everything
+stored. A layout that cannot produce one such tile in a whole expedition has
+answered the question.
+
+**It cannot be `admitted` itself, and that was the first version.** `keeper`,
+`summit` and `record` all pass `force`, which bypasses separation so that a
+generation is never silently absent from the record — so `admitted` counts
+PICTURES, not new ones, and `keeper` fires whenever any tile is viable at all.
+Measured over a run with separation raised past reach, every layout kept itself
+and the ban set stayed empty forever: a revert path that never fires and a
+ledger with nothing in it. Counting only the unforced admissions is also what
+the paragraph above already claims in words.
+
+A reverted layout still keeps whatever its forced keepers deposited under its
+own signature — the same one-tile-per-generation deposit `keeper` makes
+everywhere. It is bounded by the ban set, which stops the pair being proposed
+again, rather than by anything in the revert.
 
 The alternative — comparing admission RATE against the parent — was rejected.
 A generation's tiles are not independent draws (they share one CMA-ES

@@ -560,9 +560,16 @@ class ImgepDriver:
         """Keep the layout, or ask for the parent back. Once, as its expedition
         ends.
 
-        The archive is already the judge: admission means finite, viable, alive
-        and separated from everything stored. A layout that cannot produce one
-        such tile in a whole expedition has answered the question.
+        The archive is already the judge: an admission that cleared SEPARATION
+        means finite, viable, alive and unlike everything stored. A layout that
+        cannot produce one such tile in a whole expedition has answered the
+        question.
+
+        It counts the SEPARATED admissions, not every admission. keeper, summit
+        and record all pass `force`, which bypasses separation so that a
+        generation is never absent from the record - so `admitted` counts
+        pictures, and every layout that renders anything at all would keep
+        itself.
 
         Comparing the admission RATE against the parent was rejected. A
         generation's tiles share one CMA-ES population, so they clear or miss
@@ -578,7 +585,7 @@ class ImgepDriver:
         # Said out loud for the same reason a hand switch is: it redirects
         # where results are filed, and nothing else records that it happened.
         print(f"[brain] layout move {mv.operator} {mv.parent.signature()} -> "
-              f"{mv.child.signature()}: {admitted} admitted, "
+              f"{mv.child.signature()}: {admitted} separated, "
               f"{'kept' if kept else 'reverted'}")
         if kept:
             # It has native entries now, so ordinary expansion breeds from it
@@ -707,6 +714,11 @@ class ImgepDriver:
         records = self._goal_records(b, shows_something)
         self._n_records += len(records)
         admitted = 0
+        # Admissions that cleared SEPARATION on their own. keeper, summit and
+        # record all bypass it - deliberately, so a generation is never absent
+        # from the record - which makes `admitted` a count of pictures rather
+        # than of new ones. Only a layout move reads this.
+        separated = 0
 
         for i in range(n):
             phys = parts[i].get("physics")
@@ -730,6 +742,7 @@ class ImgepDriver:
             else:
                 tile_source = source
 
+            forced = (i == keeper or i == summit or record is not None)
             entry = self.archive.consider(
                 Candidate(
                     brain=np.asarray(parts[i]["brain"], dtype=np.float32),
@@ -748,18 +761,19 @@ class ImgepDriver:
                 source=tile_source,
                 thumb_crop=last[i],
                 separation=float(sep[i]),
-                force=(i == keeper or i == summit or record is not None),
+                force=forced,
                 ignore_liveness=(i == summit or record is not None),
             )
             if entry is not None:
                 admitted += 1
+                separated += not forced
                 # The batch has to separate from itself too, or converged
                 # tiles would all pass separation against the pre-generation
                 # archive and all go in.
                 sep = np.minimum(sep, 1.0 - b @ b[i])
 
         if self._move is not None:
-            self._move_admitted += admitted
+            self._move_admitted += separated
 
         self.tournament.selected.clear()
         self._last_descriptors = b

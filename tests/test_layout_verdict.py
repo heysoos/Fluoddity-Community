@@ -89,6 +89,26 @@ def test_an_abandoned_move_is_neither_kept_nor_banned():
     assert d.layout_move is None
 
 
+def test_a_layout_that_only_repeats_the_archive_is_reverted():
+    """The one that makes the verdict mean anything.
+
+    keeper, summit and record all pass `force`, which bypasses separation so a
+    generation is never absent from the record - so a layout producing nothing
+    but near-duplicates still ADMITS every generation. Counting those would
+    keep every layout that renders a picture at all.
+    """
+    d, arc, _ts = a_move(expedition_gens=3)
+    # Nothing can ever separate from what is stored again. 2.0 is the largest
+    # cosine distance two unit vectors can be apart, so this is 'never'.
+    arc.min_separation = 2.0
+    before = len(arc)
+    parent = d.layout_move.parent
+    run_expedition(d, admit=True)
+    assert len(arc) > before, "keeper and summit still deposited tiles"
+    assert d.requested_layout == parent
+    assert d._reverted
+
+
 def test_an_ordinary_expedition_asks_for_nothing_when_it_ends():
     """The revert must belong to the MOVE, not to every expedition that
     happens to admit nothing."""

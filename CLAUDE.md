@@ -1978,20 +1978,27 @@ mechanics these caveats assume.
   makes an abandoned move (a grid change, a hand switch) neither kept nor
   banned: nothing was learned about it.
 
-- **The verdict is `admitted >= 1`, delivered ONCE, and `keep_running=True` is
-  how a search-driven switch differs from a hand one.** The archive is already
-  the judge — admission means finite, viable, alive and separated from
-  everything stored — so a layout that cannot produce one such tile in a whole
-  expedition has answered the question, and a reverted `(parent, child)` pair
-  is banned so the cadence is not spent re-proposing it. Comparing the
-  admission RATE against the parent was rejected: a generation's tiles share
-  one CMA-ES population, so they clear or miss any bar together, the same
-  reason the adaptive admission threshold was removed. Reverting costs nothing
-  in entries, because admitting nothing is the revert condition.
-  `_apply_brain_layout(keep_running=True)` skips the pause and the optimizer
-  reset only — the realloc, the retarget and the settings write all still
-  happen — because the search moved its own space on purpose and has an
-  expedition ready to start in it. Guarded by
+- **The verdict counts the SEPARATED admissions, never `admitted`, and
+  `admitted` is what the obvious version used.** `keeper`, `summit` and
+  `record` all pass `force`, which bypasses separation deliberately so that a
+  generation is never silently absent from the record — and `keeper` fires
+  whenever ANY tile is viable. So `admitted` counts pictures rather than new
+  ones: with separation raised past reach, every layout kept itself and the
+  ban set stayed empty, which is a revert path that never fires. An admission
+  that cleared separation on its own means finite, viable, alive and unlike
+  everything stored, which is the criterion the rule was always stated in.
+  The verdict is delivered ONCE, from `tell()` at `_remaining <= 0` and before
+  `end_expedition` drops the move; a reverted `(parent, child)` pair is banned
+  so the cadence is not spent re-proposing it, and a layout with every move
+  banned settles rather than thrashing. Comparing the admission RATE against
+  the parent was rejected: a generation's tiles share one CMA-ES population,
+  so they clear or miss any bar together, the same reason the adaptive
+  admission threshold was removed. A reverted layout still keeps whatever its
+  forced keepers deposited under its own signature — bounded by the ban set,
+  not by the revert. `_apply_brain_layout(keep_running=True)` skips the pause
+  and the optimizer reset ONLY — the realloc, the retarget and the settings
+  write all still happen — because the search moved its own space on purpose
+  and has an expedition ready to start in it. Guarded by
   `tests/test_layout_expedition.py`, `tests/test_layout_verdict.py` and
   `tests/test_layout_move_wiring.py`.
 
