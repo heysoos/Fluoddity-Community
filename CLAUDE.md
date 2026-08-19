@@ -467,6 +467,81 @@ mechanics these caveats assume.
   so any colour experiment run outside tournament mode measures the wrong
   thing. Guarded by `tests/test_auto_hue_clamp.py`.
 
+### Field injection
+
+- **The bus is STATELESS PER FRAME, and any source that needs memory owns its
+  own buffer.** Every destination is cleared and rebuilt from the layer stack,
+  which is the only reason turning a layer off removes its contribution. The
+  previous override shader painted one persistent texture and nothing cleared
+  it, so unticking the box left the last frame it drew on screen for good —
+  and enabling it had force-switched the draw target, so the Clear button no
+  longer named the thing that had been turned on. The brush is not
+  special-cased: it is a source with a private accumulation buffer, which is
+  what lets the rule hold. Guarded by
+  `tests/test_field_bus_rebuild.py::test_a_disabled_layer_contributes_exactly_zero`.
+
+- **`force` and `strafe` are CHANNEL PAIRS of one RGBA32F texture, and the four
+  blend modes are native GL state.** `replace` is blending off, `add` is
+  `ONE,ONE`, `multiply` is `DST_COLOR,ZERO`, `max` is `blend_equation=MAX`. So
+  there is exactly one composite shader, and `get_field()` in
+  `entity_update.glsl` never changed. **The colour mask must be set BEFORE
+  `use()`** — moderngl applies a framebuffer's stored state when it is bound,
+  so a mask set afterwards misses the pass it was meant for and every force
+  layer also writes strafe. That reads on screen as a preset that strafes more
+  than it used to, not as a bug. A `multiply` layer FIRST in a stack
+  composites against the zero clear and yields zero; multiply is for layer 2
+  and after.
+
+- **A mipmap min-filter over a texture with NO mip chain is INCOMPLETE and
+  samples as BLACK.** Blur reads the chain, so `composite_one` builds it on
+  demand and puts the filter back afterwards — `feedback` hands back the sim's
+  own canvas, and leaving that on a mipmap filter would change how the sim
+  samples its own trails. A source rendering into scratch with a mipmap filter
+  and no chain produces an all-zero field that looks exactly like a source
+  that did nothing.
+
+- **The bus runs BELOW canvas resolution by default and its texture filter is
+  therefore `LINEAR`, not `NEAREST`.** A forcing field is smooth. Nothing else
+  has to know: `get_field()` takes its aspect correction from
+  `textureSize()`, so a uniformly scaled texture reads correctly.
+
+- **The bus is OFF under a tournament grid.** Tiles are isolated small worlds,
+  so one field across the canvas is shared by every tile — the optimizer would
+  score the injected texture rather than the genome, and the entries it
+  admitted would be unreproducible. Same discipline as `color_by_cohort` being
+  forced off.
+
+- **Source shader annotation is OPT-IN, and that is what keeps old files
+  working.** `parse_shader_params` reads `uniform float x; // 0..1 = 0.5 "X"`;
+  an unannotated uniform yields no UI and keeps its GLSL default, so a `.frag`
+  written before the parser existed still runs — `march.frag` parses to zero
+  parameters and is unchanged. A malformed annotation is skipped rather than
+  raised: a shader is a user's text file and must never fail to load over a
+  comment. `FrameContext` carries `camera_pos`/`camera_dir` because
+  `march.frag` raymarches from them and would otherwise render a black frame.
+
+- **A layer's GPU state is keyed by `FieldLayer.uid`, never by its position.**
+  Reordering the stack must not recompile a shader or discard the brush's
+  paint.
+
+- **A config with a `_fields.png` and no `field_stack` migrates to TWO brush
+  layers**, reading `.xy` and `.zw` of one buffer through the composite's
+  `src_channels` swizzle. Without the swizzle both read `.xy` and every
+  pre-existing preset silently loses its strafe field and gains a duplicate of
+  its force field. Loading also has to MATERIALISE the brush buffer rather
+  than wait for the next rebuild, since the stack is installed and its saved
+  paint written in the same call.
+
+- **A stroke aimed at a destination with no brush layer ADDS one.** Otherwise
+  selecting Force Field in Drawing Controls and painting reaches nothing,
+  which is the old feature's silent-no-op defect in a new place.
+
+- **`cleanup()` takes a LAMBDA, not a bound method.** The attribute lookup has
+  to happen inside `_step`'s guard: `self.field_bus.cleanup` is evaluated
+  while the argument is built, so a missing field raises outside the guard and
+  skips every step below it — including the archive flush. Caught by
+  `tests/test_crash_safety.py`, a long way from the line that broke it.
+
 ### The archive and admission
 
 - **An archive is pinned to ONE encoder AT CREATION, and every control over it

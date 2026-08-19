@@ -86,6 +86,47 @@ Whatever the modality, the size settings fix the search dimension printed under 
 
 The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space. For a deep MLP the tiles are the **last** hidden layer's units, the only ones that add up to the output. `Slice` chooses the plane and **Reseed plane** redraws the random one; `Output` chooses what is drawn, defaulting to a random projection of all four outputs into red, green and blue. The single-value views are blue for negative and orange for positive.
 
+## Field Stack
+
+**Extras > Field Stack** injects texture into the fields the particles move through — procedural noise, an image, your own GLSL, or the simulation's own canvas fed back into itself.
+
+The stack is a list of **layers**, composited top to bottom, and the whole thing is rebuilt every frame — so unticking a layer removes it, with nothing left behind. Each row reads left to right as what actually happens:
+
+- **Source** — where the texture comes from. `noise` (fbm, with scale, octaves, speed and domain warp), `image`, `gradient` (linear or radial), `shader` (your own `.frag`), `brush` (what you paint with the mouse), and `feedback` (the sim's own trails, which closes the loop).
+- **Mapping** — how that texture becomes a vector field. `gradient` makes it a potential particles run down, `curl` turns it a quarter turn so they circulate along contours instead of piling into the bright spots, `rg_direct` reads the channels as a vector, `polar` reads hue as an angle, `luminance` reads brightness.
+- **Destination** — `force` accelerates particles; `strafe` slides them sideways without changing their velocity.
+- **Blend** — `replace`, `add`, `multiply` or `max` against the layers beneath. A `multiply` layer at the bottom of the stack has nothing to multiply and yields zero.
+- **Strength**, **Blur** (softens the source before the mapping reads it — worth turning up for `gradient`, which is otherwise reading sensor grain) and **Attract**, which flips whether the gradient pulls toward the bright regions or away.
+
+Click a row's thumbnail to pin the **Inspect** panel and see what a source produces before anything interprets it. **Bus Resolution** composites below canvas resolution; a forcing field is smooth, so 1/2 usually looks identical and costs a quarter as much.
+
+### Writing a field shader
+
+Drop a `.frag` in `Documents/Fluoddity/shaders/` and pick it on a `shader` layer. Annotate a uniform and you get a slider for it; leave it unannotated and it keeps its default, so shaders written before this existed still work.
+
+```glsl
+#version 430
+in  vec2 texcoord;
+out vec4 fragColor;
+
+uniform vec2  canvas_resolution;   // always provided
+uniform float time;
+uniform int   frame_count;
+uniform vec2  mouse, prev_mouse;
+uniform vec3  camera_pos, camera_dir;
+
+uniform float speed;    // 0..5 = 1.0       "Speed"
+uniform int   octaves;  // 1..8 = 4         "Octaves"
+uniform vec3  tint;     // color = 1,.5,0   "Tint"
+uniform bool  invert;   // = false          "Invert"
+
+void main(){ fragColor = vec4(0.0); }
+```
+
+Press **V** to recompile without restarting. A shader that fails to build shows its compile error on its own row in red and contributes nothing; every other layer keeps rendering.
+
+The stack is saved with a preset. Field injection is switched off while a tournament grid is running, because one field shared across isolated tiles would be scored instead of the creature.
+
 ## Design
 Particles in Fluoddity have no direct interactions with each-other. Instead, they leave trails as they move. These trails decay and diffuse over time. Particles respond to the density and direction of trails around them.
 There is no fixed rule that determines how particles respond to their senses. Instead, each particle has a simple neural-net like brain with only a few dozen parameters — 80 for the default Fourier brain, and see [Brain Modality](#brain-modality) for the others. These parameters are randomized on startup, and then mutated as the user selects which lineages to explore.
