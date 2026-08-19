@@ -6,6 +6,8 @@ here exists to stop that.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from imgui_bundle import imgui
 
 # The longest label the tournament and archive panels use. Widgets get whatever
@@ -72,3 +74,43 @@ def text_colored_wrapped(rgba, text: str) -> None:
     imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(*rgba))
     imgui.text_wrapped(text)
     imgui.pop_style_color()
+
+
+# A sub tab bar's colours. Desaturated to a neutral so the blue is reserved for
+# the WINDOW level, and the selected tab is separated by its overline rather
+# than by being brighter - brightness is what makes two strips compete.
+_SUB_TAB = (0.135, 0.140, 0.170, 1.0)
+_SUB_TAB_HOVERED = (0.225, 0.235, 0.285, 1.0)
+_SUB_TAB_SELECTED = (0.200, 0.212, 0.262, 1.0)
+_SUB_TAB_OVERLINE = (0.62, 0.42, 0.78, 1.0)
+_SUB_TAB_GAP = 4.0
+
+
+@contextmanager
+def sub_tab_bar(str_id: str):
+    """A tab bar INSIDE a window, drawn quieter than the window's own tabs.
+
+    A DOCKED window's title is itself a tab strip, so a default-coloured tab
+    bar a few pixels under it reads as the same level and the eye cannot tell
+    which one is the window. Nothing about the window changes; the level below
+    it steps back instead.
+
+    Yields whether the bar opened, exactly as begin_tab_bar does, and ends it.
+    """
+    imgui.dummy(imgui.ImVec2(0.0, _SUB_TAB_GAP))
+    imgui.push_style_color(imgui.Col_.tab, imgui.ImVec4(*_SUB_TAB))
+    imgui.push_style_color(imgui.Col_.tab_hovered,
+                           imgui.ImVec4(*_SUB_TAB_HOVERED))
+    imgui.push_style_color(imgui.Col_.tab_selected,
+                           imgui.ImVec4(*_SUB_TAB_SELECTED))
+    imgui.push_style_color(imgui.Col_.tab_selected_overline,
+                           imgui.ImVec4(*_SUB_TAB_OVERLINE))
+    opened = imgui.begin_tab_bar(str_id)
+    try:
+        yield opened
+    finally:
+        # The colours are popped whatever happens, and end_tab_bar is called
+        # only if begin returned true - the pairing ImGui requires.
+        if opened:
+            imgui.end_tab_bar()
+        imgui.pop_style_color(4)
