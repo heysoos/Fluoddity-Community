@@ -130,6 +130,8 @@ class FieldStackWindowMixin:
         hints.tip(
             "Whether the gradient pulls toward the bright regions or away.")
 
+        changed_any |= self._draw_file_picker(layer, collect)
+
         if layer.error:
             imgui.push_style_color(imgui.Col_.text, imgui.ImVec4(*BAD))
             imgui.text_wrapped(self._tag(layer.error, collect))
@@ -143,6 +145,38 @@ class FieldStackWindowMixin:
         if changed_any:
             self._mark_dirty()
         return remove
+
+    def _draw_file_picker(self, layer, collect) -> bool:
+        """`shader` and `image` are the two sources that name a file.
+
+        Both read `params["_file"]`, so without this the source can be selected
+        and never pointed at anything - the silent no-op the stack exists to
+        remove.
+        """
+        if layer.source == "shader":
+            names = field_sources.available_shader_files()
+            current = layer.params.get("_file", "")
+            pos = names.index(current) if current in names else 0
+            if not names:
+                imgui.text_disabled(self._tag(
+                    f"no .frag files found##nofrag{layer.uid}", collect))
+                return False
+            changed, pos = imgui.combo(
+                self._tag(f"Shader##file{layer.uid}", collect), pos, names)
+            if changed or current not in names:
+                layer.params["_file"] = names[pos]
+                return True
+            return False
+
+        if layer.source == "image":
+            changed, value = imgui.input_text(
+                self._tag(f"Image##file{layer.uid}", collect),
+                layer.params.get("_file", ""))
+            hints.tip("Image file, absolute or relative to the Fluoddity folder.")
+            if changed:
+                layer.params["_file"] = value
+                return True
+        return False
 
     def _draw_thumbnail(self, layer, collect) -> None:
         """The row's 48px preview: hover peeks, click pins the Inspect panel."""

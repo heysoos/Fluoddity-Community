@@ -196,3 +196,26 @@ def test_every_parameter_kind_has_a_widget_that_runs(gui, monkeypatch):
     harness, _ = draw(FieldStack(layers=[FieldLayer()]), bus=_FakeBus())
     for p in params:
         assert any(p.label in l for l in harness.labels), f"{p.kind} drew nothing"
+
+
+def test_a_shader_layer_offers_a_file_to_point_at(gui):
+    """Both file-backed sources read params["_file"], which nothing else sets."""
+    harness, _ = draw(FieldStack(layers=[FieldLayer(source="shader")]),
+                      bus=_FakeBus())
+    assert any("Shader##file" in l or "no .frag" in l for l in harness.labels)
+
+
+def test_an_image_layer_offers_a_path_field(gui):
+    harness, _ = draw(FieldStack(layers=[FieldLayer(source="image")]),
+                      bus=_FakeBus())
+    assert any("Image##file" in l for l in harness.labels)
+
+
+def test_choosing_a_shader_writes_the_file_the_source_reads(gui):
+    """The picker must fill the key field_sources looks up, not a new one."""
+    if not field_sources.available_shader_files():
+        pytest.skip("no .frag files installed")
+    layer = FieldLayer(source="shader")
+    draw(FieldStack(layers=[layer]), bus=_FakeBus())
+    assert layer.params.get("_file"), "the picker set no file"
+    assert field_sources.resolve_shader_path(layer.params["_file"]) is not None
