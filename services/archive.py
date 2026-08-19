@@ -489,6 +489,24 @@ class Archive:
         self._last_settings = data
         return self.cfg_version
 
+    def close(self) -> None:
+        """Release EVERY layout's file handle, not just the running one.
+
+        An archive holds one store per signature directory and each keeps its
+        index.jsonl open for append, so closing the running layout's alone
+        leaves the others holding the FOLDER open - and Windows refuses to
+        remove a directory with an open handle. Clear and Delete then fail,
+        which surfaces as a warning and an archive that stays in the list.
+
+        Flush before calling this: a closed store drops writes silently.
+        Idempotent, because the delete path releases, deletes, and then
+        switches - which releases the same archive again.
+        """
+        for store in self._stores.values():
+            closer = getattr(store, "close", None)
+            if closer is not None:
+                closer()
+
     # ---- the layout ledger ---------------------------------------------
 
     def record_layout_move(self, parent: str, child: str, op: str, gens: int,

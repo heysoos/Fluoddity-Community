@@ -565,6 +565,22 @@ mechanics these caveats assume.
   `thumbs/` are per-signature. Guarded by `tests/test_archive_retarget.py` and
   `tests/test_brain_layout_retarget_wiring.py`.
 
+- **Letting go of an archive means closing EVERY layout's handle, not just the
+  running one.** An archive holds one `ArchiveStore` per signature directory —
+  `load_from_store` opens one for each it finds, and `retarget` opens one for
+  each brain visited — and every store keeps its `index.jsonl` open for
+  append. Windows refuses to remove a directory any handle holds open, so
+  closing `self.archive_store` alone left the siblings holding the FOLDER:
+  `shutil.rmtree` failed with WinError 32, Delete reported a warning, and the
+  archive stayed in the dropdown looking undeleted. `Archive.close()` closes
+  the whole `_stores` map and is idempotent, because the delete path releases,
+  deletes, then switches — which releases the same archive again. It comes
+  AFTER `maybe_flush(closing=True)` in the release order, since a closed store
+  drops writes silently. A single-layout archive deletes either way, which is
+  why this survived: it needs a second brain in the archive to reproduce at
+  all. Guarded by `tests/test_archive_close.py` and by the release-order
+  assertion in `tests/test_archive_switch.py`.
+
 - **An archive records the brain it was last searched under, and nothing else
   did.** `archive_name` is in preferences, so the archive reopens; without
   `ArchiveState.layout_signature` the brain did not, and an archive whose

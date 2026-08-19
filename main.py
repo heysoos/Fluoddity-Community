@@ -451,7 +451,9 @@ class App:
 
         Must run before an archive is emptied or deleted - Windows refuses to
         remove a directory with an open handle, and ArchiveStore keeps
-        index.jsonl open for append. Flush before closing the store or
+        index.jsonl open for append. EVERY layout's store, not just the
+        running one: an archive holds one per signature directory, and any one
+        of them left open holds the whole folder. Flush before closing or
         unflushed entries are lost; release the thumbnail cache too, since
         entry ids restart at 0 in every archive.
         """
@@ -465,6 +467,10 @@ class App:
             self.archive.maybe_flush(force=True, closing=True)
         if self.goal_list is not None:
             self.goal_list.save()
+        if self.archive is not None:
+            self.archive.close()
+        # Also directly: the archive may have failed to build, and this handle
+        # is the app's own.
         if self.archive_store is not None:
             self.archive_store.close()
         # Both caches: entry ids restart at 0 in every archive and the key
@@ -1679,6 +1685,11 @@ class App:
         # getattr, and the check INSIDE the step: a raise out here would skip
         # every step below it, which is the whole reason each one is guarded.
         self._step("close map layout thread", self._close_map_layout)
+        # Every layout's store, then the app's own handle. On quit this only
+        # tidies up, but an archive left open is what stops the NEXT session
+        # deleting the folder if the process lingers.
+        if self.archive is not None:
+            self._step("close archive layouts", self.archive.close)
         if self.archive_store is not None:
             self._step("close archive store", self.archive_store.close)
         # The lookup goes INSIDE the lambda, for the reason given below: a
