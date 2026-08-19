@@ -177,3 +177,15 @@ def test_peek_does_not_disturb_the_eviction_order():
 def test_an_empty_name_peeks_to_nothing():
     c, _ = cache()
     assert c.peek("") is None
+
+
+def test_swapping_the_loader_keeps_what_is_already_decoded():
+    """A brain switch rebuilds the Archive over the SAME directory, so the
+    keys and the files behind them are unchanged - only the object the loader
+    resolves through is new. Re-decoding the whole map for that is what made a
+    cross-brain click look like a reload."""
+    first = ThumbCache(lambda k: f"old:{k}", capacity=8)
+    assert first.get("a") == "old:a"
+    first.set_loader(lambda k: f"new:{k}")
+    assert first.get("a") == "old:a", "already decoded, so untouched"
+    assert first.get("b") == "new:b", "anything new goes through the new one"

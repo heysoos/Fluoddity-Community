@@ -29,6 +29,7 @@ class _FakeApp:
         self.goal_list = None
         self.archive_store = None
         self.thumb_cache = None
+        self.atlas_cache = None
         self.map_layout_service = None
         self.imgep_driver = None
         self._last_projection_size = 0

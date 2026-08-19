@@ -407,15 +407,26 @@ class App:
                                      store.encoder)
         # Keyed by signature, because one archive holds every brain and each
         # of them has a 000000.jpg.
-        self.thumb_cache = ThumbCache(gl_loader(self.ctx, archive.stores),
-                                      capacity=256)
+        # Reused when they survived the release - a brain switch stays in the
+        # same directory, so only the stores the loader resolves through are
+        # new. Rebuilding them re-decodes the whole map for nothing.
+        loader = gl_loader(self.ctx, archive.stores)
+        if self.thumb_cache is not None:
+            self.thumb_cache.set_loader(loader)
+        else:
+            self.thumb_cache = ThumbCache(loader, capacity=256)
         # The map's own cache. Its textures are decoded small, so it can hold
         # a picture for EVERY cell where the gallery's 160px ones cannot -
         # which is the difference between an atlas that fills in and one that
         # goes sparse and re-decodes itself.
-        self.atlas_cache = ThumbCache(
-            gl_loader(self.ctx, archive.stores, max_px=ATLAS_TEX_PX),
-            capacity=256, max_capacity=ATLAS_CACHE_CAPACITY)
+        atlas_loader = gl_loader(self.ctx, archive.stores,
+                                 max_px=ATLAS_TEX_PX)
+        if self.atlas_cache is not None:
+            self.atlas_cache.set_loader(atlas_loader)
+        else:
+            self.atlas_cache = ThumbCache(
+                atlas_loader, capacity=256,
+                max_capacity=ATLAS_CACHE_CAPACITY)
 
         if self.imgep_driver is not None:
             self.imgep_driver.archive = archive
@@ -446,8 +457,11 @@ class App:
         create(root, DEFAULT_ARCHIVE)
         return resolve(root, DEFAULT_ARCHIVE)
 
-    def _release_archive(self, ui_state):
+    def _release_archive(self, ui_state, keep_thumbs: bool = False):
         """Let go of the archive DIRECTORY: flush, save, close, drop textures.
+
+        `keep_thumbs` is for a rebuild over the SAME directory - a brain
+        switch - where the ids, the keys and the files are all unchanged.
 
         Must run before an archive is emptied or deleted - Windows refuses to
         remove a directory with an open handle, and ArchiveStore keeps
@@ -469,9 +483,12 @@ class App:
             self.archive_store.close()
         # Both caches: entry ids restart at 0 in every archive and the key
         # derives from the id, so a kept texture shows the previous archive's
-        # picture.
-        _release(self.thumb_cache)
-        _release(getattr(self, "atlas_cache", None))
+        # picture. None is what tells _build_archive_set to make new ones.
+        if not keep_thumbs:
+            _release(self.thumb_cache)
+            _release(getattr(self, "atlas_cache", None))
+            self.thumb_cache = None
+            self.atlas_cache = None
 
     def _save_archive_settings(self, ui_state):
         """Persist the Explore settings into the archive's own folder.
@@ -669,7 +686,8 @@ class App:
 
         # Before the release, while the outgoing store is still open.
         self._save_archive_settings(ui_state)
-        self._release_archive(ui_state)
+        # Same directory, so the thumbnails keep their meaning.
+        self._release_archive(ui_state, keep_thumbs=True)
 
         # The GPU side first: the per-particle readback buffer is sized by the
         # active length, and slot 0 is re-uploaded from whatever rule is live.

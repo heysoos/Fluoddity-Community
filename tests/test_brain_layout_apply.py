@@ -86,8 +86,9 @@ class _StubApp:
     def _load_archive_settings(self, ui_state):
         return main.App._load_archive_settings(self, ui_state)
 
-    def _release_archive(self, ui_state):
-        return main.App._release_archive(self, ui_state)
+    def _release_archive(self, ui_state, keep_thumbs=False):
+        return main.App._release_archive(self, ui_state,
+                                         keep_thumbs=keep_thumbs)
 
     def _build_archive_set(self, path):
         raise AssertionError("unreachable: archive and store are both None")

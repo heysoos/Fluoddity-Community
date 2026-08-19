@@ -323,3 +323,35 @@ def test_binding_a_new_archive_drops_the_old_layout(tmp_path):
     other = _Arc(n=30)
     svc.bind(other, tmp_path / "other.npz", other.encoder)
     assert not svc.fitted or svc.version != v
+
+
+def test_rebinding_the_same_directory_keeps_the_layout(tmp_path):
+    """A brain switch rebuilds the Archive OBJECT but the directory, the ids
+    and the positions are all unchanged - and dropping the fit leaves the map
+    with nothing to draw for a frame, which collapses the browser's contents
+    and clamps its scroll to the top."""
+    svc, arc = _svc(tmp_path)
+    svc.update(arc)
+    assert svc.fitted
+
+    same = _Arc()                             # what _build_archive_set makes
+    svc.bind(same, tmp_path / "map_layout.npz", same.encoder)
+    assert svc.fitted, "a same-directory rebind must not drop the layout"
+
+
+def test_rebinding_a_different_directory_still_drops_it(tmp_path):
+    svc, arc = _svc(tmp_path)
+    svc.update(arc)
+    assert svc.fitted
+
+    svc.bind(_Arc(), tmp_path / "other.npz", arc.encoder)
+    assert not svc.fitted
+
+
+def test_rebinding_under_another_encoder_drops_it(tmp_path):
+    svc, arc = _svc(tmp_path)
+    svc.update(arc)
+    assert svc.fitted
+
+    svc.bind(_Arc(), tmp_path / "map_layout.npz", "siglip2-b16")
+    assert not svc.fitted

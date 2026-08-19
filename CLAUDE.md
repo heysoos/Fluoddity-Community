@@ -746,6 +746,21 @@ mechanics these caveats assume.
 - **Entry ids restart at 0 in every archive**, so `ThumbCache` must be released
   on a switch: it is keyed by thumbnail filename, which derives from the entry
   id, so reusing it shows the previous archive's pictures.
+  **A BRAIN SWITCH IS NOT THAT SWITCH, and treating it as one reads as a
+  reload.** A layout change moves to a SIBLING directory under the same
+  archive name, so the ids, the thumbnail keys and the map's positions are all
+  unchanged - and clicking an archive entry of another brain performs one.
+  Dropping the caches there re-decoded the whole atlas, and dropping the map
+  layout left `_render_map` with nothing to project for a frame: the tab
+  collapsed to one line of text, which made ImGui clamp the browser window's
+  scroll back to the TOP. `_release_archive(keep_thumbs=True)` and a `bind()`
+  that keeps its layouts when the PATH and encoder are unchanged are the two
+  halves; `_build_archive_set` reuses a surviving cache through
+  `set_loader`, since only the stores the loader resolves through are new.
+  The ordering is what makes the blank frame reachable at all -
+  `_update_map_layout` runs at the top of `orchestrate_frame` and the switch
+  runs in `process_commands` below it, so the refit cannot land until the
+  NEXT frame. Guarded by `tests/test_archive_switch_thumbs.py`.
 
 - **Explore settings belong to the ARCHIVE, not to the app**, and live in
   `settings.json` beside its `goals.json`. The settings that suit a

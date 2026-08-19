@@ -61,10 +61,22 @@ class MapLayoutService:
 
         Entry ids restart in every archive, so keeping positions would draw the
         previous archive's map under this one's entries.
+
+        The DIRECTORY is what identifies them, not the Archive object: a brain
+        switch rebuilds that object over the same directory, with the same ids
+        in the same positions. Dropping the layout there leaves the map with
+        nothing to draw for a frame, which collapses the browser's contents
+        and clamps its scroll to the top - and throws away a UMAP fit that
+        costs seconds.
         """
+        path = Path(path) if path is not None else None
+        same = (self._archive is not None and path == self._path
+                and str(encoder or "") == self._encoder)
         self._archive = archive
-        self._path = Path(path) if path is not None else None
+        self._path = path
         self._encoder = str(encoder or "")
+        if same:
+            return
         self._layouts = {}
         self._future = None
         self._refit_requested = False

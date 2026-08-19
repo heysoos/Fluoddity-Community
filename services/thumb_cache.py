@@ -67,6 +67,15 @@ class ThumbCache:
         self.max_capacity = max(int(capacity), int(max_capacity))
         self._items: OrderedDict = OrderedDict()
 
+    def set_loader(self, loader) -> None:
+        """Resolve future loads through `loader`, keeping what is decoded.
+
+        For a rebuild over the SAME directory - a brain switch - where the
+        keys and the files behind them are unchanged and only the object the
+        loader closes over is new.
+        """
+        self._load = loader
+
     def reserve(self, n: int) -> None:
         """Hold room for `n` thumbnails in one frame.
 

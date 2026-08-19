@@ -546,6 +546,9 @@ else, so any other interpreter shows the Layout combo as PCA-only:
       rather than crashing.
 - [ ] **x5.** Gallery list mode: the thumbnail column's width tracks the size
       slider, and offers no resize handle of its own.
+- [ ] **x6.** Scroll the browser down, then click an entry belonging to a
+      DIFFERENT brain: the scroll stays where it was, the map keeps its
+      pictures, and a UMAP layout is not refitted.
 - [ ] **y.** A big archive is no slower to draw than a small one at the same
       zoom. The count follows the viewport, not the entry count.
 
