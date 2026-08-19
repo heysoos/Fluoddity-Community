@@ -113,6 +113,10 @@ class ArchiveStore:
     def history_path(self) -> Path:
         return self.base / "settings_history.jsonl"
 
+    @property
+    def layouts_path(self) -> Path:
+        return self.base / "layouts.jsonl"
+
     def run_config_path(self, run_id: str) -> Path:
         return self.base / "runs" / f"{safe_stem(run_id)}.json"
 
@@ -252,6 +256,38 @@ class ArchiveStore:
         rows: list[dict] = []
         try:
             text = self.history_path.read_text(encoding="utf-8")
+        except OSError:
+            return rows
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue        # a torn trailing line is one lost row
+        return rows
+
+    def append_layout_move(self, row: dict) -> None:
+        """One layout move. Append-only, like the settings history.
+
+        At the archive ROOT: a move is BETWEEN two signatures and belongs to
+        neither of their directories.
+        """
+        if not self.enabled:
+            return
+        try:
+            self.layouts_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.layouts_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except (OSError, TypeError) as exc:
+            print(f"[Archive] layout move not recorded ({exc})")
+
+    def load_layout_moves(self) -> list[dict]:
+        """-> every move row, oldest first. Empty for an archive with none."""
+        rows: list[dict] = []
+        try:
+            text = self.layouts_path.read_text(encoding="utf-8")
         except OSError:
             return rows
         for line in text.splitlines():
