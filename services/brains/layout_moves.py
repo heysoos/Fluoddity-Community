@@ -132,3 +132,42 @@ def propose_layout_move(layout, bounds, rng, banned=frozenset()):
     if not moves:
         return None
     return moves[int(rng.integers(len(moves)))]
+
+
+def transfer_genome(params, parent, child, rng) -> np.ndarray:
+    """Carry a DECODED brain from `parent`'s layout into `child`'s.
+
+    This is what makes a layout move continuous rather than a restart. Whole
+    units are copied; a new unit is DRAWN and then SILENCED - its amplitude
+    zeroed - so the child evaluates exactly as its parent did at birth and any
+    novelty it earns is earned. Drawing the incoming half matters as much:
+    a unit zeroed on both sides is inert in a way sigma takes generations to
+    undo.
+
+    Shrinking is lossy by nature, and the units that remain remain unchanged.
+
+    Only a cross-MODALITY jump has no transfer, and it raises rather than
+    returning something that looks like a carried genome.
+    """
+    p = np.asarray(params, dtype=np.float32).reshape(-1)
+    if parent.modality != child.modality:
+        raise ValueError(
+            f"cross-modality move {parent.signature()} -> {child.signature()} "
+            "has no genome transfer; seed the expedition instead")
+    m = get(child.modality)
+    fn = getattr(m, "transfer_genome", None)
+    if fn is not None:
+        return np.asarray(fn(p, parent, child, rng),
+                          dtype=np.float32).reshape(-1)
+
+    stride = int(m.unit_floats(child) or 0)
+    if not stride:
+        raise ValueError(f"{child.modality} declares no unit and no transfer")
+    out = np.asarray(m.random(rng, child), dtype=np.float32).reshape(-1)
+    keep = min(p.size, out.size)
+    keep -= keep % stride
+    out[:keep] = p[:keep]
+    lo, hi = getattr(m, "AMPLITUDE_SLICE", (0, 0))
+    for start in range(keep, out.size, stride):
+        out[start + lo:start + hi] = 0.0
+    return out.astype(np.float32)

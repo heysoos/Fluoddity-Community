@@ -71,6 +71,8 @@ class GaborModality:
     # phase. Frequency and sigma SCALE - see gabor.glsl's gabor_param_at.
     UNIT_FLOATS = FLOATS_PER_FILTER
     SCALE_OFFSETS = frozenset({4, 5, 6, 7, 12})
+    # The OUTGOING half - see fourier.py. centre(4), frequency(4) come first.
+    AMPLITUDE_SLICE = (8, 12)
 
     def unit_floats(self, layout: BrainLayout):
         return self.UNIT_FLOATS

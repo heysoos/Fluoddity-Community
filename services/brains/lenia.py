@@ -75,6 +75,8 @@ class LeniaModality:
     # zero at zero forever.
     UNIT_FLOATS = FLOATS_PER_BUMP
     SCALE_OFFSETS = frozenset({0, 1, 2, 3, 9})
+    # The OUTGOING half - see fourier.py. projection(4) comes first.
+    AMPLITUDE_SLICE = (4, 8)
 
     def unit_floats(self, layout: BrainLayout):
         return self.UNIT_FLOATS
