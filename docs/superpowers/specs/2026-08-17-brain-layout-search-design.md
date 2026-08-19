@@ -417,11 +417,21 @@ explicit allowlist and a field not named there simply does not persist:
 
 Defaults: `layout_search` off, so opening the app never starts changing brain
 under anyone; `layout_move_chance` low enough that most expeditions are
-ordinary ones; the three bounds seeded from the LIVE layout rather than from
-the hard maxima, so switching the feature on explores around the brain that is
-already running instead of immediately reaching for the expensive end of the
-space. `layout_modalities` starts as the running modality alone — a
+ordinary ones. `layout_modalities` starts as the running modality alone — a
 cross-modality jump is a restart, and opting into one should be a decision.
+
+**The three bounds are NOT seeded from the live layout, and that is a
+deliberate departure from this section as first written.** Every concrete
+seeding constant — live width plus four? live floats doubled? — would be
+invented rather than measured, and an invented number buried in a default is
+exactly what the writing rules exist to stop. All three default to **0**, one
+convention meaning "the limit this build already allows"; a literal bound of
+zero would forbid every layout, so it can never mean itself, which also lets
+`ArchiveState` state its defaults without importing anything from `services`.
+The REASON the seeding was asked for — that the user should not walk into the
+expensive end of the space without noticing — is served instead by making the
+cost visible where the bound is set: the width slider names the `MAX_MLP_WIDTH`
+scratch bucket it implies.
 
 `layout_modalities` is one string rather than four booleans so that a fifth
 modality needs no new field, and its checkboxes are derived from `REGISTRY`

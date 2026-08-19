@@ -2002,6 +2002,39 @@ mechanics these caveats assume.
   `tests/test_layout_expedition.py`, `tests/test_layout_verdict.py` and
   `tests/test_layout_move_wiring.py`.
 
+- **`<archive>/layouts.jsonl` is what BANS a move, so it belongs to the
+  ARCHIVE and not to the run.** It sits at the archive root beside
+  `settings_history.jsonl` and for the same reason — a move is BETWEEN two
+  signatures and belongs to neither of their directories, and nothing else
+  records that a run changed brain. A move that produced nothing in this
+  archive will produce nothing in it next session either, so `Archive`
+  seeds `reverted_pairs()` from the file at construction: **Reset does not
+  forgive one**, because Reset clears the SEARCH and the ledger is a fact
+  about the archive, and deleting the file is how a user does. The ban is
+  DIRECTIONAL — growing failing says nothing about shrinking back — and kept
+  moves are filed too, because the ledger is the record of the WALK and a
+  settled search has nowhere else to explain itself. Guarded by
+  `tests/test_layout_ledger.py`.
+
+- **Every layout bound is 0 for "the limit this build already allows", and
+  that is one convention rather than three.** A literal bound of zero would
+  forbid every layout, so it can never mean itself — which is also what lets
+  `ArchiveState` state these defaults without importing `services`, as nothing
+  else in `state/` does. `bounds_from` resolves them and drops the RUNNING
+  modality from the jump list, since a move to the layout the search is
+  standing on is not a move. `layout_modalities` is ONE comma-separated string
+  rather than a boolean per modality, so a fifth needs no new field, and its
+  checkboxes are derived from `REGISTRY` — a second list of modalities is the
+  declared-but-never-read defect this codebase has already shipped twice. An
+  unknown key is dropped rather than raising, because the bound is written to
+  disk and outlives the build that understood it. **The width bound names the
+  scratch bucket it implies**, because `MAX_MLP_WIDTH` is a compile-time
+  define whose cost every brain in the build pays — crossing a bucket is a
+  cost to see when it is set, not to discover in the frame time. Spec §7 asks
+  for the bounds to be SEEDED from the live layout instead; that is
+  deliberately not implemented, because every concrete seeding constant would
+  be invented rather than measured.
+
 - **A cross-MODALITY jump lands on the target's DEFAULT layout and carries no
   genome.** There is no correspondence between a Fourier centre count and an
   MLP width, so preserving a size would be a fiction; `transfer_genome`
