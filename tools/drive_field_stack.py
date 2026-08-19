@@ -171,6 +171,8 @@ def main() -> int:
     if not step(app, 8, "stack reversed"):
         return finish(app)
 
+    _webcam(app, stack)
+
     if not _roundtrip(app, stack):
         return finish(app)
     _tournament(app)
@@ -179,6 +181,34 @@ def main() -> int:
     step(app, 10, "empty stack")
     print(f"  emptied -> {field(app)}")
     return finish(app)
+
+
+def _webcam(app, stack) -> None:
+    """A real camera through the whole stack, where one is present."""
+    from services import webcam
+    devices = webcam.list_devices()
+    if not devices:
+        print("  webcam: no device on this machine")
+        return
+    layer = FieldLayer(source="webcam", mapping="gradient")
+    layer.params["_device"] = devices[0]
+    put(app, [layer])
+    # Opening a camera takes longer than a frame.
+    for _ in range(12):
+        if not step(app, 10, "webcam"):
+            return
+        if field(app) and field(app)[0] > 0.0:
+            break
+    print(f"  webcam '{devices[0]}': field={field(app)} err={layer.error!r}")
+    if layer.error:
+        fail(f"the camera reported: {layer.error}")
+    elif not field(app) or field(app)[0] == 0.0:
+        fail("a live camera produced a zero field")
+
+    # Dropping the layer must close the device, or the camera light stays on.
+    put(app, [])
+    step(app, 5, "webcam released")
+    print("  webcam released")
 
 
 def _roundtrip(app, stack) -> bool:

@@ -14,7 +14,7 @@ import contextlib
 import pytest
 from imgui_bundle import imgui
 
-from services import field_sources, file_picker
+from services import field_sources, file_picker, webcam
 from services.shader_params import ShaderParam
 from state.field_stack import FieldLayer, FieldStack
 from state.preferences_state import PreferencesState
@@ -387,3 +387,26 @@ def test_a_chosen_file_reaches_the_layer(gui):
     imgui.end()
     imgui.render()
     assert layer.params.get("_file") == "C:/pics/chosen.png"
+
+
+def test_a_webcam_layer_offers_a_camera_and_a_size(gui):
+    """Without a picker the source is selectable and reaches no device."""
+    harness, _ = draw(FieldStack(layers=[FieldLayer(source="webcam")]),
+                      bus=_FakeBus())
+    assert any("Camera##" in l or "no camera found" in l
+               for l in harness.labels)
+    assert any("Camera size" in l for l in harness.labels)
+
+
+def test_the_camera_list_is_not_enumerated_every_frame(gui):
+    """Enumerating shells out to ffmpeg, and this runs on every frame the
+    layer is open."""
+    calls = []
+    real = webcam.list_devices
+    webcam.list_devices = lambda *a, **k: calls.append(1) or ["Cam A"]
+    try:
+        draw(FieldStack(layers=[FieldLayer(source="webcam")]), bus=_FakeBus(),
+             n=5)
+    finally:
+        webcam.list_devices = real
+    assert len(calls) == 1, f"enumerated {len(calls)} times over five frames"

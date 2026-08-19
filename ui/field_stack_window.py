@@ -1,7 +1,7 @@
 """Inject Texture: the ordered list of layers feeding the sim's fields."""
 from imgui_bundle import imgui
 
-from services import field_sources, file_picker
+from services import field_sources, file_picker, webcam
 from state.field_stack import BLENDS, DESTINATIONS, MAPPINGS, FieldLayer
 from ui import hints, layout
 from ui.notices import BAD
@@ -25,6 +25,7 @@ SOURCE_TIPS = {
     "image":    "A picture from disk, held still.",
     "shader":   "Your own fragment shader from a .frag file.",
     "brush":    "What you paint with the mouse, in Drawing Controls.",
+    "webcam":   "A live camera. Movement in front of it pushes the particles.",
     "feedback": "The simulation's own trail canvas, fed back in.",
 }
 
@@ -66,6 +67,8 @@ SIGN_LABELS = ("Toward bright", "Away from bright")
 
 VIEW_LABELS = ("Source texture", "After mapping", "Whole field")
 VIEWS = ("source", "mapped", "destination")
+
+WEBCAM_SIZES = ((640, 480), (1280, 720), (320, 240))
 
 STRENGTH_DEFAULT = 1.0
 BLUR_DEFAULT = 0.0
@@ -339,7 +342,54 @@ class FieldStackWindowMixin:
 
         if layer.source == "image":
             return self._draw_image_picker(layer, collect)
+        if layer.source == "webcam":
+            return self._draw_webcam_picker(layer, collect)
         return False
+
+    def _webcam_devices(self):
+        """Cached: enumerating shells out to ffmpeg and takes a moment, and
+        this is asked for on every frame the layer is open."""
+        devices = getattr(self, "_webcam_device_cache", None)
+        if devices is None:
+            devices = webcam.list_devices()
+            self._webcam_device_cache = devices
+        return devices
+
+    def _draw_webcam_picker(self, layer, collect) -> bool:
+        changed_any = False
+        devices = self._webcam_devices()
+        current = layer.params.get("_device", "")
+
+        if not devices:
+            imgui.text_disabled(self._tag(
+                f"no camera found##nocam{layer.uid}", collect))
+        else:
+            options = (list(devices) if current in devices
+                       else [current or NO_FILE] + list(devices))
+            pos = options.index(current) if current in options else 0
+            changed, pos = imgui.combo(
+                self._tag(f"Camera##cam{layer.uid}", collect), pos, options)
+            hints.tip("Which camera this layer reads.")
+            if changed:
+                layer.params["_device"] = ("" if options[pos] == NO_FILE
+                                           else options[pos])
+                changed_any = True
+
+        if imgui.button(self._tag(f"Rescan##cam{layer.uid}", collect)):
+            self._webcam_device_cache = None
+        hints.tip("Look for cameras again.")
+
+        sizes = [f"{w}x{h}" for w, h in WEBCAM_SIZES]
+        want = (int(layer.params.get("_width", webcam.DEFAULT_SIZE[0])),
+                int(layer.params.get("_height", webcam.DEFAULT_SIZE[1])))
+        pos = WEBCAM_SIZES.index(want) if want in WEBCAM_SIZES else 0
+        changed, pos = imgui.combo(
+            self._tag(f"Camera size##camsz{layer.uid}", collect), pos, sizes)
+        hints.tip("Resolution to ask the camera for.")
+        if changed:
+            layer.params["_width"], layer.params["_height"] = WEBCAM_SIZES[pos]
+            changed_any = True
+        return changed_any
 
     def _draw_image_picker(self, layer, collect) -> bool:
         """Browse... plus the typed path, which stays the way through.

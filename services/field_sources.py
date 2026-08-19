@@ -15,6 +15,7 @@ from PIL import Image
 
 from services.shader_params import ShaderParam, parse_shader_params
 from utilities.gl_helpers import read_shader, tryset
+from services import webcam
 from utilities.paths import get_app_dir, get_user_data_dir
 
 
@@ -63,6 +64,7 @@ def _build_registry() -> None:
     _register(SourceDescriptor("image", "Image"))
     _register(SourceDescriptor("shader", "Shader", keeps_history=True))
     _register(SourceDescriptor("brush", "Brush"))
+    _register(SourceDescriptor("webcam", "Webcam", keeps_history=True))
     _register(SourceDescriptor("feedback", "Feedback", keeps_history=True))
 
 
@@ -199,6 +201,70 @@ class _ProgramSource:
 class _BuiltinSource(_ProgramSource):
     def __init__(self, ctx, key):
         super().__init__(ctx, read_shader(get(key).shader))
+
+
+class _WebcamSource:
+    """A camera, uploaded to a texture whenever the worker has a new frame.
+
+    Owns its reader, which is what lets the bus stay stateless: the device is
+    opened when the layer first asks for it and closed when the layer goes.
+    """
+
+    animated = True
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.error: str | None = None
+        self._reader = None
+        self._tex = None
+        self._opened = None       # (device, size) the reader was opened with
+        self._serial = -1
+
+    def _wanted(self, layer):
+        device = layer.params.get("_device", "")
+        size = (int(layer.params.get("_width", webcam.DEFAULT_SIZE[0])),
+                int(layer.params.get("_height", webcam.DEFAULT_SIZE[1])))
+        return device, size
+
+    def evaluate(self, bus, layer, frame):
+        device, size = self._wanted(layer)
+        if not device:
+            self.error = "no camera selected"
+            return None
+        if self._opened != (device, size):
+            self.release()
+            self._reader = webcam.WebcamReader(device, size)
+            self._opened = (device, size)
+            self._serial = -1
+        self.error = self._reader.error
+        if self.error:
+            return None
+
+        data, serial = self._reader.latest()
+        if data is None:
+            # Opening a camera takes a moment; nothing to show is not an error.
+            return self._tex
+        if self._tex is None or self._tex.size != size:
+            if self._tex is not None:
+                self._tex.release()
+            self._tex = self.ctx.texture(size, 3)
+            self._tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+            self._tex.repeat_x = True
+            self._tex.repeat_y = True
+            self._serial = -1
+        if serial != self._serial:
+            self._tex.write(data)
+            self._serial = serial
+        return self._tex
+
+    def release(self) -> None:
+        if self._reader is not None:
+            self._reader.close()
+            self._reader = None
+        self._opened = None
+        if self._tex is not None:
+            self._tex.release()
+            self._tex = None
 
 
 class _FeedbackSource:
@@ -380,4 +446,6 @@ def make_source(key: str, ctx: moderngl.Context):
         return _UserShaderSource(ctx)
     if key == "brush":
         return _BrushSource(ctx)
+    if key == "webcam":
+        return _WebcamSource(ctx)
     raise KeyError(f"unknown source '{key}'")
