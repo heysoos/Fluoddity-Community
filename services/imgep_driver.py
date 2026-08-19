@@ -8,14 +8,18 @@ equations.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from services.archive import Candidate
 from services.archive_projection import Projection
+from services.brains.layout_moves import (LayoutBounds, LayoutMove,
+                                          propose_layout_move, transfer_genome)
 from services.capture_health import is_viable_tile, structure
 from services.descriptor import descriptor, liveness, stack_snapshots
 from services.expedition_fitness import contrastive
-from services.genome_spec import encode, layout_of, spec_for
+from services.genome_spec import encode, layout_of, physics_spec_for, spec_for
 from services.goal_source import (
     LATENT_DIMS,
     Goal,
@@ -33,6 +37,16 @@ from services.physics_genome import PHYSICS_DIM, PHYSICS_PARAMS, encode_physics
 
 def _phys_dict(vec) -> dict[str, float]:
     return {n: float(v) for (n, _g, _lo, _hi), v in zip(PHYSICS_PARAMS, vec)}
+
+
+@dataclass
+class _PendingMove:
+    """A layout move that has been asked for and has not landed yet."""
+    move: LayoutMove
+    goal: Goal
+    x0: np.ndarray
+    seed: int | None
+    phys_clipped: int
 
 
 class ImgepDriver:
@@ -79,6 +93,12 @@ class ImgepDriver:
         self.seed_ess_min = 8.0
         self.seed_ess_max = 512.0
 
+        # layout search (spec 4). OFF: opening the app must never start
+        # changing brain under anyone.
+        self.layout_search = False
+        self.layout_move_chance = 0.25
+        self.layout_bounds = LayoutBounds()
+
         # The search's own projection, separate from the map's - refitting a
         # shared one every frame would thrash both.
         self.projection = Projection(LATENT_DIMS)
@@ -103,6 +123,19 @@ class ImgepDriver:
         # Physics genes the current origin could not reach when the running
         # expedition was seeded. Describes ONE seed, so it is cleared with it.
         self._seed_phys_clipped = 0
+
+        # A layout move in three stages. REQUESTED: the one-shot the frame loop
+        # reads, because App owns the archive, the sim and the tournament and
+        # the driver owns none of them. PENDING: asked for, switch not landed.
+        # LIVE: its expedition is running and _move_admitted is counting.
+        self.requested_layout = None
+        self._pending: _PendingMove | None = None
+        self._move: LayoutMove | None = None
+        self._move_seed: int | None = None
+        self._move_admitted = 0
+        # Pairs that produced nothing, so the search does not spend its cadence
+        # re-proposing them. In memory until the ledger persists it.
+        self._reverted: set[tuple[str, str]] = set()
 
         self.gen = 0
         self._last_score_label = "novelty"
@@ -142,6 +175,16 @@ class ImgepDriver:
     @property
     def optimizer(self):
         return self._optimizer
+
+    @property
+    def layout_move(self) -> LayoutMove | None:
+        """The move whose expedition is LIVE, or None."""
+        return self._move
+
+    @property
+    def layout_move_seed(self) -> int | None:
+        """The archive row the live move's genome was carried from."""
+        return self._move_seed
 
     @property
     def sigma(self) -> float:
@@ -242,6 +285,11 @@ class ImgepDriver:
         self._n_records = 0
         for v in self.trace.values():
             v.clear()
+        # A move that has not landed belongs to the run being abandoned, and so
+        # does what this run learned about which moves are dead ends.
+        self.requested_layout = None
+        self._pending = None
+        self._reverted.clear()
         self.end_expedition()
 
     def end_expedition(self) -> None:
@@ -251,6 +299,14 @@ class ImgepDriver:
         self._x0_index = None
         self._expedition_best = -np.inf
         self._seed_phys_clipped = 0
+        # A live move's VERDICT is delivered before this is called. Any other
+        # path here - a grid change, a brain switch of the user's own - abandons
+        # the move unjudged, which is honest: nothing was learned about it.
+        # `_pending` is deliberately NOT cleared: set_spec calls this when the
+        # space moves, and the space moving IS the request landing.
+        self._move = None
+        self._move_seed = None
+        self._move_admitted = 0
 
     def ask(self, n: int) -> np.ndarray:
         n = int(n)
@@ -320,15 +376,23 @@ class ImgepDriver:
         zb, _clamped = encode(self.archive.brain_at(i), self.spec.layout)
         if self.spec.dim <= len(zb):
             return zb[: self.spec.dim].astype(np.float32), 0
-        entry = self.archive.entries[i]
-        if "physics" in entry.spec:
-            zp, n_clipped = encode_physics(_phys_dict(self.archive.physics[i]),
-                                           self.physics_origin)
-        else:
-            # z = 0 decodes to the current origin exactly, so a brain-only
-            # entry is well-defined rather than an error.
-            zp, n_clipped = np.zeros(PHYSICS_DIM, dtype=np.float32), 0
+        zp, n_clipped = self._physics_z(i)
         return np.concatenate([zb, zp]).astype(np.float32), n_clipped
+
+    def _physics_z(self, i: int | None):
+        """The physics half of a seed's z. -> (z, genes the origin cannot reach)
+
+        Split out because a genome carried across a layout move supplies its own
+        brain half: the physics is the seed's and the brain is not.
+
+        z = 0 decodes to the current origin exactly, so a brain-only entry -
+        and an absent one, which is what a modality jump has - is well-defined
+        rather than an error.
+        """
+        if i is not None and "physics" in self.archive.entries[i].spec:
+            return encode_physics(_phys_dict(self.archive.physics[i]),
+                                  self.physics_origin)
+        return np.zeros(PHYSICS_DIM, dtype=np.float32), 0
 
     # ---- expeditions ---------------------------------------------------
 
@@ -337,6 +401,11 @@ class ImgepDriver:
         goal = self._draw_goal()
         if goal is None:
             return False
+        # A layout move RIDES on this expedition rather than replacing it: the
+        # goal is drawn exactly as it always was, and only the space it is
+        # chased in changes.
+        if self._propose_layout_move(goal):
+            return True
         return self.start_expedition_with(goal.embedding, goal.kind, goal.text,
                                           seed_index=goal.seed_index)
 
@@ -418,6 +487,73 @@ class ImgepDriver:
             x0.astype(np.float64),
             layout=self.spec.layout,
         )
+        return True
+
+    # ---- layout moves --------------------------------------------------
+
+    def _propose_layout_move(self, goal) -> bool:
+        """Ask for a neighbouring LAYOUT to chase this goal in. -> asked?
+
+        True the moment the request is queued, NOT once an expedition is
+        running: a genome of the child's width cannot be optimised under the
+        parent's spec, so the switch has to land first and only the frame loop
+        can land it. begin_moved_expedition is the other half.
+        """
+        if not self.layout_search or self._move is not None:
+            return False
+        if self._pending is not None:
+            return False
+        if float(self.rng.random()) >= float(self.layout_move_chance):
+            return False
+        parent = self.spec.layout
+        mv = propose_layout_move(parent, self.layout_bounds, self.rng,
+                                 banned=self._reverted)
+        if mv is None:
+            return False
+        # The seed this goal would have picked anyway, under the layout still
+        # running - which is what makes this a move WITH an expedition rather
+        # than a move instead of one.
+        i = self._resolve_seed(goal.embedding, goal.kind, goal.seed_index)
+        if mv.child.modality == parent.modality:
+            if i is None:
+                return False        # nothing to carry; run an ordinary one
+            params = transfer_genome(self.archive.brain_at(i), parent,
+                                     mv.child, self.rng)
+            zb, _clamped = encode(params, mv.child)
+        else:
+            # A jump has no transfer by definition, so it seeds the way
+            # bootstrap does. It still enters as an EXPEDITION: a layout with
+            # no native entries would otherwise spend its whole budget on
+            # random genomes before expansion was reachable at all.
+            zb = (self.sigma0 * self.rng.normal(size=int(mv.child.length))
+                  ).astype(np.float32)
+        zp, n_clipped = self._physics_z(i)
+        spec = (physics_spec_for(mv.child) if self.physics_enabled
+                else spec_for(mv.child))
+        x0 = zb if spec.dim <= zb.size else np.concatenate([zb, zp])
+        self._pending = _PendingMove(mv, goal, x0.astype(np.float32), i,
+                                     int(n_clipped))
+        self.requested_layout = mv.child
+        return True
+
+    def begin_moved_expedition(self) -> bool:
+        """Start the expedition a layout move was asked for. -> did it?
+
+        VERIFIED rather than assumed: the request may have been refused, or
+        overtaken by a switch of the user's own, and a move that did not land
+        is dropped rather than started in a space its genome does not belong
+        to. Consumes the request either way.
+        """
+        p, self._pending = self._pending, None
+        if p is None or self.spec.layout != p.move.child:
+            return False
+        if not self.start_expedition_at(p.goal.embedding, p.goal.kind,
+                                        p.goal.text, p.x0):
+            return False
+        self._seed_phys_clipped = p.phys_clipped
+        self._move = p.move
+        self._move_seed = p.seed
+        self._move_admitted = 0
         return True
 
     def _draw_goal(self) -> Goal | None:
