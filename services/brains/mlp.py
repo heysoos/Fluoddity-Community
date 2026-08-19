@@ -51,6 +51,9 @@ MIN_WIDTH = 1
 # MAX_BRAIN_FLOATS, which BrainLayout enforces.
 MAX_WIDTH = 48
 MAX_DEPTH = 8
+# A new layer's width. The `layers` Setting's own default, so the search adds
+# what the `+ Add layer` button adds.
+DEFAULT_NEW_LAYER_WIDTH = 16
 
 # What mlp.glsl's ping-pong locals must hold, and the ONLY thing the compiled
 # shader is sized by. Bucketed so a width drag lands on a handful of variants
@@ -235,6 +238,58 @@ class MLPModality:
     def settings_of(self, layout: BrainLayout) -> dict:
         return {"layers": [[int(w), int(a)] for w, a
                            in zip(layout.shape[0::2], layout.shape[1::2])]}
+
+    def layout_moves(self, layout: BrainLayout, bounds):
+        """The stack's own operators. -> [(operator, settings), ...]
+
+        Proposals only: layout_moves.candidate_moves rebuilds each one and
+        rejects any that _shape_from_layers clamped, which is the check that
+        makes a bounded proposal safe.
+
+        Growth is by ONE unit and a new layer is APPENDED. An inserted layer
+        would renumber every layer after it, leaving nothing for the transfer
+        to carry across; a large jump is a restart wearing a growth move's
+        name.
+        """
+        base = self.settings_of(layout)
+        base.update({k: float(v) for k, v in layout.scales})
+        layers = [list(p) for p in base["layers"]]
+        depth = len(layers)
+        max_depth = (MAX_DEPTH if bounds.max_depth is None
+                     else min(MAX_DEPTH, int(bounds.max_depth)))
+        max_width = (MAX_WIDTH if bounds.max_width is None
+                     else min(MAX_WIDTH, int(bounds.max_width)))
+        out = []
+
+        def with_layers(new):
+            return {**base, "layers": new}
+
+        for i in range(depth):
+            w, a = layers[i]
+            if w + 1 <= max_width:
+                grown = [list(p) for p in layers]
+                grown[i][0] = w + 1
+                out.append(("grow", with_layers(grown)))
+            if w - 1 >= MIN_WIDTH:
+                shrunk = [list(p) for p in layers]
+                shrunk[i][0] = w - 1
+                out.append(("shrink", with_layers(shrunk)))
+            # The LAST hidden layer may not go: a brain with none is not a
+            # smaller brain, it is a different model.
+            if depth > 1:
+                dropped = [list(p) for j, p in enumerate(layers) if j != i]
+                out.append(("drop_layer", with_layers(dropped)))
+            for act in range(len(ACTIVATIONS)):
+                if act != a:
+                    swapped = [list(p) for p in layers]
+                    swapped[i][1] = act
+                    out.append(("activation", with_layers(swapped)))
+
+        if depth < max_depth:
+            width = min(int(DEFAULT_NEW_LAYER_WIDTH), max_width)
+            out.append(("add_layer",
+                        with_layers([list(p) for p in layers] + [[width, 0]])))
+        return out
 
     def layout_uniforms(self, layout: BrainLayout) -> dict:
         """The stack, for mlp.glsl. `shape` verbatim and zero-padded, so there
