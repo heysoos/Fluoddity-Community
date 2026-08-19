@@ -295,6 +295,11 @@ class SimulationRunner:
         """The injected field the sim samples, or None when nothing injects."""
         return self.field_bus.field_texture if self.field_bus is not None else None
 
+    @property
+    def trail_texture(self):
+        """The injected deposit for the sim's canvas, or None."""
+        return self.field_bus.trail_texture if self.field_bus is not None else None
+
     def _run_physics_step(self, ui_state, draw_mode, mouse_tex_coords,
                            draw_power_value, tiling_mode, step_index,
                            erase_mode=False):
@@ -347,6 +352,7 @@ class SimulationRunner:
             fill_direction_type=ui_state.fill_direction_type,
             canvas_draw_active=canvas_draw_active,
             field_texture=self.field_texture,
+            trail_texture=self.trail_texture,
             force_field_strength=adv_prefs.force_field_strength,
             strafe_field_strength=adv_prefs.strafe_field_strength,
         )

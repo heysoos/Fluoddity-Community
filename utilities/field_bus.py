@@ -24,11 +24,15 @@ class FieldBus:
     """Owns the force/strafe destination texture and the composite pass."""
 
     # force is .xy, strafe is .zw of one RGBA32F texture, so entity_update's
-    # get_field() is unchanged by this feature.
+    # get_field() is unchanged by this feature. `trail` is not a force at all -
+    # it is deposited into the sim's own canvas, which the brains sense - so it
+    # cannot share those channels and has a target of its own.
     DEST_CHANNELS = {
         "force":  (True, True, False, False),
         "strafe": (False, False, True, True),
+        "trail":  (True, True, False, False),
     }
+    TRAIL_DESTINATIONS = ("trail",)
     SCALAR_DESTINATIONS = ()
 
     def __init__(self, ctx: moderngl.Context):
@@ -60,12 +64,24 @@ class FieldBus:
         self._devices = {}           # exclusive device name -> owning source
         self._inspect_want = None    # (uid, view) the panel is asking for
         self._inspect_ready = None   # (uid, view) currently in _vview_tex
+        self._trail_tex = None
+        self._trail_fbo = None
+        self._trail_live = False     # a layer drove the trail on the last rebuild
 
     # -- public ---------------------------------------------------------
 
     @property
     def field_texture(self):
         return self._tex
+
+    @property
+    def trail_texture(self):
+        """The deposit for the sim's canvas, or None when nothing drives it.
+
+        None rather than a cleared texture, so the sim skips the pass outright
+        instead of adding zero to the trail once per step.
+        """
+        return self._trail_tex if self._trail_live else None
 
     @property
     def resolution(self) -> tuple[int, int]:
@@ -91,10 +107,29 @@ class FieldBus:
         self._ensure_composite()
 
     def clear(self) -> None:
-        if self._fbo is None:
-            return
-        self._fbo.color_mask = (True, True, True, True)
-        self._fbo.clear()
+        for fbo in (self._fbo, self._trail_fbo):
+            if fbo is None:
+                continue
+            fbo.color_mask = (True, True, True, True)
+            fbo.clear()
+
+    def _target_for(self, destination: str):
+        """The framebuffer a destination composites into.
+
+        The trail's is built on demand: most stacks never drive it, and an
+        allocation nothing writes into is a second full-resolution buffer for
+        nothing.
+        """
+        if destination not in self.TRAIL_DESTINATIONS:
+            return self._fbo
+        if self._res == (0, 0):
+            return None
+        if self._trail_tex is None or self._trail_tex.size != self._res:
+            self._release_trail()
+            self._trail_tex, self._trail_fbo = self._preview_target(
+                (None, None), self._res)
+            self._trail_fbo.clear()
+        return self._trail_fbo
 
     def composite_one(self, src_tex, layer, target=None, alone=False) -> None:
         """Map `src_tex` through `layer` and blend it into the destination.
@@ -103,7 +138,7 @@ class FieldBus:
         its own, with its blend and channel mask set aside so what is shown is
         the layer's own contribution rather than its share of the stack.
         """
-        fbo = self._fbo if target is None else target
+        fbo = self._target_for(layer.destination) if target is None else target
         if fbo is None or src_tex is None:
             return
         self._ensure_composite()
@@ -268,6 +303,16 @@ class FieldBus:
             layers = []
         self._prune_sources(layers)
 
+        # A destination nobody drives is released, not merely cleared: the sim
+        # then skips the pass rather than adding a zeroed texture every step.
+        wants_trail = any(l.enabled and l.destination in self.TRAIL_DESTINATIONS
+                          for l in layers)
+        if self._trail_live and not wants_trail:
+            self._dirty = True
+        self._trail_live = wants_trail
+        if not wants_trail:
+            self._release_trail()
+
         if not layers:
             self._pass_count = 0
             if self._tex is not None:
@@ -401,7 +446,9 @@ class FieldBus:
         if layer is None:
             return
         if view == "destination":
-            if self._vector_view(self._tex, layer.destination) is not None:
+            whole = (self._trail_tex if layer.destination in self.TRAIL_DESTINATIONS
+                     else self._tex)
+            if self._vector_view(whole, layer.destination) is not None:
                 self._inspect_ready = (uid, view)
             return
         if layer.error:
@@ -584,7 +631,16 @@ class FieldBus:
         self._scratch = tex
         self._scratch_fbo = self.ctx.framebuffer(color_attachments=[tex])
 
+    def _release_trail(self) -> None:
+        if self._trail_fbo is not None:
+            self._trail_fbo.release()
+            self._trail_fbo = None
+        if self._trail_tex is not None:
+            self._trail_tex.release()
+            self._trail_tex = None
+
     def _release_target(self) -> None:
+        self._release_trail()
         if self._fbo is not None:
             self._fbo.release()
             self._fbo = None

@@ -172,6 +172,7 @@ def main() -> int:
         return finish(app)
 
     _brush(app, stack)
+    _trail(app)
     _webcam(app, stack)
 
     if not _roundtrip(app, stack):
@@ -245,6 +246,62 @@ def _brush(app, stack) -> None:
     if painted > 0.0 and after != 0.0:
         fail("Clear left paint behind")
     prefs.advanced_drawing_enabled = False
+
+
+def _canvas_coverage(app) -> tuple[float, float]:
+    """(share of the trail canvas carrying anything, its mean level).
+
+    Coverage rather than a peak: particles pile a tall trail into a small part
+    of the canvas, while an injected one lands everywhere at once, so the two
+    are only told apart by how MUCH of the canvas is lit. The mean is what
+    says whether an injected trail sits alongside the particles' own or
+    swamps it.
+    """
+    tex = app.sim.can
+    data = np.abs(np.frombuffer(tex.read(), dtype=np.float32).reshape(-1, 2))
+    return float((data[:, 0] > 0.05).mean()), float(data[:, 0].mean())
+
+
+def _trail(app) -> None:
+    """A trail layer deposits into the SIM's canvas, not into the bus field.
+
+    Driven here because nothing else runs sim.update: the deposit rides in the
+    framebuffer the particles paint into, and a bus-only test cannot see
+    whether it ever reaches one.
+    """
+    put(app, [])
+    app.sim.clear_canvas()
+    step(app, 10, "canvas with no injection")
+    bare, bare_mean = _canvas_coverage(app)
+
+    layer = FieldLayer(source="noise", mapping="luminance",
+                       destination="trail", strength=1.0)
+    put(app, [layer])
+    app.sim.clear_canvas()
+    step(app, 10, "canvas with a trail layer")
+    injected, injected_mean = _canvas_coverage(app)
+    print(f"  trail: canvas lit {bare:.3f} -> {injected:.3f}, "
+          f"mean {bare_mean:.4f} -> {injected_mean:.4f} err={layer.error!r}")
+    if injected <= bare:
+        fail("a trail layer deposited nothing into the canvas")
+
+    # It is a destination of its own: the force/strafe field stays empty.
+    forces = field(app)
+    print(f"  trail: bus force/strafe={forces} trail_tex="
+          f"{app.field_bus.trail_texture is not None}")
+    if forces is not None and (forces[0] != 0.0 or forces[1] != 0.0):
+        fail("a trail layer wrote the force field")
+    if app.field_bus.trail_texture is None:
+        fail("a live trail layer released its texture")
+
+    layer.enabled = False
+    app.field_bus.mark_dirty()
+    step(app, 6, "trail layer off")
+    if app.field_bus.trail_texture is not None:
+        fail("a disabled trail layer kept its texture")
+    put(app, [])
+    app.sim.clear_canvas()
+    step(app, 4, "trail released")
 
 
 def _webcam(app, stack) -> None:
