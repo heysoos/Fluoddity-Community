@@ -666,7 +666,8 @@ class App:
             if reset and hasattr(drv, "reset"):
                 drv.reset()
 
-    def _apply_brain_layout(self, layout, ui_state) -> bool:
+    def _apply_brain_layout(self, layout, ui_state, *,
+                            keep_running: bool = False) -> bool:
         """Switch the brain layout. A hard reset of the SEARCH, never of the
         archive.
 
@@ -675,6 +676,11 @@ class App:
         and their thumbnails are all about pictures and survive the change.
         Only which rows are native moves. See
         docs/superpowers/specs/2026-08-17-brain-layout-search-design.md.
+
+        `keep_running` is for a layout the SEARCH asked for. It moved its own
+        space on purpose and has an expedition ready to start in the new one,
+        so the pause and the optimizer reset a hand switch needs would cost the
+        whole run.
         """
         current = self.sim.brain_layout
         if layout == current:
@@ -705,9 +711,10 @@ class App:
         # layout's entries are already in memory and only which of them are
         # native differs. The search still stops - its space just moved - but
         # the teardown that used to come with that does not.
-        ui_state.archive.running = False
-        if self.auto_service is not None:
-            self.auto_service.pause()
+        if not keep_running:
+            ui_state.archive.running = False
+            if self.auto_service is not None:
+                self.auto_service.pause()
 
         # The GPU side first: the per-particle readback buffer is sized by the
         # active length, and slot 0 is re-uploaded from whatever rule is live.
@@ -735,7 +742,7 @@ class App:
 
         # The optimizer searches a different number of dimensions now, so its
         # covariance and population are meaningless. Reset rather than resize.
-        self._refresh_driver_specs(layout, reset=True)
+        self._refresh_driver_specs(layout, reset=not keep_running)
 
         if self.archive is not None:
             self.archive.retarget(layout)
@@ -743,6 +750,34 @@ class App:
         # now on rather than the one it just left.
         self._save_archive_settings(ui_state)
         return True
+
+    def _apply_requested_layout(self, ui_state) -> bool:
+        """Honour a layout the SEARCH asked for, in the frame it asked.
+        -> did anything move?
+
+        The driver cannot switch brain itself - App owns the archive, the sim
+        and the tournament - so it sets a one-shot and this reads it. The
+        expedition the move was proposed for starts AFTERWARDS, because a
+        genome of the child's width cannot be optimised under the parent's
+        spec; begin_moved_expedition verifies the switch landed and drops the
+        move if it did not.
+        """
+        from command_handler import CommandHandler
+
+        drv = getattr(self, "imgep_driver", None)
+        layout = getattr(drv, "requested_layout", None)
+        if drv is None or layout is None:
+            return False
+        # Consumed whatever happens below: left standing it would be re-applied
+        # every generation forever.
+        drv.requested_layout = None
+        applied = self._apply_brain_layout(layout, ui_state, keep_running=True)
+        # The WINDOW as well as the sim: _handle_brain_layout applies whatever
+        # it finds in ui_state.brain every frame, so a switch that moves only
+        # the sim is undone by the next one.
+        CommandHandler._put_brain_window(layout, ui_state)
+        drv.begin_moved_expedition()
+        return applied
 
     def _open_archive(self, ui_state):
         """Load the archive directory into memory, if it is not already.
@@ -888,6 +923,9 @@ class App:
             fit = svc.score_and_tell()
             # None while the CLIP pass runs off-thread; retry next frame.
             if fit is not None:
+                # Before the rest: everything below reports what is live NOW,
+                # and a layout move that landed has changed it.
+                self._apply_requested_layout(ui_state)
                 self._after_generation(fit)
                 self._record_settings_version(ui_state)
             return 0

@@ -90,10 +90,10 @@ class _App:
     def _load_archive_settings(self, ui_state):
         self._log.note("load_settings")
 
-    def _apply_brain_layout(self, layout, ui_state):
+    def _apply_brain_layout(self, layout, ui_state, **kw):
         from main import App
 
-        return App._apply_brain_layout(self, layout, ui_state)
+        return App._apply_brain_layout(self, layout, ui_state, **kw)
 
 
 class _UI:
@@ -122,6 +122,22 @@ def test_the_search_is_still_stopped_and_the_optimizer_still_reset():
     assert ui.archive.running is False
     assert "pause" in log
     assert "refresh_specs(reset=True)" in log
+
+
+def test_a_move_the_search_asked_for_keeps_it_running():
+    """The search moved its own space deliberately and has an expedition ready
+    to start in the new one, so the pause and the optimizer reset a hand switch
+    needs would cost the whole run."""
+    log = _Log()
+    app, ui = _App(log), _UI()
+    ui.archive.running = True
+    app._apply_brain_layout(GABOR, ui, keep_running=True)
+    assert ui.archive.running is True
+    assert "pause" not in log
+    assert "refresh_specs(reset=True)" not in log
+    # Everything that is about the SPACE still happens.
+    assert "retarget" in log
+    assert "realloc" in log
 
 
 def test_the_settings_are_written_after_the_switch_not_before():
