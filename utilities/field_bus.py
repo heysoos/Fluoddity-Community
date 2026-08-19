@@ -49,6 +49,14 @@ class FieldBus:
         self._inspect_src = {}  # layer uid -> the texture its source produced
         self._blit = None
         self._blit_vao = None
+        # The Inspect panel's own buffers: one layer composited alone, and the
+        # readable rendering of a vector field.
+        self._preview_tex = None
+        self._preview_fbo = None
+        self._vview_tex = None
+        self._vview_fbo = None
+        self._vview = None
+        self._vview_vao = None
 
     # -- public ---------------------------------------------------------
 
@@ -85,9 +93,15 @@ class FieldBus:
         self._fbo.color_mask = (True, True, True, True)
         self._fbo.clear()
 
-    def composite_one(self, src_tex, layer) -> None:
-        """Map `src_tex` through `layer` and blend it into the destination."""
-        if self._fbo is None or src_tex is None:
+    def composite_one(self, src_tex, layer, target=None, alone=False) -> None:
+        """Map `src_tex` through `layer` and blend it into the destination.
+
+        `target`/`alone` are for the Inspect panel: one layer, into a buffer of
+        its own, with its blend and channel mask set aside so what is shown is
+        the layer's own contribution rather than its share of the stack.
+        """
+        fbo = self._fbo if target is None else target
+        if fbo is None or src_tex is None:
             return
         self._ensure_composite()
 
@@ -117,10 +131,11 @@ class FieldBus:
 
         # The mask is set BEFORE use(): moderngl applies a framebuffer's stored
         # state when it is bound, so a mask set afterwards misses this pass.
-        self._fbo.color_mask = self.DEST_CHANNELS[layer.destination]
-        self._fbo.use()
+        fbo.color_mask = ((True, True, True, True) if alone
+                          else self.DEST_CHANNELS[layer.destination])
+        fbo.use()
 
-        state = BLEND_STATE[layer.blend]
+        state = None if alone else BLEND_STATE[layer.blend]
         if state is None:
             self.ctx.disable(moderngl.BLEND)
         else:
@@ -133,7 +148,7 @@ class FieldBus:
 
         self.ctx.disable(moderngl.BLEND)
         self.ctx.blend_equation = moderngl.FUNC_ADD
-        self._fbo.color_mask = (True, True, True, True)
+        fbo.color_mask = (True, True, True, True)
         src_tex.filter = previous_filter
 
     @property
@@ -292,12 +307,44 @@ class FieldBus:
         return entry[0] if entry else None
 
     def inspect(self, layer, view: str):
-        """The texture the Inspect panel should draw for `layer`."""
+        """The texture the Inspect panel should draw for `layer`.
+
+        The three views are three different computations. "source" is the
+        picture the layer produced; "mapped" is that picture put through this
+        layer's mapping ALONE, so what is shown is the layer's own
+        contribution rather than its share of the stack; "destination" is the
+        whole composited field. Both vector views are rendered as hue and
+        brightness - raw RG shows opposite directions as much the same colour.
+        """
+        if view == "source":
+            return None if layer.error else self._inspect_src.get(layer.uid)
         if view == "destination":
-            return self._tex
+            return self._vector_view(self._tex, layer.destination)
         if layer.error:
             return None
-        return self._inspect_src.get(layer.uid)
+        src = self._inspect_src.get(layer.uid)
+        if src is None or self._res == (0, 0):
+            return None
+        self._ensure_preview()
+        self._preview_fbo.color_mask = (True, True, True, True)
+        self._preview_fbo.clear()
+        self.composite_one(src, layer, target=self._preview_fbo, alone=True)
+        return self._vector_view(self._preview_tex, layer.destination)
+
+    def _vector_view(self, tex, destination: str):
+        """Direction as hue, magnitude as brightness."""
+        if tex is None:
+            return None
+        self._ensure_vector_view()
+        tex.use(location=0)
+        tryset(self._vview, "src", 0)
+        tryset(self._vview, "pair", 1 if destination == "strafe" else 0)
+        tryset(self._vview, "gain", 4.0)
+        self._vview_fbo.color_mask = (True, True, True, True)
+        self._vview_fbo.use()
+        self.ctx.disable(moderngl.BLEND)
+        self._vview_vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
+        return self._vview_tex
 
     def _capture_thumbnail(self, uid, src_tex) -> None:
         if not self._thumbs_on:
@@ -375,6 +422,21 @@ class FieldBus:
             source.release()
         self._sources.clear()
         self._inspect_src.clear()
+        for vao in (self._vview_vao,):
+            if vao is not None:
+                vao.release()
+        self._vview_vao = None
+        if self._vview is not None:
+            self._vview.release()
+            self._vview = None
+        for tex, fbo in ((self._preview_tex, self._preview_fbo),
+                         (self._vview_tex, self._vview_fbo)):
+            if fbo is not None:
+                fbo.release()
+            if tex is not None:
+                tex.release()
+        self._preview_tex = self._preview_fbo = None
+        self._vview_tex = self._vview_fbo = None
         self._release_target()
         if self._composite_vao is not None:
             self._composite_vao.release()
@@ -393,6 +455,34 @@ class FieldBus:
             fragment_shader=read_shader("shaders/field/composite.frag"),
         )
         self._composite_vao = self.ctx.vertex_array(self._composite, [])
+
+    def _preview_target(self, existing, res):
+        """An off-stack RGBA32F buffer at the bus resolution."""
+        tex, fbo = existing
+        if tex is not None and tex.size == res:
+            return tex, fbo
+        if fbo is not None:
+            fbo.release()
+        if tex is not None:
+            tex.release()
+        tex = self.ctx.texture(res, 4, dtype="f4")
+        tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        return tex, self.ctx.framebuffer(color_attachments=[tex])
+
+    def _ensure_preview(self) -> None:
+        self._preview_tex, self._preview_fbo = self._preview_target(
+            (self._preview_tex, self._preview_fbo), self._res)
+
+    def _ensure_vector_view(self) -> None:
+        self._vview_tex, self._vview_fbo = self._preview_target(
+            (self._vview_tex, self._vview_fbo), self._res)
+        if self._vview is not None:
+            return
+        self._vview = self.ctx.program(
+            vertex_shader=read_shader("shaders/canvas.vert"),
+            fragment_shader=read_shader("shaders/field/vector_view.frag"),
+        )
+        self._vview_vao = self.ctx.vertex_array(self._vview, [])
 
     def _ensure_scratch(self) -> None:
         if self._scratch is not None:

@@ -77,10 +77,15 @@ def test_inspect_source_returns_the_raw_source(bus):
     assert bus.inspect(layer, "source") is not None
 
 
-def test_inspect_destination_returns_the_field(bus):
+def test_inspect_destination_shows_the_whole_field(bus):
+    """A RENDERING of it, not the buffer: raw RG draws two opposite vectors
+    as much the same colour, so the panel maps direction onto hue."""
     layer = a_layer()
     rebuild(bus, layer)
-    assert bus.inspect(layer, "destination") is bus.field_texture
+    shown = bus.inspect(layer, "destination")
+    assert shown is not None
+    assert shown is not bus.field_texture
+    assert shown.size == bus.field_texture.size
 
 
 def test_inspect_on_a_broken_layer_returns_none(bus):
