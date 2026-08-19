@@ -38,13 +38,18 @@ class _State:
 
 
 class _Harness(FieldStackWindowMixin):
+    """Only the mixin plus what App really injects.
+
+    Deliberately stubs NOTHING the real UI does not have: a harness that
+    supplies a helper the app lacks makes the window pass here and crash
+    there, which is how a call to a tooltip helper removed two commits
+    earlier survived a green suite.
+    """
+
     def __init__(self, stack):
         self.state = _State(stack)
         self.field_bus = None
         self.labels = []
-
-    def _delayed_tooltip(self, _text):
-        pass
 
 
 def draw(stack, n=2):

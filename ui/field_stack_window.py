@@ -3,7 +3,7 @@ from imgui_bundle import imgui
 
 from services import field_sources
 from state.field_stack import BLENDS, DESTINATIONS, MAPPINGS, FieldLayer
-from ui import layout
+from ui import hints, layout
 from ui.notices import BAD
 
 SCALES = (("1/1", 1.0), ("1/2", 0.5), ("1/4", 0.25))
@@ -51,7 +51,7 @@ class FieldStackWindowMixin:
         if changed:
             prefs.field_bus_scale = SCALES[current][1]
             self._mark_dirty()
-        self._delayed_tooltip(
+        hints.tip(
             "Resolution the injection layers are composited at, as a fraction "
             "of the canvas.")
 
@@ -108,7 +108,7 @@ class FieldStackWindowMixin:
         changed, layer.blend = self._enum(layer.blend, BLENDS,
                                           f"bl{uid}", collect)
         changed_any |= changed
-        self._delayed_tooltip(
+        hints.tip(
             "How this layer combines with the ones beneath it.")
 
         changed, layer.strength = imgui.slider_float(
@@ -118,7 +118,7 @@ class FieldStackWindowMixin:
         changed, layer.blur = imgui.slider_float(
             self._tag(f"Blur##{uid}", collect), layer.blur, 0.0, 6.0)
         changed_any |= changed
-        self._delayed_tooltip(
+        hints.tip(
             "Softens the source before the mapping reads it.")
 
         attract = layer.sign >= 0.0
@@ -127,7 +127,7 @@ class FieldStackWindowMixin:
         if changed:
             layer.sign = 1.0 if attract else -1.0
             changed_any = True
-        self._delayed_tooltip(
+        hints.tip(
             "Whether the gradient pulls toward the bright regions or away.")
 
         if layer.error:

@@ -1,13 +1,18 @@
-"""Every attribute UI.render() reads off self must actually exist.
+"""Every attribute the UI reads off self must actually exist ON the UI.
 
-The render tests all drive a bare MIXIN, never the real UI, so a dispatch line
-naming an attribute that does not exist compiles, passes the whole suite, and
-crashes on the first frame the app draws. That is how `self.show_sidebar`
-shipped where every other line reads `self.state.preferences.show_sidebar`.
+The render tests drive a bare MIXIN through a stub harness, never the real UI,
+so a method naming something that exists nowhere compiles, passes the whole
+suite, and crashes on the first frame the app draws. Two shipped that way: a
+dispatch reading `self.show_sidebar` where the flag lives on
+`self.state.preferences`, and a call to `self._delayed_tooltip`, a helper
+deleted when tooltips moved to `ui.hints` - which a harness had stubbed, so
+the mixin's own test could never see it.
 
-Static, so it needs no GL context and no window: the names come from the AST
-of ui/core.py, checked against the class, everything assigned anywhere in it,
-and the handful of attributes the orchestrator injects from outside.
+Covering `render()` alone was not enough: the second one was a level deeper,
+inside a window body. So this walks EVERY method of the UI class and of every
+mixin it inherits.
+
+Static, so it needs no GL context and no window.
 """
 import ast
 import inspect
@@ -71,23 +76,69 @@ def _read_in(method_node):
     return names
 
 
-def test_render_reads_no_attribute_that_does_not_exist():
-    class_node = _class_node()
-    render = next((n for n in class_node.body
-                   if isinstance(n, ast.FunctionDef) and n.name == "render"), None)
-    assert render is not None, "UI.render disappeared"
-
-    known = set(dir(UI)) | _assigned_anywhere(class_node) | EXTERNALLY_INJECTED
-    missing = sorted(_read_in(render) - known)
-    assert not missing, (
-        f"UI.render() reads attribute(s) that exist nowhere: {missing}. "
-        "A window dispatch gate is the usual culprit - visibility flags live "
-        "on self.state.preferences, not on self.")
+def _ui_classes():
+    """The UI class and every mixin it inherits, with their source files."""
+    return [c for c in UI.__mro__ if c is not object]
 
 
-def test_the_guard_would_catch_a_bad_dispatch():
-    """The check is only worth having if it actually rejects the mistake."""
-    class_node = _class_node()
-    known = set(dir(UI)) | _assigned_anywhere(class_node) | EXTERNALLY_INJECTED
+def _known_attributes():
+    """Everything the assembled UI can legitimately answer to."""
+    known = set(dir(UI)) | EXTERNALLY_INJECTED
+    for cls in _ui_classes():
+        node = _class_node_for(cls)
+        if node is not None:
+            known |= _assigned_anywhere(node)
+    return known
+
+
+def _class_node_for(cls):
+    try:
+        source = Path(inspect.getfile(cls)).read_text(encoding="utf-8")
+    except (OSError, TypeError):
+        return None
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.ClassDef) and node.name == cls.__name__:
+            return node
+    return None
+
+
+def _methods_of(class_node):
+    return [n for n in class_node.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+def test_no_ui_method_reads_an_attribute_that_does_not_exist():
+    known = _known_attributes()
+    offences = []
+    for cls in _ui_classes():
+        node = _class_node_for(cls)
+        if node is None:
+            continue
+        for method in _methods_of(node):
+            for name in sorted(_read_in(method) - known):
+                offences.append(f"{cls.__name__}.{method.name} -> self.{name}")
+    assert not offences, (
+        "these read attributes that exist nowhere on the assembled UI:\n  "
+        + "\n  ".join(offences)
+        + "\nA visibility flag lives on self.state.preferences; a tooltip "
+          "goes through ui.hints.tip.")
+
+
+def test_the_guard_rejects_both_shipped_mistakes():
+    """A guard that has never been shown to fail is imaginary coverage."""
+    known = _known_attributes()
     assert "show_sidebar" not in known, (
         "show_sidebar is a preference, so a bare self.show_sidebar must fail")
+    assert "_delayed_tooltip" not in known, (
+        "the tooltip helper is ui.hints.tip; self._delayed_tooltip must fail")
+
+
+def test_it_actually_looks_at_the_window_bodies():
+    """Covering render() alone missed the second bug, so prove the reach."""
+    names = set()
+    for cls in _ui_classes():
+        node = _class_node_for(cls)
+        if node is not None:
+            names |= {m.name for m in _methods_of(node)}
+    assert "render_field_stack_window" in names
+    assert "render_archive_window" in names
