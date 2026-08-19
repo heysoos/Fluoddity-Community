@@ -553,3 +553,22 @@ else, so any other interpreter shows the Layout combo as PCA-only:
       zoom. The count follows the viewport, not the entry count.
 
 Numbers behind the UMAP choice: `python -m tools.measure_map_layout`.
+
+### E. Startup, and the novelty column an open now trusts
+
+The riskiest change here is invisible: an open trusts the stored novelty
+column where it used to rescore. A wrongly trusted column does not raise -
+it quietly skews parent choice, eviction and the gallery's sort.
+
+- [ ] **z1.** Launch with the archive browser open on the Map tab. It must
+      reach the first frame in about a second. A multi-second freeze means
+      something is importing umap on the main thread again.
+- [ ] **z2.** Sort the gallery by Novelty. NOTHING may read 1.000, and the
+      values must span a range (roughly 0.02..0.07 on a real archive). A
+      block of entries at exactly 1.000 is the at-admission stamp, which
+      means a rescore was skipped when it was needed.
+- [ ] **z3.** Delete one entry, quit, reopen: the console must NOT say the
+      archive rescored, and z2 must still hold. Deleting is what used to
+      condemn an archive to a rescore on every open.
+- [ ] **z4.** Run Explore for a few generations after that, and confirm
+      entries are still admitted and the novelty column keeps moving.
