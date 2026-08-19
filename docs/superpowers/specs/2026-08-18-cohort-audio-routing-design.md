@@ -226,14 +226,22 @@ unmasked row adds nothing to the file and every existing rig loads as
 all-cohorts with no migration. `PERSISTED_FIELDS` is unchanged - the mask rides
 inside `mappings`, which is already there.
 
-**It is stored as half-open RUN RANGES**, `[[0, 72]]` for the first half of the
-axis. A rig is written with a json indent, which puts every list entry on its
-own line, so the slot-per-entry bitmap this started as made a two-row split rig
-**340 lines** where ranges make it **60**. Ranges also read as what they are.
-`read_mask` accepts the bitmap forever, since rigs were saved on it; the two are
-told apart by shape, not by a version field. An empty list is a mask with no
-runs, which is an idle row - a FULL mask writes no key at all, which is why
-those two never collide.
+**It is stored as half-open RUN RANGES on ONE LINE**, `"0-72"` for the first
+half of the axis and `"0-36,72-108"` for two blocks.
+
+The line count is the whole reason, and the obvious spelling is a trap. A rig
+is written with a json indent, which gives every list entry its own line and a
+NESTED PAIR four of them. Measured on one mask: the slot-per-entry bitmap this
+started as is **148 lines** at every density; ranges as `[[lo, hi]]` lists are
+**8** for a contiguous half but **292** for `every 2nd` at 144 cohorts - worse
+than the bitmap they replaced, in a shape the strip's own stride buttons
+produce. As text it is **3** at every density.
+
+`read_mask` accepts all three forms forever, told apart by SHAPE rather than by
+a version field, because rigs were saved on each. An empty string is a mask with
+no runs, which is an idle row - a FULL mask writes no key at all, which is why
+those two never collide. A range string that does not parse leaves the mapping
+on every cohort rather than dropping the row.
 
 The mask takes part in `Mapping.__eq__` like every other field, so
 `_save_last_rig`'s value diff sees a mask edit as the change it is.

@@ -72,13 +72,33 @@ def is_empty(mask: np.ndarray) -> bool:
     return not bool(np.any(mask))
 
 
-def mask_to_runs(mask: np.ndarray) -> list[list[int]]:
-    """The set slots as half-open [lo, hi) ranges.
+def mask_to_text(mask: np.ndarray) -> str:
+    """The set slots as half-open ranges on ONE line: "0-72,80-90".
 
-    A rig is written with json indent, which puts every list entry on its own
-    line - a slot-per-entry bitmap made a two-row rig 340 lines long. Ranges
-    are also readable: [[0, 72]] is the first half of the axis.
+    A rig is written with a json indent, which gives every list entry its own
+    line and a nested pair four of them. A slot-per-entry bitmap therefore ran
+    to 144 lines, and ranges AS LISTS were worse still for a fine stride - 72
+    pairs is 292 lines. One string is one line at every density, and still
+    reads as what it is.
     """
+    return ",".join(f"{lo}-{hi}" for lo, hi in mask_to_runs(mask))
+
+
+def _text_to_runs(text: str):
+    """Parsed ranges, or None if anything at all is wrong with the string."""
+    if text == "":
+        return []
+    runs = []
+    for part in text.split(","):
+        lo, sep, hi = part.partition("-")
+        if not sep or not lo.lstrip("-").isdigit() or not hi.lstrip("-").isdigit():
+            return None
+        runs.append((int(lo), int(hi)))
+    return runs
+
+
+def mask_to_runs(mask: np.ndarray) -> list[list[int]]:
+    """The set slots as half-open [lo, hi) ranges."""
     runs: list[list[int]] = []
     start = None
     for i in range(MASK_SLOTS):
@@ -102,22 +122,35 @@ def _is_runs(raw: list) -> bool:
     )
 
 
+def _fill(mask: np.ndarray, runs) -> None:
+    mask[:] = False
+    for lo_raw, hi_raw in runs:
+        lo = max(0, min(MASK_SLOTS, int(lo_raw)))
+        hi = max(0, min(MASK_SLOTS, int(hi_raw)))
+        if hi > lo:
+            mask[lo:hi] = True
+
+
 def read_mask(mask: np.ndarray, raw) -> None:
     """Fill `mask` in place from a stored value; leave it alone if malformed.
 
-    Two forms are accepted forever: ranges, and the slot-per-entry bitmap that
-    rigs written before ranges carry. An empty list is a mask with no runs,
-    which is an idle row - a FULL mask writes no key at all.
+    Three forms are accepted forever, told apart by SHAPE rather than by a
+    version field: the range text written now, the list of pairs written
+    briefly before it, and the slot-per-entry bitmap before that. A rig must
+    never be lost to a row this cannot read.
+
+    An empty string, like an empty list, is a mask with no runs - an idle row.
+    A FULL mask writes no key at all, so those two never collide.
     """
+    if isinstance(raw, str):
+        runs = _text_to_runs(raw)
+        if runs is not None:
+            _fill(mask, runs)
+        return
     if not isinstance(raw, list):
         return
     if _is_runs(raw):
-        mask[:] = False
-        for lo_raw, hi_raw in raw:
-            lo = max(0, min(MASK_SLOTS, int(lo_raw)))
-            hi = max(0, min(MASK_SLOTS, int(hi_raw)))
-            if hi > lo:
-                mask[lo:hi] = True
+        _fill(mask, raw)
         return
     if len(raw) == MASK_SLOTS and all(
             isinstance(v, (int, float, bool)) for v in raw):

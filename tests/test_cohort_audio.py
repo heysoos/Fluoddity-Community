@@ -136,19 +136,38 @@ def test_a_rig_written_before_this_feature_loads_as_all_cohorts():
     assert ca.is_full(m.cohorts)
 
 
-def test_a_mask_is_stored_as_runs_rather_than_a_slot_per_line():
-    """json.dumps(indent=2) puts every entry on its own line, so a bitmap made
-    a two-row rig 340 lines long."""
+def _painted(cells, n):
+    m = np.zeros(ca.MASK_SLOTS, dtype=bool)
+    for c in cells:
+        ca.paint(m, c, n, True)
+    return m
+
+
+def _stored(mask):
     from services.audio_mapping import Mapping
     from state.audio_in_state import _mapping_to_dict
 
     m = Mapping(signal="bass", target="SENSOR_GAIN")
-    m.cohorts[:] = False
-    for cell in range(32):
-        ca.paint(m.cohorts, cell, 64, True)
+    m.cohorts[:] = mask
+    return _mapping_to_dict(m).get("cohorts", "<absent>")
 
-    stored = _mapping_to_dict(m)["cohorts"]
-    assert stored == [[0, 72]], stored
+
+def test_a_mask_is_stored_as_one_line_of_ranges():
+    assert _stored(_painted(range(32), 64)) == "0-72"
+    assert _stored(_painted(range(32, 64), 64)) == "72-144"
+    assert _stored(_painted(list(range(16)) + list(range(32, 48)), 64)) \
+        == "0-36,72-108"
+
+
+def test_even_the_finest_stride_stays_one_line():
+    """json.dumps(indent=2) explodes a nested list onto four lines per pair,
+    so ranges as lists made 'every 2nd of 144' LONGER than the bitmap."""
+    import json
+
+    mask = _painted(range(0, 144, 2), 144)
+    text = _stored(mask)
+    assert isinstance(text, str)
+    assert len(json.dumps({"cohorts": text}, indent=2).splitlines()) == 3
 
 
 def test_runs_survive_a_pattern_with_gaps():
@@ -156,25 +175,42 @@ def test_runs_survive_a_pattern_with_gaps():
     from state.audio_in_state import _mapping_from_dict, _mapping_to_dict
 
     m = Mapping(signal="bass", target="SENSOR_GAIN")
-    m.cohorts[:] = False
-    for cell in range(0, 64, 4):
-        ca.paint(m.cohorts, cell, 64, True)
-
-    d = _mapping_to_dict(m)
-    assert len(d["cohorts"]) == 16
-    back = _mapping_from_dict(d)
+    m.cohorts[:] = _painted(range(0, 64, 4), 64)
+    back = _mapping_from_dict(_mapping_to_dict(m))
     assert np.array_equal(back.cohorts, m.cohorts)
 
 
-def test_an_empty_mask_stores_as_no_runs_at_all():
+def test_an_empty_mask_stores_as_an_empty_string():
     from services.audio_mapping import Mapping
     from state.audio_in_state import _mapping_from_dict, _mapping_to_dict
 
     m = Mapping(signal="bass", target="SENSOR_GAIN")
     m.cohorts[:] = False
     d = _mapping_to_dict(m)
-    assert d["cohorts"] == []
+    assert d["cohorts"] == ""
     assert ca.is_empty(_mapping_from_dict(d).cohorts)
+
+
+def test_a_rig_holding_the_list_of_ranges_still_loads():
+    """The form between the bitmap and the text one. Short-lived, but a rig
+    saved on it must not be lost either."""
+    from state.audio_in_state import _mapping_from_dict
+
+    m = _mapping_from_dict({"signal": "bass", "target": "SENSOR_GAIN",
+                            "cohorts": [[0, 72]]})
+    assert m is not None
+    assert ca.covers(m.cohorts, 0, 64)
+    assert not ca.covers(m.cohorts, 63, 64)
+
+
+def test_a_malformed_range_string_falls_back_to_all_cohorts():
+    from state.audio_in_state import _mapping_from_dict
+
+    for bad in ("0-", "-", "a-b", "0-72,", "5", "0-72;80-90"):
+        m = _mapping_from_dict({"signal": "bass", "target": "SENSOR_GAIN",
+                                "cohorts": bad})
+        assert m is not None, bad
+        assert ca.is_full(m.cohorts), bad
 
 
 def test_a_rig_holding_the_old_bitmap_still_loads():

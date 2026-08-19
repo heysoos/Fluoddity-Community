@@ -105,7 +105,7 @@ class AudioInState:
 
 def _mapping_to_dict(m: Mapping) -> dict:
     """`uid` is in-session only, so a loaded rig mints fresh ones."""
-    from services.cohort_audio import is_full, mask_to_runs
+    from services.cohort_audio import is_full, mask_to_text
 
     out = {
         "signal": m.signal, "target": m.target, "mode": m.mode,
@@ -120,7 +120,7 @@ def _mapping_to_dict(m: Mapping) -> dict:
     }
     # Only when something is painted out, so an unmasked row adds nothing.
     if not is_full(m.cohorts):
-        out["cohorts"] = mask_to_runs(m.cohorts)
+        out["cohorts"] = mask_to_text(m.cohorts)
     return out
 
 
