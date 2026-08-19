@@ -1249,12 +1249,16 @@ class ArchiveWindowMixin:
         if ast.map_thumbs:
             self._draw_atlas(ast, arc, draw, pts, origin, size)
         elif ast.map_render != "density":
+            # One radius for the frame, and it is DOT_RADIUS_MAX unless the
+            # dots are covering each other - see map_view.dot_radius.
+            r = map_view.dot_radius(xs[sel], ys[sel],
+                                    (origin.x, origin.y), (size.x, size.y))
             # .tolist() first: indexing a numpy array with a Python int inside
             # the loop costs more than the draw call it feeds.
             px, py = xs[sel].tolist(), ys[sel].tolist()
             pc = pts.colors[sel].tolist()
             for x, y, c in zip(px, py, pc):
-                draw.add_circle_filled(imgui.ImVec2(x, y), 3.0, c)
+                draw.add_circle_filled(imgui.ImVec2(x, y), r, c)
 
         best_i, best_d, picked = -1, 1e9, -1
         if hovering and ast.map_thumbs:

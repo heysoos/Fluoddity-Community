@@ -340,3 +340,40 @@ def atlas_winners(unit: np.ndarray, values: np.ndarray, cell_u,
     return (gx[win].astype(np.float32) * cx,
             gy[win].astype(np.float32) * cy,
             win)
+
+
+# The radius the scatter draws at when nothing is crowding it. Historical, and
+# what every uncrowded map keeps.
+DOT_RADIUS_MAX = 3.0
+# Below this a dot is a single pixel and the map reads as static.
+DOT_RADIUS_MIN = 1.0
+# How much of the ground the dots are ON they may cover before they shrink.
+# Past about half, a cluster reads as one blob rather than as countable
+# entries - which is the whole complaint zooming out produces.
+DOT_COVER_MAX = 0.5
+# The cell the occupied ground is measured in. Wide enough that a cell holding
+# ONE full-size dot sits well under DOT_COVER_MAX (28.3 of 144), so a sparse
+# map can never talk itself into shrinking.
+DOT_CELL_PX = 12.0
+
+
+def dot_radius(xs: np.ndarray, ys: np.ndarray, origin, size) -> float:
+    """Radius to draw the scatter at, so a crowded map stays countable.
+
+    DOT_RADIUS_MAX whenever the dots cover less than DOT_COVER_MAX of the
+    ground they sit on; past that, the radius that puts coverage back on the
+    bar. Continuous in the point count, so zooming grows the dots back
+    smoothly rather than snapping between two sizes.
+
+    Measured over the cells the points OCCUPY, never the whole canvas. A dense
+    blob in the corner of an empty map is exactly the case that needs
+    shrinking, and averaging it over the empty half is what would hide it.
+    """
+    flat, _on, nx, ny, cell = bin_points(xs, ys, origin, size, DOT_CELL_PX)
+    n = int(len(flat))
+    if n <= 0:
+        return DOT_RADIUS_MAX
+    filled = int(np.count_nonzero(np.bincount(flat, minlength=nx * ny)))
+    ground = float(filled) * cell * cell
+    r = float(np.sqrt(DOT_COVER_MAX * ground / (n * np.pi)))
+    return float(min(DOT_RADIUS_MAX, max(DOT_RADIUS_MIN, r)))
