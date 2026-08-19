@@ -156,6 +156,57 @@ def test_a_jump_respects_the_float_budget():
                       LayoutBounds(max_floats=1, modalities=("mlp", "gabor")))
 
 
+def test_a_modality_bound_is_one_string_not_four_booleans():
+    """So a fifth modality needs no new field and no second list of them."""
+    from services.brains.layout_moves import parse_modalities
+
+    assert parse_modalities("mlp, gabor") == ("gabor", "mlp")
+
+
+def test_an_unknown_key_is_dropped_rather_than_raising():
+    """The bound is written to disk and outlives the build that wrote it."""
+    from services.brains.layout_moves import parse_modalities
+
+    assert parse_modalities("mlp,nonesuch") == ("mlp",)
+
+
+def test_an_empty_string_names_no_modality():
+    from services.brains.layout_moves import parse_modalities
+
+    assert parse_modalities("") == ()
+    assert parse_modalities(None) == ()
+
+
+def test_zero_means_the_modality_decides():
+    """0 is 'unbounded within the modality', which is what a fresh settings
+    block holds - never a bound of zero, which forbids every layout."""
+    from services.brains.layout_moves import bounds_from
+
+    b = bounds_from(0, 0, 1024, "", FOURIER)
+    assert b.max_depth is None
+    assert b.max_width is None
+    assert candidate_moves(FOURIER, b)
+
+
+def test_a_bound_narrows_and_never_widens():
+    from services.brains import MAX_BRAIN_FLOATS
+    from services.brains.layout_moves import bounds_from
+
+    b = bounds_from(2, 6, 400, "", FOURIER)
+    assert (b.max_depth, b.max_width, b.max_floats) == (2, 6, 400)
+    assert bounds_from(0, 0, 99999, "", FOURIER).max_floats == MAX_BRAIN_FLOATS
+
+
+def test_the_running_modality_is_never_a_jump_target():
+    """It is where the search already is; naming it would offer a move to the
+    layout it is standing on."""
+    from services.brains.layout_moves import bounds_from
+
+    b = bounds_from(0, 0, 1024, "fourier,mlp", FOURIER)
+    assert "fourier" not in b.modalities
+    assert "mlp" in b.modalities
+
+
 def test_a_jump_carries_the_parent_it_came_from():
     """The ledger and the revert both key off the pair, and a jump is the one
     move whose two halves share nothing else."""

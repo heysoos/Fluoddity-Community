@@ -50,6 +50,38 @@ class LayoutMove:
         return (self.parent.signature(), self.child.signature())
 
 
+def parse_modalities(text) -> tuple[str, ...]:
+    """A comma-separated bound into keys the registry knows. -> sorted keys.
+
+    ONE string rather than one boolean per modality, so a fifth modality needs
+    no new settings field and no second list of them. An unknown key is dropped
+    rather than raising: the bound is written to disk and outlives the build
+    that understood it.
+    """
+    if not text:
+        return ()
+    keys = {k.strip() for k in str(text).split(",")}
+    return tuple(sorted(k for k in keys if k in REGISTRY))
+
+
+def bounds_from(max_depth, max_width, max_floats, modalities,
+                running) -> LayoutBounds:
+    """Build the bounds a settings block describes.
+
+    0 means "whatever the modality itself allows", which is what a fresh
+    settings block holds - a literal bound of zero would forbid every layout.
+    The RUNNING modality is dropped from the jump list: it is where the search
+    already is, and a move to the layout it is standing on is not a move.
+    """
+    return LayoutBounds(
+        max_depth=int(max_depth) or None,
+        max_width=int(max_width) or None,
+        max_floats=min(int(max_floats), MAX_BRAIN_FLOATS),
+        modalities=tuple(k for k in parse_modalities(modalities)
+                         if k != running.modality),
+    )
+
+
 def _structural_int(m):
     """The one integer that IS this modality's structure, or None."""
     ints = [s for s in m.settings_schema() if s.kind in STRUCTURAL_KINDS]
