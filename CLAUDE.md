@@ -1955,6 +1955,55 @@ mechanics these caveats assume.
   is a function of the centre INDEX, so its new centre goes at the END for the
   same reason.
 
+- **A layout move is TWO STAGES, because only the frame loop can switch
+  brain.** `App` owns the archive, the sim and the tournament and the driver
+  owns none of them, so `_propose_layout_move` sets a one-shot
+  `requested_layout` and `_apply_requested_layout` reads it in the frame the
+  generation that proposed it was scored. The two halves run under DIFFERENT
+  layouts and each needs its own: the proposal reads the seed's genome, which
+  only exists under the PARENT, and the expedition optimises the carried
+  genome, whose width is only legal under the CHILD. `begin_moved_expedition`
+  therefore VERIFIES the landing rather than assuming it — the request can be
+  refused, or overtaken by a switch of the user's own — and drops the move
+  rather than starting it in a space its genome does not belong to. It
+  consumes the request either way, or a refused one is re-applied every
+  generation forever. The Brain WINDOW moves with the sim, for the reason
+  `_restore_archive_layout` already does: `_handle_brain_layout` applies
+  `ui_state.brain` every frame and would put the old layout straight back.
+
+- **`_pending` deliberately survives `end_expedition()`.** `set_spec` calls
+  that whenever the space moves, and the space moving IS the request landing —
+  so clearing the request there would kill every move at the moment it
+  succeeded. `end_expedition` clears the LIVE move instead, which is what
+  makes an abandoned move (a grid change, a hand switch) neither kept nor
+  banned: nothing was learned about it.
+
+- **The verdict is `admitted >= 1`, delivered ONCE, and `keep_running=True` is
+  how a search-driven switch differs from a hand one.** The archive is already
+  the judge — admission means finite, viable, alive and separated from
+  everything stored — so a layout that cannot produce one such tile in a whole
+  expedition has answered the question, and a reverted `(parent, child)` pair
+  is banned so the cadence is not spent re-proposing it. Comparing the
+  admission RATE against the parent was rejected: a generation's tiles share
+  one CMA-ES population, so they clear or miss any bar together, the same
+  reason the adaptive admission threshold was removed. Reverting costs nothing
+  in entries, because admitting nothing is the revert condition.
+  `_apply_brain_layout(keep_running=True)` skips the pause and the optimizer
+  reset only — the realloc, the retarget and the settings write all still
+  happen — because the search moved its own space on purpose and has an
+  expedition ready to start in it. Guarded by
+  `tests/test_layout_expedition.py`, `tests/test_layout_verdict.py` and
+  `tests/test_layout_move_wiring.py`.
+
+- **A cross-MODALITY jump lands on the target's DEFAULT layout and carries no
+  genome.** There is no correspondence between a Fourier centre count and an
+  MLP width, so preserving a size would be a fiction; `transfer_genome`
+  refuses the pair outright and the expedition seeds from a `sigma0` draw
+  instead. It still enters as an EXPEDITION rather than as bootstrap — a
+  layout with zero native entries would otherwise spend its whole budget on
+  random genomes before expansion was reachable at all. It is opt-in for that
+  reason: `LayoutBounds.modalities` empty means the running modality only.
+
 ### The MLP layer stack
 
 - **`MAX_MLP_WIDTH` is COMPILED PER LAYOUT, and that is the only reason a deep
