@@ -291,6 +291,56 @@ class MLPModality:
                         with_layers([list(p) for p in layers] + [[width, 0]])))
         return out
 
+    def transfer_genome(self, params, parent: BrainLayout,
+                        child: BrainLayout, rng) -> np.ndarray:
+        """Repack a decoded stack into `child`'s shape.
+
+        A hidden unit is three regions - input weights, bias, and a COLUMN of
+        the next matrix - and W_out is OUTPUT-MAJOR, so that column is one
+        strided entry per output rather than a contiguous append. Every offset
+        comes from layer_spans, which is the definition mlp.glsl is checked
+        against.
+
+        Whatever a layer does not inherit is DRAWN, then its outgoing column is
+        zeroed: the child evaluates exactly as its parent did at birth, while a
+        new unit still has an incoming half to contribute the moment the search
+        moves its output weight.
+        """
+        p = np.asarray(params, dtype=np.float32).reshape(-1)
+        out = np.asarray(self.random(rng, child),
+                         dtype=np.float32).reshape(-1)
+        p_hidden, p_ow, p_ob, _pn = layer_spans(parent.shape)
+        c_hidden, c_ow, c_ob, _cn = layer_spans(child.shape)
+
+        # Layer l of the child inherits from layer l of the parent, which is
+        # what makes APPENDING a layer the only safe way to deepen a stack.
+        for li, (w_off, b_off, fan_in, w) in enumerate(c_hidden):
+            if li >= len(p_hidden):
+                break
+            pw_off, pb_off, p_fan, p_w = p_hidden[li]
+            rows, cols = min(w, p_w), min(fan_in, p_fan)
+            src = p[pw_off:pb_off].reshape(p_w, p_fan)
+            dst = out[w_off:b_off].reshape(w, fan_in)
+            dst[:rows, :cols] = src[:rows, :cols]
+            # A widened fan-in means the layer BELOW grew: those columns are
+            # the new unit's outgoing weights and start silent.
+            dst[:rows, cols:] = 0.0
+            out[b_off:b_off + rows] = p[pb_off:pb_off + rows]
+
+        # W_out, output-major (OUT_DIM, fan_in of the last hidden layer).
+        p_fan = p_hidden[-1][3] if p_hidden else IN_DIM
+        c_fan = c_hidden[-1][3] if c_hidden else IN_DIM
+        src = p[p_ow:p_ob].reshape(OUT_DIM, p_fan)
+        dst = out[c_ow:c_ob].reshape(OUT_DIM, c_fan)
+        cols = min(c_fan, p_fan)
+        # Only when the LAST layer is the same one: a dropped or added layer
+        # changes which units W_out reads, and those weights mean nothing.
+        if len(c_hidden) == len(p_hidden):
+            dst[:, :cols] = src[:, :cols]
+            dst[:, cols:] = 0.0
+            out[c_ob:c_ob + OUT_DIM] = p[p_ob:p_ob + OUT_DIM]
+        return out.astype(np.float32)
+
     def layout_uniforms(self, layout: BrainLayout) -> dict:
         """The stack, for mlp.glsl. `shape` verbatim and zero-padded, so there
         is exactly ONE encoding and the GPU never re-derives what the host
