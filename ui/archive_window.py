@@ -378,9 +378,10 @@ class ArchiveWindowMixin:
         if st.get("last_tiles"):
             layout.text_disabled_wrapped(
                 f"Last generation: kept {st.get('last_admitted', 0)} of "
-                f"{st['last_tiles']} tiles   "
-                f"({st.get('n_rejected_close', 0)} too close, "
-                f"{st.get('n_rejected_dead', 0)} dead, all-time)")
+                f"{st['last_tiles']} tiles")
+            hints.marker(
+                f"All-time: {st.get('n_rejected_close', 0)} rejected too "
+                f"close, {st.get('n_rejected_dead', 0)} dead.")
         if st.get("n_summits") or st.get("n_records"):
             layout.text_colored_wrapped(
                 _OK,
@@ -424,9 +425,8 @@ class ArchiveWindowMixin:
         layout.wrap_row(right, layout.button_width("Reset Search"))
         if imgui.button("Reset Search##explore"):
             ast.reset_requested = True
-        note = "(Reset keeps the archive)"
-        layout.wrap_row(right, imgui.calc_text_size(note).x)
-        imgui.text_colored(imgui.ImVec4(*_DIM), note)
+        # A tip and not a marker: this row wraps itself against the panel edge.
+        hints.tip("Clears the optimizer. Reset keeps the archive.")
         self._render_cycle_estimate(ast)
 
     _SIZE_COLOR = (0.45, 0.70, 1.00, 1.0)      # blue, how much
@@ -464,8 +464,8 @@ class ArchiveWindowMixin:
                     [(ex["mean"], self._MEAN_COLOR, "mean"),
                      (ex["best"], self._BEST_COLOR, "best")],
                     height=70.0)
-                layout.text_disabled_wrapped(
-                    f"{ex['gens']} generations - flat means converged")
+                layout.text_disabled_wrapped(f"{ex['gens']} generations")
+                hints.marker("Flat means converged.")
             imgui.tree_pop()
 
     _STEPS_PER_SECOND = 716.0
@@ -709,14 +709,14 @@ class ArchiveWindowMixin:
         self._render_live_preview_toggle(ast)
         imgui.separator()
 
-        if imgui.begin_tab_bar("archive_views"):
-            if imgui.begin_tab_item("Gallery")[0]:
-                self._render_gallery(ast, arc)
-                imgui.end_tab_item()
-            if imgui.begin_tab_item("Map")[0]:
-                self._render_map(ast, arc)
-                imgui.end_tab_item()
-            imgui.end_tab_bar()
+        with layout.sub_tab_bar("archive_views") as open_bar:
+            if open_bar:
+                if imgui.begin_tab_item("Gallery")[0]:
+                    self._render_gallery(ast, arc)
+                    imgui.end_tab_item()
+                if imgui.begin_tab_item("Map")[0]:
+                    self._render_map(ast, arc)
+                    imgui.end_tab_item()
         imgui.end()
 
     def _render_mixed_note(self, arc, st) -> None:
@@ -826,7 +826,8 @@ class ArchiveWindowMixin:
         if imgui.arrow_button("##sort_dir",
                               imgui.Dir.down if ast.sort_desc else imgui.Dir.up):
             ast.sort_desc = not ast.sort_desc
-        hints.tip("Reverse the order.")
+        # No tooltip: the arrow points the way it will sort, so a tooltip here
+        # only teaches that tooltips are not worth hovering.
         layout.wrap_row(right, layout.button_width("Pinned only"))
         _, ast.pinned_only = imgui.checkbox("Pinned only", ast.pinned_only)
 
@@ -1060,7 +1061,7 @@ class ArchiveWindowMixin:
         layout.wrap_row(right, layout.button_width("Delete"))
         if imgui.button("Delete"):
             ast.delete_entry_id = ast.selected_entry_id
-        hints.tip("Remove this entry and its thumbnail.")
+        hints.tip("Remove this entry. Undo does not cover it.")
 
     # Summits are brighter than the expeditions they sit among, and records get
     # their own hue because a record can be set in any regime.
@@ -1509,7 +1510,7 @@ class ArchiveWindowMixin:
             ast.map_color_by = map_view.COLOR_MODES[i]
         imgui.end_disabled()
         hints.tip("Thumbnails carry their own colour." if pictures
-                  else "What the colours mean.")
+                  else "Regime, novelty or liveness.")
 
         layout.wrap_row(right, layout.labelled_width(w, "Show"))
         imgui.set_next_item_width(w)
@@ -1520,7 +1521,8 @@ class ArchiveWindowMixin:
                                  labels)
         if changed:
             ast.map_filter = map_view.FILTER_MODES[i]
-        hints.tip("Which entries to draw.")
+        hints.tip("Draw fewer dots. What is left re-spreads to fill "
+                  "the canvas.")
 
         layout.wrap_row(right, layout.labelled_width(w, "Draw"))
         imgui.begin_disabled(pictures)

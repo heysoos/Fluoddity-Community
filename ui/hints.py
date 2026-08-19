@@ -33,3 +33,19 @@ def card(text: str) -> None:
     """Show the last widget's own details, with no delay."""
     if imgui.is_item_hovered():
         imgui.set_tooltip(text)
+
+
+def marker(text: str) -> None:
+    """Put a dim `(?)` after the last item, carrying `text` on hover.
+
+    What makes moving an explanation off the panel honest: a tooltip nothing
+    advertises is found by accident, which is why the explanations ended up
+    written as permanent grey lines in the first place.
+
+    For a control in a settings column. A button in a wrapping row takes a
+    plain `tip` instead - the marker is another item on a row that is already
+    measuring itself against the panel edge.
+    """
+    imgui.same_line()
+    imgui.text_disabled("(?)")
+    tip(text)

@@ -123,7 +123,7 @@ class AutoTournamentWindowMixin:
         if sweeps:
             layout.text_colored_wrapped(
                 _WARN, "Tiles are not comparable: " + ", ".join(sweeps))
-            layout.text_disabled_wrapped(
+            hints.marker(
                 "These sweep across tiles, so fitness is confounded by "
                 "position until they are cleared.")
 
@@ -191,10 +191,13 @@ class AutoTournamentWindowMixin:
         grid_note overrides the last hint line: a grid change costs Auto its
         covariance but only ends Explore's expedition."""
         ch, g = imgui.slider_int("Grid", ats.grid, 2, 8)
+        # The note is the tab's, because a grid change costs Auto its
+        # covariance but only ends Explore's expedition.
+        hints.marker(grid_note or "Changing the grid resets the optimizer.")
         if ch and g != ats.grid:
             ats.grid = g
             ats.grid_changed = True
-        self._render_grid_hints(ats, grid_note)
+        self._render_grid_hints(ats)
 
         _, ats.steps_per_gen = imgui.slider_int(
             "Steps per Gen", ats.steps_per_gen, 50, 2000)
@@ -203,7 +206,7 @@ class AutoTournamentWindowMixin:
         _, ats.snapshots_per_gen = imgui.slider_int(
             "Snapshots per Gen", ats.snapshots_per_gen, 1, 8)
 
-    def _render_grid_hints(self, ats, note=None):
+    def _render_grid_hints(self, ats):
         tiles = ats.grid * ats.grid
         src_px = 1024 // ats.grid
         layout.text_disabled_wrapped(
@@ -213,8 +216,7 @@ class AutoTournamentWindowMixin:
                 "  upscaled to 224 for the encoder - consider a larger canvas")
         if ats.grid == 2:
             layout.text_disabled_wrapped("  popsize 4 is small for CMA-ES")
-        layout.text_disabled_wrapped(
-            note or "changing the grid resets the optimizer")
+
 
     def _render_transport(self, ats):
         right = layout.row_right_edge()
@@ -237,21 +239,19 @@ class AutoTournamentWindowMixin:
         was = ats.physics_enabled
         _, ats.physics_enabled = imgui.checkbox(
             "Search Physics Too", ats.physics_enabled)
-        hints.tip(PHYSICS_TOOLTIP)
+        hints.marker(PHYSICS_TOOLTIP)
         if ats.physics_enabled != was:
             ats.reset_requested = True     # the search space changed dimension
 
         if not ats.physics_enabled:
-            layout.text_disabled_wrapped(
-                "brain only - the loaded preset fixes the overall look")
             return
 
+        # The count on screen, the eight names on the marker: the list wrapped
+        # to three lines and said the same thing every frame.
         layout.text_disabled_wrapped(
-            "searching " + ", ".join(n.replace('_', ' ').title()
-                                     for n, _g, _lo, _hi in PHYSICS_PARAMS))
-        layout.text_colored_wrapped(
-            _WARN,
-            "these sliders set the centre of the search, not each tile's value")
+            f"searching {len(PHYSICS_PARAMS)} physics params")
+        hints.marker(", ".join(n.replace('_', ' ').title()
+                               for n, _g, _lo, _hi in PHYSICS_PARAMS))
 
     def _render_tile_mutation(self, ats, sigma):
         _, ats.tile_mutation_enabled = imgui.checkbox(
