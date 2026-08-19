@@ -723,7 +723,7 @@ class UI(
         if self.state.preferences.show_sidebar and self.state.preferences.show_history_window:
             self.render_history_window()
 
-        if self.show_sidebar and self.state.preferences.show_field_stack:
+        if self.state.preferences.show_sidebar and self.state.preferences.show_field_stack:
             self.render_field_stack_window()
 
         if self.state.preferences.show_undo_window:
