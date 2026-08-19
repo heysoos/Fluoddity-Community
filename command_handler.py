@@ -332,6 +332,7 @@ class CommandHandler:
         # is what clears the browser's other one-shots, and after both mode
         # handlers so it sees this frame's enabled flags.
         self._handle_archive_preview(ui_state)
+        self._handle_browser_actions(ui_state)
 
         return None
 
@@ -925,8 +926,10 @@ class CommandHandler:
         ast.chase_tile = -1
         ast.pin_tile = -1
         ast.seed_entry_id = -1
-        ast.delete_entry_id = -1
-        ast.refit_projection_requested = False
+        # delete_entry_id and refit_projection_requested are NOT here: they
+        # belong to _handle_browser_actions, which runs after this and needs
+        # them still set. Clearing them here is what made the buttons do
+        # nothing while the browser was open without Explore.
         ast.download_model_requested = False
 
     @staticmethod
@@ -1069,14 +1072,8 @@ class CommandHandler:
             drv.end_expedition()
         if ast.chase_tile >= 0 and not drv.chase(int(ast.chase_tile)):
             ast.warning = "nothing captured yet - chase needs one generation first"
-        if (ast.refit_projection_requested and self.archive is not None
-                and self.map_layout_service is not None):
-            self.map_layout_service.request_refit()
-
         if ast.seed_entry_id >= 0:
             self._seed_from_archive(ast)
-        if ast.delete_entry_id >= 0:
-            self._delete_archive_entry(ast)
 
         ast.running = svc.phase.value == "rollout"
         if ast.running:
@@ -1235,6 +1232,26 @@ class CommandHandler:
                 f"window to run or export this one.")
 
     # ---- live preview of an archive entry -----------------------------
+
+    def _handle_browser_actions(self, ui_state):
+        """Delete and Relayout, which need the ARCHIVE and nothing else.
+
+        Outside _handle_explore for the same reason _handle_archive_preview is:
+        that bails the moment the Explore driver is detached, and
+        _clear_explore_flags then wipes the one-shot - so the button did
+        nothing and said nothing while the browser was open on its own. Seeding
+        a run stays behind, because it sets the optimizer's mean and there is
+        nothing to set without one.
+        """
+        ast = ui_state.archive
+        if self.archive is None:
+            return
+        if ast.refit_projection_requested and self.map_layout_service is not None:
+            self.map_layout_service.request_refit()
+        ast.refit_projection_requested = False
+        if ast.delete_entry_id >= 0:
+            self._delete_archive_entry(ast)
+        ast.delete_entry_id = -1
 
     def _handle_archive_preview(self, ui_state):
         """Run the hovered archive entry in the live sim, and commit a click.

@@ -567,8 +567,11 @@ it quietly skews parent choice, eviction and the gallery's sort.
       values must span a range (roughly 0.02..0.07 on a real archive). A
       block of entries at exactly 1.000 is the at-admission stamp, which
       means a rescore was skipped when it was needed.
-- [ ] **z3.** Delete one entry, quit, reopen: the console must NOT say the
-      archive rescored, and z2 must still hold. Deleting is what used to
-      condemn an archive to a rescore on every open.
+- [ ] **z3.** Delete one entry from the browser with Explore NOT running.
+      It must disappear, and the count in the header must drop by one -
+      Delete used to be swallowed silently in that state. Then quit and
+      reopen: the `(N dropped)` figure in the archive line must have gone UP
+      by one, the loaded count DOWN by one, and z2 must still hold. Deleting
+      is what used to condemn an archive to a rescore on every open.
 - [ ] **z4.** Run Explore for a few generations after that, and confirm
       entries are still admitted and the novelty column keeps moving.

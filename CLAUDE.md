@@ -1314,6 +1314,21 @@ mechanics these caveats assume.
   absent — which is the same rule manual tournament mode already follows. A
   reload is what must not happen twice: `load_from_store` rescores everything.
 
+- **A browser one-shot that needs only the ARCHIVE must not be dispatched
+  inside `_handle_explore`.** That handler bails the moment the Explore driver
+  is detached, and `_clear_explore_flags` then wipes the flag - so Delete and
+  Relayout did nothing, and said nothing, whenever the browser was open on its
+  own. `_handle_archive_preview` was moved out for exactly this reason and
+  these two were missed; they now live in `_handle_browser_actions`, which
+  runs after it. Seeding a run stays behind the gate, because it sets the
+  optimizer's mean and there is nothing to set without one. The flag's owner
+  is whichever handler READS it: leaving `delete_entry_id` in
+  `_clear_explore_flags` put the clear back in front of the read. **A
+  method-level test cannot see any of this** - `_delete_archive_entry` was
+  always correct, and the tests calling it directly passed throughout; the
+  guard has to drive `process_commands`. Guarded by
+  `tests/test_browser_actions_without_explore.py`.
+
 - **A closed Tournament window must turn its sub-modes OFF, and only the tab
   that is drawn can do that.** `render_tournament_window` returns early when
   the window is shut, so neither tab runs and neither clears its own
