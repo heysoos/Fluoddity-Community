@@ -1913,6 +1913,48 @@ mechanics these caveats assume.
   `_apply_brain_layout` logs both signatures, and says so louder when a search
   is running.
 
+- **A GROW move is phenotype-preserving, and that is the whole point of
+  transferring rather than redrawing.** A new unit is drawn and then SILENCED —
+  its amplitude zeroed for the three unit modalities, its outgoing column
+  zeroed for MLP — so the child computes bit-for-bit what its parent computed
+  until the search moves it. Without that, a child's novelty comes from the
+  random restart rather than from the extra capacity, and a layout move looks
+  productive whatever shape it proposed. The INCOMING half is drawn, not
+  zeroed: a unit silent on both sides is inert in a way `sigma` takes
+  generations to undo. Amplitude is an OFFSET-type float, so zero encodes to
+  zero and the transferred genome makes a clean CMA-ES mean — the unit's WIDTH
+  (Gabor's and Lenia's `sigma`) is a scale and does clip at zero, which is why
+  only the amplitude is silenced. `shrink`, `drop_layer` and `activation` are
+  lossy or different by definition: only what survives survives unchanged.
+
+- **`add_layer` CANNOT be phenotype-preserving, and that is the architecture
+  rather than the transfer.** Appending a layer puts a new nonlinearity between
+  the old last hidden layer and `W_out`, and none of `tanh`, `sin` or `gelu`
+  has an identity region to pass the signal through — Net2DeeperNet does this
+  with `ReLU`, where `ReLU(x) = x` for `x > 0`. A depth change therefore
+  carries the parent's earlier layers and draws the rest, which is better than
+  a full restart but is still a jump. It reads exactly like a broken transfer,
+  so it is asserted as a PROPERTY in
+  `tests/test_layout_move_phenotype_gpu.py` rather than left to be
+  rediscovered. Guarded there on the real shader, because the phenotype is
+  what the SHADER computes and a NumPy check compares Python against itself.
+
+- **A layout move is PROPOSED, REBUILT and COMPARED.** `_shape_from_layers`
+  CLAMPS rather than raising — deliberately, because its input may be a config
+  from a build with different limits — so a proposal that hits `MAX_DEPTH`,
+  `MAX_WIDTH`, `MAX_BRAIN_FLOATS` or the user's own bound comes back as a
+  DIFFERENT layout, silently: growing `mlp-n48.14` at the second layer asks for
+  more than the budget and returns `mlp-n47.15`, which also SHRANK the first
+  layer. `candidate_moves` rebuilds each proposal and compares `settings_of`
+  against it, which turns that into a rejected move rather than a move that did
+  something else. The float budget is checked BEFORE the `BrainLayout` is
+  constructed, because `__post_init__` raises past `MAX_BRAIN_FLOATS` and a
+  bounded search must not take the app down at its own ceiling. A new MLP layer
+  is APPENDED, never inserted: an inserted layer renumbers every layer after
+  it, leaving nothing for the transfer to carry across. Fourier's phase offset
+  is a function of the centre INDEX, so its new centre goes at the END for the
+  same reason.
+
 ### The MLP layer stack
 
 - **`MAX_MLP_WIDTH` is COMPILED PER LAYOUT, and that is the only reason a deep

@@ -285,9 +285,26 @@ Also a registry hook, and this is what makes a layout move continuous rather
 than a restart.
 
 **Generic:** for the unit-structured modalities, copy `min(n_old, n_new)` whole
-units and draw the remainder. `unit_floats()` already defines the unit and
-`crossover` already relies on it, so `fourier-n10 -> fourier-n11` keeps ten
-centres and gains one.
+units, draw the remainder, and then ZERO the new unit's amplitude.
+`unit_floats()` already defines the unit and `crossover` already relies on it,
+so `fourier-n10 -> fourier-n11` keeps ten centres and gains one.
+
+Drawing the remainder outright was the first design and it is wrong for the
+same reason a randomly initialised MLP unit is: all three unit modalities
+evaluate as `out += amplitude * basis`, so an amplitude of zero makes the new
+unit silent and the grown child bit-identical to its parent. `AMPLITUDE_SLICE`
+is declared by each modality beside `UNIT_FLOATS`, because where a unit keeps
+its outgoing weight is the modality's own fact.
+
+**`add_layer` is the exception, and it is a fact about the architecture rather
+than a limit of the transfer.** Appending a layer puts a new NONLINEARITY
+between the old last hidden layer and `W_out`, and none of `tanh`, `sin` or
+`gelu` has an identity region to pass the signal through unchanged —
+Net2DeeperNet manages this only because `ReLU(x) = x` for `x > 0`. So a depth
+change carries the parent's earlier layers and draws the rest: better than a
+full restart, but discontinuous, and section 4 should treat it as the jump it
+is rather than as ordinary growth. Only `grow` is phenotype-preserving, in
+every modality.
 
 **MLP override:** repack the weight matrices. Growing hidden layer *l* adds a
 row to `W_l`, an entry to `b_l`, and a column to every row of `W_{l+1}` — which
