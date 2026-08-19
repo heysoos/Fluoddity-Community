@@ -261,6 +261,11 @@ class FieldBus:
         """
         entry_target = self.ctx.fbo
         layers = list(getattr(stack, "layers", []))
+        # The global switch reads as an empty stack: the field is released and
+        # contributes exactly zero, which is the rule that makes a disabled
+        # layer free rather than leaving its last frame standing.
+        if not getattr(stack, "enabled", True):
+            layers = []
         self._prune_sources(layers)
 
         if not layers:

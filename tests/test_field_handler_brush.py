@@ -101,16 +101,24 @@ def test_a_config_with_its_own_stack_is_used_verbatim(handler):
     assert [l.source for l in ui.field_stack.layers] == ["noise"]
 
 
-def test_a_config_with_neither_leaves_an_empty_stack(handler):
+def test_a_config_with_neither_leaves_the_stack_ALONE(handler):
+    """A preset that carries no stack has nothing to install.
+
+    Every preset in the library predates the feature, so installing "no stack"
+    over the current one deletes a setup that took a long time to build - on an
+    action about physics. The paint is still cleared; the layers stay.
+    """
     h, _, _ = handler
-    ui = make_ui(stack_from_dict(legacy_brush_stack()))
+    mine = stack_from_dict(legacy_brush_stack())
+    ui = make_ui(mine)
+    before = list(mine.layers)
     config = SimpleNamespace(field_stack={}, force_field_strength=1.0,
                              strafe_field_strength=1.0)
     h.cache.get = lambda *a, **k: None
 
     h.apply_for_config(config, "whatever.json", ui)
 
-    assert ui.field_stack.layers == []
+    assert ui.field_stack.layers == before
 
 
 def test_drawing_at_a_destination_with_no_brush_layer_adds_one():

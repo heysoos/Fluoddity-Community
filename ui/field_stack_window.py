@@ -125,6 +125,19 @@ class FieldStackWindowMixin:
             bus.set_thumbnails_enabled(True)
         layout.push_settings_width()
 
+        changed, stack.enabled = imgui.checkbox(
+            self._tag("Inject##fieldon", collect), stack.enabled)
+        if changed:
+            self._mark_dirty()
+        hints.tip("Turn every layer off at once, keeping their settings.")
+
+        imgui.same_line()
+        changed, stack.locked = imgui.checkbox(
+            self._tag("Keep on preset load##fieldlock", collect), stack.locked)
+        hints.tip("Stop a preset from replacing this stack with its own.")
+
+        imgui.separator()
+
         if imgui.button(self._tag("+ Add layer##fieldstack", collect)):
             stack.layers.append(FieldLayer())
             self._mark_dirty()
@@ -220,8 +233,26 @@ class FieldStackWindowMixin:
         return remove
 
     def _draw_layer_body(self, layer, collect) -> bool:
+        """Three sections, in the order a layer actually works.
+
+        Flat, the camera picker sat six controls below the Source combo that
+        asks for it, and a dozen sliders ran on with nothing to separate them.
+        """
+        changed_any = False
+        changed_any |= self._section_picture(layer, collect)
+        changed_any |= self._section_shape(layer, collect)
+        changed_any |= self._section_output(layer, collect)
+        return changed_any
+
+    def _heading(self, text, collect) -> None:
+        imgui.spacing()
+        imgui.text_disabled(self._tag(text, collect))
+
+    def _section_picture(self, layer, collect) -> bool:
+        """What the picture is: the source, its file or device, its settings."""
         uid = layer.uid
         changed_any = False
+        self._heading(f"Picture##pic{uid}", collect)
 
         keys = [d.key for d in field_sources.descriptors()]
         labels = [field_sources.get(k).label for k in keys]
@@ -235,11 +266,47 @@ class FieldStackWindowMixin:
             layer.params = {}
             changed_any = True
 
+        # Immediately after Source, because it is the question Source asks.
+        changed_any |= self._draw_file_picker(layer, collect)
+        changed_any |= self._draw_layer_params(layer, collect)
+        return changed_any
+
+    def _section_shape(self, layer, collect) -> bool:
+        """How the picture becomes a vector."""
+        uid = layer.uid
+        changed_any = False
+        self._heading(f"Becomes##shp{uid}", collect)
+
         changed, layer.mapping = self._enum(
             "Mapping", layer.mapping, MAPPINGS, MAPPING_LABELS,
             f"map{uid}", collect,
             MAPPING_TIPS.get(layer.mapping, "How the picture becomes a vector."))
         changed_any |= changed
+
+        # Only the derivative mappings have a direction to reverse; on the
+        # others this control was live and did nothing.
+        if layer.mapping in SIGNED_MAPPINGS:
+            pos = 0 if layer.sign >= 0.0 else 1
+            changed, pos = imgui.combo(
+                self._tag(f"Direction##sign{uid}", collect), pos,
+                list(SIGN_LABELS))
+            hints.tip("Whether particles are drawn to the bright regions or "
+                      "driven out of them.")
+            if changed:
+                layer.sign = 1.0 if pos == 0 else -1.0
+                changed_any = True
+
+        changed, layer.blur = self._slider(
+            "Blur", f"{uid}b", layer.blur, 0.0, 6.0, BLUR_DEFAULT, collect,
+            "Softens the picture before the mapping reads it.")
+        changed_any |= changed
+        return changed_any
+
+    def _section_output(self, layer, collect) -> bool:
+        """Where it goes and how hard."""
+        uid = layer.uid
+        changed_any = False
+        self._heading(f"Drives##out{uid}", collect)
 
         changed, layer.destination = self._enum(
             "Destination", layer.destination, DESTINATIONS, DESTINATION_LABELS,
@@ -257,27 +324,6 @@ class FieldStackWindowMixin:
             "Strength", f"{uid}s", layer.strength, 0.0, 4.0, STRENGTH_DEFAULT,
             collect, "How hard this layer pushes.")
         changed_any |= changed
-
-        changed, layer.blur = self._slider(
-            "Blur", f"{uid}b", layer.blur, 0.0, 6.0, BLUR_DEFAULT, collect,
-            "Softens the picture before the mapping reads it.")
-        changed_any |= changed
-
-        # Only the derivative mappings have a direction to reverse; on the
-        # others this control was live and did nothing.
-        if layer.mapping in SIGNED_MAPPINGS:
-            pos = 0 if layer.sign >= 0.0 else 1
-            changed, pos = imgui.combo(
-                self._tag(f"Direction##sign{uid}", collect), pos,
-                list(SIGN_LABELS))
-            hints.tip("Whether particles are drawn to the bright regions or "
-                      "driven out of them.")
-            if changed:
-                layer.sign = 1.0 if pos == 0 else -1.0
-                changed_any = True
-
-        changed_any |= self._draw_file_picker(layer, collect)
-        changed_any |= self._draw_layer_params(layer, collect)
         return changed_any
 
     # -- widgets --------------------------------------------------------

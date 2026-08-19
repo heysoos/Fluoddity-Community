@@ -461,3 +461,33 @@ def test_the_panel_asks_for_a_view_and_never_renders_one(gui):
     imgui.end()
     imgui.render()
     assert bus.asked == (stack.layers[0].uid, "source")
+
+
+def test_a_source_setting_sits_next_to_the_source_combo(gui):
+    """The camera picker was six controls below the Source that asks for it."""
+    harness, _ = draw(FieldStack(layers=[FieldLayer(source="webcam")]),
+                      bus=_FakeBus())
+    order = harness.labels
+
+    def at(fragment):
+        return next(i for i, l in enumerate(order) if fragment in l)
+
+    source = at("Source##")
+    camera = next(i for i, l in enumerate(order)
+                  if "Camera##" in l or "no camera found" in l)
+    mapping = at("Mapping##")
+    assert source < camera < mapping, (
+        f"source at {source}, camera at {camera}, mapping at {mapping}")
+
+
+def test_the_layer_body_is_grouped_into_sections(gui):
+    harness, _ = draw(FieldStack(layers=[FieldLayer(source="noise")]),
+                      bus=_FakeBus())
+    for heading in ("Picture##", "Becomes##", "Drives##"):
+        assert any(heading in l for l in harness.labels), f"{heading} missing"
+
+
+def test_the_global_switch_and_lock_are_reachable(gui):
+    harness, _ = draw(FieldStack(layers=[FieldLayer()]), bus=_FakeBus())
+    assert any("Inject##" in l for l in harness.labels)
+    assert any("Keep on preset load" in l for l in harness.labels)

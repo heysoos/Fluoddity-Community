@@ -590,6 +590,45 @@ mechanics these caveats assume.
   produces. Both first attempts read exactly like the brush being dead, and
   the brush was fine.
 
+- **Nothing called from inside a window BODY may touch GL.** The Inspect panel
+  rendered its view where the UI asked for it, so it left a framebuffer bound
+  that was not the one imgui was about to draw into: every window vanished at
+  once and the close button could not bring them back. The UI asks
+  (`request_inspect`) and the rebuild draws. `rebuild` also puts back the
+  target it FOUND rather than binding the screen - a standalone context, which
+  is what every GL test runs under, does not have one. A released framebuffer
+  keeps its wrapper and swaps its `mglo` for an `InvalidObject`, so the
+  wrapper's own type says nothing about whether binding it will raise.
+
+- **A source shaped differently from the bus is CROPPED, never squeezed**, and
+  the crop lives in the composite's texture read so it covers image as well as
+  webcam. The procedural sources render at the bus size and land on a ratio of
+  exactly 1.0, which the shader takes as its no-op.
+
+- **A camera is flipped at the SOURCE.** ffmpeg's rawvideo rows are top-down
+  and a GL texture is bottom-up; fixing it in the preview instead would put
+  the camera at odds with every other source, all of which the preview flip
+  already handles.
+
+- **Closing a reader is TERMINATE, JOIN, then close - in that order.** The
+  pump thread blocks inside `read()`, and closing the pipe under it from
+  another thread is what repeated open/close does not survive. Terminating
+  first makes that read return EOF, so the thread leaves on its own.
+
+- **One camera cannot be opened twice.** DirectShow refuses the second open,
+  and two layers churning a device between them - each opening what the other
+  just closed, every frame - is what took a machine down. `claim_device` is
+  first-come per rebuild and the loser reports it on its own error line. Two
+  DIFFERENT cameras run together.
+
+- **A preset that carries no stack leaves the current one ALONE.** Every
+  preset in the library predates this feature, so installing "no stack" over a
+  setup deletes user work on an action about physics. `FieldStack.locked`
+  covers the other case, where the preset does carry one, and
+  `FieldStack.enabled` is the global switch - off reads as an EMPTY stack, so
+  the field is released and contributes exactly zero rather than leaving its
+  last frame standing.
+
 - **`python -m tools.drive_field_stack` is how this feature is verified.** A
   render test drives a bare mixin and a GL test drives a bare bus; neither runs
   the assembled app, so a window body naming a missing attribute or handing

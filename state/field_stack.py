@@ -43,10 +43,17 @@ class FieldLayer:
 @dataclass
 class FieldStack:
     layers: list[FieldLayer] = field(default_factory=list)
+    # One switch over every layer. Off means the field is cleared and
+    # contributes exactly zero, not that the last frame is left standing -
+    # same rule the per-layer checkbox follows.
+    enabled: bool = True
+    # Keep this stack when a preset is loaded. A setup takes a long time to
+    # build and an unrelated action must not be able to delete it.
+    locked: bool = False
 
 
 def stack_to_dict(stack: FieldStack) -> dict:
-    return {"layers": [
+    return {"enabled": stack.enabled, "locked": stack.locked, "layers": [
         {
             "uid": l.uid,
             "enabled": l.enabled,
@@ -69,8 +76,9 @@ def stack_from_dict(d: dict) -> FieldStack:
     An unknown enum value falls back to the default rather than raising, so a
     file written by a build with more sources than this one still opens.
     """
+    d = d or {}
     out = []
-    for raw in (d or {}).get("layers", []):
+    for raw in d.get("layers", []):
         out.append(FieldLayer(
             uid=str(raw.get("uid") or new_uid()),
             enabled=bool(raw.get("enabled", True)),
@@ -83,4 +91,6 @@ def stack_from_dict(d: dict) -> FieldStack:
             blur=float(raw.get("blur", 0.0)),
             sign=float(raw.get("sign", 1.0)),
         ))
-    return FieldStack(layers=out)
+    return FieldStack(layers=out,
+                      enabled=bool(d.get("enabled", True)),
+                      locked=bool(d.get("locked", False)))

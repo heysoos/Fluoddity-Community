@@ -193,8 +193,17 @@ class FieldHandler:
         stack_dict = getattr(config, "field_stack", {}) or {}
         if not stack_dict and field_data is not None:
             stack_dict = legacy_brush_stack()
-        ui_state.field_stack.layers = list(stack_from_dict(stack_dict).layers)
-        self._mark_dirty()
+
+        # A preset must never silently delete a setup that took a long time to
+        # build. It carries no stack of its own - which is every preset saved
+        # before this feature existed - so there is nothing to install and the
+        # current one stays. The lock covers the other case, where the preset
+        # does carry one.
+        if stack_dict and not ui_state.field_stack.locked:
+            incoming = stack_from_dict(stack_dict)
+            ui_state.field_stack.layers = list(incoming.layers)
+            ui_state.field_stack.enabled = incoming.enabled
+            self._mark_dirty()
 
         if field_data is not None:
             # The stack was installed a moment ago, so the brush's buffer does
