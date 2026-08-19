@@ -557,6 +557,39 @@ mechanics these caveats assume.
   layer shows `(none)` for the same reason: a combo displaying a filename the
   layer was never pointed at is the same lie.
 
+- **A source that reads the CLOCK is rebuilt on the clock.** The dirty flag is
+  what makes a static stack free, and it froze every animated source on
+  whichever frame a slider was last touched - noise as a still image, feedback
+  inert. `_ProgramSource.animated` asks whether the compiled program declares
+  `time`; whether that shader's own Speed happens to be zero is the shader's
+  business, and guessing from the outside is what caused this. Webcam and
+  feedback declare it outright.
+
+- **The scratch texture rests on LINEAR, never a mipmap filter.**
+  `composite_one` puts a source's filter back the way it found it - it has to,
+  because `feedback` hands back the sim's own canvas - so a mipmap RESTING
+  state left the scratch incomplete for every reader that was not blurring.
+  That is the thumbnail and the inspector, both of which then drew black, and
+  it looked like a source doing nothing rather than a filter.
+
+- **Every preview needs the v FLIP.** The bus renders GL textures, v=0 at the
+  bottom; imgui draws uv0 at the top-left. Unflipped, the picture is a mirror
+  of what the particles read, which reads as the SIM being upside down - the
+  sim's orientation was measured and was correct all along. Guarded by
+  `tests/test_ui_image_calls.py`.
+
+- **The inspector's three views are three different computations.** "Mapped"
+  composites the layer ALONE, with its blend and channel mask set aside: its
+  share of the stack is not its contribution, and a layer under a `replace`
+  layer inspected as empty. Both vector views are drawn as direction-in-hue,
+  because raw RG shows two opposite vectors as much the same colour.
+
+- **`get_state()` rebuilds the pointer and every one-shot EVERY FRAME.** So a
+  tool driving a stroke has to write `mouse_pos`/`mouse_left_held` after it
+  returns, and a clear request onto the UI rather than onto the state it
+  produces. Both first attempts read exactly like the brush being dead, and
+  the brush was fine.
+
 - **`python -m tools.drive_field_stack` is how this feature is verified.** A
   render test drives a bare mixin and a GL test drives a bare bus; neither runs
   the assembled app, so a window body naming a missing attribute or handing

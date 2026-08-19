@@ -86,19 +86,21 @@ Whatever the modality, the size settings fix the search dimension printed under 
 
 The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space. For a deep MLP the tiles are the **last** hidden layer's units, the only ones that add up to the output. `Slice` chooses the plane and **Reseed plane** redraws the random one; `Output` chooses what is drawn, defaulting to a random projection of all four outputs into red, green and blue. The single-value views are blue for negative and orange for positive.
 
-## Field Stack
+## Inject Texture
 
-**Extras > Field Stack** injects texture into the fields the particles move through — procedural noise, an image, your own GLSL, or the simulation's own canvas fed back into itself.
+**Extras > Inject Texture** injects texture into the fields the particles move through — procedural noise, an image, your own GLSL, or the simulation's own canvas fed back into itself.
 
 The stack is a list of **layers**, composited top to bottom, and the whole thing is rebuilt every frame — so unticking a layer removes it, with nothing left behind. Each row reads left to right as what actually happens:
 
-- **Source** — where the texture comes from. `noise` (fbm, with scale, octaves, speed and domain warp), `image`, `gradient` (linear or radial), `shader` (your own `.frag`), `brush` (what you paint with the mouse), and `feedback` (the sim's own trails, which closes the loop).
+- **Source** — where the texture comes from. `noise` (fbm, with scale, octaves, speed and domain warp), `image`, `gradient` (linear or radial), `shader` (your own `.frag`), `brush` (what you paint with the mouse), `webcam` (a live camera — pair it with `gradient` or `curl` and moving in front of it pushes the particles around), and `feedback` (the sim's own trails, which closes the loop).
 - **Mapping** — how that texture becomes a vector field. `gradient` makes it a potential particles run down, `curl` turns it a quarter turn so they circulate along contours instead of piling into the bright spots, `rg_direct` reads the channels as a vector, `polar` reads hue as an angle, `luminance` reads brightness.
 - **Destination** — `force` accelerates particles; `strafe` slides them sideways without changing their velocity.
 - **Blend** — `replace`, `add`, `multiply` or `max` against the layers beneath. A `multiply` layer at the bottom of the stack has nothing to multiply and yields zero.
-- **Strength**, **Blur** (softens the source before the mapping reads it — worth turning up for `gradient`, which is otherwise reading sensor grain) and **Attract**, which flips whether the gradient pulls toward the bright regions or away.
+- **Strength**, **Blur** (softens the source before the mapping reads it — worth turning up for `gradient`, which is otherwise reading sensor grain) and **Direction**, which appears only for `gradient` and `curl` and flips whether particles are drawn to the bright regions or driven out of them.
 
-Click a row's thumbnail to pin the **Inspect** panel and see what a source produces before anything interprets it. **Bus Resolution** composites below canvas resolution; a forcing field is smooth, so 1/2 usually looks identical and costs a quarter as much.
+Every slider resets to its default on right-click, and each layer is a collapsing header so a deep stack stays readable.
+
+Click a row's thumbnail (or **Inspect**) to open the **Inspect** panel, which shows three different things: the **source texture** as the layer produced it, **after mapping** — that layer alone, with direction drawn as hue and strength as brightness — and the **whole field** every layer composited together. Under **Advanced**, **Resolution** composites below canvas resolution; a forcing field is smooth, so Half usually looks identical and costs a quarter as much.
 
 ### Writing a field shader
 
