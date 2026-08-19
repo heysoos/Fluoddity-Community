@@ -90,13 +90,17 @@ The **Inspector** in the same window draws what the brain actually computes — 
 
 **Extras > Inject Texture** injects texture into the fields the particles move through — procedural noise, an image, your own GLSL, or the simulation's own canvas fed back into itself.
 
-The stack is a list of **layers**, composited top to bottom, and the whole thing is rebuilt every frame — so unticking a layer removes it, with nothing left behind. Each row reads left to right as what actually happens:
+**Inject** turns the whole stack off at once without losing anything, and **Keep on preset load** stops a preset replacing it — a preset carrying no stack of its own never touches yours either way.
 
-- **Source** — where the texture comes from. `noise` (fbm, with scale, octaves, speed and domain warp), `image`, `gradient` (linear or radial), `shader` (your own `.frag`), `brush` (what you paint with the mouse), `webcam` (a live camera — pair it with `gradient` or `curl` and moving in front of it pushes the particles around), and `feedback` (the sim's own trails, which closes the loop).
-- **Mapping** — how that texture becomes a vector field. `gradient` makes it a potential particles run down, `curl` turns it a quarter turn so they circulate along contours instead of piling into the bright spots, `rg_direct` reads the channels as a vector, `polar` reads hue as an angle, `luminance` reads brightness.
-- **Destination** — `force` accelerates particles; `strafe` slides them sideways without changing their velocity.
-- **Blend** — `replace`, `add`, `multiply` or `max` against the layers beneath. A `multiply` layer at the bottom of the stack has nothing to multiply and yields zero.
-- **Strength**, **Blur** (softens the source before the mapping reads it — worth turning up for `gradient`, which is otherwise reading sensor grain) and **Direction**, which appears only for `gradient` and `curl` and flips whether particles are drawn to the bright regions or driven out of them.
+The stack is a list of **layers**, composited top to bottom, and the whole thing is rebuilt every frame — so unticking a layer removes it, with nothing left behind. Each layer opens into three sections — what the **Picture** is, what it **Becomes**, what it **Drives**:
+
+- **Picture** — the **Source**, then its own settings right beneath it: a file browser for `image` and `shader`, a camera and resolution for `webcam`, a Clear button for `brush`. Sources are `noise` (fbm, with scale, octaves, speed and domain warp), `image`, `gradient` (linear or radial), `shader` (your own `.frag`), `brush` (what you paint with the mouse), `webcam` (a live camera — pair it with `gradient` or `curl` and moving in front of it pushes the particles around), and `feedback` (the sim's own trails, which closes the loop).
+- **Becomes** — the **Mapping** from texture to vector field. `gradient` makes it a potential particles run down, `curl` turns it a quarter turn so they circulate along contours instead of piling into the bright spots, `rg_direct` reads the channels as a vector, `polar` reads hue as an angle, `luminance` reads brightness.
+- **Drives** — **Destination** (`force` accelerates particles; `strafe` slides them sideways without changing their velocity), **Blend** (`replace`, `add`, `multiply` or `max` against the layers beneath — a `multiply` layer at the bottom has nothing to multiply and yields zero) and **Strength**.
+
+**Blur** softens the source before the mapping reads it — worth turning up for `gradient`, which is otherwise reading sensor grain — and **Direction** appears only for `gradient` and `curl`, flipping whether particles are drawn to the bright regions or driven out of them.
+
+A source shaped differently from the canvas is scaled to fill and centre-cropped, so a 4:3 camera keeps its proportions.
 
 Every slider resets to its default on right-click, and each layer is a collapsing header so a deep stack stays readable.
 
