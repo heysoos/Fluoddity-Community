@@ -167,6 +167,10 @@ class FieldBus:
     def mark_dirty(self) -> None:
         self._dirty = True
 
+    def _is_animated(self, layer) -> bool:
+        """Whether this layer's source has to be redrawn every frame."""
+        return bool(getattr(self._source_for_layer(layer), "animated", False))
+
     def source_for(self, layer):
         """The GPU-side source object for a layer, or None if it has none."""
         entry = self._sources.get(layer.uid)
@@ -231,6 +235,12 @@ class FieldBus:
         had_target = self._tex is not None
         self.ensure(canvas_width, canvas_height, scale)
         if not had_target:
+            self._dirty = True
+
+        # A source that varies with time is redrawn on every frame, or it is
+        # frozen on whichever frame a slider was last touched - which is what
+        # made noise look like a still image and feedback look inert.
+        if any(layer.enabled and self._is_animated(layer) for layer in layers):
             self._dirty = True
 
         # The count belongs to the last REBUILD, so a clean frame leaves it
@@ -389,7 +399,11 @@ class FieldBus:
             return
         w, h = self._res
         tex = self.ctx.texture((w, h), 4, dtype="f4")
-        tex.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+        # LINEAR at rest, never a mipmap filter: composite_one puts the filter
+        # back the way it found it, so a mipmap resting state leaves the
+        # scratch incomplete for every reader that is not blurring - which is
+        # the thumbnail and the inspector, both of which then draw black.
+        tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
         tex.repeat_x = True
         tex.repeat_y = True
         self._scratch = tex

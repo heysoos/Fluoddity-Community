@@ -144,6 +144,16 @@ class _ProgramSource:
         self._vao = self.ctx.vertex_array(program, [])
         self.error = None
 
+    @property
+    def animated(self) -> bool:
+        """A shader that reads the clock is redrawn on the clock.
+
+        Whether its own Speed happens to be zero is the shader's business: the
+        bus cannot see inside it, and guessing is what froze every animated
+        source on the frame a slider was last touched.
+        """
+        return self._program is not None and "time" in self._program
+
     def evaluate(self, bus, layer, frame):
         if self._program is None:
             return None
@@ -187,6 +197,9 @@ class _BuiltinSource(_ProgramSource):
 
 class _FeedbackSource:
     """The sim's own canvas, borrowed. Costs no pass and no copy."""
+
+    # The trail moves under it every step, so the composite must be redone.
+    animated = True
 
     def __init__(self, ctx):
         self.ctx = ctx

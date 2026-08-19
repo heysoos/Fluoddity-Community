@@ -172,3 +172,41 @@ def test_pass_count_reports_what_ran(bus):
     rebuild(bus, FieldStack(layers=[gradient_layer(), gradient_layer()]))
     # Two procedural layers: a source pass and a composite pass each.
     assert bus.pass_count == 4
+
+
+def test_an_animated_source_rebuilds_without_being_marked_dirty(bus):
+    """Noise reads the clock, so it must advance on its own.
+
+    Left to the dirty flag it froze on whichever frame a slider was last
+    touched - a still image in the thumbnail, the inspector and the sim.
+    """
+    stack = FieldStack(layers=[FieldLayer(source="noise")])
+    assert rebuild(bus, stack) is True
+    assert bus.dirty is False
+    assert rebuild(bus, stack) is True, "an animated source stopped redrawing"
+
+
+def test_a_static_source_still_goes_quiet(bus):
+    """The fast path has to survive: a stack that cannot change is free."""
+    layer = FieldLayer(source="image")
+    layer.params["_file"] = ""
+    stack = FieldStack(layers=[layer])
+    rebuild(bus, stack)
+    assert rebuild(bus, stack) is False
+
+
+def test_a_disabled_animated_layer_does_not_keep_the_bus_awake(bus):
+    layer = FieldLayer(source="noise", enabled=False)
+    stack = FieldStack(layers=[layer])
+    rebuild(bus, stack)
+    assert rebuild(bus, stack) is False
+
+
+def test_the_scratch_is_not_left_on_a_mipmap_filter(bus):
+    """A mipmap min-filter with no chain samples as BLACK, which is what the
+    thumbnail and the inspector draw unless Blur happens to build one."""
+    import moderngl
+    rebuild(bus, FieldStack(layers=[FieldLayer(source="noise", blur=0.0)]))
+    assert bus.scratch_texture.filter == (moderngl.LINEAR, moderngl.LINEAR)
+    rebuild(bus, FieldStack(layers=[FieldLayer(source="noise", blur=3.0)]))
+    assert bus.scratch_texture.filter == (moderngl.LINEAR, moderngl.LINEAR)

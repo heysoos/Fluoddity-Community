@@ -48,3 +48,23 @@ def test_the_guard_can_see_the_calls_it_is_meant_to_police():
     for expected in ("archive_window.py", "brain_window.py",
                      "field_stack_window.py"):
         assert expected in files, f"{expected} draws images and was not read"
+
+
+def test_every_field_preview_flips_v():
+    """The bus renders GL textures - v=0 at the BOTTOM - and imgui draws uv0
+    at the top-left, so an unflipped preview is a mirror of what the particles
+    read. That reads as the sim being upside down rather than the picture."""
+    missing = [f"{f}:{line}" for f, line, _ in _image_calls()
+               if f == "field_stack_window.py"
+               and not _has_uv(f, line)]
+    assert not missing, (
+        "these field previews draw without a uv flip:\n  " + "\n  ".join(missing))
+
+
+def _has_uv(filename, lineno):
+    for path in Path("ui").glob(filename):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if (isinstance(node, ast.Call) and node.lineno == lineno
+                    and len(node.args) >= 4):
+                return True
+    return False
