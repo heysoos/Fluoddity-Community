@@ -150,10 +150,10 @@ class FieldStackWindowMixin:
         thumb = bus.thumbnail_for(layer) if bus is not None else None
         if thumb is None:
             return
-        imgui.image(thumb.glo, imgui.ImVec2(48, 48))
+        imgui.image(imgui.ImTextureRef(thumb.glo), imgui.ImVec2(48, 48))
         if imgui.is_item_hovered():
             imgui.begin_tooltip()
-            imgui.image(thumb.glo, imgui.ImVec2(256, 256))
+            imgui.image(imgui.ImTextureRef(thumb.glo), imgui.ImVec2(256, 256))
             imgui.end_tooltip()
         if imgui.is_item_clicked():
             self._inspect_uid = layer.uid
@@ -179,7 +179,7 @@ class FieldStackWindowMixin:
         # a vector-field view worth drawing with the arrow renderer.
         tex = bus.inspect(layer, views[view])
         if tex is not None:
-            imgui.image(tex.glo, imgui.ImVec2(384, 384))
+            imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(384, 384))
         if imgui.button(self._tag("Close##fieldinspect", collect)):
             self._inspect_uid = None
 
