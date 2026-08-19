@@ -45,10 +45,10 @@ def test_a_move_that_admits_nothing_asks_for_the_parent_back():
 
 
 def test_a_reverted_move_is_not_immediately_re_proposed():
-    d, _arc, _ts = a_move(expedition_gens=2)
+    d, arc, _ts = a_move(expedition_gens=2)
     pair = d.layout_move.pair
     run_expedition(d, admit=False)
-    assert pair in d._reverted
+    assert pair in arc.reverted_pairs()
 
 
 def test_a_reverted_move_leaves_the_native_count_where_it_started():
@@ -63,12 +63,12 @@ def test_a_reverted_move_leaves_the_native_count_where_it_started():
 
 
 def test_a_move_that_admits_keeps_the_layout():
-    d, _arc, _ts = a_move(expedition_gens=2)
+    d, arc, _ts = a_move(expedition_gens=2)
     run_expedition(d, admit=True)
     assert d._move_admitted == 0          # consumed by the verdict
     assert d.requested_layout is None
     assert d.layout_move is None
-    assert not d._reverted
+    assert not arc.reverted_pairs()
 
 
 def test_the_verdict_is_delivered_exactly_once():
@@ -82,10 +82,11 @@ def test_the_verdict_is_delivered_exactly_once():
 def test_an_abandoned_move_is_neither_kept_nor_banned():
     """A grid change or a brain switch of the user's own ends the expedition
     without a verdict. Nothing was learned, so nothing is recorded."""
-    d, _arc, _ts = a_move(expedition_gens=50)
+    d, arc, _ts = a_move(expedition_gens=50)
     d.end_expedition()
     assert d.requested_layout is None
-    assert not d._reverted
+    assert not arc.layout_moves()
+    assert not arc.reverted_pairs()
     assert d.layout_move is None
 
 
@@ -106,7 +107,47 @@ def test_a_layout_that_only_repeats_the_archive_is_reverted():
     run_expedition(d, admit=True)
     assert len(arc) > before, "keeper and summit still deposited tiles"
     assert d.requested_layout == parent
-    assert d._reverted
+    assert arc.reverted_pairs()
+
+
+def test_the_verdict_reaches_the_archives_ledger():
+    d, arc, _ts = a_move(expedition_gens=2)
+    mv = d.layout_move
+    run_expedition(d, admit=False)
+    row = arc.layout_moves()[-1]
+    assert (row["parent"], row["child"]) == mv.pair
+    assert row["kept"] is False
+    assert row["op"] == mv.operator
+
+
+def test_a_kept_move_is_filed_too():
+    """The ledger is the record of the WALK, not only of its failures."""
+    d, arc, _ts = a_move(expedition_gens=2)
+    run_expedition(d, admit=True)
+    assert arc.layout_moves()[-1]["kept"] is True
+
+
+def test_a_ban_already_in_the_archive_is_honoured():
+    """The ledger outlives the run, so a driver that has proposed nothing yet
+    still knows what did not work."""
+    from services.brains import default_layout
+    from tests.test_layout_expedition import a_driver
+
+    d, arc, _ts = a_driver()
+    for child in ("fourier-n9", "fourier-n11"):
+        arc.record_layout_move(default_layout().signature(), child,
+                               "grow", 1, 0, False, 0)
+    assert d.start_expedition() is True
+    assert d.requested_layout is None      # every move from here is banned
+
+
+def test_a_reset_does_not_forgive_a_reverted_move():
+    """Reset clears the SEARCH, never the archive - and the ledger is a fact
+    about the archive."""
+    d, arc, _ts = a_move(expedition_gens=2)
+    run_expedition(d, admit=False)
+    d.reset()
+    assert arc.reverted_pairs()
 
 
 def test_an_ordinary_expedition_asks_for_nothing_when_it_ends():

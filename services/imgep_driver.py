@@ -133,9 +133,6 @@ class ImgepDriver:
         self._move: LayoutMove | None = None
         self._move_seed: int | None = None
         self._move_admitted = 0
-        # Pairs that produced nothing, so the search does not spend its cadence
-        # re-proposing them. In memory until the ledger persists it.
-        self._reverted: set[tuple[str, str]] = set()
 
         self.gen = 0
         self._last_score_label = "novelty"
@@ -285,11 +282,12 @@ class ImgepDriver:
         self._n_records = 0
         for v in self.trace.values():
             v.clear()
-        # A move that has not landed belongs to the run being abandoned, and so
-        # does what this run learned about which moves are dead ends.
+        # A move that has not landed belongs to the run being abandoned. What
+        # the ARCHIVE learned about which moves are dead ends is not the run's
+        # to forget - the ledger is a fact about the archive, and this clears
+        # the search.
         self.requested_layout = None
         self._pending = None
-        self._reverted.clear()
         self.end_expedition()
 
     def end_expedition(self) -> None:
@@ -507,7 +505,7 @@ class ImgepDriver:
             return False
         parent = self.spec.layout
         mv = propose_layout_move(parent, self.layout_bounds, self.rng,
-                                 banned=self._reverted)
+                                 banned=self.archive.reverted_pairs())
         if mv is None:
             return False
         # The seed this goal would have picked anyway, under the layout still
@@ -587,11 +585,15 @@ class ImgepDriver:
         print(f"[brain] layout move {mv.operator} {mv.parent.signature()} -> "
               f"{mv.child.signature()}: {admitted} separated, "
               f"{'kept' if kept else 'reverted'}")
+        # BOTH outcomes: the ledger is the record of the walk, and it is also
+        # what bans a reverted pair from being proposed again.
+        self.archive.record_layout_move(
+            mv.parent.signature(), mv.child.signature(), mv.operator,
+            int(self.expedition_gens), int(admitted), kept, int(self.gen))
         if kept:
             # It has native entries now, so ordinary expansion breeds from it
             # next generation with no special case anywhere.
             return
-        self._reverted.add(mv.pair)
         self.requested_layout = mv.parent
 
     def _draw_goal(self) -> Goal | None:

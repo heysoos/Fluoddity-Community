@@ -114,6 +114,10 @@ class Archive:
             dim = get_model(self.encoder).dim
 
         self.store = store
+        # Seeded from disk, so a reopened archive already knows which layout
+        # moves it refused. See record_layout_move.
+        self._layout_moves: list[dict] = (
+            store.load_layout_moves() if store is not None else [])
         self.capacity = int(capacity)
         self.k = int(k)
         self.liveness_min = float(liveness_min)
@@ -484,6 +488,40 @@ class Archive:
             "entries": len(self.entries), "changed": moved})
         self._last_settings = data
         return self.cfg_version
+
+    # ---- the layout ledger ---------------------------------------------
+
+    def record_layout_move(self, parent: str, child: str, op: str, gens: int,
+                           admitted: int, kept: bool, gen: int) -> None:
+        """File one layout move, and ban its pair if it was reverted.
+
+        The ledger belongs to the ARCHIVE rather than to the run: a move that
+        produced nothing here will produce nothing here next session either,
+        and re-proposing it spends a cadence interval an ordinary expedition
+        would have used. So Reset does not forgive one - deleting
+        layouts.jsonl is how a user does.
+
+        Kept moves are filed too: the ledger is the record of the WALK, not
+        only of its failures.
+        """
+        row = {"ts": time.time(), "gen": int(gen), "parent": str(parent),
+               "child": str(child), "op": str(op), "gens": int(gens),
+               "admitted": int(admitted), "kept": bool(kept)}
+        self._layout_moves.append(row)
+        if self.store is not None:
+            self.store.append_layout_move(row)
+
+    def layout_moves(self) -> list[dict]:
+        """-> every move filed against this archive, oldest first."""
+        return list(self._layout_moves)
+
+    def reverted_pairs(self) -> set[tuple[str, str]]:
+        """-> (parent, child) pairs the archive has already refused.
+
+        DIRECTIONAL: growing failing says nothing about shrinking back.
+        """
+        return {(str(r.get("parent", "")), str(r.get("child", "")))
+                for r in self._layout_moves if not r.get("kept", True)}
 
     # ---- capacity ------------------------------------------------------
 

@@ -56,3 +56,60 @@ def test_a_disabled_store_writes_nothing_and_does_not_raise(tmp_path):
     s.enabled = False
     s.append_layout_move({"op": "grow"})
     assert not s.layouts_path.exists()
+
+
+# ---- the archive's view of it -------------------------------------------
+
+def an_archive(tmp_path=None):
+    from services.archive import Archive
+
+    store = a_store(tmp_path) if tmp_path is not None else None
+    return Archive(store=store, dim=8)
+
+
+def test_a_kept_move_bans_nothing():
+    arc = an_archive()
+    arc.record_layout_move("fourier-n10", "fourier-n11", "grow", 50, 3, True, 7)
+    assert arc.reverted_pairs() == set()
+
+
+def test_a_reverted_move_bans_its_pair():
+    arc = an_archive()
+    arc.record_layout_move("fourier-n10", "fourier-n11", "grow", 50, 0, False, 7)
+    assert arc.reverted_pairs() == {("fourier-n10", "fourier-n11")}
+
+
+def test_the_ban_is_directional():
+    """Growing n10 -> n11 failing says nothing about shrinking n11 -> n10."""
+    arc = an_archive()
+    arc.record_layout_move("fourier-n10", "fourier-n11", "grow", 50, 0, False, 7)
+    assert ("fourier-n11", "fourier-n10") not in arc.reverted_pairs()
+
+
+def test_a_store_less_archive_still_bans():
+    """Every test harness and every browse-only session runs without one."""
+    arc = an_archive()
+    arc.record_layout_move("a", "b", "grow", 1, 0, False, 0)
+    assert arc.reverted_pairs() == {("a", "b")}
+
+
+def test_a_ban_survives_reopening_the_archive(tmp_path):
+    """The whole reason it is on disk: a move that produced nothing in this
+    archive will not be re-proposed in the next session either."""
+    arc = an_archive(tmp_path)
+    arc.record_layout_move("fourier-n10", "fourier-n11", "grow", 50, 0, False, 7)
+    again = an_archive(tmp_path)
+    assert again.reverted_pairs() == {("fourier-n10", "fourier-n11")}
+
+
+def test_the_row_records_what_the_move_was(tmp_path):
+    arc = an_archive(tmp_path)
+    arc.record_layout_move("fourier-n10", "fourier-n11", "grow", 50, 3, True, 7)
+    row = arc.layout_moves()[-1]
+    assert row["parent"] == "fourier-n10"
+    assert row["child"] == "fourier-n11"
+    assert row["op"] == "grow"
+    assert row["gens"] == 50
+    assert row["admitted"] == 3
+    assert row["kept"] is True
+    assert row["gen"] == 7
