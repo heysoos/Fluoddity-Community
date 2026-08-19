@@ -542,6 +542,28 @@ mechanics these caveats assume.
   skips every step below it — including the archive flush. Caught by
   `tests/test_crash_safety.py`, a long way from the line that broke it.
 
+- **The pass count belongs to the LAST REBUILD, and the field TEXTURE is the
+  only honest measure of whether a layer is doing anything.** The bus is clean
+  in steady state, so zeroing the count on a clean frame made the readout say
+  "0 passes" for every frame a layer was quietly forcing — and made it useless
+  as an instrument, which is how a first pass at verifying this feature
+  concluded the whole bus was dead when it was working. Read
+  `field_bus.field_texture` instead.
+
+- **A file a layer names and cannot find is OFFERED BACK, never replaced.**
+  The shader picker used to substitute the first `.frag` it could find, so a
+  preset naming a deleted shader silently ran a different one and the layer's
+  error — the only place the loss is reported — never appeared. An unchosen
+  layer shows `(none)` for the same reason: a combo displaying a filename the
+  layer was never pointed at is the same lie.
+
+- **`python -m tools.drive_field_stack` is how this feature is verified.** A
+  render test drives a bare mixin and a GL test drives a bare bus; neither runs
+  the assembled app, so a window body naming a missing attribute or handing
+  imgui a raw `.glo` passes the whole suite and crashes on the first frame —
+  four did. The tool suppresses `imgui.ini` and keeps the archive browser shut,
+  because a restored browser opens the user's archive and flushes it on close.
+
 ### The archive and admission
 
 - **An archive is pinned to ONE encoder AT CREATION, and every control over it
