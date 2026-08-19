@@ -83,6 +83,22 @@ class ArchiveState:
     seed_ess_min: float = 8.0
     seed_ess_max: float = 512.0
 
+    # brain layout search. OFF: opening the app must never start changing
+    # brain under anyone. See services/brains/layout_moves.py.
+    layout_search: bool = False
+    layout_move_chance: float = 0.2
+    # ONE convention for all three: 0 is "the limit this build already
+    # allows". A literal bound of zero would forbid every layout, so it can
+    # never mean itself - and it is what lets these defaults be stated here
+    # without importing services, which nothing else in state/ does.
+    layout_max_depth: int = 0
+    layout_max_width: int = 0
+    layout_max_floats: int = 0
+    # Comma-separated registry keys, so a fifth modality needs no new field.
+    # Empty is the running modality alone: a jump carries no genome, and
+    # opting into a restart should be a decision.
+    layout_modalities: str = ""
+
     # browser view
     sort_by: str = "novelty"         # see GALLERY_SORTS
     sort_desc: bool = True
@@ -248,6 +264,9 @@ PERSISTED_FIELDS = (
     "expansion_between", "expedition_gens", "expedition_sigma",
     "latent_share", "novelty_share", "goal_order",
     "seed_ess_min", "seed_ess_max",
+    # brain layout search
+    "layout_search", "layout_move_chance", "layout_max_depth",
+    "layout_max_width", "layout_max_floats", "layout_modalities",
     # browser and map view: per-archive, and restoring where you were looking
     # is most of what "open it in its last state" means once the archive is
     # large enough that the map does not fit on screen.

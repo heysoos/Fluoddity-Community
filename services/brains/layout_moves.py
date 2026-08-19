@@ -68,17 +68,22 @@ def bounds_from(max_depth, max_width, max_floats, modalities,
                 running) -> LayoutBounds:
     """Build the bounds a settings block describes.
 
-    0 means "whatever the modality itself allows", which is what a fresh
-    settings block holds - a literal bound of zero would forbid every layout.
+    0 means "the limit this build already allows", one convention for all
+    three bounds - a literal bound of zero would forbid every layout, so it
+    can never mean itself. That is also what lets the settings block name its
+    defaults without importing anything from services.
+
     The RUNNING modality is dropped from the jump list: it is where the search
-    already is, and a move to the layout it is standing on is not a move.
+    already is, and a move to the layout it is standing on is not a move. A
+    `running` of None means no brain has been built yet, which is not an error
+    - it just names no modality to exclude.
     """
+    here = getattr(running, "modality", "")
     return LayoutBounds(
         max_depth=int(max_depth) or None,
         max_width=int(max_width) or None,
-        max_floats=min(int(max_floats), MAX_BRAIN_FLOATS),
-        modalities=tuple(k for k in parse_modalities(modalities)
-                         if k != running.modality),
+        max_floats=min(int(max_floats) or MAX_BRAIN_FLOATS, MAX_BRAIN_FLOATS),
+        modalities=tuple(k for k in parse_modalities(modalities) if k != here),
     )
 
 

@@ -1040,6 +1040,7 @@ class CommandHandler:
                      "goal_order",
                      "seed_ess_min", "seed_ess_max"):
             setattr(drv, name, getattr(ast, name))
+        self._push_layout_search(drv, ast, self._brain_layout())
         if self.archive is not None:
             self.archive.capacity = int(ast.capacity)
             self.archive.min_separation = float(ast.min_separation)
@@ -1082,6 +1083,23 @@ class CommandHandler:
         if ast.running:
             self._record_run_physics(ui_state, svc.run_id)
         self._clear_explore_flags(ast)
+
+    @staticmethod
+    def _push_layout_search(drv, ast, layout) -> None:
+        """Point the driver's layout search at what the settings say.
+
+        Its own helper rather than three lines in the setattr loop above,
+        because the bounds are the one Explore setting that is not a straight
+        copy: 0 means "the limit this build allows", and the running modality
+        is dropped from the jump list.
+        """
+        from services.brains.layout_moves import bounds_from
+
+        drv.layout_search = bool(ast.layout_search)
+        drv.layout_move_chance = float(ast.layout_move_chance)
+        drv.layout_bounds = bounds_from(
+            ast.layout_max_depth, ast.layout_max_width, ast.layout_max_floats,
+            ast.layout_modalities, layout)
 
     def _record_run_physics(self, ui_state, run_id):
         """File the physics this run is producing entries under.
