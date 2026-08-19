@@ -340,6 +340,22 @@ class ImgepDriver:
         return self.start_expedition_with(goal.embedding, goal.kind, goal.text,
                                           seed_index=goal.seed_index)
 
+    def _resolve_seed(self, emb, kind: str, seed_index) -> int | None:
+        """Which archive row an expedition toward this goal should start at.
+
+        NATIVE as well as in range. A seed becomes the optimizer's mean and is
+        re-encoded under the running layout, so a row belonging to another
+        brain is not a worse start but an unreadable one - and an archive pools
+        every layout. A goal that names one falls through to _seed_index, which
+        filters, exactly as an out-of-range index does.
+        """
+        if (seed_index is not None and 0 <= int(seed_index) < len(self.archive)
+                and self.archive.is_native(int(seed_index))):
+            return int(seed_index)
+        if emb is None:
+            return None            # nothing to point at and nowhere to start
+        return self._seed_index(emb, str(kind))
+
     def start_expedition_with(self, embedding, kind: str, text: str,
                               seed_index: int | None = None) -> bool:
         """Begin an expedition toward a specific embedding. An expedition needs
@@ -353,35 +369,49 @@ class ImgepDriver:
         """
         emb = (None if embedding is None
                else np.asarray(embedding, dtype=np.float32))
-        # NATIVE as well as in range. A seed becomes the optimizer's mean and is
-        # re-encoded under the running layout, so a row belonging to another
-        # brain is not a worse start but an unreadable one - and an archive
-        # pools every layout. A goal that names one falls through to
-        # _seed_index, which filters, exactly as an out-of-range index does.
-        if (seed_index is not None and 0 <= int(seed_index) < len(self.archive)
-                and self.archive.is_native(int(seed_index))):
-            i = int(seed_index)
-        elif emb is None:
-            return False            # nothing to point at and nowhere to start
-        else:
-            i = self._seed_index(emb, str(kind))
-        if i is None or self.expedition_gens <= 0:
+        i = self._resolve_seed(emb, kind, seed_index)
+        if i is None:
             return False
-        self._goal = Goal(kind, text, emb, seed_index=i)
-        self._x0_index = int(i)
+        # The seed is the one re-encode worth reporting: it becomes the
+        # optimizer's mean, so a clipped one starts the chase from a creature
+        # the user did not pick. Expansion parents re-encode too, but there are
+        # `tiles` of them every generation and a count per draw is not a signal.
+        x0, clipped = self._parent_z_clipped(i)
+        if not self.start_expedition_at(emb, kind, text, x0, seed_index=i):
+            return False
+        self._seed_phys_clipped = clipped
+        return True
+
+    def start_expedition_at(self, embedding, kind: str, text: str, x0,
+                            seed_index: int | None = None) -> bool:
+        """Begin an expedition from an explicit starting point.
+
+        `x0` rather than an archive row, because a genome carried across a
+        LAYOUT move has no row: it is a brain of a layout the archive may hold
+        nothing of yet. A width that does not match the running space is
+        REFUSED rather than sliced - the same discipline
+        GenomeSpec._check_width applies, and for the same reason.
+        """
+        if self.expedition_gens <= 0:
+            return False
+        x0 = np.asarray(x0, dtype=np.float32).reshape(-1)
+        if x0.size != self.spec.dim:
+            return False
+        emb = (None if embedding is None
+               else np.asarray(embedding, dtype=np.float32))
+        self._goal = Goal(kind, text, emb, seed_index=seed_index)
+        self._x0_index = None if seed_index is None else int(seed_index)
         self._remaining = int(self.expedition_gens)
         self._since_expedition = 0
         # Reset explicitly: chase()/UI can start a new expedition on top of a
         # running one, and fitness is not comparable across different goals.
         self._expedition_best = -np.inf
+        # Describes ONE seed, so it goes with it; the wrapper puts back the
+        # count for the row it resolved.
+        self._seed_phys_clipped = 0
         # Fresh optimizer per goal - a covariance learned for one goal doesn't
         # transfer to another. sigma << sigma0: local refinement, not a fresh
         # search.
-        # The seed is the one re-encode worth reporting: it becomes the
-        # optimizer's mean, so a clipped one starts the chase from a creature
-        # the user did not pick. Expansion parents re-encode too, but there are
-        # `tiles` of them every generation and a count per draw is not a signal.
-        x0, self._seed_phys_clipped = self._parent_z_clipped(self._x0_index)
         self._optimizer = make_optimizer(
             self.algorithm, self.spec.dim, self.tournament.tiles,
             self.expedition_sigma, self.base_seed + self.gen,
