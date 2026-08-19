@@ -96,6 +96,12 @@ def available_shader_files() -> list[str]:
 
 
 def resolve_shader_path(name: str) -> Path | None:
+    """A bundled name, or an absolute path the file browser handed back."""
+    if not name:
+        return None
+    direct = Path(name)
+    if direct.is_absolute():
+        return direct if direct.exists() else None
     for folder in _shader_folders():
         candidate = folder / name
         if candidate.exists():

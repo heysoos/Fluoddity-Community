@@ -1,7 +1,7 @@
 """Inject Texture: the ordered list of layers feeding the sim's fields."""
 from imgui_bundle import imgui
 
-from services import field_sources
+from services import field_sources, file_picker
 from state.field_stack import BLENDS, DESTINATIONS, MAPPINGS, FieldLayer
 from ui import hints, layout
 from ui.notices import BAD
@@ -316,33 +316,69 @@ class FieldStackWindowMixin:
         if layer.source == "shader":
             names = field_sources.available_shader_files()
             current = layer.params.get("_file", "")
-            if not names:
+            if not names and not current:
                 imgui.text_disabled(self._tag(
                     f"no .frag files found##nofrag{layer.uid}", collect))
-                return False
             options, pos = shader_options(current, names)
             changed, pos = imgui.combo(
                 self._tag(f"Shader##file{layer.uid}", collect), pos, options)
             hints.tip("Fragment shader this layer renders.")
+            changed_any = False
             if changed:
                 layer.params["_file"] = ("" if options[pos] == NO_FILE
                                          else options[pos])
-                return True
-            return False
+                changed_any = True
+            if file_picker.available():
+                if imgui.button(self._tag(f"Browse...##frag{layer.uid}",
+                                          collect)):
+                    self._pending_pick = (layer.uid, file_picker.open_shader(
+                        file_picker.folder_of(current)))
+                hints.tip("Choose a .frag from anywhere on disk.")
+            changed_any |= self._collect_pick(layer)
+            return changed_any
 
         if layer.source == "image":
             return self._draw_image_picker(layer, collect)
         return False
 
     def _draw_image_picker(self, layer, collect) -> bool:
+        """Browse... plus the typed path, which stays the way through.
+
+        The dialog runs in another process, so it is asked for on one frame and
+        collected on a later one - waiting on it here would freeze the sim
+        behind the window.
+        """
+        changed_any = False
         current = layer.params.get("_file", "")
+
         changed, value = imgui.input_text(
             self._tag(f"Image##file{layer.uid}", collect), current)
         hints.tip("Picture this layer reads.")
         if changed:
             layer.params["_file"] = value
-            return True
-        return False
+            changed_any = True
+
+        if file_picker.available():
+            if imgui.button(self._tag(f"Browse...##img{layer.uid}", collect)):
+                self._pending_pick = (layer.uid, file_picker.open_image(
+                    file_picker.folder_of(current)))
+            hints.tip("Choose a picture from disk.")
+        changed_any |= self._collect_pick(layer)
+        return changed_any
+
+    def _collect_pick(self, layer) -> bool:
+        """Take the chosen path once the dialog closes. -> True if it changed."""
+        pending = getattr(self, "_pending_pick", None)
+        if pending is None or pending[0] != layer.uid:
+            return False
+        chosen = pending[1].result()
+        if chosen is None:
+            return False
+        self._pending_pick = None
+        if not chosen:
+            return False
+        layer.params["_file"] = chosen
+        return True
 
     def _draw_thumbnail(self, layer, collect) -> None:
         """The row's preview: hover peeks larger, click opens Inspect."""

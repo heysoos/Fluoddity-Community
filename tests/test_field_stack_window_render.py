@@ -14,7 +14,7 @@ import contextlib
 import pytest
 from imgui_bundle import imgui
 
-from services import field_sources
+from services import field_sources, file_picker
 from services.shader_params import ShaderParam
 from state.field_stack import FieldLayer, FieldStack
 from state.preferences_state import PreferencesState
@@ -350,3 +350,40 @@ def test_resetting_strength_puts_the_default_back(gui):
     finally:
         imgui.selectable = real
     assert layer.strength == STRENGTH_DEFAULT
+
+
+def test_an_image_layer_offers_a_browse_button(gui):
+    """Typing a directory is not a design anyone should have to use."""
+    if not file_picker.available():
+        pytest.skip("no file dialog backend")
+    harness, _ = draw(FieldStack(layers=[FieldLayer(source="image")]),
+                      bus=_FakeBus())
+    assert any("Browse" in l for l in harness.labels)
+
+
+def test_a_shader_layer_offers_a_browse_button(gui):
+    if not file_picker.available():
+        pytest.skip("no file dialog backend")
+    harness, _ = draw(FieldStack(layers=[FieldLayer(source="shader")]),
+                      bus=_FakeBus())
+    assert any("Browse" in l for l in harness.labels)
+
+
+def test_a_chosen_file_reaches_the_layer(gui):
+    """The dialog resolves on a LATER frame, so the window has to collect it."""
+    layer = FieldLayer(source="image")
+    stack = FieldStack(layers=[layer])
+    harness = _Harness(stack, _FakeBus())
+
+    class _Pick:
+        def result(self):
+            return "C:/pics/chosen.png"
+
+    harness._pending_pick = (layer.uid, _Pick())
+    imgui.new_frame()
+    imgui.begin("host", True)
+    with _headers_open(True):
+        harness.render_field_stack_window(collect=harness.labels)
+    imgui.end()
+    imgui.render()
+    assert layer.params.get("_file") == "C:/pics/chosen.png"
