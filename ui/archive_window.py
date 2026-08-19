@@ -546,6 +546,12 @@ class ArchiveWindowMixin:
         hints.tip(ALPHA_TOOLTIP)
         _, ast.k = imgui.slider_int("Neighbours (k)", ast.k, 1, 50)
         _, ast.seed_n = imgui.slider_int("Seed Entries", ast.seed_n, 64, 2048)
+        hints.tip("Entries of the running brain before it stops scattering "
+                  "at random.")
+        _, ast.bootstrap_gens = imgui.slider_int(
+            "Bootstrap Gens", ast.bootstrap_gens, 0, 200)
+        hints.tip("Generations a NEW brain shape scatters for, whichever "
+                  "finish line it reaches first.")
         _, ast.sigma0 = imgui.slider_float("Bootstrap Sigma", ast.sigma0, 0.05, 1.5)
 
     def _render_encoder_combo(self, ast):

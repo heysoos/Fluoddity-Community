@@ -1033,7 +1033,8 @@ class CommandHandler:
             variants_per_tile=ast.variants_per_tile,
             tile_mutation_strength=ast.tile_mutation_strength,
         )
-        for name in ("sigma_expand", "alpha", "k", "seed_n", "liveness_min",
+        for name in ("sigma_expand", "alpha", "k", "seed_n", "bootstrap_gens",
+                     "liveness_min",
                      "n_views",
                      "refresh_sweep_gens", "expansion_between", "expedition_gens",
                      "expedition_sigma", "latent_share", "novelty_share",

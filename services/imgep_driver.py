@@ -77,6 +77,11 @@ class ImgepDriver:
         self.alpha = 4.0
         self.k = 10
         self.seed_n = 256
+        # A CEILING on each layout's bootstrap, in generations. seed_n is a
+        # native COUNT, and separation is measured against the pooled archive -
+        # so a layout born into a full one admits ever more slowly and takes
+        # ever longer to reach the same count. Whichever comes first.
+        self.bootstrap_gens = 30
         self.liveness_min = 0.002    # see CLAUDE.md
         self.n_views = 3             # see VisionScorer.embed_mean
         self.refresh_sweep_gens = 10
@@ -105,6 +110,9 @@ class ImgepDriver:
         self._distractors = None
 
         self._optimizer = None
+        # Bootstrap generations spent in the RUNNING layout. Reset when the
+        # space moves, which is what makes the budget per layout.
+        self._bootstrap_gens = 0
         self._goal: Goal | None = None
         self._remaining = 0
         self._since_expedition = 0
@@ -162,10 +170,19 @@ class ImgepDriver:
     def regime(self) -> str:
         if self._remaining > 0 and self._goal is not None:
             return "expedition"
-        # max(1, ...): nothing to expand FROM stays in bootstrap whatever
-        # seed_n says. Without this, parent sampling raises on the first ask
-        # when seed_n is 0.
-        if self._native_n < max(1, self.seed_n):
+        # Nothing to expand FROM stays in bootstrap whatever either limit says.
+        # Without this, parent sampling runs in front of an empty archive.
+        if not self._native_n:
+            return "bootstrap"
+        # Enough natives to breed from, OR this layout's budget for exploring
+        # itself at random is spent - whichever comes first. Every layout gets
+        # its own bootstrap because random draws are the cheapest exploration
+        # there is and a child's entries all cluster round the genome its
+        # expedition converged on. The BUDGET is what bounds that in time: a
+        # native count does not, since separation is measured against the
+        # pooled archive and a layout born into a full one admits ever slower.
+        if (self._native_n < int(self.seed_n)
+                and self._bootstrap_gens < int(self.bootstrap_gens)):
             return "bootstrap"
         return "expansion"
 
@@ -207,10 +224,18 @@ class ImgepDriver:
                     "unit": "generations",
                     "note": f"{int(self._remaining)} left"}
         if r == "bootstrap":
-            total = max(1, int(self.seed_n))
-            done = min(self._native_n, total)
+            # Two finish lines, and the honest one to show is whichever this
+            # layout is nearer to: a fresh archive fills up and leaves on the
+            # count, a layout born into a full one runs its budget out first.
+            ents, gens = max(1, int(self.seed_n)), max(1, int(self.bootstrap_gens))
+            done_e, done_g = min(self._native_n, ents), min(self._bootstrap_gens, gens)
+            # Ties go to ENTRIES, which is what a fresh archive shows before
+            # either has moved and is the more informative of the two there.
+            by_gens = done_g / gens > done_e / ents
+            done, total = (done_g, gens) if by_gens else (done_e, ents)
             return {"label": "bootstrap: scattering to fill the archive",
-                    "done": done, "total": total, "unit": "entries",
+                    "done": done, "total": total,
+                    "unit": "generations" if by_gens else "entries",
                     "note": f"{total - done} more before expansion starts"}
         if int(self.expansion_between) <= 0:
             return {"label": "expansion: no expeditions (Expansion Between = 0)",
@@ -263,6 +288,9 @@ class ImgepDriver:
         same = self.spec.same_space_as(spec)
         self.spec = spec
         if not same:
+            # A new space is a new layout to explore, and the budget is what
+            # makes that exploration the same size wherever it happens.
+            self._bootstrap_gens = 0
             # The search dimension changed; an optimizer for the old one is
             # meaningless, and the archive is unaffected because it stores
             # phenotypes rather than z.
@@ -278,6 +306,7 @@ class ImgepDriver:
         """
         self.gen = 0
         self._since_expedition = 0
+        self._bootstrap_gens = 0
         self._n_summits = 0
         self._n_records = 0
         for v in self.trace.values():
@@ -780,6 +809,8 @@ class ImgepDriver:
         self.tournament.selected.clear()
         self._last_descriptors = b
         self.gen += 1
+        if source == "bootstrap":
+            self._bootstrap_gens += 1
         self.archive.refresh(self._refresh_count())
         # AFTER refresh, so eviction ranks on the freshest novelty available,
         # and once per generation rather than per admission - the whole point
@@ -801,9 +832,14 @@ class ImgepDriver:
 
         self._record(source, admitted, n, None)
         self._since_expedition += 1
+        # Out of BOOTSTRAP, not up to seed_n. The two used to be the same
+        # question; once a layout can leave bootstrap on a generation budget
+        # they part, and asking for the count here would leave that layout in
+        # expansion forever with no expedition - and so no layout move, which
+        # only ever rides on one.
         if (self.expansion_between > 0
                 and self._since_expedition >= self.expansion_between
-                and self._native_n >= self.seed_n):
+                and source == "expansion"):
             self.start_expedition()
 
         self._last_score_label = "novelty"

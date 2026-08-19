@@ -642,6 +642,28 @@ mechanics these caveats assume.
   `V_MAX` are both excluded from the search — and joining the search space
   needs a load-time migration before it needs anything else.
 
+- **EVERY layout bootstraps, and it ends at `seed_n` natives OR
+  `bootstrap_gens` generations — whichever comes first.** Random draws are the
+  cheapest exploration there is, and a layout arrived at by a move holds only
+  what its expedition admitted, all of it clustered round the one genome that
+  expedition converged on — so expanding from those alone explores a pinhole.
+  A native COUNT cannot bound that in time, which is the whole reason for the
+  budget: separation is measured against the POOLED archive, so a layout born
+  into a full one admits ever more slowly and takes ever longer to reach the
+  same count. Measured over one real run, bootstrap admission fell from
+  7.9/generation over the first half to 2.6 over the second, and ~1.7 over the
+  last ten — so at `seed_n` 256 the first layout's bootstrap cost ~30
+  generations and a later one would cost hundreds, growing without limit.
+  The counter counts BOOTSTRAP generations only and is reset by `set_spec`
+  when the space moves, which is what makes it per layout; a decode-scale
+  tweak is the same space and does not restart it. **The expedition cadence
+  gate asks `source == "expansion"`, not `_native_n >= seed_n`** — those were
+  the same question until a layout could leave bootstrap on the budget, and
+  asking for the count there would strand such a layout in expansion with no
+  expedition, and so no layout move, which only ever rides on one. Zero
+  natives stays in bootstrap whatever either limit says. Guarded by
+  `tests/test_bootstrap_budget.py`.
+
 - **Admission does not gate on novelty; capacity prunes.** Everything finite,
   viable and alive is admitted, and `prune_to_capacity()` evicts the least
   novel once over the cap — one bulk pass per generation, from `tell()`, AFTER

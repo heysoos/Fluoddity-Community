@@ -55,6 +55,11 @@ class ArchiveState:
     alpha: float = 4.0
     k: int = 10
     seed_n: int = 256
+    # A ceiling on each layout's bootstrap, in generations, because seed_n is a
+    # native COUNT and separation is pooled across every layout - so a layout
+    # born into a full archive takes ever longer to reach the same count.
+    # Bootstrap ends at whichever of the two comes first.
+    bootstrap_gens: int = 30
     # A FLOOR on the bulk, deliberately far below what looks reasonable - a
     # frozen canvas scores 0, and real presets run much lower than they seem.
     # Re-run tools.calibrate_imgep --liveness before changing it.
@@ -258,7 +263,8 @@ PERSISTED_FIELDS = (
     "n_views", "physics_enabled", "tile_mutation_enabled",
     "variants_per_tile", "tile_mutation_strength",
     # exploration
-    "sigma0", "sigma_expand", "alpha", "k", "seed_n", "liveness_min",
+    "sigma0", "sigma_expand", "alpha", "k", "seed_n", "bootstrap_gens",
+    "liveness_min",
     "capacity", "min_separation", "refresh_sweep_gens",
     # expeditions
     "expansion_between", "expedition_gens", "expedition_sigma",
