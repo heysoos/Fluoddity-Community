@@ -16,8 +16,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from services.brains import (MAX_BRAIN_FLOATS, STRUCTURAL_KINDS, BrainLayout,
-                             get, settings_of)
+from services.brains import (MAX_BRAIN_FLOATS, REGISTRY, STRUCTURAL_KINDS,
+                             BrainLayout, get, settings_of)
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,25 @@ def _build(m, settings, bounds):
     return child
 
 
+def _modality_jumps(layout, bounds) -> list[LayoutMove]:
+    """Every OTHER modality named in the bounds, at its own DEFAULT layout.
+
+    There is no correspondence between a Fourier centre count and an MLP width,
+    so a jump lands on the target's default rather than pretending to preserve
+    a size. It carries no genome either - transfer_genome refuses one - which
+    is what makes a jump a restart, and the reason it is opt-in.
+    """
+    out = []
+    for key in bounds.modalities:
+        if key == layout.modality or key not in REGISTRY:
+            continue
+        child = _build(REGISTRY[key], {}, bounds)
+        if child is None:
+            continue
+        out.append(LayoutMove(parent=layout, child=child, operator="modality"))
+    return out
+
+
 def candidate_moves(layout, bounds, modality=None) -> list[LayoutMove]:
     """Every legal one-step move from `layout`, rebuilt and verified.
 
@@ -116,6 +135,7 @@ def candidate_moves(layout, bounds, modality=None) -> list[LayoutMove]:
         if settings_of(child) != dict(settings):
             continue
         out.append(LayoutMove(parent=layout, child=child, operator=op))
+    out.extend(_modality_jumps(layout, bounds))
     return out
 
 

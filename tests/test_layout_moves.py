@@ -118,3 +118,47 @@ def test_a_modality_with_no_structural_int_proposes_nothing():
 
     lay = BrainLayout("flat", (), 8)
     assert candidate_moves(lay, LayoutBounds(), modality=_Flat()) == []
+
+
+# ---- jumping to another modality ----------------------------------------
+
+def _jumps(layout, bounds):
+    return [m for m in candidate_moves(layout, bounds)
+            if m.operator == "modality"]
+
+
+def test_no_modality_jump_is_offered_by_default():
+    """LayoutBounds.modalities empty means 'the running one only'. A jump is a
+    restart, so opting into one is a decision rather than a default."""
+    assert not _jumps(FOURIER, LayoutBounds())
+
+
+def test_naming_another_modality_offers_its_default_layout():
+    """There is no correspondence between a centre count and an MLP width, so
+    a jump lands on the target's own default rather than preserving a size."""
+    jumps = _jumps(FOURIER, LayoutBounds(modalities=("fourier", "mlp")))
+    assert [m.child.signature() for m in jumps] == [
+        REGISTRY["mlp"].layout_from_settings({}).signature()]
+
+
+def test_a_jump_never_proposes_the_modality_already_running():
+    assert not _jumps(FOURIER, LayoutBounds(modalities=("fourier",)))
+
+
+def test_an_unknown_modality_key_is_skipped_rather_than_raising():
+    """The bound is a comma-separated string in the settings, so a stale key
+    outlives the build that understood it."""
+    assert not _jumps(FOURIER, LayoutBounds(modalities=("nonesuch",)))
+
+
+def test_a_jump_respects_the_float_budget():
+    assert not _jumps(FOURIER,
+                      LayoutBounds(max_floats=1, modalities=("mlp", "gabor")))
+
+
+def test_a_jump_carries_the_parent_it_came_from():
+    """The ledger and the revert both key off the pair, and a jump is the one
+    move whose two halves share nothing else."""
+    mv = _jumps(FOURIER, LayoutBounds(modalities=("gabor",)))[0]
+    assert mv.parent == FOURIER
+    assert mv.pair == (FOURIER.signature(), GABOR.signature())
