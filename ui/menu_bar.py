@@ -393,9 +393,9 @@ class MenuBarMixin:
                     "brush modes, force fields, and strafe fields."
                 )
 
-                # Field Stack toggle
+                # Inject Texture toggle
                 _, self.state.preferences.show_field_stack = imgui.checkbox(
-                    "Field Stack",
+                    "Inject Texture",
                     self.state.preferences.show_field_stack
                 )
                 hints.tip(

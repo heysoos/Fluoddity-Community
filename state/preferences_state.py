@@ -62,7 +62,7 @@ class PreferencesState:
     strafe_field_strength: float = 1.0  # Multiplier for strafe field effect (log scale 0.0001-10.0)
     draw_target_overlay_opacity: float = 0.0  # Opacity of draw target field overlay in frame assembly (0-1)
     # Field injection
-    show_field_stack: bool = False  # Whether the Field Stack window is shown
+    show_field_stack: bool = False  # Whether the Inject Texture window is shown
     field_bus_scale: float = 0.5  # Bus resolution as a fraction of the canvas
 
     # Physics slider group collapsed states (True = expanded/open, False = collapsed)

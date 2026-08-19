@@ -9,6 +9,8 @@ the WINDOW, not to the display, so at a default size the lower controls fall
 outside it and draw no vertices, which turns "the control rendered" into a test
 of nothing.
 """
+import contextlib
+
 import pytest
 from imgui_bundle import imgui
 
@@ -81,18 +83,49 @@ class _Harness(FieldStackWindowMixin):
         self.labels = []
 
 
-def draw(stack, n=2, bus=None):
-    """Render the window offscreen; return (harness, vertex count)."""
+def draw(stack, n=2, bus=None, force_open=True):
+    """Render the window offscreen; return (harness, vertex count).
+
+    Layer bodies live behind a collapsing header, so a default-closed header
+    draws none of the controls under test - the same trap the archive window
+    tests document. `force_open` opens every header before the frame.
+    """
     harness = _Harness(stack, bus)
     for _ in range(n):
         harness.labels = []
         imgui.new_frame()
         imgui.set_next_window_size(imgui.ImVec2(1200, 4000))
         imgui.begin("host", True)
-        harness.render_field_stack_window(collect=harness.labels)
+        with _headers_open(force_open):
+            harness.render_field_stack_window(collect=harness.labels)
         imgui.end()
         imgui.render()
     return harness, imgui.get_draw_data().total_vtx_count
+
+
+@contextlib.contextmanager
+def _headers_open(on):
+    """Force every collapsing header open for the duration of one frame.
+
+    A closed header runs none of its body, so every control under test draws
+    no vertices and the assertions become tests of nothing - the trap the
+    archive window tests already document for popups.
+    """
+    if not on:
+        yield
+        return
+    real = imgui.collapsing_header
+
+    def always(label, *a, **kw):
+        out = real(label, *a, **kw)
+        # The two-argument overload returns (clicked, still_visible).
+        return (True, out[1]) if isinstance(out, tuple) else True
+
+    imgui.collapsing_header = always
+    try:
+        yield
+    finally:
+        imgui.collapsing_header = real
 
 
 def test_an_empty_stack_still_offers_add_layer(gui):
@@ -102,14 +135,15 @@ def test_an_empty_stack_still_offers_add_layer(gui):
 
 def test_the_bus_resolution_control_is_reachable(gui):
     harness, _ = draw(FieldStack())
-    assert any("Bus Resolution" in l for l in harness.labels)
+    assert any("Resolution" in l for l in harness.labels)
 
 
-def test_a_layer_draws_its_source_and_destination(gui):
+def test_a_layer_header_summarises_the_layer(gui):
+    """The header has to say what the layer does while it is collapsed."""
     harness, _ = draw(FieldStack(layers=[
-        FieldLayer(source="noise", destination="force")]))
-    assert any("noise" in l for l in harness.labels)
-    assert any("force" in l for l in harness.labels)
+        FieldLayer(source="noise", mapping="curl", destination="force")]))
+    assert any("Noise" in l and "Curl" in l and "Force" in l
+               for l in harness.labels), harness.labels
 
 
 def test_a_layer_error_is_drawn(gui):
@@ -202,7 +236,7 @@ def test_a_shader_layer_offers_a_file_to_point_at(gui):
     """Both file-backed sources read params["_file"], which nothing else sets."""
     harness, _ = draw(FieldStack(layers=[FieldLayer(source="shader")]),
                       bus=_FakeBus())
-    assert any("Shader:" in l or "no .frag" in l for l in harness.labels)
+    assert any("Shader##" in l or "no .frag" in l for l in harness.labels)
 
 
 def test_an_image_layer_offers_a_path_field(gui):
@@ -213,14 +247,27 @@ def test_an_image_layer_offers_a_path_field(gui):
 
 def test_an_unchosen_shader_layer_does_not_claim_a_file(gui):
     """The combo must not name a file the layer has not been pointed at."""
-    from ui.field_stack_window import NO_FILE
     if not field_sources.available_shader_files():
         pytest.skip("no .frag files installed")
     layer = FieldLayer(source="shader")
-    harness, _ = draw(FieldStack(layers=[layer]), bus=_FakeBus())
+    draw(FieldStack(layers=[layer]), bus=_FakeBus())
     assert not layer.params.get("_file"), "the picker chose a file on its own"
-    assert any(NO_FILE in l for l in harness.labels), (
-        "nothing on screen says no shader is selected")
+
+
+def test_the_shader_combo_offers_none_and_keeps_a_missing_name():
+    """Pure, because what is SELECTED inside a combo is not a label a render
+    pass can see - only the list construction can be asserted."""
+    from ui.field_stack_window import NO_FILE, shader_options
+
+    options, pos = shader_options("", ["a.frag", "b.frag"])
+    assert options[pos] == NO_FILE, "an unchosen layer named a file anyway"
+
+    options, pos = shader_options("b.frag", ["a.frag", "b.frag"])
+    assert options[pos] == "b.frag"
+
+    options, pos = shader_options("gone.frag", ["a.frag"])
+    assert options[pos] == "gone.frag", "a missing shader was silently swapped"
+    assert "a.frag" in options, "the real files must still be reachable"
 
 
 def test_a_missing_shader_file_is_offered_back_not_replaced(gui):
@@ -231,3 +278,75 @@ def test_a_missing_shader_file_is_offered_back_not_replaced(gui):
     draw(FieldStack(layers=[layer]), bus=_FakeBus())
     assert layer.params["_file"] == "definitely_not_here.frag", (
         "the picker silently swapped in a different shader")
+
+
+@contextlib.contextmanager
+def _popups_open():
+    """Force every right-click menu open for one frame.
+
+    A popup BODY only runs while the popup is open, so every widget inside one
+    is unexecuted by an ordinary render pass - and imgui_bundle raises
+    TypeError on a bad signature rather than failing to compile, so the first
+    real right-click takes the app down. open_popup and begin_popup_context_item
+    hash the same str_id against the same window and ID stack, which is what
+    lets this reach a popup nested inside a push_id.
+    """
+    real = imgui.begin_popup_context_item
+    opened = []
+
+    def forced(str_id=None, *a, **kw):
+        if str_id:
+            imgui.open_popup(str_id)
+            opened.append(str_id)
+        return real(str_id, *a, **kw)
+
+    imgui.begin_popup_context_item = forced
+    try:
+        yield opened
+    finally:
+        imgui.begin_popup_context_item = real
+
+
+def test_the_right_click_reset_menus_render(gui):
+    """Every slider offers Reset to Default, and the body has to actually run."""
+    stack = FieldStack(layers=[FieldLayer(source="noise")])
+    harness = _Harness(stack, _FakeBus())
+    with _popups_open() as opened:
+        for _ in range(2):
+            harness.labels = []
+            imgui.new_frame()
+            imgui.set_next_window_size(imgui.ImVec2(1200, 4000))
+            imgui.begin("host", True)
+            with _headers_open(True):
+                harness.render_field_stack_window(collect=harness.labels)
+            imgui.end()
+            imgui.render()
+    assert opened, "the forced-popup helper opened nothing"
+    assert any("Reset to default" in l for l in harness.labels), (
+        "no slider offered a reset")
+
+
+def test_resetting_strength_puts_the_default_back(gui):
+    from ui.field_stack_window import STRENGTH_DEFAULT
+    layer = FieldLayer(source="noise", strength=3.75)
+    stack = FieldStack(layers=[layer])
+    harness = _Harness(stack, _FakeBus())
+
+    real = imgui.selectable
+
+    def click(label, *a, **kw):
+        out = real(label, *a, **kw)
+        return (True, out[1]) if "Reset to default" in label else out
+
+    imgui.selectable = click
+    try:
+        with _popups_open():
+            imgui.new_frame()
+            imgui.begin("host", True)
+            with _headers_open(True):
+                harness.render_field_stack_window(collect=harness.labels)
+            imgui.end()
+            imgui.render()
+    finally:
+        imgui.selectable = real
+    assert layer.strength == STRENGTH_DEFAULT
