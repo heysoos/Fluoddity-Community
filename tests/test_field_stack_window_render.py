@@ -57,9 +57,11 @@ class _FakeBus:
 
     def __init__(self):
         self.drawn = 0
+        self.asked = None
 
     def set_thumbnails_enabled(self, on): pass
     def mark_dirty(self): pass
+    def request_inspect(self, uid, view): self.asked = (uid, view)
     def inspect(self, layer, view): return _FakeTex()
 
     def thumbnail_for(self, layer):
@@ -202,7 +204,7 @@ def test_the_fake_bus_only_answers_to_the_real_buss_api():
     """A fake free to invent methods hides the window calling a missing one."""
     from utilities.field_bus import FieldBus
     for name in ("set_thumbnails_enabled", "mark_dirty", "thumbnail_for",
-                 "inspect", "resolution", "pass_count"):
+                 "inspect", "request_inspect", "resolution", "pass_count"):
         assert hasattr(FieldBus, name), f"FieldBus has no {name}"
 
 
@@ -443,3 +445,19 @@ def test_the_clear_button_asks_for_the_layers_own_destination(gui):
         finally:
             imgui.button = real
         assert getattr(harness, flag, False), f"{destination} did not ask"
+
+
+def test_the_panel_asks_for_a_view_and_never_renders_one(gui):
+    """A GL pass inside a window body leaves a framebuffer bound that is not
+    the one imgui is about to draw into, and every window vanishes at once."""
+    stack = FieldStack(layers=[FieldLayer(source="noise")])
+    bus = _FakeBus()
+    harness = _Harness(stack, bus)
+    harness._inspect_uid = stack.layers[0].uid
+    imgui.new_frame()
+    imgui.begin("host", True)
+    with _headers_open(True):
+        harness.render_field_stack_window(collect=harness.labels)
+    imgui.end()
+    imgui.render()
+    assert bus.asked == (stack.layers[0].uid, "source")

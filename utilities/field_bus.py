@@ -57,6 +57,9 @@ class FieldBus:
         self._vview_fbo = None
         self._vview = None
         self._vview_vao = None
+        self._devices = {}           # exclusive device name -> owning source
+        self._inspect_want = None    # (uid, view) the panel is asking for
+        self._inspect_ready = None   # (uid, view) currently in _vview_tex
 
     # -- public ---------------------------------------------------------
 
@@ -128,6 +131,7 @@ class FieldBus:
         tryset(prog, "scalar_out", layer.destination in self.SCALAR_DESTINATIONS)
         tryset(prog, "src_channels",
                1 if layer.params.get("_channels") == "zw" else 0)
+        tryset(prog, "aspect_ratio", self._aspect_ratio(src_tex))
 
         # The mask is set BEFORE use(): moderngl applies a framebuffer's stored
         # state when it is bound, so a mask set afterwards misses this pass.
@@ -150,6 +154,19 @@ class FieldBus:
         self.ctx.blend_equation = moderngl.FUNC_ADD
         fbo.color_mask = (True, True, True, True)
         src_tex.filter = previous_filter
+
+    def _aspect_ratio(self, src_tex) -> float:
+        """Source aspect over destination aspect, for the cover crop.
+
+        A 4:3 camera squeezed into a square bus is the visible symptom; the
+        procedural sources render at the bus size and land on exactly 1.0,
+        which the shader takes as its no-op.
+        """
+        sw, sh = src_tex.size
+        dw, dh = self._res
+        if not (sh and dh and dw):
+            return 1.0
+        return (sw / sh) / (dw / dh)
 
     @property
     def scratch_texture(self):
@@ -185,6 +202,14 @@ class FieldBus:
     def _is_animated(self, layer) -> bool:
         """Whether this layer's source has to be redrawn every frame."""
         return bool(getattr(self._source_for_layer(layer), "animated", False))
+
+    def claim_device(self, name: str, source):
+        """Which source owns an exclusive device this frame. First one wins.
+
+        Cleared at the top of every rebuild, so the claim follows the stack
+        rather than outliving a layer that has gone.
+        """
+        return self._devices.setdefault(name, source)
 
     def source_for(self, layer):
         """The GPU-side source object for a layer, or None if it has none."""
@@ -234,6 +259,7 @@ class FieldBus:
         Clean and unchanged means no passes at all, which is what makes a
         static layer free in steady state.
         """
+        entry_target = self.ctx.fbo
         layers = list(getattr(stack, "layers", []))
         self._prune_sources(layers)
 
@@ -242,6 +268,7 @@ class FieldBus:
             if self._tex is not None:
                 self._release_target()
             self._dirty = False
+            self._inspect_ready = None
             return False
 
         if scale != self._scale:
@@ -262,9 +289,12 @@ class FieldBus:
         # alone: zeroing it made the readout say "0 passes" for every frame a
         # layer was quietly forcing, which reads as a stack doing nothing.
         if not self._dirty:
+            self._draw_inspect_view(layers)
+            self._restore_target(entry_target)
             return False
 
         self._pass_count = 0
+        self._devices.clear()
         self.clear()
         for layer in layers:
             if not layer.enabled:
@@ -283,8 +313,29 @@ class FieldBus:
             self._pass_count += 1
             self._capture_thumbnail(layer.uid, tex)
 
+        self._draw_inspect_view(layers)
+        self._restore_target(entry_target)
         self._dirty = False
         return True
+
+    def _restore_target(self, previous) -> None:
+        """Put back whatever was bound before we started.
+
+        Everything downstream - the sim's own passes, and imgui - inherits the
+        target the last pass left. A rebuild that leaves its own bound sends
+        the whole UI into an offscreen buffer, which reads as every window
+        vanishing at once with the close button unable to bring them back.
+        Restoring what was there beats binding the screen, which a standalone
+        context does not have.
+        """
+        # A released framebuffer keeps its wrapper and swaps its `mglo` for an
+        # InvalidObject, so the wrapper's own type says nothing. Binding one
+        # raises; having nothing to put back is not an error.
+        if previous is None:
+            return
+        if isinstance(getattr(previous, "mglo", None), moderngl.InvalidObject):
+            return
+        previous.use()
 
     # -- previews --------------------------------------------------------
 
@@ -306,8 +357,18 @@ class FieldBus:
         entry = self._thumbs.get(layer.uid)
         return entry[0] if entry else None
 
+    def request_inspect(self, uid, view: str) -> None:
+        """Ask for a view. Drawn by the next rebuild, never here.
+
+        The UI calls this from inside a window body, where a GL pass would
+        leave a framebuffer bound that is not the one imgui is about to draw
+        into - every window vanishes and the close button cannot bring them
+        back.
+        """
+        self._inspect_want = (uid, view) if uid is not None else None
+
     def inspect(self, layer, view: str):
-        """The texture the Inspect panel should draw for `layer`.
+        """The finished texture for `layer`'s current view, or None.
 
         The three views are three different computations. "source" is the
         picture the layer produced; "mapped" is that picture put through this
@@ -318,18 +379,37 @@ class FieldBus:
         """
         if view == "source":
             return None if layer.error else self._inspect_src.get(layer.uid)
+        if self._inspect_ready == (layer.uid, view):
+            return self._vview_tex
+        return None
+
+    def _draw_inspect_view(self, layers) -> None:
+        """Render the requested view. Called by rebuild, on the frame loop."""
+        self._inspect_ready = None
+        want = self._inspect_want
+        if want is None or self._res == (0, 0):
+            return
+        uid, view = want
+        if view == "source":
+            return
+        layer = next((l for l in layers if l.uid == uid), None)
+        if layer is None:
+            return
         if view == "destination":
-            return self._vector_view(self._tex, layer.destination)
+            if self._vector_view(self._tex, layer.destination) is not None:
+                self._inspect_ready = (uid, view)
+            return
         if layer.error:
-            return None
-        src = self._inspect_src.get(layer.uid)
-        if src is None or self._res == (0, 0):
-            return None
+            return
+        src = self._inspect_src.get(uid)
+        if src is None:
+            return
         self._ensure_preview()
         self._preview_fbo.color_mask = (True, True, True, True)
         self._preview_fbo.clear()
         self.composite_one(src, layer, target=self._preview_fbo, alone=True)
-        return self._vector_view(self._preview_tex, layer.destination)
+        if self._vector_view(self._preview_tex, layer.destination) is not None:
+            self._inspect_ready = (uid, view)
 
     def _vector_view(self, tex, destination: str):
         """Direction as hue, magnitude as brightness."""

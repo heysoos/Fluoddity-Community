@@ -95,6 +95,11 @@ class WebcamReader:
                 "-framerate", str(self.fps),
                 "-video_size", f"{w}x{h}",
                 "-i", target,
+                # rawvideo rows arrive top-down and a GL texture is bottom-up,
+                # so the camera would be mirrored on the particles and in the
+                # preview. Flipping here costs nothing and keeps every reader
+                # of the texture on one convention.
+                "-vf", "vflip",
                 "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
 
     def _start(self) -> None:
@@ -133,8 +138,13 @@ class WebcamReader:
             self.error = self._read_error() or "the camera stopped sending"
 
     def _read_error(self) -> str:
+        """ffmpeg's last line. Reads the handle it was given, since close()
+        may have cleared `_proc` while this thread was still unwinding."""
+        proc = self._proc
+        if proc is None or proc.stderr is None:
+            return ""
         try:
-            text = self._proc.stderr.read().decode("utf-8", "replace").strip()
+            text = proc.stderr.read().decode("utf-8", "replace").strip()
         except Exception:
             return ""
         return text.splitlines()[-1] if text else ""
@@ -151,22 +161,38 @@ class WebcamReader:
         return self._proc is not None and self._proc.poll() is None
 
     def close(self) -> None:
+        """Terminate, JOIN, then close - in that order, and never another.
+
+        The pump thread blocks inside `read()`. Closing the pipe under it from
+        another thread is what a reader closed and reopened a few times does
+        not survive; terminating first makes that read return EOF, so the
+        thread leaves on its own and the pipes are closed by nobody else.
+        """
         self._stop.set()
         proc, self._proc = self._proc, None
+        thread, self._thread = self._thread, None
+
         if proc is not None:
-            for pipe in (proc.stdout, proc.stderr):
-                try:
-                    pipe.close()
-                except Exception:
-                    pass
             try:
                 proc.terminate()
+            except Exception:
+                pass
+            try:
                 proc.wait(timeout=2)
             except Exception:
                 try:
                     proc.kill()
+                    proc.wait(timeout=2)
                 except Exception:
                     pass
-        if self._thread is not None:
-            self._thread.join(timeout=2)
-            self._thread = None
+
+        if thread is not None:
+            thread.join(timeout=3)
+
+        if proc is not None:
+            for pipe in (proc.stdout, proc.stderr):
+                try:
+                    if pipe is not None:
+                        pipe.close()
+                except Exception:
+                    pass

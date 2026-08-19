@@ -484,6 +484,7 @@ class FieldStackWindowMixin:
         layer = next((l for l in stack.layers if l.uid == uid), None)
         if layer is None:
             self._inspect_uid = None
+            bus.request_inspect(None, "")
             return
 
         imgui.separator()
@@ -493,6 +494,9 @@ class FieldStackWindowMixin:
         self._inspect_view = view
         hints.tip("Which stage of this layer to show: the picture, the vectors "
                   "it maps to, or the whole composited field.")
+        # Ask; the frame loop draws. A GL pass here would leave a framebuffer
+        # bound that is not the one imgui is about to draw into.
+        bus.request_inspect(layer.uid, VIEWS[view])
         tex = bus.inspect(layer, VIEWS[view])
         if tex is not None:
             imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(384, 384),
@@ -502,6 +506,7 @@ class FieldStackWindowMixin:
                 "nothing to show##fieldinspect", collect))
         if imgui.button(self._tag("Close##fieldinspect", collect)):
             self._inspect_uid = None
+            bus.request_inspect(None, "")
 
     def _draw_layer_params(self, layer, collect) -> bool:
         changed_any = False

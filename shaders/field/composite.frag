@@ -18,9 +18,19 @@ uniform float blur_lod;   // mip level of the pre-filter
 uniform vec2  texel;
 uniform bool  scalar_out; // destination is scalar: contribute the magnitude
 uniform int   src_channels; // 0 = read .xy / .rgb, 1 = read .zw
+// Source aspect over destination aspect. A source shaped differently from the
+// bus is scaled to COVER and centre-cropped, never squeezed to fit.
+uniform float aspect_ratio;
+
+vec2 cover(vec2 uv){
+    if (aspect_ratio == 1.0) return uv;
+    vec2 scale = (aspect_ratio > 1.0) ? vec2(1.0 / aspect_ratio, 1.0)
+                                      : vec2(1.0, aspect_ratio);
+    return (uv - 0.5) * scale + 0.5;
+}
 
 vec4 fetch(vec2 uv){
-    vec4 c = textureLod(src, uv, blur_lod);
+    vec4 c = textureLod(src, cover(uv), blur_lod);
     return (src_channels == 1) ? vec4(c.zw, 0.0, 1.0) : c;
 }
 

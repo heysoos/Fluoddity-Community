@@ -231,6 +231,14 @@ class _WebcamSource:
         if not device:
             self.error = "no camera selected"
             return None
+        # One camera cannot be opened twice: DirectShow refuses the second
+        # open, and two layers churning a device between them is what a run
+        # with two webcam layers on one device does not survive. Say so
+        # instead, and let the first layer keep it.
+        if bus.claim_device(device, self) is not self:
+            self.release()
+            self.error = f"{device} is already used by another layer"
+            return None
         if self._opened != (device, size):
             self.release()
             self._reader = webcam.WebcamReader(device, size)

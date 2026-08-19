@@ -269,6 +269,42 @@ def _webcam(app, stack) -> None:
     elif not field(app) or field(app)[0] == 0.0:
         fail("a live camera produced a zero field")
 
+    # Two layers on ONE device: the second must say so, not fight for it.
+    same_a = FieldLayer(source="webcam", mapping="gradient")
+    same_b = FieldLayer(source="webcam", mapping="curl")
+    same_a.params["_device"] = same_b.params["_device"] = devices[0]
+    put(app, [same_a, same_b])
+    for _ in range(8):
+        if not step(app, 10, "two layers, one camera"):
+            return
+    print(f"  one device, two layers: a={same_a.error!r} b={same_b.error!r}")
+    if same_a.error and same_b.error:
+        fail("neither layer got the camera")
+    if not (same_a.error or same_b.error):
+        fail("both layers claimed the same camera")
+
+    # Two DIFFERENT devices, which is the case that took the machine down.
+    if len(devices) > 1:
+        two = [FieldLayer(source="webcam", mapping="gradient"),
+               FieldLayer(source="webcam", mapping="curl")]
+        two[0].params["_device"] = devices[0]
+        two[1].params["_device"] = devices[1]
+        put(app, two)
+        for _ in range(10):
+            if not step(app, 10, "two cameras"):
+                return
+        print(f"  two cameras: {[l.error for l in two]} field={field(app)}")
+
+    # Churn: opening and closing repeatedly is what the close path has to
+    # survive, since the pump thread blocks inside read().
+    for i in range(6):
+        churn = FieldLayer(source="webcam", mapping="gradient")
+        churn.params["_device"] = devices[i % len(devices)]
+        put(app, [churn])
+        if not step(app, 6, f"churn {i}"):
+            return
+    print("  ok opened and closed six times")
+
     # Dropping the layer must close the device, or the camera light stays on.
     put(app, [])
     step(app, 5, "webcam released")

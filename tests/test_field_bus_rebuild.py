@@ -212,7 +212,16 @@ def test_the_scratch_is_not_left_on_a_mipmap_filter(bus):
     assert bus.scratch_texture.filter == (moderngl.LINEAR, moderngl.LINEAR)
 
 
-def _view(bus, layer, which):
+def _view(bus, layer, which, stack=None):
+    """Ask, let the frame loop draw, then read - which is the contract.
+
+    The UI may not render: a GL pass inside a window body leaves a framebuffer
+    bound that is not the one imgui is about to draw into.
+    """
+    bus.request_inspect(layer.uid, which)
+    if stack is not None:
+        bus.mark_dirty()
+        rebuild(bus, stack)
     tex = bus.inspect(layer, which)
     if tex is None:
         return None
@@ -223,10 +232,11 @@ def _view(bus, layer, which):
 def test_the_three_inspect_views_are_three_different_pictures(bus):
     """They were all the same texture, so the combo appeared to do nothing."""
     layer = gradient_layer(mapping="curl")
-    rebuild(bus, FieldStack(layers=[layer]))
-    source = _view(bus, layer, "source")
-    mapped = _view(bus, layer, "mapped")
-    whole = _view(bus, layer, "destination")
+    stack = FieldStack(layers=[layer])
+    rebuild(bus, stack)
+    source = _view(bus, layer, "source", stack)
+    mapped = _view(bus, layer, "mapped", stack)
+    whole = _view(bus, layer, "destination", stack)
     assert source is not None and mapped is not None and whole is not None
     assert not np.allclose(source, mapped), "mapped is just the source again"
 
@@ -236,8 +246,9 @@ def test_the_mapped_view_shows_this_layer_alone(bus):
     replace layer would otherwise inspect as nothing at all."""
     under = gradient_layer(mapping="curl", strength=1.0)
     over = gradient_layer(mapping="luminance", blend="replace", strength=1.0)
-    rebuild(bus, FieldStack(layers=[under, over]))
-    mapped = _view(bus, under, "mapped")
+    stack = FieldStack(layers=[under, over])
+    rebuild(bus, stack)
+    mapped = _view(bus, under, "mapped", stack)
     assert mapped is not None
     assert np.abs(mapped).max() > 0.0, "the hidden layer inspected as empty"
 
@@ -245,15 +256,52 @@ def test_the_mapped_view_shows_this_layer_alone(bus):
 def test_the_mapped_view_follows_the_layers_own_destination(bus):
     """A strafe layer's vectors live in .zw, so reading .xy shows nothing."""
     layer = gradient_layer(mapping="curl", destination="strafe")
-    rebuild(bus, FieldStack(layers=[layer]))
-    assert np.abs(_view(bus, layer, "mapped")).max() > 0.0
+    stack = FieldStack(layers=[layer])
+    rebuild(bus, stack)
+    assert np.abs(_view(bus, layer, "mapped", stack)).max() > 0.0
 
 
 def test_inspecting_does_not_disturb_the_field(bus):
     """The panel is a readout; drawing it must not change what the sim reads."""
     layer = gradient_layer(mapping="curl")
-    rebuild(bus, FieldStack(layers=[layer]))
+    stack = FieldStack(layers=[layer])
+    rebuild(bus, stack)
     before = read(bus).copy()
     for which in ("source", "mapped", "destination"):
-        bus.inspect(layer, which)
+        _view(bus, layer, which, stack)
     assert np.array_equal(read(bus), before)
+
+
+def test_asking_for_a_view_does_no_gl_work(bus):
+    """The UI calls this from inside a window body.
+
+    A GL pass there leaves a framebuffer bound that is not the one imgui is
+    about to draw into, and every window vanishes at once with the close
+    button unable to bring them back.
+    """
+    layer = gradient_layer(mapping="curl")
+    stack = FieldStack(layers=[layer])
+    rebuild(bus, stack)
+    bus.request_inspect(layer.uid, "mapped")
+    rebuild(bus, stack)
+
+    before = bus.ctx.fbo
+    bus.request_inspect(layer.uid, "destination")
+    bus.inspect(layer, "destination")
+    assert bus.ctx.fbo is before, "reading a view rebound the framebuffer"
+
+
+def test_a_rebuild_puts_back_the_target_it_found(bus):
+    """Everything downstream inherits whatever the last pass left bound."""
+    outside = bus.ctx.simple_framebuffer((8, 8))
+    try:
+        outside.use()
+        stack = FieldStack(layers=[gradient_layer()])
+        rebuild(bus, stack)
+        assert bus.ctx.fbo is outside, "the rebuild left its own target bound"
+
+        bus.request_inspect(stack.layers[0].uid, "mapped")
+        rebuild(bus, stack)
+        assert bus.ctx.fbo is outside, "drawing a view left its target bound"
+    finally:
+        outside.release()

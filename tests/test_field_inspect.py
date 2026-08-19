@@ -82,6 +82,9 @@ def test_inspect_destination_shows_the_whole_field(bus):
     as much the same colour, so the panel maps direction onto hue."""
     layer = a_layer()
     rebuild(bus, layer)
+    bus.request_inspect(layer.uid, "destination")
+    bus.mark_dirty()
+    rebuild(bus, layer)
     shown = bus.inspect(layer, "destination")
     assert shown is not None
     assert shown is not bus.field_texture
