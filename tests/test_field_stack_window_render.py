@@ -202,7 +202,7 @@ def test_a_shader_layer_offers_a_file_to_point_at(gui):
     """Both file-backed sources read params["_file"], which nothing else sets."""
     harness, _ = draw(FieldStack(layers=[FieldLayer(source="shader")]),
                       bus=_FakeBus())
-    assert any("Shader##file" in l or "no .frag" in l for l in harness.labels)
+    assert any("Shader:" in l or "no .frag" in l for l in harness.labels)
 
 
 def test_an_image_layer_offers_a_path_field(gui):
@@ -211,11 +211,23 @@ def test_an_image_layer_offers_a_path_field(gui):
     assert any("Image##file" in l for l in harness.labels)
 
 
-def test_choosing_a_shader_writes_the_file_the_source_reads(gui):
-    """The picker must fill the key field_sources looks up, not a new one."""
+def test_an_unchosen_shader_layer_does_not_claim_a_file(gui):
+    """The combo must not name a file the layer has not been pointed at."""
+    from ui.field_stack_window import NO_FILE
     if not field_sources.available_shader_files():
         pytest.skip("no .frag files installed")
     layer = FieldLayer(source="shader")
+    harness, _ = draw(FieldStack(layers=[layer]), bus=_FakeBus())
+    assert not layer.params.get("_file"), "the picker chose a file on its own"
+    assert any(NO_FILE in l for l in harness.labels), (
+        "nothing on screen says no shader is selected")
+
+
+def test_a_missing_shader_file_is_offered_back_not_replaced(gui):
+    """Adopting another file hides the loss: the layer's error is the only
+    place a preset naming a deleted .frag gets reported."""
+    layer = FieldLayer(source="shader")
+    layer.params["_file"] = "definitely_not_here.frag"
     draw(FieldStack(layers=[layer]), bus=_FakeBus())
-    assert layer.params.get("_file"), "the picker set no file"
-    assert field_sources.resolve_shader_path(layer.params["_file"]) is not None
+    assert layer.params["_file"] == "definitely_not_here.frag", (
+        "the picker silently swapped in a different shader")

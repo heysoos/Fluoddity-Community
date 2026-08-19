@@ -7,6 +7,7 @@ from ui import hints, layout
 from ui.notices import BAD
 
 SCALES = (("1/1", 1.0), ("1/2", 0.5), ("1/4", 0.25))
+NO_FILE = "(none)"
 
 
 class FieldStackWindowMixin:
@@ -156,15 +157,24 @@ class FieldStackWindowMixin:
         if layer.source == "shader":
             names = field_sources.available_shader_files()
             current = layer.params.get("_file", "")
-            pos = names.index(current) if current in names else 0
             if not names:
                 imgui.text_disabled(self._tag(
                     f"no .frag files found##nofrag{layer.uid}", collect))
                 return False
+            # A name that no longer resolves is OFFERED BACK, never replaced:
+            # silently adopting another file hides the missing one, and the
+            # layer's own error is the only place the loss is reported. The
+            # empty choice is listed too, or the combo names a file that the
+            # layer has not in fact been pointed at.
+            options = names if current in names else [current or NO_FILE] + names
+            pos = options.index(current) if current in options else 0
+            # The label names the selection, as every other combo in the row
+            # does, so what is chosen is legible without opening the list.
             changed, pos = imgui.combo(
-                self._tag(f"Shader##file{layer.uid}", collect), pos, names)
-            if changed or current not in names:
-                layer.params["_file"] = names[pos]
+                self._tag(f"Shader: {current or NO_FILE}##file{layer.uid}",
+                          collect), pos, options)
+            if changed:
+                layer.params["_file"] = "" if options[pos] == NO_FILE else options[pos]
                 return True
             return False
 

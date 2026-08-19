@@ -233,8 +233,10 @@ class FieldBus:
         if not had_target:
             self._dirty = True
 
+        # The count belongs to the last REBUILD, so a clean frame leaves it
+        # alone: zeroing it made the readout say "0 passes" for every frame a
+        # layer was quietly forcing, which reads as a stack doing nothing.
         if not self._dirty:
-            self._pass_count = 0
             return False
 
         self._pass_count = 0

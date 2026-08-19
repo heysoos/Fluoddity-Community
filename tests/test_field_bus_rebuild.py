@@ -98,7 +98,20 @@ def test_a_clean_bus_does_no_work(bus):
     assert rebuild(bus, stack) is True
     assert bus.dirty is False
     assert rebuild(bus, stack) is False
-    assert bus.pass_count == 0
+
+
+def test_the_pass_count_survives_a_clean_frame(bus):
+    """It counts the last REBUILD, and the readout is on screen every frame.
+
+    Zeroing it made the window say "0 passes" for every frame a layer was
+    quietly forcing, which reads as a stack that is doing nothing.
+    """
+    stack = FieldStack(layers=[gradient_layer()])
+    rebuild(bus, stack)
+    ran = bus.pass_count
+    assert ran > 0
+    rebuild(bus, stack)
+    assert bus.pass_count == ran
 
 
 def test_marking_dirty_makes_it_rebuild(bus):
