@@ -31,25 +31,39 @@ SOURCE_TIPS = {
 
 MAPPING_LABELS = {
     "rg_direct": "Direct RG",
+    "rg_signed": "Direct RG, centred",
     "polar":     "Hue and value",
     "gradient":  "Gradient (uphill)",
     "curl":      "Curl (swirl)",
+    "edge":      "Edges (across)",
+    "edge_flow": "Edges (along)",
     "luminance": "Brightness",
 }
 MAPPING_TIPS = {
-    "rg_direct": "Reads the red and green channels as the vector itself.",
+    "rg_direct": "Reads the red and green channels as the vector itself. A "
+                 "camera's channels are all positive, so this pushes into one "
+                 "corner - use the centred version for one that came from a "
+                 "picture.",
+    "rg_signed": "Reads red and green as the vector, with mid grey as still, "
+                 "so a picture can push in any direction.",
     "polar":     "Reads hue as the direction and value as the strength.",
     "gradient":  "Points up or down the brightness slope, so particles gather "
                  "on peaks or flee them.",
     "curl":      "Points along the brightness contours, so particles circle "
                  "the bright regions instead of piling into them.",
+    "edge":      "Pushes across the edges it finds, hardest where the picture "
+                 "changes fastest and not at all across a flat wall.",
+    "edge_flow": "Runs along the edges it finds, so particles trace outlines "
+                 "instead of crossing them.",
     "luminance": "Uses brightness alone, with no direction.",
 }
 
-DESTINATION_LABELS = {"force": "Force", "strafe": "Strafe"}
+DESTINATION_LABELS = {"force": "Force", "strafe": "Strafe", "trail": "Trail"}
 DESTINATION_TIPS = {
     "force":  "Accelerates particles, so the effect builds up and carries.",
     "strafe": "Slides particles sideways each step, with no momentum.",
+    "trail":  "Paints straight into the trail canvas, so the particles' brains "
+              "read it as trail somebody else left.",
 }
 
 BLEND_LABELS = {"replace": "Replace", "add": "Add",
@@ -62,7 +76,7 @@ BLEND_TIPS = {
 }
 
 # The sign control only means something where the mapping takes a derivative.
-SIGNED_MAPPINGS = ("gradient", "curl")
+SIGNED_MAPPINGS = ("gradient", "curl", "edge", "edge_flow")
 SIGN_LABELS = ("Toward bright", "Away from bright")
 
 VIEW_LABELS = ("Source texture", "After mapping", "Whole field")
@@ -255,14 +269,14 @@ class FieldStackWindowMixin:
         self._heading(f"Picture##pic{uid}", collect)
 
         keys = [d.key for d in field_sources.descriptors()]
-        labels = [field_sources.get(k).label for k in keys]
-        pos = keys.index(layer.source) if layer.source in keys else 0
-        changed, pos = imgui.combo(
-            self._tag(f"Source##src{uid}", collect), pos, labels)
-        hints.tip(SOURCE_TIPS.get(layer.source, "Where this layer's picture "
-                                                "comes from."))
+        labels = {k: field_sources.get(k).label for k in keys}
+        changed, chosen = self._enum(
+            "Source", layer.source, keys, labels, f"src{uid}", collect,
+            SOURCE_TIPS.get(layer.source, "Where this layer's picture comes "
+                                          "from."),
+            SOURCE_TIPS)
         if changed:
-            layer.source = keys[pos]
+            layer.source = chosen
             layer.params = {}
             changed_any = True
 
@@ -280,7 +294,8 @@ class FieldStackWindowMixin:
         changed, layer.mapping = self._enum(
             "Mapping", layer.mapping, MAPPINGS, MAPPING_LABELS,
             f"map{uid}", collect,
-            MAPPING_TIPS.get(layer.mapping, "How the picture becomes a vector."))
+            MAPPING_TIPS.get(layer.mapping, "How the picture becomes a vector."),
+            MAPPING_TIPS)
         changed_any |= changed
 
         # Only the derivative mappings have a direction to reverse; on the
@@ -311,13 +326,15 @@ class FieldStackWindowMixin:
         changed, layer.destination = self._enum(
             "Destination", layer.destination, DESTINATIONS, DESTINATION_LABELS,
             f"dst{uid}", collect,
-            DESTINATION_TIPS.get(layer.destination, "What this layer drives."))
+            DESTINATION_TIPS.get(layer.destination, "What this layer drives."),
+            DESTINATION_TIPS)
         changed_any |= changed
 
         changed, layer.blend = self._enum(
             "Blend", layer.blend, BLENDS, BLEND_LABELS, f"bl{uid}", collect,
             BLEND_TIPS.get(layer.blend, "How this layer combines with the "
-                                        "ones beneath it."))
+                                        "ones beneath it."),
+            BLEND_TIPS)
         changed_any |= changed
 
         changed, layer.strength = self._slider(
@@ -347,13 +364,38 @@ class FieldStackWindowMixin:
             imgui.end_popup()
         return hit
 
-    def _enum(self, label, current, options, labels, tag, collect, tip):
-        pos = options.index(current) if current in options else 0
-        changed, pos = imgui.combo(
-            self._tag(f"{label}##{tag}", collect), pos,
-            [labels.get(o, o) for o in options])
+    def _enum(self, label, current, options, labels, tag, collect, tip,
+              tips=None):
+        """A combo whose ENTRIES explain themselves while the list is open.
+
+        `imgui.combo` can only be told about the selection, so the only way to
+        read what an entry does was to choose it and then hover the closed
+        control. Each entry is a selectable of its own now, and carries its own
+        line.
+        """
+        chosen = current if current in options else options[0]
+        open_now = imgui.begin_combo(self._tag(f"{label}##{tag}", collect),
+                                     labels.get(chosen, chosen))
+        # Read before the body: after end_combo the popup is gone and the last
+        # item is no longer this control.
         hints.tip(tip)
-        return changed, options[pos]
+        if open_now:
+            for option in options:
+                picked, _ = imgui.selectable(
+                    self._tag(f"{labels.get(option, option)}##{tag}{option}",
+                              collect),
+                    option == chosen)
+                self._item_tip(tips, option)
+                if picked:
+                    chosen = option
+            imgui.end_combo()
+        return chosen != current, chosen
+
+    @staticmethod
+    def _item_tip(tips, key) -> None:
+        text = (tips or {}).get(key, "")
+        if text:
+            hints.tip(text)
 
     def _draw_file_picker(self, layer, collect) -> bool:
         """`shader` and `image` are the two sources that name a file.

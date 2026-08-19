@@ -9,8 +9,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 
-MAPPINGS = ("rg_direct", "polar", "gradient", "curl", "luminance")
-DESTINATIONS = ("force", "strafe")
+# The index into this tuple IS the composite shader's `mapping` uniform, so a
+# new mapping is APPENDED. A config stores the name, not the index.
+MAPPINGS = ("rg_direct", "polar", "gradient", "curl", "luminance",
+            "rg_signed", "edge", "edge_flow")
+DESTINATIONS = ("force", "strafe", "trail")
 BLENDS = ("replace", "add", "multiply", "max")
 
 

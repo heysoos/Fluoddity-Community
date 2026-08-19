@@ -18,7 +18,9 @@ from services import field_sources, file_picker, webcam
 from services.shader_params import ShaderParam
 from state.field_stack import FieldLayer, FieldStack
 from state.preferences_state import PreferencesState
-from ui.field_stack_window import FieldStackWindowMixin
+from state.field_stack import BLENDS, DESTINATIONS, MAPPINGS
+from ui.field_stack_window import (BLEND_LABELS, DESTINATION_LABELS,
+                                   MAPPING_LABELS, FieldStackWindowMixin)
 
 
 @pytest.fixture(scope="module")
@@ -128,6 +130,114 @@ def _headers_open(on):
         yield
     finally:
         imgui.collapsing_header = real
+
+
+@contextlib.contextmanager
+def _combo_open(match):
+    """Force ONE combo to run its body, chosen by a fragment of its label.
+
+    A combo submits its entries only while its popup is open, so an ordinary
+    frame executes none of them - the same blindness a popup body has, and the
+    reason a per-entry tooltip can be added, look right in the source and
+    never draw. Only one popup can stand open at a time, which is why this
+    takes a label rather than opening them all.
+
+    BeginCombo's popup id is "##ComboPopup" hashed against the combo's OWN id,
+    so pushing the label onto the id stack first is what makes open_popup name
+    the right one.
+    """
+    real = imgui.begin_combo
+
+    def forced(label, preview, *a, **kw):
+        if match in label:
+            imgui.push_id(label)
+            imgui.open_popup("##ComboPopup")
+            imgui.pop_id()
+        return real(label, preview, *a, **kw)
+
+    imgui.begin_combo = forced
+    try:
+        yield
+    finally:
+        imgui.begin_combo = real
+
+
+def draw_with_combo(stack, match, n=2, bus=None):
+    """Render with one combo's list open. -> (harness, labels)."""
+    harness = _Harness(stack, bus)
+    for _ in range(n):
+        harness.labels = []
+        imgui.new_frame()
+        imgui.set_next_window_size(imgui.ImVec2(1200, 4000))
+        imgui.begin("host", True)
+        with _headers_open(True), _combo_open(match):
+            harness.render_field_stack_window(collect=harness.labels)
+        imgui.end()
+        imgui.render()
+    return harness, harness.labels
+
+
+def test_every_choice_carries_a_label_and_a_line_of_its_own():
+    """Derived from the registries, so a new option cannot ship unexplained.
+
+    A hand-written list is what let an entry go out with the enum key showing
+    and nothing to say what it does.
+    """
+    from ui import field_stack_window as w
+
+    for keys, labels, tips, what in (
+            (MAPPINGS, MAPPING_LABELS, w.MAPPING_TIPS, "mapping"),
+            (DESTINATIONS, DESTINATION_LABELS, w.DESTINATION_TIPS, "destination"),
+            (BLENDS, BLEND_LABELS, w.BLEND_TIPS, "blend")):
+        for key in keys:
+            assert labels.get(key), f"{what} '{key}' has no label"
+            assert tips.get(key), f"{what} '{key}' has no tooltip"
+    for desc in field_sources.descriptors():
+        assert w.SOURCE_TIPS.get(desc.key), f"source '{desc.key}' has no tooltip"
+
+
+def test_the_forced_combo_helper_really_opens_something(gui):
+    """Without this the tooltip tests below would be coverage of nothing."""
+    stack = FieldStack(layers=[FieldLayer(mapping="curl")])
+    shut, _ = draw(stack)
+    _, opened = draw_with_combo(FieldStack(layers=[FieldLayer(mapping="curl")]),
+                                "Mapping")
+    entry = MAPPING_LABELS["gradient"]
+    assert not any(l.startswith(entry) for l in shut.labels), (
+        "a closed combo already drew its entries - the helper proves nothing")
+    assert any(l.startswith(entry) for l in opened), (
+        "the helper did not open the combo")
+
+
+def test_every_mapping_is_listed_with_its_own_entry(gui):
+    _, labels = draw_with_combo(FieldStack(layers=[FieldLayer()]), "Mapping")
+    for key in MAPPINGS:
+        assert any(l.startswith(MAPPING_LABELS[key]) for l in labels), key
+
+
+def test_every_destination_is_listed(gui):
+    _, labels = draw_with_combo(FieldStack(layers=[FieldLayer()]), "Destination")
+    for key in DESTINATIONS:
+        assert any(l.startswith(DESTINATION_LABELS[key]) for l in labels), key
+
+
+def test_every_source_is_listed(gui):
+    _, labels = draw_with_combo(FieldStack(layers=[FieldLayer()]), "Source")
+    for desc in field_sources.descriptors():
+        assert any(l.startswith(desc.label) for l in labels), desc.key
+
+
+def test_an_open_combo_keeps_its_entries_apart(gui):
+    """Two layers open on the same combo would collide on the entry ids."""
+    _, labels = draw_with_combo(
+        FieldStack(layers=[FieldLayer(), FieldLayer()]), "Mapping")
+    assert len(labels) == len(set(labels))
+
+
+def test_the_trail_destination_reaches_the_list(gui):
+    """The one destination that is not a force."""
+    _, labels = draw_with_combo(FieldStack(layers=[FieldLayer()]), "Destination")
+    assert any(l.startswith("Trail") for l in labels)
 
 
 def test_an_empty_stack_still_offers_add_layer(gui):

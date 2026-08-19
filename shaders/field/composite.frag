@@ -11,7 +11,9 @@ in vec2 texcoord;
 out vec4 fragColor;
 
 uniform sampler2D src;
-uniform int   mapping;    // 0 rg_direct, 1 polar, 2 gradient, 3 curl, 4 luminance
+// Index into state/field_stack.MAPPINGS: 0 rg_direct, 1 polar, 2 gradient,
+// 3 curl, 4 luminance, 5 rg_signed, 6 edge, 7 edge_flow.
+uniform int   mapping;
 uniform float strength;
 uniform float sign_mul;   // +1 attract, -1 repel
 uniform float blur_lod;   // mip level of the pre-filter
@@ -38,6 +40,28 @@ float scalar_at(vec2 uv){
     return dot(fetch(uv).rgb, vec3(0.2126, 0.7152, 0.0722));
 }
 
+float lum_at(float dx, float dy){
+    return scalar_at(texcoord + vec2(dx, dy) * texel);
+}
+
+// A step from black to white scores 4 under these weights, so the divide puts
+// the strongest edge a source can hold at 1.
+const float SOBEL_FULL = 4.0;
+
+// Sobel, direction and strength kept apart: the direction is normalised, so a
+// soft ramp steers as firmly as a hard edge, and the strength is the edge
+// itself rather than the slope's raw height.
+void sobel(out vec2 dir, out float mag){
+    float tl = lum_at(-1.0,  1.0), tc = lum_at(0.0,  1.0), tr = lum_at(1.0,  1.0);
+    float ml = lum_at(-1.0,  0.0),                         mr = lum_at(1.0,  0.0);
+    float bl = lum_at(-1.0, -1.0), bc = lum_at(0.0, -1.0), br = lum_at(1.0, -1.0);
+    vec2 g = vec2((tr + 2.0 * mr + br) - (tl + 2.0 * ml + bl),
+                  (tl + 2.0 * tc + tr) - (bl + 2.0 * bc + br));
+    float len = length(g);
+    dir = (len > 1e-5) ? g / len : vec2(0.0);
+    mag = clamp(len / SOBEL_FULL, 0.0, 1.0);
+}
+
 void main(){
     vec2 v;
     if (mapping == 0) {
@@ -49,6 +73,15 @@ void main(){
         v = vec2(cos(a), sin(a)) * c.b;
     } else if (mapping == 4) {
         v = vec2(scalar_at(texcoord), 0.0);
+    } else if (mapping == 5) {
+        // A camera's channels are all positive, so read straight they carry a
+        // constant push into one corner. Mid grey is the rest position.
+        v = (fetch(texcoord).rg - 0.5) * 2.0;
+    } else if (mapping == 6 || mapping == 7) {
+        vec2 dir;
+        float mag;
+        sobel(dir, mag);
+        v = ((mapping == 6) ? dir : vec2(-dir.y, dir.x)) * mag * sign_mul;
     } else {
         float l = scalar_at(texcoord - vec2(texel.x, 0.0));
         float r = scalar_at(texcoord + vec2(texel.x, 0.0));
