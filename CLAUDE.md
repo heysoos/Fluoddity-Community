@@ -492,6 +492,38 @@ mechanics these caveats assume.
   composites against the zero clear and yields zero; multiply is for layer 2
   and after.
 
+- **`trail` is NOT a force, so it cannot share those channels and needs a
+  target of its own.** It deposits into the sim's canvas — the RG32F velocity
+  field the brains sense — so it rides in `sim.update`'s framebuffer after
+  `brush_update`, blended `ONE,ONE`, and never reaches `get_field()`.
+  `trail_texture` is None whenever no enabled layer drives it, which is what
+  makes the sim SKIP the pass rather than add a zeroed texture once per step;
+  the stateless-per-frame rule then holds over it unchanged. Its Strength is a
+  deposit RATE against an average that keeps accumulating, so it is scaled by
+  `TRAIL_GAIN` in `trail_deposit.frag`: full strength on the raw mapping is
+  three orders of magnitude over the trail a running sim leaves, which buries
+  the particles rather than joining them. It IS scaled by `TIME_SCALE`, since
+  the decay it feeds already is; it is NOT weighted per fragment by
+  `1 - trail_persistence` the way `brush.frag` is, so a sweep on Trail
+  Persistence tilts the level it settles at. A third copy of
+  `calculate_setting` is the price of fixing that. Guarded by
+  `tests/test_field_trail_dest_gl.py` for the routing and by
+  `tools.drive_field_stack`, which is the only thing that runs `sim.update`
+  and therefore the only thing that can see the deposit land.
+
+- **A mapping's index IS `MAPPINGS.index`, so a new one is APPENDED.** The
+  composite is one shader with a branch per mapping and the tuple's order is
+  the wire protocol between them; a config stores the NAME, so inserting one
+  renumbers every branch and silently reinterprets nothing on disk while
+  breaking everything in memory. `rg_direct` reads a source's channels
+  straight, which for anything that came from a camera or a photo is all
+  positive and pushes every particle into one corner — `rg_signed` is the
+  centred version, and the reason both exist is that the brush paints SIGNED
+  values into its own buffer, where subtracting a half would be wrong. `edge`
+  and `edge_flow` keep direction and strength APART: a normalised Sobel
+  heading times a clamped edge magnitude, so Strength means the same thing
+  whatever source is under it. Guarded by `tests/test_field_mappings_gl.py`.
+
 - **A mipmap min-filter over a texture with NO mip chain is INCOMPLETE and
   samples as BLACK.** Blur reads the chain, so `composite_one` builds it on
   demand and puts the filter back afterwards — `feedback` hands back the sim's
@@ -1548,6 +1580,15 @@ mechanics these caveats assume.
   Pair it with a test that the wrapper opened something, or the coverage is
   imaginary. Guarded by
   `tests/test_audio_reactive_window_render.py::test_the_forced_popup_helper_really_opens_something`.
+  **A COMBO's ENTRIES are the same blindness**, and they only exist at all
+  where the combo is drawn `begin_combo`/`selectable` by hand — which is what
+  a per-entry tooltip needs, because `imgui.combo` can only be told about the
+  selection. `BeginCombo`'s popup id is `"##ComboPopup"` hashed against the
+  COMBO's own id, so the wrapper pushes the label onto the ID stack before
+  calling `open_popup`. Only ONE popup stands open at a time, so the helper
+  takes a label and opens one combo per frame rather than all of them.
+  Guarded by
+  `tests/test_field_stack_window_render.py::test_the_forced_combo_helper_really_opens_something`.
 
 - **An ImGui widget's identity IS its label, and a duplicate silently kills the
   loser.** Two visible items hashing to one ID puts Dear ImGui's "conflicting
