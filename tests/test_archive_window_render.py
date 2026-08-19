@@ -87,6 +87,10 @@ class _FakeArchive:
         # of the path that actually ships.
         self.revision = 0
         self.signature = "fourier-n10"
+        self.moves = []
+
+    def layout_moves(self):
+        return list(self.moves)
 
     def layout_at(self, i):
         return getattr(self.entries[i], "layout", "") or self.signature
@@ -977,7 +981,8 @@ def test_a_very_long_warning_still_renders_its_dismiss_button(gui):
     assert frame(h.render_explore_tab) > host_only()
 
 
-SECTIONS = ("Goals", "Rollout", "Exploration", "Admission", "Expeditions")
+SECTIONS = ("Goals", "Rollout", "Exploration", "Admission", "Expeditions",
+            "Brain Layout")
 
 
 def _open_all_sections():
@@ -2591,3 +2596,97 @@ def test_the_thumbnail_column_follows_the_size_slider(gui, small, big):
 
     assert narrow > 0 and wide > 0, (narrow, wide)
     assert wide - narrow == pytest.approx(big - small, abs=2.0), (narrow, wide)
+
+
+# ---- brain layout search -------------------------------------------------
+
+def text_wrapped_lines(fn, n=3):
+    """Every wrapped line `fn` emits. layout.text_disabled_wrapped and
+    text_colored_wrapped both land on imgui.text_wrapped."""
+    seen = []
+    real = imgui.text_wrapped
+
+    def spy(text, *a, **kw):
+        seen.append(text)
+        return real(text, *a, **kw)
+
+    imgui.text_wrapped = spy
+    try:
+        frame(fn, n=n)
+    finally:
+        imgui.text_wrapped = real
+    return seen
+
+
+def _explore(h):
+    def draw():
+        _open_all_sections()
+        h.render_explore_tab()
+    return draw
+
+
+def test_the_layout_search_toggle_is_drawn_with_every_section_shut(gui):
+    """The primary control, so it may not live in a folded header - a folded
+    header's body does not run at all."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+
+    def draw():
+        _close_all_sections()
+        h.render_explore_tab()
+
+    assert "Search Brain Layouts Too" in checkbox_labels(draw)
+
+
+def test_the_bounds_are_drawn_once_the_search_is_on(gui):
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    h.state.archive.layout_search = True
+    labels = slider_int_labels(_explore(h))
+    assert any("Max Brain Floats" in s for s in labels), labels
+    assert any("Max Layers" in s for s in labels), labels
+    assert any("Max Layer Width" in s for s in labels), labels
+
+
+def test_a_modality_checkbox_comes_from_the_registry(gui):
+    """A second hand-written list of modalities is the declared-but-never-read
+    defect this codebase has shipped twice."""
+    from services.brains import REGISTRY
+
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    h.state.archive.layout_search = True
+    labels = checkbox_labels(_explore(h))
+    for key in REGISTRY:
+        assert key in labels, (key, labels)
+
+
+def test_the_bounds_are_not_drawn_while_the_search_is_off(gui):
+    """The header is the whole feature, so it is absent rather than empty."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    assert not any("Max Brain Floats" in s
+                   for s in slider_int_labels(_explore(h)))
+
+
+def test_ticking_a_modality_writes_the_comma_separated_bound(gui):
+    """The checkboxes are the only writer of layout_modalities, and a frame
+    that merely draws them must not clear what is already in it."""
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    h.state.archive.layout_search = True
+    h.state.archive.layout_modalities = "mlp"
+    frame(_explore(h))
+    assert h.state.archive.layout_modalities == "mlp"
+
+
+def test_the_ledger_is_drawn_when_the_archive_holds_moves(gui):
+    arc = _FakeArchive()
+    arc.moves = [{"parent": "fourier-n10", "child": "fourier-n11",
+                  "op": "grow", "gens": 50, "admitted": 3, "kept": True,
+                  "gen": 7}]
+    h = Harness(driver=_TracingDriver(), archive=arc, goals=GoalList())
+    h.state.archive.layout_search = True
+    lines = text_wrapped_lines(_explore(h))
+    assert any("fourier-n11" in s for s in lines), lines
+
+
+def test_an_archive_with_no_moves_draws_no_ledger(gui):
+    h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
+    h.state.archive.layout_search = True
+    assert not any("reverted" in s for s in text_wrapped_lines(_explore(h)))
