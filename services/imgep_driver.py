@@ -556,6 +556,37 @@ class ImgepDriver:
         self._move_admitted = 0
         return True
 
+    def _finish_layout_move(self) -> None:
+        """Keep the layout, or ask for the parent back. Once, as its expedition
+        ends.
+
+        The archive is already the judge: admission means finite, viable, alive
+        and separated from everything stored. A layout that cannot produce one
+        such tile in a whole expedition has answered the question.
+
+        Comparing the admission RATE against the parent was rejected. A
+        generation's tiles share one CMA-ES population, so they clear or miss
+        any bar together - the same reason the adaptive admission threshold was
+        removed.
+        """
+        mv, self._move = self._move, None
+        admitted, self._move_admitted = self._move_admitted, 0
+        self._move_seed = None
+        if mv is None:
+            return
+        kept = admitted >= 1
+        # Said out loud for the same reason a hand switch is: it redirects
+        # where results are filed, and nothing else records that it happened.
+        print(f"[brain] layout move {mv.operator} {mv.parent.signature()} -> "
+              f"{mv.child.signature()}: {admitted} admitted, "
+              f"{'kept' if kept else 'reverted'}")
+        if kept:
+            # It has native entries now, so ordinary expansion breeds from it
+            # next generation with no special case anywhere.
+            return
+        self._reverted.add(mv.pair)
+        self.requested_layout = mv.parent
+
     def _draw_goal(self) -> Goal | None:
         """One of three kinds, by share. Text takes whatever is left over.
 
@@ -727,6 +758,9 @@ class ImgepDriver:
                 # archive and all go in.
                 sep = np.minimum(sep, 1.0 - b @ b[i])
 
+        if self._move is not None:
+            self._move_admitted += admitted
+
         self.tournament.selected.clear()
         self._last_descriptors = b
         self.gen += 1
@@ -742,6 +776,9 @@ class ImgepDriver:
             self._remaining -= 1
             self._record(source, admitted, n, fit)
             if self._remaining <= 0:
+                # BEFORE end_expedition, which drops the move: reaching zero
+                # remaining is the one path that has a verdict to deliver.
+                self._finish_layout_move()
                 self.end_expedition()
             self._last_score_label = "goal match"
             return fit

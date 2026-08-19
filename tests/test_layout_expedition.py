@@ -19,8 +19,13 @@ FOURIER = default_layout()
 
 
 def a_driver(**kw):
-    """A driver with one generation already in the archive, so a seed exists."""
-    d, arc, ts = make(grid=4, seed_n=1, **kw)
+    """A driver with one generation already in the archive, so a seed exists.
+
+    grid=2 is four tiles, which is the popsize every test here asks for: the
+    optimizer's is fixed at construction and _ask_expedition ends the
+    expedition rather than crashing on a mismatch.
+    """
+    d, arc, ts = make(grid=2, seed_n=1, **kw)
     d.tell(d.ask(4), snaps(4, [[10, 20, 30, 40], [11, 21, 31, 41]]))
     d.layout_search = True
     d.layout_move_chance = 1.0
