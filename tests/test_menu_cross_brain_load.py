@@ -355,3 +355,59 @@ def test_a_frame_of_gallery_teardown_between_hover_and_click():
     _click(h, ui_state, "p")
     h._handle_brain_layout(ui_state)
     assert [lay for lay, _ in h.switches] == [layout]
+
+
+# --- the historical library, which names no brain at all --------------------
+
+class _UnsignedConfig:
+    """A preset saved before `brain_layout` existed: 138 of the 175 shipped
+    files. The rule is 80 floats, which IS a fourier-n10 genome - the field is
+    missing, not the brain."""
+
+    rule_seed = 0.0
+
+    def __init__(self):
+        self.rule = _rule_for(FOURIER)
+        self.brain_layout = ""
+        self.brain_settings = {}
+
+
+def test_an_unsigned_preset_is_fourier_not_whatever_is_running():
+    """A file naming no brain was read as 'stay put', so hovering one while an
+    MLP was live ran an 80-float Fourier genome under a 148-float layout -
+    which apply_rule refuses on width, silently. The whole historical library
+    behaves this way and the 37 signed presets do not, which is why it reads as
+    intermittent."""
+    live = layout_for("mlp", {})
+    sim = _Sim(live)
+    h, ui_state = _handler(sim, {"old": _UnsignedConfig()})
+    ui_state.brain.modality = "mlp"
+
+    _hover(h, ui_state, "old")
+
+    assert sim.brain_layout == FOURIER, (
+        f"hovering an unsigned preset left the sim on "
+        f"{sim.brain_layout.signature()}; a preset with no brain_layout is "
+        f"Fourier by history")
+    rule, under = sim.applied[-1]
+    assert under == FOURIER
+    assert len(rule) == FOURIER.length
+
+
+def test_clicking_an_unsigned_preset_lands_on_fourier():
+    """And the click has to complete the switch the hover borrowed, exactly as
+    it does for a signed one."""
+    live = layout_for("mlp", {})
+    sim = _Sim(live)
+    h, ui_state = _handler(sim, {"old": _UnsignedConfig()})
+    ui_state.brain.modality = "mlp"
+
+    _hover(h, ui_state, "old")
+    _click(h, ui_state, "old")
+    h._handle_brain_layout(ui_state)
+
+    assert ui_state.brain.modality == "fourier"
+    assert len(h.switches) == 1, "the click must perform the real switch"
+    got_layout, handed = h.switches[0]
+    assert got_layout == FOURIER
+    assert handed is not None, "the switch was handed no creature"

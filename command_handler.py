@@ -754,10 +754,10 @@ class CommandHandler:
         _handle_brain_layout runs every frame and applies whatever it finds
         here, so writing the state IS applying it. Nothing to request.
         """
-        sig = getattr(config, "brain_layout", "")
+        sig = self._config_signature(config)
         bst = getattr(ui_state, "brain", None)
         if not sig or bst is None:
-            return                  # pre-modality file: Fourier, nothing to say
+            return    # a file whose brain cannot be known: leave it alone
         from services.brains import layout_from_signature, settings_of
         from ui.brain_window import layout_for
 
@@ -1215,19 +1215,56 @@ class CommandHandler:
         if base != self.sim.brain_layout:
             self.sim.realloc_brain_buffers(base)
 
+    @staticmethod
+    def _config_signature(config) -> str:
+        """The layout signature a config MEANS, or "" when it cannot be known.
+
+        A file naming no brain is FOURIER, and its GENOME is what says so: the
+        field was added after most of the library was written, and all 138 of
+        the shipped presets that lack it carry exactly a fourier-n10 rule.
+        Reading that absence as "whatever is running" made the whole historical
+        library load its physics under someone else's brain - apply_rule
+        refuses an 80-float genome on width and `_rule_fits` suppresses the
+        line that would have said so, so the preset appeared to load and the
+        creature was the one already there. It only misbehaves while another
+        modality is live, which is why it reads as intermittent.
+
+        The width is checked rather than assumed, because an unsigned file is
+        not always Fourier: a tile saved by an earlier build of this branch can
+        be unsigned at another width, and there the honest answer is that the
+        file does not say. "" means stay put.
+
+        One home, because the borrow and the Brain window must agree - the
+        borrow moves the sim, and the window's per-frame apply moves it back.
+        """
+        import numpy as np
+
+        from services.brains import default_layout
+
+        sig = str(getattr(config, "brain_layout", "") or "")
+        if sig:
+            return sig
+        rule = getattr(config, "rule", None)
+        if rule is None:
+            return ""
+        fourier = default_layout()
+        if int(np.asarray(rule).size) != int(fourier.length):
+            return ""
+        return fourier.signature()
+
     def _config_borrow_layout(self, config):
         """The layout a config must be previewed under, or None to stay put.
 
-        None covers three cases that all mean 'no borrow': a file naming no
-        brain (those are Fourier by history), one naming the brain already
-        running, and one this build cannot rebuild.
+        None covers two cases that both mean 'no borrow': a config meaning the
+        brain already running, and one naming a signature this build cannot
+        rebuild.
 
         The config's own `brain_settings` supply the decode SCALES, which a
         signature leaves out - a file has them and an archive entry does not.
         """
         from services.brains import layout_from_signature
 
-        sig = getattr(config, "brain_layout", "")
+        sig = self._config_signature(config)
         live = getattr(getattr(self, "sim", None), "brain_layout", None)
         if not sig or live is None or sig == live.signature():
             return None

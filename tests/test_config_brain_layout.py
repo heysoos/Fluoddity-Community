@@ -140,15 +140,39 @@ def test_loading_puts_the_brain_window_back(name):
     assert tuple(got.scales) == tuple(lay.scales)
 
 
-def test_loading_a_legacy_file_leaves_the_brain_window_alone():
-    """No signature means a pre-modality config, which says nothing about the
-    brain - so it must not stamp Fourier over whatever is selected."""
+def test_loading_a_legacy_file_moves_the_window_to_the_fourier_it_holds():
+    """A pre-modality config names no brain, and its GENOME says which one it
+    is anyway: every unsigned file in the library carries a fourier-n10 rule.
+    Leaving the window on gabor was what let the whole historical library load
+    its physics around whatever creature was already running."""
     from command_handler import CommandHandler
     from state.ui_state import UIState
 
     d = PhysicsConfig().to_dict()
     del d["brain_layout"]
     cfg = PhysicsConfig.from_dict(d)
+
+    ui_state = UIState()
+    ui_state.brain.modality = "gabor"
+    ui_state.brain.settings = {"filters": 20}
+    CommandHandler._restore_brain_settings(
+        CommandHandler.__new__(CommandHandler), cfg, ui_state)
+
+    assert ui_state.brain.modality == "fourier"
+
+
+def test_a_legacy_file_at_an_unknown_width_still_leaves_it_alone():
+    """The width is checked rather than assumed. An unsigned file that is NOT
+    Fourier-shaped does not say which brain it wants, and guessing would be the
+    same defect pointed the other way."""
+    from command_handler import CommandHandler
+    from state.ui_state import UIState
+    from ui.brain_window import layout_for
+
+    d = PhysicsConfig().to_dict()
+    del d["brain_layout"]
+    cfg = PhysicsConfig.from_dict(d)
+    cfg.rule = [0.0] * layout_for("mlp", {}).length
 
     ui_state = UIState()
     ui_state.brain.modality = "gabor"

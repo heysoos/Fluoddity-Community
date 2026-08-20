@@ -98,12 +98,32 @@ def test_the_match_is_the_signature_and_never_the_width():
     assert h.take_pending_brain_rule(fourier.signature()) is None
 
 
-def test_a_config_naming_no_brain_hands_over_nothing():
-    """Pre-modality files are Fourier by history, and trigger no switch, so
-    there is nothing for a switch to consume."""
+def test_a_config_naming_no_brain_is_read_as_the_fourier_it_is():
+    """Pre-modality files are Fourier by history, and this used to stop at
+    saying so: the absence was read as "stay put", so hovering one while
+    another modality was live ran an 80-float genome under a wider layout,
+    where apply_rule refuses it without a word. The GENOME is the evidence -
+    all 138 unsigned presets in the library are exactly fourier-n10 - so it is
+    handed over under that signature like any other."""
     h = _handler()
     h._restore_brain_settings(_Config(np.zeros(80, np.float32), ""), _UI())
+    got = h.take_pending_brain_rule(default_layout().signature())
+    assert got is not None, "an unsigned Fourier preset handed over nothing"
+    assert len(got) == default_layout().length
+
+
+def test_an_unsigned_config_at_an_unknown_width_is_left_alone():
+    """The other half, and the reason the width is checked rather than
+    assumed. An unsigned file is not always Fourier - a tile saved by an
+    earlier build of this branch can be unsigned at another width - and there
+    the file genuinely does not say which brain it wants."""
+    h = _handler()
+    wide = layout_for("mlp", {})
+    h._restore_brain_settings(
+        _Config(np.zeros(wide.length, np.float32), ""), _UI())
     assert h._pending_brain_rule is None
+    assert CommandHandler._config_signature(
+        _Config(np.zeros(wide.length, np.float32), "")) == ""
 
 
 class _Layout:
