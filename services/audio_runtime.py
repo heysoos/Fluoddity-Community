@@ -14,6 +14,7 @@ from services.audio_brain import BrainModulator
 from services.audio_capture import AudioCapture
 from services.audio_mapping import (brain_targets, deaf_targets, modulate,
                                     physics_targets)
+from services.cohort_audio import build_arrays
 
 
 def muted_targets(ast, prefix: str = "") -> set[str]:
@@ -44,6 +45,9 @@ class AudioRuntime:
         self._brain = BrainModulator()
         self._states: dict[int, object] = {}
         self._base_brain_id = None
+        # Per-cohort gain and offset for the sim, or None when nothing is
+        # masked. Read by the orchestrator, never returned from update().
+        self.cohort_audio = None
 
     def close(self) -> None:
         self.capture.stop()
@@ -103,8 +107,11 @@ class AudioRuntime:
         # Cleared before any early return, so a bypassed or stopped rig empties
         # the drawer traces rather than freezing them on their last value.
         ast.shaped = {}
-        # Likewise before any early return: nothing tells the runtime a row was
-        # deleted, so the table is cut back to the rig every frame.
+        # Likewise before any early return, or a bypassed rig keeps driving the
+        # sim with whatever the last frame computed.
+        self.cohort_audio = None
+        # Nothing tells the runtime a row was deleted, so the table is cut back
+        # to the rig every frame.
         self._prune_states(ast)
 
         # Auto and Explore rank tiles against each other. Modulating physics
@@ -135,6 +142,12 @@ class AudioRuntime:
                          ast.shaped, held=held, rate_scale=ast.rate_scale)
         if moved:
             sim_out = replace(ui_state.sim, **moved)
+
+        arr, active = build_arrays(
+            ast.mappings, p_targets, signals, self._states, ast.strengths,
+            ast.global_strength, dt, deaf, ui_state.sim.num_cohorts,
+            held=held, rate_scale=ast.rate_scale)
+        self.cohort_audio = arr if active else None
 
         brain_out = self._update_brain(ui_state, ast, signals, dt,
                                        brain_layout, current_rule, held)

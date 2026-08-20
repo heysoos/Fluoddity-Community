@@ -659,3 +659,49 @@ def test_the_panel_reads_its_snapshot_from_state_not_from_a_service():
     src = SRC.read_text(encoding="utf-8")
     assert "audio_runtime" not in src
     assert "ast.snapshot" in src or 'getattr(ast, "snapshot"' in src
+
+
+# --- the cohort strip, drawn by the real panel -----------------------------
+#
+# The section lives inside a drawer's band tab, which only runs while that
+# drawer is open. Testing the widget alone leaves that reachability unproven,
+# which is the trap a folded section and a popup body both set.
+
+def test_a_maskable_target_draws_a_cell_per_cohort():
+    imgui, host = _bound_host(open_target="SENSOR_GAIN", open_band="bass")
+    host._cohort_cell_rects = []
+    _draw(imgui, host)
+    assert len(host._cohort_cell_rects) == int(host.state.sim.num_cohorts)
+
+
+def test_an_unmaskable_target_draws_no_strip():
+    """Trail Persistence is evaluated in canvas.frag, which has no cohort."""
+    from services.audio_mapping import Mapping
+
+    imgui, host = _bound_host(open_target="TRAIL_PERSISTENCE",
+                              open_band="bass")
+    host.state.audio.mappings.append(
+        Mapping(signal="bass", target="TRAIL_PERSISTENCE"))
+    host._cohort_cell_rects = []
+    _draw(imgui, host)
+    assert host._cohort_cell_rects == []
+
+
+def test_a_scoped_band_is_marked_on_the_row(monkeypatch):
+    """A row carries six bands, so the drawer alone cannot show which."""
+    imgui, host = _bound_host(open_target="", open_band="")
+    seen = []
+    real = imgui.button
+
+    def spy(label, *args, **kwargs):
+        seen.append(label)
+        return real(label, *args, **kwargs)
+
+    monkeypatch.setattr(imgui, "button", spy)
+    _draw(imgui, host)
+    assert not any(s.startswith("B*") for s in seen), "unmasked must be plain"
+
+    seen.clear()
+    host.state.audio.mappings[0].cohorts[:8] = False
+    _draw(imgui, host)
+    assert any(s.startswith("B*##") for s in seen), seen

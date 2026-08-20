@@ -621,8 +621,8 @@ void calculate_entity_behavior( vec2 L,vec2 R, vec2 axis, uint base, vec2 pos, f
     strafe = baseterm.zw + y_reflect(mirrorterm.zw);
 
     //Convert force and strafe back to world coordinates
-    force=forward*force.x*calculate_setting(get_particle_axial_force(),pos,cohort)+left*force.y*calculate_setting(get_particle_lateral_force(),pos,cohort);
-    strafe = forward*strafe.x*calculate_setting(get_particle_axial_force(),pos,cohort) + left * strafe.y * calculate_setting(get_particle_lateral_force(),pos,cohort);
+    force=forward*force.x*cohort_audio(calculate_setting(get_particle_axial_force(),pos,cohort),CA_AXIAL_FORCE,cohort)+left*force.y*cohort_audio(calculate_setting(get_particle_lateral_force(),pos,cohort),CA_LATERAL_FORCE,cohort);
+    strafe = forward*strafe.x*cohort_audio(calculate_setting(get_particle_axial_force(),pos,cohort),CA_AXIAL_FORCE,cohort) + left * strafe.y * cohort_audio(calculate_setting(get_particle_lateral_force(),pos,cohort),CA_LATERAL_FORCE,cohort);
 
     color = baseterm.xy+(mirrorterm.xy); //Just an arbitrary function of blackbox output. Reuses force terms.
     return;
@@ -644,7 +644,7 @@ void main() {
     uint brain_base = get_particle_brain_base(cohort);
 
     //Each cohort gets a random mutation, applied on read by the modality.
-    g_brain_mut = calculate_setting(get_particle_mutation_scale(),e.pos,cohort);
+    g_brain_mut = cohort_audio(calculate_setting(get_particle_mutation_scale(),e.pos,cohort),CA_MUTATION_SCALE,cohort);
     g_brain_cohort = get_particle_rule_seed()+floor(cohort);
 
     // Only write brains when explicitly requested, and only for the particle
@@ -658,12 +658,12 @@ void main() {
 
 
     //frame_count == 0 signals a simulation reset
-    if (frame_count==0||calculate_setting(get_particle_hazard_rate(),e.pos,cohort)>hash(vec2(float(index)/float(ACTIVE_COUNT),frame_count))){reset(index);return;}
+    if (frame_count==0||cohort_audio(calculate_setting(get_particle_hazard_rate(),e.pos,cohort),CA_HAZARD_RATE,cohort)>hash(vec2(float(index)/float(ACTIVE_COUNT),frame_count))){reset(index);return;}
 
 
 
     //Calculate position offsets for the two sensors.
-    float sample_dist = 1./SQRT_WORLD_SIZE*.005 * calculate_setting(get_particle_sensor_distance(),e.pos,cohort);
+    float sample_dist = 1./SQRT_WORLD_SIZE*.005 * cohort_audio(calculate_setting(get_particle_sensor_distance(),e.pos,cohort),CA_SENSOR_DISTANCE,cohort);
     
     //variable sample distance?
     //sample_dist *= (get_can(e.pos).z*10);
@@ -677,8 +677,8 @@ void main() {
     else if(ORIENTATION_MODE==2){orientation = mix(orientation,-normalize(e.pos),mix_amt);}
     vec2 left_sensor_offset = orientation*sample_dist;
     vec2 right_sensor_offset = orientation*sample_dist;
-    pR(left_sensor_offset,calculate_setting(get_particle_sensor_angle(),e.pos,cohort)*PI);//rotate them opposite directions
-    pR(right_sensor_offset,-calculate_setting(get_particle_sensor_angle(),e.pos,cohort)*PI);
+    pR(left_sensor_offset,cohort_audio(calculate_setting(get_particle_sensor_angle(),e.pos,cohort),CA_SENSOR_ANGLE,cohort)*PI);//rotate them opposite directions
+    pR(right_sensor_offset,-cohort_audio(calculate_setting(get_particle_sensor_angle(),e.pos,cohort),CA_SENSOR_ANGLE,cohort)*PI);
 
     //read the trails from canvas (tournament: keep sample points inside the home tile)
     vec2 lsample = e.pos + left_sensor_offset;
@@ -694,7 +694,7 @@ void main() {
 
     
     //rescale sensor values
-    float sensor_scaling = SQRT_WORLD_SIZE*38.855*calculate_setting(get_particle_sensor_gain(),e.pos,cohort);
+    float sensor_scaling = SQRT_WORLD_SIZE*38.855*cohort_audio(calculate_setting(get_particle_sensor_gain(),e.pos,cohort),CA_SENSOR_GAIN,cohort);
     ltap *= sensor_scaling;
     rtap *= sensor_scaling;
 
@@ -705,8 +705,8 @@ void main() {
     calculate_entity_behavior(ltap.xy,rtap.xy,orientation,brain_base,e.pos,cohort,force,strafe,col_params);
 
     //rescale output forces
-    force *= 1./SQRT_WORLD_SIZE*calculate_setting(get_particle_global_force_mult(),e.pos,cohort)/400.;
-    strafe *= 1./SQRT_WORLD_SIZE*calculate_setting(get_particle_global_force_mult(),e.pos,cohort)/20.;
+    force *= 1./SQRT_WORLD_SIZE*cohort_audio(calculate_setting(get_particle_global_force_mult(),e.pos,cohort),CA_GLOBAL_FORCE_MULT,cohort)/400.;
+    strafe *= 1./SQRT_WORLD_SIZE*cohort_audio(calculate_setting(get_particle_global_force_mult(),e.pos,cohort),CA_GLOBAL_FORCE_MULT,cohort)/20.;
 
 
     //The particle stores hue and saturation; the vertex shaders supply the
@@ -728,7 +728,7 @@ void main() {
     //STATE f/(1-d) exactly where it was. Scaling the position alone would let
     //a particle turn as sharply per step as before while covering less
     //ground, which is a tighter creature rather than a slower one.
-    float drag = calculate_setting(get_particle_drag(),e.pos,cohort);
+    float drag = cohort_audio(calculate_setting(get_particle_drag(),e.pos,cohort),CA_DRAG,cohort);
     float drag_ts = TIME_SCALE == 1.0 ? drag : pow(abs(drag), TIME_SCALE)*sign(drag);
     //d == 1 is a frictionless particle: the average never settles, and the
     //share of force a step takes in is just its length.
@@ -737,7 +737,7 @@ void main() {
     e.vel = e.vel*drag_ts + force*force_gain;
     //Move: add e.vel and strafe to e.pos. Strafe is sampled at the position
     //e.vel alone would have reached, which is where a sweep used to read it.
-    vec2 hop = strafe*calculate_setting(get_particle_strafe_power(),e.pos+e.vel,cohort);
+    vec2 hop = strafe*cohort_audio(calculate_setting(get_particle_strafe_power(),e.pos+e.vel,cohort),CA_STRAFE_POWER,cohort);
     vec2 step_delta = e.vel + hop;
 
     //ADVANCED DRAWING force / strafe. Sampled where the step lands, which is

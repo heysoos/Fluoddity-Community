@@ -203,3 +203,45 @@ def test_the_window_being_open_is_not_a_rig_change(data_dir):
     st.show_window = True
     st.open_target = "SENSOR_GAIN"
     assert session.exit() is False
+
+
+def test_a_named_rig_carries_its_cohort_masks(data_dir):
+    """The two-band split has to survive Save and Load by name, not just the
+    dict helpers - this is the path the preset row actually uses."""
+    import numpy as np
+
+    from services import cohort_audio as ca
+
+    st = AudioInState()
+    lo = Mapping(signal="bass", target="SENSOR_GAIN", mode="add")
+    hi = Mapping(signal="hi", target="SENSOR_GAIN", mode="subtract")
+    lo.cohorts[:] = False
+    hi.cohorts[:] = False
+    for cell in range(32):
+        ca.paint(lo.cohorts, cell, 64, True)
+    for cell in range(32, 64):
+        ca.paint(hi.cohorts, cell, 64, True)
+    st.mappings = [lo, hi]
+
+    assert rig_io.save_rig(st, rig_io.preset_path("split"))
+
+    back = AudioInState()
+    assert rig_io.load_rig(back, rig_io.preset_path("split"))
+    assert [m.signal for m in back.mappings] == ["bass", "hi"]
+    assert np.array_equal(back.mappings[0].cohorts, lo.cohorts)
+    assert np.array_equal(back.mappings[1].cohorts, hi.cohorts)
+    # The halves land the right way round, not merely somewhere.
+    assert ca.covers(back.mappings[0].cohorts, 0, 64)
+    assert not ca.covers(back.mappings[0].cohorts, 63, 64)
+    assert ca.covers(back.mappings[1].cohorts, 63, 64)
+
+
+def test_painting_a_mask_makes_this_instance_the_one_that_writes(data_dir):
+    """Or the session that scoped a band would not save it at exit."""
+    from services import cohort_audio as ca
+
+    st = AudioInState()
+    st.mappings = [Mapping(signal="bass", target="SENSOR_GAIN")]
+    session = _Session(st)
+    ca.paint(st.mappings[0].cohorts, 0, 64, False)
+    assert session.exit() is True

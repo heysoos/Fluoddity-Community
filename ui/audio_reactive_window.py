@@ -16,11 +16,13 @@ import numpy as np
 from imgui_bundle import imgui
 
 from services import audio_capture
+from services import cohort_audio as ca
 from services.audio_analysis import BAND_NAMES, SIGNAL_NAMES
 from services.audio_mapping import (MODES, Mapping, brain_targets,
                                     deaf_targets, physics_targets)
 from services.audio_shapers import SHAPER_KINDS, ShaperParams
 from ui import hints, layout, notices
+from ui.cohort_strip import CohortStripMixin
 
 SIGNAL_COLORS: dict[str, tuple] = {
     "bass": (0.88, 0.31, 0.38, 1.0),
@@ -111,7 +113,7 @@ class TraceRing:
         return self._buf
 
 
-class AudioReactiveWindowMixin:
+class AudioReactiveWindowMixin(CohortStripMixin):
     """Combined into UI via multiple inheritance."""
 
     # --- ring buffers ---------------------------------------------------
@@ -581,8 +583,12 @@ class AudioReactiveWindowMixin:
             colour = imgui.ImVec4(*SIGNAL_COLORS[signal])
             if existing is None:
                 colour = imgui.ImVec4(colour.x, colour.y, colour.z, 0.30)
+            # A row can carry six bands, so no one strip summarises it. The
+            # star says this band is scoped; the drawer says to what.
+            mark = ("*" if existing is not None
+                    and not ca.is_full(existing.cohorts) else "")
             imgui.push_style_color(imgui.Col_.button, colour)
-            if imgui.button(f"{SIGNAL_ABBR[signal]}##{signal}"):
+            if imgui.button(f"{SIGNAL_ABBR[signal]}{mark}##{signal}"):
                 # A dot toggles its mapping and never opens or closes a drawer.
                 if existing is None:
                     mappings.append(Mapping(signal=signal, target=target.key))
@@ -680,6 +686,28 @@ class AudioReactiveWindowMixin:
                 imgui.pop_style_color()
         elif m.shaper.kind != "none":
             imgui.text_disabled("Start audio to see the shaper's output.")
+
+        imgui.separator()
+        self._render_cohort_section(m)
+
+    def _render_cohort_section(self, m):
+        if m.target not in ca.COHORT_AUDIO_PARAMS:
+            imgui.text_disabled(
+                "This parameter is one value for the whole canvas, so it "
+                "cannot be split by cohort.")
+            return
+        n = int(self.state.sim.num_cohorts)
+        imgui.text("Cohorts")
+        hints.tip("Which cohorts this band drives; drag across to paint.")
+        self.render_cohort_buttons(m, n)
+        self.render_cohort_strip(m, n)
+        count = int(ca.cells_lit(m.cohorts, n).sum())
+        if count == 0:
+            imgui.text_disabled("no cohorts - this band is idle")
+        elif count == n:
+            imgui.text_disabled(f"all {n} cohorts")
+        else:
+            imgui.text_disabled(f"{count} of {n} cohorts")
 
     def _render_audio_total_tab(self, target, bound, overlay):
         if overlay is None:

@@ -8,7 +8,10 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass, field
 
+import numpy as np
+
 from services.audio_shapers import ShaperParams, ShaperState
+from services.cohort_audio import full_mask
 
 MODES: tuple[str, ...] = ("add", "subtract", "multiply")
 
@@ -45,6 +48,22 @@ class Mapping:
     # the mapping, never persisted, and an ordinary field so that a rig diffed
     # by value sees a delete-and-re-add.
     uid: int = field(default_factory=_next_uid)
+    # Which cohorts this mapping drives, over the normalised cohort axis. Full
+    # means every cohort, which is what a rig written before this comes to.
+    cohorts: np.ndarray = field(default_factory=full_mask)
+
+    def __eq__(self, other) -> bool:
+        # Explicit, because the generated one compares the mask with `==` and
+        # returns an array rather than a bool.
+        if not isinstance(other, Mapping):
+            return NotImplemented
+        return (
+            (self.signal, self.target, self.mode, self.depth, self.gain,
+             self.shaper, self.enabled, self.uid)
+            == (other.signal, other.target, other.mode, other.depth,
+                other.gain, other.shaper, other.enabled, other.uid)
+            and bool(np.array_equal(self.cohorts, other.cohorts))
+        )
 
 
 def physics_targets(sim_state) -> list[TargetDef]:

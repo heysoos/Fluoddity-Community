@@ -96,7 +96,12 @@ v = clamp(v, lo, hi);
 ```
 
 `lo`/`hi` are the parameter's hard limits where it declares them and its slider
-range otherwise - the same bounds `modulate()` already clamps to.
+range otherwise - the same bounds `modulate()` already clamps to. **They are
+not optional and they travel in the array**, one extra entry per row past the
+cohorts: without them a subtract row reaches values the global path would have
+clamped, which is what the equivalence test in section 7 catches. A row with no
+masked mapping keeps OPEN bounds rather than its parameter's, or it would start
+clipping whatever a sweep or a jitter produced on a row nobody scoped.
 
 Because this lands ON TOP of `calculate_setting`'s result rather than replacing
 `slider_value`, a masked mapping reaches parameters a sweep has made deaf. That
@@ -178,6 +183,9 @@ Changed, minimally:
   skipped whenever the program has not changed.
 - `shaders/entity_update.glsl` - `cohort_audio(...)` wrapped around each of the
   `calculate_setting` call sites named in `COHORT_AUDIO_PARAMS`.
+- `tools/shader_compile_check.py` - the same prepend. It MIRRORS sim.py's chain
+  rather than calling it, so a miss here does not fail: it silently stops the
+  compile check covering this shader at all.
 
 `calculate_setting` itself is NOT modified. It must stay character-identical
 across `entity_update.glsl`, `canvas.frag` and `sim.py`, and `canvas.frag` has
@@ -217,6 +225,23 @@ The mask is written to the rig only when something is painted out, so an
 unmasked row adds nothing to the file and every existing rig loads as
 all-cohorts with no migration. `PERSISTED_FIELDS` is unchanged - the mask rides
 inside `mappings`, which is already there.
+
+**It is stored as half-open RUN RANGES on ONE LINE**, `"0-72"` for the first
+half of the axis and `"0-36,72-108"` for two blocks.
+
+The line count is the whole reason, and the obvious spelling is a trap. A rig
+is written with a json indent, which gives every list entry its own line and a
+NESTED PAIR four of them. Measured on one mask: the slot-per-entry bitmap this
+started as is **148 lines** at every density; ranges as `[[lo, hi]]` lists are
+**8** for a contiguous half but **292** for `every 2nd` at 144 cohorts - worse
+than the bitmap they replaced, in a shape the strip's own stride buttons
+produce. As text it is **3** at every density.
+
+`read_mask` accepts all three forms forever, told apart by SHAPE rather than by
+a version field, because rigs were saved on each. An empty string is a mask with
+no runs, which is an idle row - a FULL mask writes no key at all, which is why
+those two never collide. A range string that does not parse leaves the mapping
+on every cohort rather than dropping the row.
 
 The mask takes part in `Mapping.__eq__` like every other field, so
 `_save_last_rig`'s value diff sees a mask edit as the change it is.
@@ -259,19 +284,29 @@ The mask takes part in `Mapping.__eq__` like every other field, so
 
 In the order that leaves the app runnable at every step:
 
-1. Delete the strip call and the chip marker in `ui/audio_reactive_window.py`;
-   delete `ui/cohort_strip.py`.
-2. Delete the `build_arrays` call and `self.cohort_audio` in
+1. Delete `_render_cohort_section` and its call, the `CohortStripMixin` base and
+   its import, and the `mark` lines in the chip loop, all in
+   `ui/audio_reactive_window.py`; delete `ui/cohort_strip.py`.
+2. Delete the `build_arrays` call, its import and `self.cohort_audio` in
    `services/audio_runtime.py`, and the one line in `main.py`.
-3. Delete the buffer reserve, the bind and the write in `sim.py`.
+3. Delete the buffer reserve, the bind, the setter and the write in `sim.py`.
 4. Delete the `cohort_audio(...)` wrappers in `shaders/entity_update.glsl`, the
-   prepend, and `shaders/cohort_audio.glsl`.
-5. Delete the field on `Mapping` and its two lines in `state/audio_in_state.py`.
-   Rigs carrying a mask key still load: `_mapping_from_dict` reads named keys
-   one at a time and never sees the rest.
-6. Delete `services/cohort_audio.py` and `tests/test_cohort_audio.py`.
+   prepend in `sim.py` AND the one in `tools/shader_compile_check.py`, and
+   `shaders/cohort_audio.glsl`.
+5. Delete the field and `__eq__` on `Mapping` and the mask lines in
+   `state/audio_in_state.py`. Rigs carrying a mask key still load:
+   `_mapping_from_dict` reads named keys one at a time and never sees the rest.
+6. Delete `services/cohort_audio.py`, `tests/test_cohort_audio.py`,
+   `tests/test_cohort_audio_gl.py` and `tests/test_cohort_strip.py`, and the
+   three tests under the "cohort strip" heading at the end of
+   `tests/test_audio_reactive_window_render.py`.
 
-Nothing that survives has been rewritten, so nothing that survives needs
-retesting. While the feature is in, this file is its home for measured facts; if
-it stays, the one-paragraph rule goes to CLAUDE.md and this document keeps the
-evidence.
+One change is deliberately NOT reverted.
+`test_v_max.py::test_the_limit_covers_strafe_and_not_just_velocity` anchored on
+the literal text of the `hop` line, which the wrapper changes; it now anchors on
+the statement rather than on what computes its scalar. That assertion is about
+statement ORDER and reads correctly with the wrapper present or absent.
+
+Nothing else that survives has been rewritten, so nothing else needs retesting.
+While the feature is in, this file is its home for measured facts; if it stays,
+the one-paragraph rule goes to CLAUDE.md and this document keeps the evidence.
