@@ -303,3 +303,45 @@ def test_saving_records_the_LIVE_layout_not_a_stale_field(tmp_path):
     written = app.archive_store.load_settings()
     app.archive_store.close()
     assert written["layout_signature"] == "gabor-n12"
+
+
+# ---- one archives folder, several builds ---------------------------------
+
+def test_a_build_that_does_not_know_a_setting_leaves_it_alone(tmp_path):
+    """ONE archives folder is shared by every copy of the app, so a build
+    whose PERSISTED_FIELDS are older must not DELETE the newer build's
+    settings - which is what a wholesale rewrite did."""
+    store = ArchiveStore(tmp_path / "arc")
+    store.save_settings({"alpha": 5.0, "layout_search": True})
+    store.save_settings({"alpha": 6.0})          # an older build's whole block
+    on_disk = store.load_settings()
+    assert on_disk["alpha"] == 6.0
+    assert on_disk["layout_search"] is True
+
+
+def test_a_setting_still_moves_when_the_build_does_know_it(tmp_path):
+    """Merging must not make a value sticky."""
+    store = ArchiveStore(tmp_path / "arc")
+    store.save_settings({"layout_search": True})
+    store.save_settings({"layout_search": False})
+    assert store.load_settings()["layout_search"] is False
+
+
+def test_a_field_survives_a_session_under_a_build_that_lacks_it(tmp_path):
+    """The whole path, as the app walks it: write every field, save again
+    under a build that knows fewer, then read it back under this one."""
+    full = ArchiveState()
+    full.layout_search = True
+    full.layout_modalities = "fourier,mlp"
+    store = ArchiveStore(tmp_path / "arc")
+    store.save_settings(full.to_settings())
+
+    older = {k: v for k, v in full.to_settings().items()
+             if not k.startswith("layout_")}
+    store.save_settings(older)
+
+    back = ArchiveState()
+    back.apply_settings(store.load_settings())
+    store.close()
+    assert back.layout_search is True
+    assert back.layout_modalities == "fourier,mlp"

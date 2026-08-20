@@ -827,6 +827,18 @@ mechanics these caveats assume.
   before the store is closed (a switch, and quitting); `grid` is the one
   restored field that also needs `grid_changed`, since the per-frame
   `configure()` push does not rebuild the tournament grid.
+  **The file is MERGED, not replaced, because one archives folder is shared by
+  every copy of the app.** `to_settings()` returns only the fields the RUNNING
+  build knows, so a wholesale rewrite deleted every setting added since
+  whichever build happened to close the archive last — a worktree left every
+  layout-search field on disk, another opened the same archive and stripped all
+  seven, and the setting read as never having been saved. The same shape as the
+  shared `audio_rig.json`, and worse in one way: the loss is silent on BOTH
+  sides, since `settings_history.jsonl` diffs against the running build's block
+  and so records no change either. That log is what the values are recoverable
+  from. A build writes what it knows and leaves the rest alone; a key dropped
+  from `PERSISTED_FIELDS` therefore lingers, which costs nothing —
+  `apply_settings` ignores what it does not recognise.
 
 - **`Archive.maybe_flush` only rewrites `vectors.npz` every 200 admissions.**
   `index.jsonl` is flushed per entry, so anything that closes an archive —

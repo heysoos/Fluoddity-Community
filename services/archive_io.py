@@ -226,15 +226,23 @@ class ArchiveStore:
 
         Beside the goal list, and for the same reason: the settings that suit a
         20000-entry archive are not the ones that suit an empty one, so they
-        belong to the archive rather than to the app. Written whole and
-        atomically, like goals.json - a partially-written settings file would
-        load as defaults, which is precisely the failure it exists to prevent.
+        belong to the archive rather than to the app. Written atomically, like
+        goals.json - a partially-written settings file would load as defaults,
+        which is precisely the failure it exists to prevent.
+
+        MERGED over what is on disk, never a wholesale replacement: one
+        archives folder is shared by every copy of the app, so a build with
+        fewer PERSISTED_FIELDS than the one that wrote the file would otherwise
+        DELETE the settings it does not know about. A build writes what it
+        knows and leaves the rest alone.
         """
         if not self.enabled:
             return
+        merged = self.load_settings()
+        merged.update(dict(data))
         tmp = self.settings_path.with_suffix(".json.tmp")
         try:
-            tmp.write_text(json.dumps(dict(data), indent=2, sort_keys=True),
+            tmp.write_text(json.dumps(merged, indent=2, sort_keys=True),
                            encoding="utf-8")
             os.replace(tmp, self.settings_path)
         except (OSError, TypeError) as exc:
