@@ -217,6 +217,14 @@ class ArchiveState:
         hand-edited or truncated file must not take the app down.
         """
         applied = []
+        # A RECORD of the archive, not a setting to carry over. Everything else
+        # keeps its current value when absent - which is what lets a brand new
+        # archive inherit the settings you were just using - but inheriting
+        # this one would tell an archive it was searched under a brain it has
+        # never held, and the restore would then move the user onto a layout
+        # with no native rows.
+        if "layout_signature" not in data:
+            self.layout_signature = ""
         for name in PERSISTED_FIELDS:
             if name not in data:
                 continue

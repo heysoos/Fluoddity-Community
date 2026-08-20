@@ -501,6 +501,20 @@ class App:
             self.thumb_cache = None
             self.atlas_cache = None
 
+    def _record_searched_layout(self, ui_state) -> None:
+        """File the brain a generation was just SEARCHED under.
+
+        The only writer of `layout_signature`, and it runs from the scored
+        branch alone - so browsing an archive under another brain, or hand
+        switching to one and quitting, records nothing and the archive reopens
+        where the search actually left it. An archive never searched keeps the
+        empty signature, which `_restore_archive_layout` reads as "leave the
+        brain alone".
+        """
+        layout = getattr(getattr(self, "sim", None), "brain_layout", None)
+        if layout is not None:
+            ui_state.archive.layout_signature = layout.signature()
+
     def _save_archive_settings(self, ui_state):
         """Persist the Explore settings into the archive's own folder.
 
@@ -508,12 +522,11 @@ class App:
         """
         if self.archive_store is None:
             return
-        # From the SIM, not from whatever was last put in the field: this is a
-        # readout of the brain the archive is on, and a stale one files the
-        # layout it just left.
-        layout = getattr(getattr(self, "sim", None), "brain_layout", None)
-        if layout is not None:
-            ui_state.archive.layout_signature = layout.signature()
+        # layout_signature is NOT read off the sim here. It names the brain the
+        # SEARCH was in, which _record_searched_layout is the only writer of -
+        # a readout at save time names whatever happens to be selected, so
+        # hand-switching to an empty layout before quitting filed that one and
+        # the archive reopened on it with no native rows to breed from.
         settings = ui_state.archive.to_settings()
         self.archive_store.save_settings(settings)
         # A change made after the last generation would otherwise never reach
@@ -954,6 +967,9 @@ class App:
                 # Before the rest: everything below reports what is live NOW,
                 # and a layout move that landed has changed it.
                 self._apply_requested_layout(ui_state)
+                # AFTER that, so a move kept or reverted in this very frame is
+                # already reflected in what gets filed.
+                self._record_searched_layout(ui_state)
                 self._after_generation(fit)
                 self._record_settings_version(ui_state)
             return 0

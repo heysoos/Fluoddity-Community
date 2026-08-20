@@ -95,3 +95,69 @@ def test_the_restore_is_not_wired_into_the_layout_change_itself():
 
     src = inspect.getsource(App._apply_brain_layout)
     assert "_restore_archive_layout" not in src
+
+
+# --- what gets RECORDED, as opposed to what is restored ---------------------
+#
+# The signature used to be read off the sim as the archive was let go, so it
+# named whatever brain happened to be selected at that moment - not the one the
+# search had been working in. Hand-switching to a layout with no entries and
+# quitting therefore filed that empty layout, and reopening the archive put you
+# on it: 2974 entries on disk and the search bootstrapping from nothing.
+
+class _Store:
+    def __init__(self):
+        self.saved = None
+
+    def save_settings(self, data):
+        self.saved = dict(data)
+
+    def load_settings(self):
+        return dict(self.saved or {})
+
+
+class _Recorder:
+    """App, reduced to the two methods that write the signature."""
+
+    def __init__(self, layout=FOURIER):
+        self.sim = _Sim()
+        self.sim.brain_layout = layout
+        self.archive = None
+        self.archive_store = _Store()
+        self.imgep_driver = None
+
+    def _save_archive_settings(self, ui_state):
+        from main import App
+
+        return App._save_archive_settings(self, ui_state)
+
+
+def test_saving_does_not_file_whatever_brain_is_merely_selected():
+    """The defect. A hand switch to an empty layout is not a search."""
+    app = _Recorder(layout=GABOR)
+    ui = _ui("fourier-n10")          # what the SEARCH was on
+    app._save_archive_settings(ui)
+    assert app.archive_store.saved["layout_signature"] == "fourier-n10"
+
+
+def test_a_scored_generation_is_what_records_the_layout():
+    """And the only thing that does. It runs after the layout a MOVE asked for
+    has been applied, so a move kept or reverted this frame is already
+    reflected."""
+    app = _Recorder(layout=GABOR)
+    ui = _ui("fourier-n10")
+    from main import App
+
+    App._record_searched_layout(app, ui)
+    assert ui.archive.layout_signature == "gabor-n12"
+    app._save_archive_settings(ui)
+    assert app.archive_store.saved["layout_signature"] == "gabor-n12"
+
+
+def test_an_archive_never_searched_records_nothing():
+    """So a brand new archive, or one only ever browsed, restores nothing and
+    leaves the brain where the user put it."""
+    app = _Recorder(layout=GABOR)
+    ui = _ui("")
+    app._save_archive_settings(ui)
+    assert app.archive_store.saved["layout_signature"] == ""

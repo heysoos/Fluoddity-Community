@@ -267,16 +267,34 @@ def test_the_layout_signature_travels_with_the_archive():
 
 def test_an_archive_with_no_recorded_layout_reads_as_empty():
     """Every archive written before this one has no such key, and must open
-    exactly as it always did."""
+    exactly as it always did.
+
+    It does NOT inherit, which is the one place this field parts company with
+    every other persisted one: `{}` means "keep what is on screen" for a
+    setting, and for a RECORD of which brain an archive was searched under it
+    would mean claiming a brain the archive has never held."""
     s = ArchiveState()
     assert s.layout_signature == ""
     s.apply_settings({"alpha": 3.0})
     assert s.layout_signature == ""
 
+    s.layout_signature = "gabor-n12"
+    s.apply_settings({"alpha": 3.0})
+    assert s.layout_signature == "", "a new archive inherited another's brain"
+    s.layout_signature = "gabor-n12"
+    s.apply_settings({"layout_signature": "fourier-n10"})
+    assert s.layout_signature == "fourier-n10"
 
-def test_saving_records_the_LIVE_layout_not_a_stale_field(tmp_path):
-    """The field is a readout on the way out. Trusting whatever was last put
-    in it files the layout the archive just left."""
+
+def test_saving_files_the_searched_layout_not_whatever_is_selected(tmp_path):
+    """The field names the brain the SEARCH was in, and _record_searched_layout
+    is its only writer.
+
+    It used to be read off the sim here instead. That files whatever happens to
+    be selected as the archive is let go - so hand switching to a layout with
+    no entries and quitting recorded that one, and the archive reopened on it
+    with nothing native to breed from while thousands of entries sat in its
+    other directories."""
     from main import App
     from services.brains import BrainLayout, default_layout
     from state.preferences_state import PreferencesState
@@ -295,11 +313,18 @@ def test_saving_records_the_LIVE_layout_not_a_stale_field(tmp_path):
 
     ui = _Bag()
     ui.archive = ArchiveState()
-    ui.archive.layout_signature = "fourier-n10"      # stale
+    ui.archive.layout_signature = "fourier-n10"   # what the SEARCH was on
     ui.preferences = PreferencesState()
 
     App._save_archive_settings(app, ui)
 
+    written = app.archive_store.load_settings()
+    assert written["layout_signature"] == "fourier-n10", (
+        "saving filed the selected brain over the searched one")
+
+    # And the scored branch is what moves it, gabor being live by then.
+    App._record_searched_layout(app, ui)
+    App._save_archive_settings(app, ui)
     written = app.archive_store.load_settings()
     app.archive_store.close()
     assert written["layout_signature"] == "gabor-n12"
