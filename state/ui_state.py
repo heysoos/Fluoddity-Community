@@ -37,6 +37,7 @@ class UIState:
     request_clear_force_field: bool = False  # Clear force field channels
     request_clear_strafe_field: bool = False  # Clear strafe field channels
     request_clear_canvas: bool = False  # Clear trails/canvas textures
+    request_mosh_reseed: bool = False  # Refill the datamosh buffer from the live source
 
     # Scroll input (for zoom-around-pointer)
     scroll_delta: float = 0.0

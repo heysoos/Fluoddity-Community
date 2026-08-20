@@ -2,7 +2,7 @@
 import glfw
 import numpy as np
 
-from state.render_params import PaletteParams, MaskParams
+from state.render_params import PaletteParams, MaskParams, MoshParams
 
 
 class SimulationRunner:
@@ -14,7 +14,7 @@ class SimulationRunner:
 
     def __init__(self, sim, camera, video_service, command_handler, window,
                  advanced_drawing_processor=None, controller_cam=None,
-                 particle_mask=None):
+                 particle_mask=None, datamosh=None):
         self.sim = sim
         self.camera = camera
         self.video_service = video_service
@@ -23,6 +23,7 @@ class SimulationRunner:
         self.advanced_drawing_processor = advanced_drawing_processor
         self.controller_cam = controller_cam
         self.particle_mask = particle_mask
+        self.datamosh = datamosh
 
         # Mouse tracking for draw trail mode
         self.prev_mouse_tex_coords = (0.0, 0.0)
@@ -36,6 +37,7 @@ class SimulationRunner:
         self._palette_params = None
         self._mask_params = None
         self._mask_texture = None
+        self._mosh_params = None
 
     def run_simulation_frame(self, ui_state, sweep_mode, sweep_reticle_pos,
                               sweep_reticle_visible, screen_aspect,
@@ -136,7 +138,10 @@ class SimulationRunner:
         # controls, one source texture.
         self._palette_params = PaletteParams.from_preferences(ui_state.preferences)
         self._mask_params = MaskParams.from_preferences(ui_state.preferences)
+        self._mosh_params = MoshParams.from_preferences(ui_state.preferences)
         self._mask_texture = None
+        if self.datamosh is not None and ui_state.request_mosh_reseed:
+            self.datamosh.reseed()
         if self.particle_mask is not None:
             self._mask_texture = self.particle_mask.update(
                 self.sim.can.size[0], self.sim.can.size[1],
@@ -358,6 +363,29 @@ class SimulationRunner:
                 ui_state.preferences.bloom_radius,
                 tonemap_softness=ui_state.preferences.tonemap_softness,
             )
+
+        # Datamosh replaces the frame outright: the particles' motion drags the
+        # incoming texture's pixels around instead of being drawn over it. It
+        # runs here, after bloom, so the feed enters unbloomed and the one hook
+        # covers the window, the Spout sender and the video recorder alike.
+        #
+        # This method only ever sees a non-None texture on the final
+        # accumulation sample (frame_assembler returns None while accumulating),
+        # so this is once per displayed frame -- which matters, because the pass
+        # feeds back into itself and running it per motion-blur sample would tie
+        # the smear rate to the blur settings.
+        if self.datamosh is not None and self._mosh_params is not None:
+            moshed = self.datamosh.process(
+                particle_texture=assembled_tex,
+                external_texture=self.external_field_texture,
+                flow_canvas=self.sim.can,
+                flow_brush=self.sim.brush_tex,
+                canvas_size=self.sim.can.size,
+                params=self._mosh_params,
+            )
+            if moshed is not None:
+                assembled_tex = moshed
+
         self.camera.assembled_texture = assembled_tex
         if self.video_service.is_active():
             self.video_service.process_frame(

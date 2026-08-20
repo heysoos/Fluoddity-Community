@@ -99,6 +99,40 @@ MASK = [
 # Controls window sets advanced_drawing_enabled False, which silently stops the
 # incoming texture driving anything -- indistinguishable from a broken bridge
 # unless you can see the flag. Better in vvvv's hands than hidden in a window.
+# Datamosh: the particles displace the incoming texture's pixels instead of
+# being drawn over it. The flow is the velocity map the simulation already
+# writes, so nothing here changes the physics -- it only reads it.
+#
+# mosh_enabled sits LAST, the same reasoning as FIELD's arm switches: a shorter
+# bulk send covers the look controls without ever toggling the mode itself, and
+# the switch keeps its own address, /fluoddity/mosh_enabled, for a button.
+MOSH = [
+    # 0=Spout feed, 1=particle frame, 2=feed+particles (particles get smeared in)
+    ("mosh_source",    0.0, 2.0, 0.0, 2.0, None, True),
+    # Ceiling on the shift per displayed frame, as a fraction of the frame.
+    ("mosh_amount",    0.0, 0.25, 0.0, 0.5, None, False),
+    # How selective the response is. The flow is normalized against the
+    # frame's own average first, so this needs no calibration to world size or
+    # particle count: 1.0 always puts average activity at half strength. Below
+    # 1 the whole frame drifts together, above 1 only the busiest streaks move.
+    ("mosh_contrast",  0.0, 4.0, 0.0, 16.0, None, False),
+    # Stroke size, as a mip level of the flow field.
+    ("mosh_scale",     0.0, 8.0, 0.0, 12.0, None, False),
+    # 0 = persistent trail map (smooth, long smears), 1 = this frame's splat.
+    ("mosh_flow_mix",  0.0, 1.0, 0.0, 1.0, None, False),
+    # Rotates the shift off the flow direction, +-90 degrees at +-1.
+    ("mosh_swirl",    -1.0, 1.0, -1.0, 1.0, None, False),
+    # Live source returning per frame. 1 = no accumulation, 0 = full melt.
+    ("mosh_refresh",   0.0, 1.0, 0.0, 1.0, None, False),
+    # Macroblock size in pixels for the flow lookup, 0 = off.
+    ("mosh_block",     0.0, 64.0, 0.0, 128.0, None, False),
+    ("mosh_chroma",    0.0, 1.0, 0.0, 1.0, None, False),
+    # Crisp particles added back on top after moshing.
+    ("mosh_ink",       0.0, 1.0, 0.0, 1.0, None, False),
+    ("mosh_enabled",   0.0, 1.0, 0.0, 1.0, None, True, True),
+]
+
+
 FIELD = [
     # 0=channels (rg/ba), 1=luminance gradient, 2=gradient perpendicular
     ("spout_field_mode",         0.0, 2.0, 0.0, 2.0, None, True),
@@ -142,6 +176,11 @@ def mask_specs() -> list[ParamSpec]:
     return _specs(MASK, "preferences")
 
 
+def mosh_specs() -> list[ParamSpec]:
+    """Datamosh controls. On preferences, same reasoning as the palette."""
+    return _specs(MOSH, "preferences")
+
+
 def field_specs() -> list[ParamSpec]:
     """Spout field source and its arm switches. All on preferences."""
     return _specs(FIELD, "preferences")
@@ -154,6 +193,7 @@ def extra_groups() -> dict[str, list[ParamSpec]]:
         "palette": palette_specs(),
         "mask": mask_specs(),
         "field": field_specs(),
+        "mosh": mosh_specs(),
     }
 
 

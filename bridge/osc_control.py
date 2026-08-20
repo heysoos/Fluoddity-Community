@@ -161,6 +161,12 @@ class OscControl:
             self.all_params.extend(specs)
 
         self._by_name = {p.name: p for p in self.all_params}
+        # Where each parameter sits inside its own group, for _pick_value().
+        self._slice_of: dict[str, int] = {}
+        for specs in [self.params] + list(self.groups.values()):
+            for index, spec in enumerate(specs):
+                self._slice_of[spec.name] = index
+        self._warned: set[str] = set()
         self._pending: dict[str, float] = {}
         self._normalized: dict[str, float] = {}
         self._raw: dict[str, list[float]] = {}
@@ -235,11 +241,38 @@ class OscControl:
         with self._lock:
             self._normalized[name] = min(max(float(t), 0.0), 1.0)
 
+    def _pick_value(self, address, spec, args) -> float | None:
+        """The value a per-parameter address is carrying.
+
+        Normally one number. But vvvv reaches this bridge through
+        ``Add (String Spectral)``, and at the default ``Bin Size`` of -1 that
+        node concatenates a whole spread into a single comma-separated string,
+        which ``OSCsend`` then repeats verbatim on every address in its Address
+        spread. Every parameter of the group therefore receives the group's
+        entire payload.
+
+        So a multi-value payload is read positionally: each address takes the
+        slice at its own index within its group, which is exactly the pairing
+        the patch intended. A single value is still just that value, so the
+        ordinary one-address-one-number case is untouched.
+        """
+        values = _split_bulk(args)
+        if not values:
+            if address not in self._warned:
+                self._warned.add(address)
+                print(f"[fluobridge] !! {address}: cannot read a number from "
+                      f"{args!r} -- ignoring this address from now on")
+            return None
+        if len(values) == 1:
+            return values[0]
+        index = self._slice_of.get(spec.name, 0)
+        return values[index] if index < len(values) else values[0]
+
     def _on_absolute(self, address, *args):
         spec = self._abs_by_address.get(address)
         if spec is None or not args:
             return
-        value = _as_float(args[0])
+        value = self._pick_value(address, spec, args)
         if value is not None:
             self._stage(spec.name, spec.clamp(value))
 
@@ -247,7 +280,7 @@ class OscControl:
         spec = self._norm_by_address.get(address)
         if spec is None or not args:
             return
-        value = _as_float(args[0])
+        value = self._pick_value(address, spec, args)
         if value is not None:
             self._stage_normalized(spec.name, value)
             self._stage(spec.name, spec.from_normalized(value))

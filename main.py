@@ -16,6 +16,7 @@ from camera_input import process_camera_input
 from controller_input import ControllerCam, process_controller_input, find_joystick
 from utilities.advanced_drawing import AdvancedDrawingProcessor
 from utilities.particle_mask import ParticleMask
+from utilities.datamosh import Datamosh
 from services.preset_index import PresetIndex
 
 # Raw OSC addresses for preset selection. Not ParamSpecs: selecting a preset is
@@ -95,6 +96,10 @@ class App:
         # Per-region activity mask. Allocates nothing until a mask control is
         # dialled off zero, so it is free when unused.
         self.particle_mask = ParticleMask(self.ctx)
+        # Datamosh mode: particle motion displaces the incoming texture instead
+        # of being drawn over it. Same deal -- no GPU resources until it is
+        # switched on, and they are released again when it is switched off.
+        self.datamosh = Datamosh(self.ctx)
         self.ui.multi_load_service = self.multi_load_service
         self.ui.advanced_drawing_processor = self.advanced_drawing_processor
 
@@ -125,7 +130,8 @@ class App:
             self.command_handler, self.window,
             advanced_drawing_processor=self.advanced_drawing_processor,
             controller_cam=self.controller_cam,
-            particle_mask=self.particle_mask
+            particle_mask=self.particle_mask,
+            datamosh=self.datamosh
         )
 
         # Frame timing
@@ -677,6 +683,7 @@ class App:
 
         self.advanced_drawing_processor.cleanup()
         self.particle_mask.cleanup()
+        self.datamosh.cleanup()
         self.video_service.cleanup()
         self.ui.cleanup()
         glfw.terminate()

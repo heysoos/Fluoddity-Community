@@ -250,6 +250,10 @@ class AdvancedDrawingWindowMixin:
             # particles go, the mask decides how much they do there.
             self._render_activity_mask_controls(prefs)
 
+            # The inverse of every other mode: nothing is drawn over the feed,
+            # the feed itself is dragged along the particles' flow.
+            self._render_datamosh_controls(prefs)
+
         imgui.end()
 
     def _render_spout_field_controls(self, prefs):
@@ -374,3 +378,123 @@ class AdvancedDrawingWindowMixin:
 
         if prefs.mask_ink <= 0.0 and prefs.mask_force <= 0.0 and prefs.mask_pull <= 0.0:
             imgui.text_disabled("Inactive - raise Ink, Force or Pull")
+
+    def _render_datamosh_controls(self, prefs):
+        """Controls for datamosh mode.
+
+        Independent of both the field override and the mask: this one does not
+        feed the simulation at all, it reads the velocity map the simulation
+        already writes and uses it to shift the incoming texture's pixels.
+        """
+        imgui.separator()
+        if not imgui.collapsing_header("Datamosh"):
+            return
+        self._delayed_tooltip(
+            "Particle motion displaces the pixels of the incoming Spout "
+            "texture instead of being drawn over it. Direction comes from the "
+            "local velocity, amplitude from speed x particle density."
+        )
+
+        _, prefs.mosh_enabled = imgui.checkbox(
+            "Enabled##mosh_enabled", prefs.mosh_enabled
+        )
+        self._delayed_tooltip(
+            "Off releases the feedback buffers -- the mode costs nothing when "
+            "it is not running."
+        )
+        if not prefs.mosh_enabled:
+            return
+
+        sources = ["Spout feed", "Particle frame", "Feed + particles"]
+        imgui.set_next_item_width(-1)
+        if imgui.begin_combo("##mosh_source", sources[prefs.mosh_source]):
+            for i, label in enumerate(sources):
+                selected = (i == prefs.mosh_source)
+                if imgui.selectable(label, selected)[0]:
+                    prefs.mosh_source = i
+                if selected:
+                    imgui.set_item_default_focus()
+            imgui.end_combo()
+        self._delayed_tooltip(
+            "What gets moshed. 'Feed + particles' smears the particles into "
+            "the image along with it; Ink below adds them back crisp instead. "
+            "With no sender connected the feed modes fall back to the particle "
+            "frame."
+        )
+
+        _, prefs.mosh_amount = imgui.slider_float(
+            "Amount##mosh_amount", prefs.mosh_amount, 0.0, 0.25
+        )
+        self._delayed_tooltip(
+            "Ceiling on the shift per displayed frame, as a fraction of the "
+            "frame. The actual shift is this scaled by the local flow."
+        )
+        _, prefs.mosh_contrast = imgui.slider_float(
+            "Contrast##mosh_contrast", prefs.mosh_contrast, 0.0, 4.0
+        )
+        self._delayed_tooltip(
+            "How selective the effect is. The flow is measured against the "
+            "frame's own average, so 1 always means 'average activity moves at "
+            "half strength' whatever the world size or particle count. Below 1 "
+            "the whole frame drifts together in broad strokes; above 1 only "
+            "the busiest streaks move, which is where the hard local "
+            "attractors come from."
+        )
+        _, prefs.mosh_scale = imgui.slider_float(
+            "Scale##mosh_scale", prefs.mosh_scale, 0.0, 8.0
+        )
+        self._delayed_tooltip(
+            "Stroke size, as a blur of the flow field. Higher leaves only the "
+            "large-scale motion, so the picture moves in regions rather than "
+            "tracing individual streaks. It softens the shift too, so Amount "
+            "usually wants to come up with it."
+        )
+        _, prefs.mosh_flow_mix = imgui.slider_float(
+            "Flow##mosh_flow_mix", prefs.mosh_flow_mix, 0.0, 1.0
+        )
+        self._delayed_tooltip(
+            "0 = the persistent trail map: dense, smooth, long smears. "
+            "1 = this frame's splat only: sparse and sharp, tearing just "
+            "where particles are right now."
+        )
+        _, prefs.mosh_swirl = imgui.slider_float(
+            "Swirl##mosh_swirl", prefs.mosh_swirl, -1.0, 1.0
+        )
+        self._delayed_tooltip(
+            "Rotates the shift away from the flow direction, up to 90 degrees "
+            "either way. Turns a push into a vortex."
+        )
+
+        _, prefs.mosh_refresh = imgui.slider_float(
+            "Refresh##mosh_refresh", prefs.mosh_refresh, 0.0, 1.0
+        )
+        self._delayed_tooltip(
+            "How much of the live source returns each frame. 1 = no "
+            "accumulation, just the current frame warped. 0.05 = the classic "
+            "melt. 0 = nothing resets and the image is consumed entirely -- "
+            "Reseed is the way back."
+        )
+        if imgui.button("Reseed##mosh_reseed"):
+            self._request_mosh_reseed = True
+        self._delayed_tooltip("Refill the buffer from the live source.")
+
+        _, prefs.mosh_block = imgui.slider_float(
+            "Block##mosh_block", prefs.mosh_block, 0.0, 64.0
+        )
+        self._delayed_tooltip(
+            "Macroblock size in pixels. Whole blocks shift together, which is "
+            "what reads as a codec artefact rather than a displacement map. "
+            "0 = off."
+        )
+        _, prefs.mosh_chroma = imgui.slider_float(
+            "Chroma##mosh_chroma", prefs.mosh_chroma, 0.0, 1.0
+        )
+        self._delayed_tooltip("Colour fringing on the fast tears.")
+        _, prefs.mosh_ink = imgui.slider_float(
+            "Ink##mosh_ink", prefs.mosh_ink, 0.0, 1.0
+        )
+        self._delayed_tooltip(
+            "Adds the particles back on top, crisp, after the mosh. 0 by "
+            "default -- the point of the mode is that they move the image "
+            "instead of being drawn on it."
+        )

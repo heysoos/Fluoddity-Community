@@ -196,6 +196,7 @@ class UI(
         self._request_clear_canvas = False
         self._request_camera_reset = False
         self._request_clear_canvas_and_fields = False
+        self._request_mosh_reseed = False
 
         # Config clipboard flags
         self._request_preview_clipboard_config = False
@@ -453,6 +454,7 @@ class UI(
         self.state.request_clear_canvas = self._request_clear_canvas
         self.state.request_camera_reset = self._request_camera_reset
         self.state.request_clear_canvas_and_fields = self._request_clear_canvas_and_fields
+        self.state.request_mosh_reseed = self._request_mosh_reseed
 
         # Transfer field loader flags
         self.state.request_load_force_field_image = self._request_load_force_field_image
@@ -510,6 +512,7 @@ class UI(
         self._request_clear_canvas = False
         self._request_camera_reset = False
         self._request_clear_canvas_and_fields = False
+        self._request_mosh_reseed = False
         self._request_load_force_field_image = False
         self._request_load_strafe_field_image = False
         self._field_load_image_path = ""

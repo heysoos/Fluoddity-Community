@@ -82,6 +82,22 @@ class PreferencesState:
     mask_vignette_softness: float = 0.5  # Radial falloff width
     mask_source: int = 0  # 0=feed, 1=vignette, 2=max(feed,vignette), 3=feed*vignette
 
+    # Datamosh: the particles displace the incoming texture's pixels instead of
+    # being drawn over it. The flow is the velocity map the simulation already
+    # writes, so this reads the simulation and changes nothing about it.
+    # Off by default, and off releases the buffers -- a true no-op.
+    mosh_enabled: bool = False  # Master switch for datamosh mode
+    mosh_source: int = 0  # 0=Spout feed, 1=particle frame, 2=feed+particles
+    mosh_amount: float = 0.02  # Max displacement per displayed frame, in uv
+    mosh_contrast: float = 1.0  # Response selectivity around the frame's own average
+    mosh_scale: float = 0.0  # Stroke size, as a mip level of the flow field
+    mosh_flow_mix: float = 0.0  # 0 = trail map (smooth), 1 = this frame's splat (sharp)
+    mosh_swirl: float = 0.0  # Rotates the shift, +-90 degrees at +-1
+    mosh_refresh: float = 0.08  # Live source returning per frame (1 = no accumulation)
+    mosh_block: float = 0.0  # Macroblock size in px for the flow lookup (0 = off)
+    mosh_chroma: float = 0.0  # Per-channel displacement spread
+    mosh_ink: float = 0.0  # Crisp particles added back on top after moshing
+
     # Physics slider group collapsed states (True = expanded/open, False = collapsed)
     physics_group_basics: bool = True  # Default: open (trail sensors + mutation)
     physics_group_forces: bool = True  # Default: open (global force mult, drag)

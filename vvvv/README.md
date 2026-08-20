@@ -26,7 +26,7 @@ be on the same adapter. The bridge needs `SpoutGL` and `python-osc`
 | `Fluo (VJ).v4p` | host patch. Open this first: both modules, previews, a test source, a Spout watchdog |
 | `FluoSpout.v4p` | textures and lifecycle |
 | `FluoMod.v4p` | all OSC: tempo, modulation, palette, mask, field, structure, presets |
-| `OSCgetSeq (Devices).v4p` | latching OSC receive (section 8) |
+| `OSCgetSeq (Devices).v4p` | latching OSC receive (section 9) |
 | `OSCsend (Devices).v4p`, `OSCget (Devices).v4p`, `Spout/` | dependencies, bundled so the patch opens on a bare vvvv |
 | `Fluoddity.bat`, `Kill.bat` | launcher and stopper |
 
@@ -89,7 +89,7 @@ own into `Texture In`.
 | `Enable` | `TogEdge` bangs `Run` up, `Kill` down. App lifetime follows the toggle |
 | `Texture In` | your source into `FluoSpout.Texture`, via `AvoidNIL (DX11.Texture)` |
 | `Texture Out` | the particles |
-| `Preset`, `FPS`, `Presets` | through to `FluoMod` (section 8) |
+| `Preset`, `FPS`, `Presets` | through to `FluoMod` (section 9) |
 
 **Spout watchdog.** `Handle` → `Count (Value)` → `EQ`, gated by `Enable`; while
 enabled with no handle, an `LFO` at 0.23 s pulses `Force Update` through a
@@ -119,14 +119,24 @@ comma-separated string on one address:
 | `/fluoddity/palette` | 6 | preferences |
 | `/fluoddity/mask` | 9 | preferences |
 | `/fluoddity/field` | 5 | preferences |
+| `/fluoddity/mosh` | 11 | preferences |
 | `/fluoddity/clock/tick`, `/bang`, `/auto`, `/audio` | 1 each | mod matrix |
 | `/fluoddity/mod/base`, `/depth`, `/source`, `/period`, `/lo`, `/hi` | 12 each | mod matrix |
-| `/fluoddity/preset` | 1 | action (section 8) |
-| `/fluoddity/presets/refresh` | bang | action (section 8) |
+| `/fluoddity/preset` | 1 | action (section 9) |
+| `/fluoddity/presets/refresh` | bang | action (section 9) |
 | `/fluoddity/cmd` | string | `quit` |
 
 Return traffic on 5012: `/fluoddity/fps`, `/fluoddity/presets/count`,
 `/fluoddity/presets/names`, `/fluoddity/preset/name`.
+
+A per-parameter address also accepts the whole group's payload. `Add (String
+Spectral)` at its default `Bin Size` of -1 concatenates a spread into one
+comma-separated string, and `OSCsend` then repeats that string on every address
+in its Address spread — so each parameter arrives holding the entire group.
+Each address reads the slice at its own index, which is the pairing the patch
+meant. Setting `Bin Size` to 1 instead, so each address carries its own single
+value, works identically. A payload that is not a number at all is reported once
+per address and then ignored.
 
 The extra groups are **not** appended to `params`. The physics registry is what
 might gain a parameter later, and appending would shift every slice index below
@@ -183,7 +193,7 @@ Two halves, and both are needed; the vvvv half alone does nothing visible.
 **vvvv:** connect a texture to `Texture In`. It leaves as `vvvv_fluo`.
 
 **Fluoddity:** Extras → Advanced Drawing, then Shader Driven Field, then pick
-`spout.frag`. All three are reachable over OSC from `FluoMod` (section 7), which
+`spout.frag`. All three are reachable over OSC from `FluoMod` (section 8), which
 is the easier route.
 
 | Mode | Behaviour | Good for |
@@ -205,7 +215,96 @@ Field.
 
 ---
 
-## 6. `FluoMod.v4p` — tempo, palette, mask
+## 6. Datamosh — the particles move the picture
+
+The inverse of section 5. There the incoming texture drives the particles; here
+the particles drive the incoming texture, dragging its pixels along their own
+motion. Nothing is drawn over the feed — Fluoddity outputs the vvvv frame
+processed. So in the rig this replaces a composite: send the texture in, take
+the moshed version out, and do not blend the particles over it downstream.
+
+The flow field is the velocity map the simulation already keeps. `brush.frag`
+splats each particle's velocity into the brush texture, and the canvas is that
+same quantity accumulated under Trail Persistence and Trail Diffusion. Both are
+RG32F velocity vectors (section 12), so the mode costs two small fullscreen
+passes and changes nothing about the physics.
+
+| What the particles do | What the pixels do |
+|---|---|
+| local velocity direction | direction of the shift, rotated by `swirl` |
+| speed × local density | shift amplitude, normalized against the frame's own average |
+| trail persistence / diffusion | how smooth and how long-lived the smear is |
+
+Fluoddity: Extras → Advanced Drawing → Datamosh → Enabled. Over OSC it is
+`/fluoddity/mosh`, or `/fluoddity/mosh_enabled` on its own.
+
+| # | Parameter | Range | Notes |
+|---|---|---|---|
+| 0 | `mosh_source` | 0..2 | 0 Spout feed · 1 particle frame · 2 feed + particles, smeared in together |
+| 1 | `mosh_amount` | 0..0.25 | ceiling on the shift per displayed frame, as a fraction of the frame |
+| 2 | `mosh_contrast` | 0..4 | how selective the response is. 1 = average activity moves at half strength |
+| 3 | `mosh_scale` | 0..8 | stroke size, as a blur of the flow field |
+| 4 | `mosh_flow_mix` | 0..1 | 0 trail map (dense, long smears) · 1 this frame's splat (sparse, sharp) |
+| 5 | `mosh_swirl` | -1..1 | rotates the shift off the flow, ±90° at ±1 — push becomes vortex |
+| 6 | `mosh_refresh` | 0..1 | live source returning per frame. 1 = no accumulation, 0 = full melt |
+| 7 | `mosh_block` | 0..64 | macroblock size in px for the flow lookup, 0 = off |
+| 8 | `mosh_chroma` | 0..1 | per-channel displacement spread — colour fringing on the fast tears |
+| 9 | `mosh_ink` | 0..1 | crisp particles added back on top, after the mosh |
+| 10 | `mosh_enabled` | 0/1 | master switch, last so a shorter bulk send cannot toggle it |
+
+**`mosh_contrast` and `mosh_scale` are the shape of the effect.** The flow
+magnitude is normalized against the frame's own average before the response
+curve sees it — the mean is read straight off the top of the flow field's mip
+chain, which costs nothing — so neither knob needs recalibrating when the world
+size, the particle count or the config changes.
+
+`contrast` is `x^c / (1 + x^c)`, which passes through half strength at average
+activity for every setting. It changes how *selective* the effect is, not how
+strong:
+
+- **below 1** the curve flattens: quiet and busy regions shift by similar
+  amounts and the whole frame drifts together in broad strokes.
+- **1** is neutral.
+- **above 1** it sharpens toward a threshold — only the busiest streaks move at
+  all, and everything else stays crisp.
+
+`scale` is a mip level of the flow field, i.e. a blur of the field itself.
+Averaging vectors lets opposing directions cancel, so raising it strips out the
+individual streaks and leaves the large-scale coherent motion: the picture moves
+in regions rather than tracing filaments. It softens the shift as well, so
+`amount` usually wants to come up with it. `contrast` high with `scale` at 3–5
+gives selective macro-brushes; `contrast` low with `scale` at 0 gives a fine
+all-over shimmer.
+
+`mosh_refresh` is the character knob, and it trades against `amount`. Both the
+feedback buffer and the live frame are sampled at the shifted coordinate, so the
+whole range warps and refresh only decides how much of the shift is inherited
+from previous frames:
+
+- **1** — a plain displacement map on the live frame, no memory. One frame's
+  worth of shift is small, so this is where `amount` wants to be high (0.05–0.2).
+- **~0.05–0.15** — artefacts survive ten to twenty frames. The classic melt;
+  keep `amount` low, around 0.02, and let it accumulate.
+- **0** — nothing resets and the image is consumed entirely. **Reseed** refills
+  the buffer from the live source.
+
+`mosh_block` is what makes it read as a codec artefact rather than a
+displacement map: whole blocks shift together instead of the field flowing
+smoothly. 8–32 px is the usable range.
+
+The output is the size of the incoming texture, so it goes back out at the
+resolution it arrived at, and the pass ignores camera pan and zoom to keep it
+pixel-aligned with the feed. The flow field is fitted over it with a **cover**
+crop rather than stretched, so displacement angles are not skewed — but a canvas
+aspect matching the feed still uses the whole field. Set Canvas Aspect Ratio to
+16:9 for a 16:9 source.
+
+With no sender connected, the feed modes fall back to the particle frame rather
+than moshing black — the particles then smear themselves.
+
+---
+
+## 7. `FluoMod.v4p` — tempo, palette, mask
 
 ### Pins
 
@@ -229,9 +328,9 @@ Field.
 | `cohorts` | 1 | part of `structure`, on its own pin |
 | `Send Structure` | 1 | bang: fire the structure send |
 | `Rule Seed` | 1 | 0..1, own address and own sender |
-| `lum . grad` | 1 | field mode (section 7) |
-| `field scale` / `strafe scale` | 1 each | field strengths (section 7) |
-| `Preset` | 1 | preset index (section 8) |
+| `lum . grad` | 1 | field mode (section 8) |
+| `field scale` / `strafe scale` | 1 each | field strengths (section 8) |
+| `Preset` | 1 | preset index (section 9) |
 | `OSC Port` | 1 | 5011 |
 
 **Out:** `Preset` (name of what is loaded), `Presets` (how many), `FPS`.
@@ -371,7 +470,7 @@ halves the reseed response (0.110). Decouple with the switch, not the count.
 
 ---
 
-## 7. Field
+## 8. Field
 
 `/fluoddity/field`, 5 slices:
 
@@ -395,7 +494,7 @@ frame and a stray click cannot switch it off.
 
 ---
 
-## 8. Presets
+## 9. Presets
 
 131 physics configs, flattened by `services/preset_index.py` into one numbered
 list: **Core, then Advanced, then Custom, alphabetical within each.** Custom is
@@ -450,7 +549,7 @@ ground mid-show. Watercolor stays a mode you own with `V`.
 
 ---
 
-## 9. When nothing appears
+## 10. When nothing appears
 
 ### Sender and receiver on different GPUs
 
@@ -500,30 +599,34 @@ output compared against the sum of its bin sizes catches it immediately:
 
 ---
 
-## 10. Performance
+## 11. Performance
 
 240k particles at the default `world_size = 0.40`, under a `#version 450`
 compute shader, sharing one GPU with everything else vvvv is doing. Measure
 early. Levers, cheapest first: `Send Res`, `world_size`, `speedmult`.
 
 Measured alone on an RTX 3080 Ti at that setting: **~10.4 ms/frame, 96 fps.**
-Spout across the process boundary at 1280×720: ~158 fps. The mask pass allocates
-nothing until switched on and frees its FBO when switched off.
+Spout across the process boundary at 1280×720: ~158 fps. The mask and datamosh
+passes allocate nothing until switched on and free their buffers when switched
+off. Datamosh is one fullscreen pass at the feed's resolution, run once per
+displayed frame rather than once per motion-blur sample.
 
 ---
 
-## 11. What the bridge adds inside Fluoddity
+## 12. What the bridge adds inside Fluoddity
 
 | New | |
 |---|---|
 | `bridge/` | OSC, Spout in/out, arg parsing, the modulation matrix |
 | `services/preset_index.py` | the stable numbered preset list |
 | `utilities/particle_mask.py`, `shaders/particle_mask.frag` | the mask pass, FBO at canvas/4, outputs `vec4(activity, weight, gradient.xy)` |
-| `state/render_params.py` | frozen `PaletteParams` / `MaskParams` |
+| `utilities/datamosh.py`, `shaders/datamosh.frag`, `shaders/datamosh_flow.frag` | the datamosh passes: a mipped flow field, then ping-pong RGBA16F at the feed's resolution |
+| `state/render_params.py` | frozen `PaletteParams` / `MaskParams` / `MoshParams` |
 
 Modified: `entity_update.glsl` (palette hue band, `get_mask()` mirroring
-`get_field()`'s UV maths), `preferences_state.py`, `main.py`, `sim.py`,
-`simulation_runner.py`, the Palette and Activity Mask UI, and `requirements.txt`.
+`get_field()`'s UV maths), `preferences_state.py`, `ui_state.py`, `main.py`,
+`sim.py`, `simulation_runner.py`, the Palette, Activity Mask and Datamosh UI,
+and `requirements.txt`.
 
 Everything defaults to a no-op: with nothing sent, the output is unchanged.
 
@@ -546,7 +649,7 @@ flat, so Emboss Intensity may need re-dialling. 2 of the 131 presets use emboss.
 
 ---
 
-## 12. Tests
+## 13. Tests
 
 The bridge is pure Python and tested. The suites live in the development repo,
 not here; run them after touching the palette, mask, modulation or preset path.
