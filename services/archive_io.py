@@ -249,11 +249,18 @@ class ArchiveStore:
             print(f"[Archive] settings not saved ({exc})")
 
     def append_history(self, row: dict) -> None:
-        """One settings version. Append-only, like index.jsonl."""
+        """One settings version. Append-only, like index.jsonl.
+
+        Creates no directory. __init__ already made the archive, and the one
+        caller left is the switch that FOLLOWS a delete - saving the outgoing
+        archive's settings through a store whose folder is gone. A mkdir here
+        put that folder back with a history row in it, and `save_goals` then
+        landed in the resurrected directory: every entry deleted, the archive
+        still on disk and still in the dropdown.
+        """
         if not self.enabled:
             return
         try:
-            self.history_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.history_path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(row) + "\n")
         except (OSError, TypeError) as exc:
@@ -355,7 +362,9 @@ class ArchiveStore:
         if path.exists():
             return True
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
+            # `runs/` on demand, but NOT its parent: with parents=True this
+            # recreates a deleted archive, the same way append_history did.
+            path.parent.mkdir(exist_ok=True)
             tmp = path.with_suffix(".json.tmp")
             tmp.write_text(config_json, encoding="utf-8")
             os.replace(tmp, path)
