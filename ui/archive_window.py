@@ -1113,6 +1113,23 @@ class ArchiveWindowMixin:
 
     # ---- what a click selected -----------------------------------------
 
+    @staticmethod
+    def _brain_line(arc, row, live_preview: bool) -> str:
+        """How an entry names the brain it was AUTHORED under.
+
+        One home, because three views say it - the gallery's selection, and the
+        map's hover card and selection - and three copies of a format drift.
+        Said for every entry rather than only a foreign one: an archive pools
+        layouts, so "which brain is this?" is a question about any of them.
+        """
+        sig = arc.layout_at(row)
+        if arc.is_native(row):
+            return f"{sig} brain"
+        # Hovering borrows this brain; only a click keeps it, and with the
+        # toggle off nothing runs at all.
+        return (f"{sig} brain - click to switch to it" if live_preview
+                else f"{sig} brain - turn on Live preview to run it")
+
     def _render_gallery_selection(self, ast, arc):
         if not (0 <= ast.selected_entry_id < len(arc.entries)):
             return
@@ -1121,20 +1138,9 @@ class ArchiveWindowMixin:
         # The ENTRY's id, not the row: the row is how the app addresses it,
         # the id is what the archive calls it.
         imgui.text(f"Selected #{sel.id}")
-        # The brain this creature was AUTHORED under, named on every selection
-        # rather than only on a foreign one: an archive pools layouts, so
-        # "which brain is this?" is a question about any entry. Only on a click
-        # - the hover preview writes a row per pointer position.
-        sig = arc.layout_at(ast.selected_entry_id)
-        if arc.is_native(ast.selected_entry_id):
-            imgui.text_colored(imgui.ImVec4(*_DIM), f"{sig} brain")
-        else:
-            # Hovering borrows this brain; only a click keeps it, and with the
-            # toggle off nothing runs at all.
-            imgui.text_colored(
-                imgui.ImVec4(*_DIM),
-                f"{sig} brain - click to switch to it" if ast.live_preview
-                else f"{sig} brain - turn on Live preview to run it")
+        imgui.text_colored(imgui.ImVec4(*_DIM),
+                           self._brain_line(arc, ast.selected_entry_id,
+                                            ast.live_preview))
         right = layout.row_right_edge()
         if imgui.button("Save as config..."):
             self.open_save_popup(save_targets.ARCHIVE_ENTRY,
@@ -1204,7 +1210,7 @@ class ArchiveWindowMixin:
         imgui.end_child()
 
         if row >= 0:
-            self._map_hover_card(arc, row)
+            self._map_hover_card(ast, arc, row)
             ast.preview_entry_id = row
             if clicked:
                 ast.selected_entry_id = row
@@ -1785,7 +1791,7 @@ class ArchiveWindowMixin:
             self._map_drag_px = 0.0
         return bool(released and not was_drag)
 
-    def _map_hover_card(self, arc, row) -> None:
+    def _map_hover_card(self, ast, arc, row) -> None:
         """The picture, on hover. A dot's position is not what it IS."""
         entry = arc.entries[row]
         cache = getattr(self, "thumb_cache", None)
@@ -1798,6 +1804,10 @@ class ArchiveWindowMixin:
         imgui.text(f"novelty {entry.novelty:.3f}   "
                    f"liveness {entry.liveness:.3f}")
         imgui.text(f"goal: {entry.goal or '-'}")
+        # On the HOVER as well as the click: the map pools every layout, and a
+        # dot gives no hint which brain drew it.
+        imgui.text_colored(imgui.ImVec4(*_DIM),
+                           self._brain_line(arc, row, ast.live_preview))
         imgui.end_tooltip()
 
     def _render_map_selection(self, ast, arc):
@@ -1822,6 +1832,8 @@ class ArchiveWindowMixin:
                    f"{'   pinned' if entry.pinned else ''}")
         imgui.text(f"novelty {entry.novelty:.3f}   liveness {entry.liveness:.3f}")
         imgui.text(f"goal: {entry.goal or '-'}")
+        imgui.text_colored(imgui.ImVec4(*_DIM),
+                           self._brain_line(arc, row, ast.live_preview))
         imgui.text_disabled(f"gen {entry.gen}   tile {entry.tile}   {entry.spec}")
         if imgui.button("Save as config...##map"):
             self.open_save_popup(save_targets.ARCHIVE_ENTRY, arg=row)

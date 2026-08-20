@@ -877,7 +877,7 @@ def test_the_hover_card_renders_with_a_thumbnail(gui):
             return _FakeTex()
 
     h.thumb_cache = _Cache()
-    assert frame(lambda: h._map_hover_card(h.archive_obj, 0)) > host_only()
+    assert frame(lambda: h._map_hover_card(h.state.archive, h.archive_obj, 0)) > host_only()
 
 
 def test_the_hover_card_renders_without_a_thumbnail(gui):
@@ -885,7 +885,7 @@ def test_the_hover_card_renders_without_a_thumbnail(gui):
     unbalanced tooltip stack takes the whole frame down, not just the card."""
     h = Harness(archive=_populated())
     h.thumb_cache = None
-    assert frame(lambda: h._map_hover_card(h.archive_obj, 0)) > host_only()
+    assert frame(lambda: h._map_hover_card(h.state.archive, h.archive_obj, 0)) > host_only()
 
 
 # ---- the browser must not redo O(n) work every frame --------------------
@@ -2467,7 +2467,7 @@ def test_the_hover_card_gets_the_entry_whose_picture_is_under_the_pointer(gui):
 
     seen = []
     real = type(h)._map_hover_card
-    type(h)._map_hover_card = lambda self, arc, row: seen.append(int(row))
+    type(h)._map_hover_card = lambda self, ast, arc, row: seen.append(int(row))
     try:
         checked = 0
         for k in range(0, len(win), max(1, len(win) // 12)):
@@ -2690,3 +2690,61 @@ def test_an_archive_with_no_moves_draws_no_ledger(gui):
     h = Harness(driver=_TracingDriver(), archive=_FakeArchive(), goals=GoalList())
     h.state.archive.layout_search = True
     assert not any("reverted" in s for s in text_wrapped_lines(_explore(h)))
+
+
+# ---- the brain an entry was authored under, wherever it is named ----------
+#
+# An archive pools every layout and a dot on the map carries no hint which
+# brain drew it. The gallery's selection has always said so; the map said it
+# nowhere, on hover or on click.
+
+def _hover_texts(monkeypatch, h, row=0):
+    return _texts(monkeypatch, lambda: h._map_hover_card(
+        h.state.archive, h.archive_obj, row))
+
+
+def test_the_map_hover_card_names_the_brain(monkeypatch, gui):
+    h = Harness(archive=_populated())
+    h.thumb_cache = None
+    assert "fourier-n10 brain" in _hover_texts(monkeypatch, h)
+
+
+def test_the_map_selection_names_the_brain(monkeypatch, gui):
+    h = Harness(archive=_populated())
+    h.thumb_cache = None
+    h.state.archive.selected_entry_id = 0
+    seen = _texts(monkeypatch, lambda: h._render_map_selection(
+        h.state.archive, h.archive_obj))
+    assert "fourier-n10 brain" in seen
+
+
+def test_the_map_says_it_the_same_way_the_gallery_does(monkeypatch, gui):
+    """The point of one helper. Three views name this and three copies of a
+    format drift - the user asked for the map to match the gallery."""
+    h = Harness(archive=_populated())
+    h.thumb_cache = None
+    ast = h.state.archive
+    ast.selected_entry_id = 0
+
+    gallery = _texts(monkeypatch, lambda: h._render_gallery_selection(
+        ast, h.archive_obj))
+    line = h._brain_line(h.archive_obj, 0, ast.live_preview)
+    assert line in gallery
+    assert line in _hover_texts(monkeypatch, h)
+
+
+@pytest.mark.parametrize("live, tail", [
+    (True, "click to switch to it"),
+    (False, "turn on Live preview to run it"),
+])
+def test_a_foreign_entry_says_what_clicking_would_do(monkeypatch, gui, live,
+                                                     tail):
+    """The foreign half of the format travels to the map with the rest of it.
+    On HOVER it is the more useful half - the pointer is already there."""
+    arc = _populated()
+    arc.entries[0].layout = "mlp-n16-a0"
+    h = Harness(archive=arc)
+    h.thumb_cache = None
+    h.state.archive.live_preview = live
+
+    assert f"mlp-n16-a0 brain - {tail}" in _hover_texts(monkeypatch, h)
