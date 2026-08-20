@@ -393,6 +393,15 @@ class MenuBarMixin:
                     "brush modes, force fields, and strafe fields."
                 )
 
+                # Inject Texture toggle
+                _, self.state.preferences.show_field_stack = imgui.checkbox(
+                    "Inject Texture",
+                    self.state.preferences.show_field_stack
+                )
+                hints.tip(
+                    "Inject noise, images, shaders or the sim's own canvas into the fields."
+                )
+
                 # Multi Load toggle
                 _, self.state.multi_load.multi_load_enabled = imgui.checkbox(
                     "Multi Load - EXPERIMENTAL",

@@ -467,6 +467,207 @@ mechanics these caveats assume.
   so any colour experiment run outside tournament mode measures the wrong
   thing. Guarded by `tests/test_auto_hue_clamp.py`.
 
+### Field injection
+
+- **The bus is STATELESS PER FRAME, and any source that needs memory owns its
+  own buffer.** Every destination is cleared and rebuilt from the layer stack,
+  which is the only reason turning a layer off removes its contribution. The
+  previous override shader painted one persistent texture and nothing cleared
+  it, so unticking the box left the last frame it drew on screen for good —
+  and enabling it had force-switched the draw target, so the Clear button no
+  longer named the thing that had been turned on. The brush is not
+  special-cased: it is a source with a private accumulation buffer, which is
+  what lets the rule hold. Guarded by
+  `tests/test_field_bus_rebuild.py::test_a_disabled_layer_contributes_exactly_zero`.
+
+- **`force` and `strafe` are CHANNEL PAIRS of one RGBA32F texture, and the four
+  blend modes are native GL state.** `replace` is blending off, `add` is
+  `ONE,ONE`, `multiply` is `DST_COLOR,ZERO`, `max` is `blend_equation=MAX`. So
+  there is exactly one composite shader, and `get_field()` in
+  `entity_update.glsl` never changed. **The colour mask must be set BEFORE
+  `use()`** — moderngl applies a framebuffer's stored state when it is bound,
+  so a mask set afterwards misses the pass it was meant for and every force
+  layer also writes strafe. That reads on screen as a preset that strafes more
+  than it used to, not as a bug. A `multiply` layer FIRST in a stack
+  composites against the zero clear and yields zero; multiply is for layer 2
+  and after.
+
+- **`trail` is NOT a force, so it cannot share those channels and needs a
+  target of its own.** It deposits into the sim's canvas — the RG32F velocity
+  field the brains sense — so it rides in `sim.update`'s framebuffer after
+  `brush_update`, blended `ONE,ONE`, and never reaches `get_field()`.
+  `trail_texture` is None whenever no enabled layer drives it, which is what
+  makes the sim SKIP the pass rather than add a zeroed texture once per step;
+  the stateless-per-frame rule then holds over it unchanged. Its Strength is a
+  deposit RATE against an average that keeps accumulating, so it is scaled by
+  `TRAIL_GAIN` in `trail_deposit.frag`: full strength on the raw mapping is
+  three orders of magnitude over the trail a running sim leaves, which buries
+  the particles rather than joining them. It IS scaled by `TIME_SCALE`, since
+  the decay it feeds already is; it is NOT weighted per fragment by
+  `1 - trail_persistence` the way `brush.frag` is, so a sweep on Trail
+  Persistence tilts the level it settles at. A third copy of
+  `calculate_setting` is the price of fixing that. Guarded by
+  `tests/test_field_trail_dest_gl.py` for the routing and by
+  `tools.drive_field_stack`, which is the only thing that runs `sim.update`
+  and therefore the only thing that can see the deposit land.
+
+- **A mapping's index IS `MAPPINGS.index`, so a new one is APPENDED.** The
+  composite is one shader with a branch per mapping and the tuple's order is
+  the wire protocol between them; a config stores the NAME, so inserting one
+  renumbers every branch and silently reinterprets nothing on disk while
+  breaking everything in memory. `rg_direct` reads a source's channels
+  straight, which for anything that came from a camera or a photo is all
+  positive and pushes every particle into one corner — `rg_signed` is the
+  centred version, and the reason both exist is that the brush paints SIGNED
+  values into its own buffer, where subtracting a half would be wrong. `edge`
+  and `edge_flow` keep direction and strength APART: a normalised Sobel
+  heading times a clamped edge magnitude, so Strength means the same thing
+  whatever source is under it. Guarded by `tests/test_field_mappings_gl.py`.
+
+- **A mipmap min-filter over a texture with NO mip chain is INCOMPLETE and
+  samples as BLACK.** Blur reads the chain, so `composite_one` builds it on
+  demand and puts the filter back afterwards — `feedback` hands back the sim's
+  own canvas, and leaving that on a mipmap filter would change how the sim
+  samples its own trails. A source rendering into scratch with a mipmap filter
+  and no chain produces an all-zero field that looks exactly like a source
+  that did nothing.
+
+- **The bus runs BELOW canvas resolution by default and its texture filter is
+  therefore `LINEAR`, not `NEAREST`.** A forcing field is smooth. Nothing else
+  has to know: `get_field()` takes its aspect correction from
+  `textureSize()`, so a uniformly scaled texture reads correctly.
+
+- **The bus is OFF under a tournament grid.** Tiles are isolated small worlds,
+  so one field across the canvas is shared by every tile — the optimizer would
+  score the injected texture rather than the genome, and the entries it
+  admitted would be unreproducible. Same discipline as `color_by_cohort` being
+  forced off.
+
+- **Source shader annotation is OPT-IN, and that is what keeps old files
+  working.** `parse_shader_params` reads `uniform float x; // 0..1 = 0.5 "X"`;
+  an unannotated uniform yields no UI and keeps its GLSL default, so a `.frag`
+  written before the parser existed still runs — `march.frag` parses to zero
+  parameters and is unchanged. A malformed annotation is skipped rather than
+  raised: a shader is a user's text file and must never fail to load over a
+  comment. `FrameContext` carries `camera_pos`/`camera_dir` because
+  `march.frag` raymarches from them and would otherwise render a black frame.
+
+- **A layer's GPU state is keyed by `FieldLayer.uid`, never by its position.**
+  Reordering the stack must not recompile a shader or discard the brush's
+  paint.
+
+- **A config with a `_fields.png` and no `field_stack` migrates to TWO brush
+  layers**, reading `.xy` and `.zw` of one buffer through the composite's
+  `src_channels` swizzle. Without the swizzle both read `.xy` and every
+  pre-existing preset silently loses its strafe field and gains a duplicate of
+  its force field. Loading also has to MATERIALISE the brush buffer rather
+  than wait for the next rebuild, since the stack is installed and its saved
+  paint written in the same call.
+
+- **A stroke aimed at a destination with no brush layer ADDS one.** Otherwise
+  selecting Force Field in Drawing Controls and painting reaches nothing,
+  which is the old feature's silent-no-op defect in a new place.
+
+- **`cleanup()` takes a LAMBDA, not a bound method.** The attribute lookup has
+  to happen inside `_step`'s guard: `self.field_bus.cleanup` is evaluated
+  while the argument is built, so a missing field raises outside the guard and
+  skips every step below it — including the archive flush. Caught by
+  `tests/test_crash_safety.py`, a long way from the line that broke it.
+
+- **The pass count belongs to the LAST REBUILD, and the field TEXTURE is the
+  only honest measure of whether a layer is doing anything.** The bus is clean
+  in steady state, so zeroing the count on a clean frame made the readout say
+  "0 passes" for every frame a layer was quietly forcing — and made it useless
+  as an instrument, which is how a first pass at verifying this feature
+  concluded the whole bus was dead when it was working. Read
+  `field_bus.field_texture` instead.
+
+- **A file a layer names and cannot find is OFFERED BACK, never replaced.**
+  The shader picker used to substitute the first `.frag` it could find, so a
+  preset naming a deleted shader silently ran a different one and the layer's
+  error — the only place the loss is reported — never appeared. An unchosen
+  layer shows `(none)` for the same reason: a combo displaying a filename the
+  layer was never pointed at is the same lie.
+
+- **A source that reads the CLOCK is rebuilt on the clock.** The dirty flag is
+  what makes a static stack free, and it froze every animated source on
+  whichever frame a slider was last touched - noise as a still image, feedback
+  inert. `_ProgramSource.animated` asks whether the compiled program declares
+  `time`; whether that shader's own Speed happens to be zero is the shader's
+  business, and guessing from the outside is what caused this. Webcam and
+  feedback declare it outright.
+
+- **The scratch texture rests on LINEAR, never a mipmap filter.**
+  `composite_one` puts a source's filter back the way it found it - it has to,
+  because `feedback` hands back the sim's own canvas - so a mipmap RESTING
+  state left the scratch incomplete for every reader that was not blurring.
+  That is the thumbnail and the inspector, both of which then drew black, and
+  it looked like a source doing nothing rather than a filter.
+
+- **Every preview needs the v FLIP.** The bus renders GL textures, v=0 at the
+  bottom; imgui draws uv0 at the top-left. Unflipped, the picture is a mirror
+  of what the particles read, which reads as the SIM being upside down - the
+  sim's orientation was measured and was correct all along. Guarded by
+  `tests/test_ui_image_calls.py`.
+
+- **The inspector's three views are three different computations.** "Mapped"
+  composites the layer ALONE, with its blend and channel mask set aside: its
+  share of the stack is not its contribution, and a layer under a `replace`
+  layer inspected as empty. Both vector views are drawn as direction-in-hue,
+  because raw RG shows two opposite vectors as much the same colour.
+
+- **`get_state()` rebuilds the pointer and every one-shot EVERY FRAME.** So a
+  tool driving a stroke has to write `mouse_pos`/`mouse_left_held` after it
+  returns, and a clear request onto the UI rather than onto the state it
+  produces. Both first attempts read exactly like the brush being dead, and
+  the brush was fine.
+
+- **Nothing called from inside a window BODY may touch GL.** The Inspect panel
+  rendered its view where the UI asked for it, so it left a framebuffer bound
+  that was not the one imgui was about to draw into: every window vanished at
+  once and the close button could not bring them back. The UI asks
+  (`request_inspect`) and the rebuild draws. `rebuild` also puts back the
+  target it FOUND rather than binding the screen - a standalone context, which
+  is what every GL test runs under, does not have one. A released framebuffer
+  keeps its wrapper and swaps its `mglo` for an `InvalidObject`, so the
+  wrapper's own type says nothing about whether binding it will raise.
+
+- **A source shaped differently from the bus is CROPPED, never squeezed**, and
+  the crop lives in the composite's texture read so it covers image as well as
+  webcam. The procedural sources render at the bus size and land on a ratio of
+  exactly 1.0, which the shader takes as its no-op.
+
+- **A camera is flipped at the SOURCE.** ffmpeg's rawvideo rows are top-down
+  and a GL texture is bottom-up; fixing it in the preview instead would put
+  the camera at odds with every other source, all of which the preview flip
+  already handles.
+
+- **Closing a reader is TERMINATE, JOIN, then close - in that order.** The
+  pump thread blocks inside `read()`, and closing the pipe under it from
+  another thread is what repeated open/close does not survive. Terminating
+  first makes that read return EOF, so the thread leaves on its own.
+
+- **One camera cannot be opened twice.** DirectShow refuses the second open,
+  and two layers churning a device between them - each opening what the other
+  just closed, every frame - is what took a machine down. `claim_device` is
+  first-come per rebuild and the loser reports it on its own error line. Two
+  DIFFERENT cameras run together.
+
+- **A preset that carries no stack leaves the current one ALONE.** Every
+  preset in the library predates this feature, so installing "no stack" over a
+  setup deletes user work on an action about physics. `FieldStack.locked`
+  covers the other case, where the preset does carry one, and
+  `FieldStack.enabled` is the global switch - off reads as an EMPTY stack, so
+  the field is released and contributes exactly zero rather than leaving its
+  last frame standing.
+
+- **`python -m tools.drive_field_stack` is how this feature is verified.** A
+  render test drives a bare mixin and a GL test drives a bare bus; neither runs
+  the assembled app, so a window body naming a missing attribute or handing
+  imgui a raw `.glo` passes the whole suite and crashes on the first frame —
+  four did. The tool suppresses `imgui.ini` and keeps the archive browser shut,
+  because a restored browser opens the user's archive and flushes it on close.
+
 ### The archive and admission
 
 - **An archive is pinned to ONE encoder AT CREATION, and every control over it
@@ -1428,6 +1629,15 @@ mechanics these caveats assume.
   Pair it with a test that the wrapper opened something, or the coverage is
   imaginary. Guarded by
   `tests/test_audio_reactive_window_render.py::test_the_forced_popup_helper_really_opens_something`.
+  **A COMBO's ENTRIES are the same blindness**, and they only exist at all
+  where the combo is drawn `begin_combo`/`selectable` by hand — which is what
+  a per-entry tooltip needs, because `imgui.combo` can only be told about the
+  selection. `BeginCombo`'s popup id is `"##ComboPopup"` hashed against the
+  COMBO's own id, so the wrapper pushes the label onto the ID stack before
+  calling `open_popup`. Only ONE popup stands open at a time, so the helper
+  takes a label and opens one combo per frame rather than all of them.
+  Guarded by
+  `tests/test_field_stack_window_render.py::test_the_forced_combo_helper_really_opens_something`.
 
 - **An ImGui widget's identity IS its label, and a duplicate silently kills the
   loser.** Two visible items hashing to one ID puts Dear ImGui's "conflicting

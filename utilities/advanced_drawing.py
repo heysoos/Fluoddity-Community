@@ -26,9 +26,6 @@ class AdvancedDrawingProcessor:
         self._resources = None  # lazily created
         self._width = 0
         self._height = 0
-        # Override shader resources (separate program/VAO for shader-driven field)
-        self._override_resources = None
-        self._override_shader_name = None  # currently compiled override shader filename
 
     # ------------------------------------------------------------------
     # Public API
@@ -47,17 +44,21 @@ class AdvancedDrawingProcessor:
                 brush_mode, fixed_direction_heading,
                 force_field_active, strafe_field_active,
                 tiling_mode, erase_mode,
-                fill_mode=False, fill_direction_type=0):
-        """Draw to the force/strafe field texture. Called once per render frame.
+                fill_mode=False, fill_direction_type=0, target_fbo=None):
+        """Draw a stroke into `target_fbo`, the brush source's own buffer.
 
         Uses a two-pass approach:
           Pass 1 (erase): no blending, outputs vec4(0) in circle, discard outside
           Pass 2 (draw/fill): additive blending (ONE, ONE), outputs delta
+
+        With no target there is no brush layer to paint into, so nothing runs.
         """
+        if target_fbo is None:
+            return
         self._ensure_resources(canvas_width, canvas_height)
         r = self._resources
 
-        r["field_fbo"].use()
+        target_fbo.use()
 
         # Set common uniforms
         tryset(r["program"], "mouse", mouse_pos)
@@ -90,54 +91,11 @@ class AdvancedDrawingProcessor:
             r["vao"].render(mode=moderngl.TRIANGLE_FAN, vertices=4)
             self.ctx.disable(moderngl.BLEND)
 
-    def process_override(self, canvas_width, canvas_height, shader_name,
-                         frame_count, mouse_pos, prev_mouse_pos,
-                         draw_size, draw_power,
-                         brush_mode, fixed_direction_heading,
-                         tiling_mode,
-                         camera_pos=(0.0, 0.0, 0.0),
-                         camera_dir=(0.0, 0.0, 1.0),
-                         defines_prefix=None):
-        """Run the selected override shader to generate the field texture.
-
-        Called once per render frame (not per physics step). Replaces the
-        field texture contents entirely (no blending).
-        """
-        self._ensure_resources(canvas_width, canvas_height)
-        self._ensure_override_resources(shader_name, defines_prefix=defines_prefix)
-        r = self._resources
-        ovr = self._override_resources
-        if ovr is None:
-            return
-
-        r["field_fbo"].use()
-
-        # Set uniforms (same as field_drawing.frag plus frame_count)
-        tryset(ovr["program"], "canvas_resolution", (canvas_width, canvas_height))
-        tryset(ovr["program"], "mouse", mouse_pos)
-        tryset(ovr["program"], "previous_mouse", prev_mouse_pos)
-        tryset(ovr["program"], "draw_size", draw_size)
-        tryset(ovr["program"], "draw_power", draw_power)
-        tryset(ovr["program"], "brush_mode", brush_mode)
-        tryset(ovr["program"], "fixed_direction_heading", fixed_direction_heading)
-        tryset(ovr["program"], "force_field_active", True)
-        tryset(ovr["program"], "strafe_field_active", True)
-        tryset(ovr["program"], "tiling_mode", tiling_mode)
-        tryset(ovr["program"], "frame_count", frame_count)
-        tryset(ovr["program"], "erase_mode", False)
-        tryset(ovr["program"], "draw_mode", False)
-        tryset(ovr["program"], "fill_mode", False)
-        tryset(ovr["program"], "camera_pos", camera_pos)
-        tryset(ovr["program"], "camera_dir", camera_dir)
-
-        # Render with no blending (fully replace field contents)
-        self.ctx.disable(moderngl.BLEND)
-        ovr["vao"].render(mode=moderngl.TRIANGLE_FAN, vertices=4)
-
     def reload(self):
-        """Recompile all shaders (field_drawing + any active override).
+        """Recompile the brush's field_drawing program.
 
-        Called from command_handler on V key press.
+        Called from command_handler on V key press. Field SOURCE shaders are
+        the bus's, and reload with it.
         """
         if self._resources is not None:
             # Recompile the main field_drawing program
@@ -154,59 +112,7 @@ class AdvancedDrawingProcessor:
             old_vao.release()
             old_program.release()
 
-        # Recompile override shader if one is active
-        if self._override_resources is not None:
-            shader_name = self._override_shader_name
-            self._cleanup_override()
-            if shader_name:
-                self._ensure_override_resources(shader_name)
-
         print("field shaders reloaded")
-
-    @staticmethod
-    def get_available_override_shaders():
-        """Return list of (filename, source) tuples for the override shader dropdown.
-
-        Scans ~/Documents/Fluoddity/*.frag then shaders/field_override/*.frag.
-        Returns a list of (display_name, is_divider) tuples where is_divider=True
-        marks the separator between user and bundled shaders.
-        """
-        results = []
-
-        # User shaders from Documents/Fluoddity
-        user_dir = get_user_data_dir()
-        if user_dir.exists():
-            user_frags = sorted(user_dir.glob("*.frag"))
-            for f in user_frags:
-                results.append((f.name, False))
-
-        # Divider (only if there are user shaders AND bundled shaders)
-        bundled_dir = get_app_dir() / "shaders" / "field_override"
-        bundled_frags = sorted(bundled_dir.glob("*.frag")) if bundled_dir.exists() else []
-
-        if results and bundled_frags:
-            results.append(("---", True))
-
-        # Bundled shaders
-        for f in bundled_frags:
-            results.append((f.name, False))
-
-        return results
-
-    @staticmethod
-    def resolve_override_shader_path(shader_name):
-        """Resolve a shader filename to its full path.
-
-        Checks user data dir first, then bundled shaders/field_override/.
-        Returns the Path or None if not found.
-        """
-        user_path = get_user_data_dir() / shader_name
-        if user_path.exists():
-            return user_path
-        bundled_path = get_app_dir() / "shaders" / "field_override" / shader_name
-        if bundled_path.exists():
-            return bundled_path
-        return None
 
     def clear_fields(self):
         """Clear the force/strafe field texture to zero."""
@@ -263,7 +169,6 @@ class AdvancedDrawingProcessor:
 
     def cleanup(self):
         """Release all GPU resources."""
-        self._cleanup_override()
         if self._resources is None:
             return
         r = self._resources
@@ -314,40 +219,3 @@ class AdvancedDrawingProcessor:
             program=program, vao=vao,
             field_tex=field_tex, field_fbo=field_fbo,
         )
-
-    def _ensure_override_resources(self, shader_name, defines_prefix=None):
-        """Compile the override shader if not already compiled (or if shader changed)."""
-        if (self._override_resources is not None
-                and self._override_shader_name == shader_name):
-            return
-        self._cleanup_override()
-
-        shader_path = self.resolve_override_shader_path(shader_name)
-        if shader_path is None:
-            print(f"Warning: override shader '{shader_name}' not found")
-            return
-
-        vert_src = read_shader("shaders/canvas.vert")
-        frag_src = shader_path.read_text()
-        if defines_prefix:
-            frag_src = shader_prepend(frag_src, defines_prefix)
-
-        try:
-            program = self.ctx.program(
-                vertex_shader=vert_src, fragment_shader=frag_src)
-        except Exception as e:
-            print(f"Error compiling override shader '{shader_name}': {e}")
-            return
-
-        vao = self.ctx.vertex_array(program, [])
-        self._override_resources = dict(program=program, vao=vao)
-        self._override_shader_name = shader_name
-
-    def _cleanup_override(self):
-        """Release override shader GPU resources."""
-        if self._override_resources is None:
-            return
-        self._override_resources["vao"].release()
-        self._override_resources["program"].release()
-        self._override_resources = None
-        self._override_shader_name = None

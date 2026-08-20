@@ -86,6 +86,57 @@ Whatever the modality, the size settings fix the search dimension printed under 
 
 The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space. For a deep MLP the tiles are the **last** hidden layer's units, the only ones that add up to the output. `Slice` chooses the plane and **Reseed plane** redraws the random one; `Output` chooses what is drawn, defaulting to a random projection of all four outputs into red, green and blue. The single-value views are blue for negative and orange for positive.
 
+## Inject Texture
+
+**Extras > Inject Texture** injects texture into the fields the particles move through — procedural noise, an image, your own GLSL, or the simulation's own canvas fed back into itself.
+
+**Inject** turns the whole stack off at once without losing anything, and **Keep on preset load** stops a preset replacing it — a preset carrying no stack of its own never touches yours either way.
+
+The stack is a list of **layers**, composited top to bottom, and the whole thing is rebuilt every frame — so unticking a layer removes it, with nothing left behind. Each layer opens into three sections — what the **Picture** is, what it **Becomes**, what it **Drives**:
+
+- **Picture** — the **Source**, then its own settings right beneath it: a file browser for `image` and `shader`, a camera and resolution for `webcam`, a Clear button for `brush`. Sources are `noise` (fbm, with scale, octaves, speed and domain warp), `image`, `gradient` (linear or radial), `shader` (your own `.frag`), `brush` (what you paint with the mouse), `webcam` (a live camera — pair it with `edge`, `gradient` or `curl` and moving in front of it pushes the particles around, or send it to `trail` and the brains read what the camera sees), and `feedback` (the sim's own trails, which closes the loop).
+- **Becomes** — the **Mapping** from texture to vector field. `gradient` makes it a potential particles run down and `curl` turns it a quarter turn so they circulate along contours instead of piling into the bright spots; `edge` and `edge_flow` are the same pair read through a Sobel filter, with the direction normalised and the contrast in the length, so they follow outlines rather than slopes. `rg_direct` reads the channels straight as a vector — a camera's channels are all positive, so that one pushes everything into a corner and `rg_signed` is the version that takes mid grey as still. `polar` reads hue as an angle, `luminance` reads brightness alone.
+- **Drives** — **Destination** (`force` accelerates particles; `strafe` slides them sideways without changing their velocity; `trail` paints into the trail canvas itself, so the particles' brains sense it as trail somebody else left rather than as a push), **Blend** (`replace`, `add`, `multiply` or `max` against the layers beneath — a `multiply` layer at the bottom has nothing to multiply and yields zero) and **Strength**.
+
+**Blur** softens the source before the mapping reads it — worth turning up for `gradient` and the edge mappings, which are otherwise reading sensor grain — and **Direction** appears only for the mappings that take a slope, flipping whether particles are drawn to the bright regions or driven out of them.
+
+On a `trail` layer, **Strength** is a deposit RATE rather than a level: the trail keeps accumulating it and decaying, so 1.0 settles near the level a busy simulation already runs at, and turning it up further will bury the particles' own trails under it.
+
+Every dropdown explains itself while it is open — hover an entry in the list to read what it does, without having to pick it first.
+
+A source shaped differently from the canvas is scaled to fill and centre-cropped, so a 4:3 camera keeps its proportions.
+
+Every slider resets to its default on right-click, and each layer is a collapsing header so a deep stack stays readable.
+
+Click a row's thumbnail (or **Inspect**) to open the **Inspect** panel, which shows three different things: the **source texture** as the layer produced it, **after mapping** — that layer alone, with direction drawn as hue and strength as brightness — and the **whole field** every layer composited together. Under **Advanced**, **Resolution** composites below canvas resolution; a forcing field is smooth, so Half usually looks identical and costs a quarter as much.
+
+### Writing a field shader
+
+Drop a `.frag` in `Documents/Fluoddity/shaders/` and pick it on a `shader` layer. Annotate a uniform and you get a slider for it; leave it unannotated and it keeps its default, so shaders written before this existed still work.
+
+```glsl
+#version 430
+in  vec2 texcoord;
+out vec4 fragColor;
+
+uniform vec2  canvas_resolution;   // always provided
+uniform float time;
+uniform int   frame_count;
+uniform vec2  mouse, prev_mouse;
+uniform vec3  camera_pos, camera_dir;
+
+uniform float speed;    // 0..5 = 1.0       "Speed"
+uniform int   octaves;  // 1..8 = 4         "Octaves"
+uniform vec3  tint;     // color = 1,.5,0   "Tint"
+uniform bool  invert;   // = false          "Invert"
+
+void main(){ fragColor = vec4(0.0); }
+```
+
+Press **V** to recompile without restarting. A shader that fails to build shows its compile error on its own row in red and contributes nothing; every other layer keeps rendering.
+
+The stack is saved with a preset. Field injection is switched off while a tournament grid is running, because one field shared across isolated tiles would be scored instead of the creature.
+
 ## Design
 Particles in Fluoddity have no direct interactions with each-other. Instead, they leave trails as they move. These trails decay and diffuse over time. Particles respond to the density and direction of trails around them.
 There is no fixed rule that determines how particles respond to their senses. Instead, each particle has a simple neural-net like brain with only a few dozen parameters — 80 for the default Fourier brain, and see [Brain Modality](#brain-modality) for the others. These parameters are randomized on startup, and then mutated as the user selects which lineages to explore.

@@ -277,6 +277,21 @@ class Sim:
         self.canvas_vao = self.ctx.vertex_array(self.canvas_update_program, [])
         tryset(self.canvas_update_program, 'canvas_resolution', canvas_shape)
 
+        # 4. Injected trail deposit. A layer aimed at the trail lands here,
+        # in the same framebuffer the particles paint into.
+        try:
+            self.trail_inject_program = self.ctx.program(
+                vertex_shader=self.canvas_vertex_source,
+                fragment_shader=read_shader('shaders/field/trail_deposit.frag')
+            )
+            self.trail_inject_vao = self.ctx.vertex_array(
+                self.trail_inject_program, [])
+        except Exception as e:
+            print('Trail Inject Compilation Failed:')
+            print(e)
+            self.trail_inject_program = None
+            self.trail_inject_vao = None
+
 
     def entity_update(self, ctx: moderngl.Context, multi_load_service=None,
                       is_preview_active=False, field_texture_bound=False,
@@ -431,6 +446,24 @@ class Sim:
 
         self.brush_vao.render(mode=moderngl.TRIANGLE_FAN, instances=self.entity_count, vertices=4)
 
+    def trail_inject(self, ctx: moderngl.Context, trail_texture) -> None:
+        """Add an injected field into the framebuffer update() has bound.
+
+        Runs after the particles' own deposit, into the same target and with
+        the same ONE, ONE blend: an injected trail is one more thing depositing
+        onto the canvas, not a force acting on anything.
+        """
+        if trail_texture is None or getattr(self, 'trail_inject_vao', None) is None:
+            return
+        trail_texture.use(location=6)
+        tryset(self.trail_inject_program, 'field', 6)
+        tryset(self.trail_inject_program, 'amount', float(self._state.TIME_SCALE))
+        ctx.enable(moderngl.BLEND)
+        ctx.blend_func = moderngl.ONE, moderngl.ONE
+        ctx.blend_equation = moderngl.FUNC_ADD
+        self.trail_inject_vao.render(mode=moderngl.TRIANGLE_FAN, vertices=4)
+        ctx.disable(moderngl.BLEND)
+
     def _set_trail_persistence(self, trail_persistence, multi_load_service) -> None:
         """Push TRAIL_PERSISTENCE_SETTING to every program that reads it.
 
@@ -547,6 +580,7 @@ class Sim:
                erase_mode: bool = False, fill_mode: bool = False, fill_direction_type: int = 0,
                canvas_draw_active: bool = True,
                field_texture=None,
+               trail_texture=None,
                force_field_strength: float = 1.0,
                strafe_field_strength: float = 1.0):
         # Bind the current read buffer for sampling (will write to the other one)
@@ -581,6 +615,7 @@ class Sim:
                         brush_mode, fixed_direction_heading, erase_mode, fill_mode,
                         fill_direction_type, canvas_draw_active)
         self.brush_update(ctx)
+        self.trail_inject(ctx, trail_texture)
 
         if strong_determinism:
             self.can_read_index = write_index

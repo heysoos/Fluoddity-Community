@@ -27,6 +27,7 @@ from .preferences_window import PreferencesWindowMixin
 from .menu_bar import MenuBarMixin
 from .physics_window import PhysicsWindowMixin
 from .advanced_drawing_window import AdvancedDrawingWindowMixin
+from .field_stack_window import FieldStackWindowMixin
 from .field_loader_window import FieldLoaderWindowMixin
 from .tournament_window import TournamentWindowMixin
 from .auto_tournament_window import AutoTournamentWindowMixin
@@ -54,6 +55,7 @@ class UI(
     ConfigBrowserMixin,
     SliderWidgetsMixin,
     AdvancedDrawingWindowMixin,
+    FieldStackWindowMixin,
     FieldLoaderWindowMixin,
     TournamentWindowMixin,
     AutoTournamentWindowMixin,
@@ -720,6 +722,9 @@ class UI(
         # Render history window if visible (hidden when windows toggled off)
         if self.state.preferences.show_sidebar and self.state.preferences.show_history_window:
             self.render_history_window()
+
+        if self.state.preferences.show_sidebar and self.state.preferences.show_field_stack:
+            self.render_field_stack_window()
 
         if self.state.preferences.show_undo_window:
             self.render_undo_window()

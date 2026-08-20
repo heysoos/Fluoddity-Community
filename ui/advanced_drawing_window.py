@@ -3,7 +3,6 @@ import math
 from imgui_bundle import imgui
 
 from ui import hints
-from utilities.advanced_drawing import AdvancedDrawingProcessor
 
 
 class AdvancedDrawingWindowMixin:
@@ -206,43 +205,5 @@ class AdvancedDrawingWindowMixin:
                 "0 = hidden, 1 = fully visible."
             )
 
-            imgui.separator()
-
-            # === 11. Shader Driven Field ===
-            changed, prefs.shader_driven_field = imgui.checkbox(
-                "Shader Driven Field", prefs.shader_driven_field
-            )
-            hints.tip(
-                "Use a frag shader to override the field texture."
-            )
-
-            # When enabling, switch draw target to canvas if on force/strafe
-            if changed and prefs.shader_driven_field:
-                if prefs.advanced_draw_force_field or prefs.advanced_draw_strafe_field:
-                    prefs.advanced_draw_canvas = True
-                    prefs.advanced_draw_force_field = False
-                    prefs.advanced_draw_strafe_field = False
-
-            if prefs.shader_driven_field:
-                available = AdvancedDrawingProcessor.get_available_override_shaders()
-                # Find current selection index among non-divider entries
-                shader_names = [name for name, is_div in available if not is_div]
-                current_idx = 0
-                if prefs.field_override_shader in shader_names:
-                    current_idx = shader_names.index(prefs.field_override_shader)
-
-                preview = prefs.field_override_shader
-                imgui.set_next_item_width(-1)
-                if imgui.begin_combo("##field_override_shader", preview):
-                    for name, is_divider in available:
-                        if is_divider:
-                            imgui.separator()
-                            continue
-                        is_selected = (name == prefs.field_override_shader)
-                        if imgui.selectable(name, is_selected)[0]:
-                            prefs.field_override_shader = name
-                        if is_selected:
-                            imgui.set_item_default_focus()
-                    imgui.end_combo()
 
         imgui.end()
