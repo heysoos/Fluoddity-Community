@@ -27,12 +27,24 @@ def a_root(tmp_path) -> Path:
 
 def an_archive(root):
     store = ArchiveStore(root / "target", layout=FOURIER)
+    _admit(store)
     return Archive(store=store, dim=8, layout=FOURIER), store
+
+
+def _admit(store):
+    """One index row, which is what gives a layout a directory AND a handle.
+
+    Both are made on first write now, so a layout that was only visited has
+    neither - and a fixture that merely constructs stores would assert that
+    every handle is closed while none was ever opened."""
+    store.append_index({"id": 0, "novelty": 1.0})
+    return store
 
 
 def test_close_releases_every_layouts_handle(tmp_path):
     arc, _store = an_archive(a_root(tmp_path))
     arc.retarget(GABOR)
+    _admit(arc.store)
     assert len(arc.stores) == 2
     arc.close()
     assert all(getattr(s, "_fh", None) is None for s in arc.stores.values())
@@ -44,6 +56,7 @@ def test_a_retargeted_archive_can_still_be_deleted(tmp_path):
     root = a_root(tmp_path)
     arc, _store = an_archive(root)
     arc.retarget(GABOR)
+    _admit(arc.store)
     arc.close()
     res = delete(root, "target")
     assert res.ok, res.message
@@ -56,6 +69,7 @@ def test_closing_the_running_store_alone_is_not_enough(tmp_path):
     root = a_root(tmp_path)
     arc, store = an_archive(root)
     arc.retarget(GABOR)
+    _admit(arc.store)
     store.close()
     assert any(getattr(s, "_fh", None) is not None
                for s in arc.stores.values())
@@ -66,6 +80,7 @@ def test_close_is_idempotent(tmp_path):
     same archive a second time."""
     arc, _store = an_archive(a_root(tmp_path))
     arc.retarget(GABOR)
+    _admit(arc.store)
     arc.close()
     arc.close()
     assert all(getattr(s, "_fh", None) is None for s in arc.stores.values())
@@ -81,6 +96,7 @@ def test_an_archive_loaded_from_disk_closes_every_directory_it_found(tmp_path):
     root = a_root(tmp_path)
     arc, _store = an_archive(root)
     arc.retarget(GABOR)
+    _admit(arc.store)
     arc.close()
 
     again = Archive(store=ArchiveStore(root / "target", layout=FOURIER),

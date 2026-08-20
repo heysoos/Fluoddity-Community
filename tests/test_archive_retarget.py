@@ -150,3 +150,26 @@ def test_retarget_is_visible_to_the_thumbnail_loader(tmp_path):
     stores = arc.stores
     arc.retarget(WIDE)
     assert stores.get(WIDE.signature()) is not None
+
+
+def test_retargeting_to_a_layout_leaves_no_directory_until_it_admits(tmp_path):
+    """The production caller. _apply_brain_layout retargets on every brain
+    change, so dragging the Brain window's layer sliders walks the archive
+    through every intermediate stack - and each one used to leave a directory,
+    an index file and a thumbs/ folder behind. One real archive reached 27
+    layout directories holding 11 brains' worth of entries.
+
+    The store is still opened and still reachable; only the directory waits.
+    """
+    base = tmp_path / "arc"
+    arc = Archive(store=ArchiveStore(base, layout=FOURIER), dim=DIM,
+                  layout=FOURIER)
+
+    arc.retarget(GABOR)
+    assert "gabor-n12" in arc.stores, "the store itself is still opened"
+    assert not (base / "gabor-n12").exists(), (
+        "merely visiting a layout created its directory")
+
+    arc.store.append_index({"id": 0, "novelty": 1.0})
+    assert (base / "gabor-n12").is_dir(), "an admission must create it"
+    arc.close()

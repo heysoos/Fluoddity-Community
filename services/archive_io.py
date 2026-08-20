@@ -74,12 +74,51 @@ class ArchiveStore:
         self.enabled = True
         self._fh = None
         try:
-            self.root.mkdir(parents=True, exist_ok=True)
+            # The ARCHIVE eagerly - the caller has resolved a path it means to
+            # work in. The LAYOUT directory only when something is admitted to
+            # it: pointing the archive at a brain is not admitting anything,
+            # and dragging the Brain window's layer sliders walks through every
+            # intermediate stack on the way. One real archive collected twelve
+            # empty layout directories that way, each with an index file, a
+            # thumbs/ folder and an open handle at load - and read as an
+            # archive of 27 brains when it held 11.
+            self.base.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.enabled = False
+            print(f"[Archive] persistence disabled ({exc}); the run continues")
+
+    def _ensure_root(self) -> bool:
+        """Make this layout's directory, on the way to writing in it. -> usable.
+
+        Idempotent and cheap - every writer calls it and the mkdirs are
+        exist_ok. Never `parents`, so it cannot put back an archive deleted out
+        from under a store still holding it: the rule append_history and
+        save_run_config already follow.
+        """
+        if not self.enabled:
+            return False
+        try:
+            self.root.mkdir(exist_ok=True)
             (self.root / "thumbs").mkdir(exist_ok=True)
+        except OSError as exc:
+            self.enabled = False
+            print(f"[Archive] persistence disabled ({exc}); the run continues")
+            return False
+        return True
+
+    def _index_handle(self):
+        """The append handle, opened on first use. -> the handle, or None."""
+        if self._fh is not None:
+            return self._fh
+        if not self._ensure_root():
+            return None
+        try:
             self._fh = open(self.index_path, "a", encoding="utf-8")
         except OSError as exc:
             self.enabled = False
             print(f"[Archive] persistence disabled ({exc}); the run continues")
+            return None
+        return self._fh
 
     # ---- paths ---------------------------------------------------------
     # Per LAYOUT: the entries and their pictures.
@@ -123,11 +162,12 @@ class ArchiveStore:
     # ---- writing -------------------------------------------------------
 
     def append_index(self, row: dict) -> None:
-        if not self.enabled or self._fh is None:
+        fh = self._index_handle()
+        if fh is None:
             return
         try:
-            self._fh.write(json.dumps(row) + "\n")
-            self._fh.flush()  # a crash must lose at most one entry
+            fh.write(json.dumps(row) + "\n")
+            fh.flush()  # a crash must lose at most one entry
         except (OSError, TypeError) as exc:
             self.enabled = False
             print(f"[Archive] index write failed ({exc}); persistence disabled")
@@ -146,7 +186,7 @@ class ArchiveStore:
         was scored, or -1 for "scored against something else". A reload may
         trust the column only when every layout agrees on it and it matches
         what actually loaded."""
-        if not self.enabled:
+        if not self._ensure_root():
             return
         tmp = self.vectors_path.with_suffix(self.vectors_path.suffix + ".tmp")
         try:
@@ -180,7 +220,7 @@ class ArchiveStore:
     def write_thumb(self, entry_id: int, crop: np.ndarray) -> str:
         """-> the filename, or "" if it could not be written. A missing
         thumbnail costs a gallery placeholder, never an admission."""
-        if not self.enabled:
+        if not self._ensure_root():
             return ""
         name = f"{int(entry_id):06d}.jpg"
         try:

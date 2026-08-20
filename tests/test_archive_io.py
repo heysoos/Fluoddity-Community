@@ -14,13 +14,29 @@ def _arrays(n=3, dim=4):
     )
 
 
+def _stocked(tmp_path, **kw):
+    """A store whose layout directory exists, as one admission would leave it.
+
+    It is made on first WRITE now, and the tests below hand-craft the files an
+    earlier run would have written into it."""
+    s = ArchiveStore(tmp_path, **kw)
+    s._ensure_root()
+    return s
+
+
 def test_creates_the_directory_layout(tmp_path):
     """The store owns its own directory - one level below the named archive,
     under the brain layout's signature. Tests ask it for paths rather than
-    rebuilding them, so the signature can change without touching them."""
+    rebuilding them, so the signature can change without touching them.
+
+    The ARCHIVE is made on construction; the layout directory waits for the
+    first entry, so a brain that was only visited leaves nothing behind."""
     s = ArchiveStore(tmp_path / "archive")
     assert s.enabled
     assert s.root.parent == tmp_path / "archive"
+    assert (tmp_path / "archive").is_dir()
+    assert not s.root.exists()
+    s.append_index({"id": 0})
     assert (s.root / "thumbs").is_dir()
     s.close()
 
@@ -77,7 +93,7 @@ def test_a_failed_flush_leaves_the_previous_vectors_intact(tmp_path, monkeypatch
 
 
 def test_a_corrupt_vectors_file_is_quarantined_not_overwritten(tmp_path):
-    s = ArchiveStore(tmp_path)
+    s = _stocked(tmp_path)
     s.index_path.write_text('{"id": 0}\n', encoding="utf-8")
     s.vectors_path.write_bytes(b"not an npz at all")
     rows, arrays = s.load()
@@ -89,7 +105,7 @@ def test_a_corrupt_vectors_file_is_quarantined_not_overwritten(tmp_path):
 
 
 def test_a_format_version_mismatch_is_quarantined(tmp_path):
-    s = ArchiveStore(tmp_path)
+    s = _stocked(tmp_path)
     ids, emb, brains, phys = _arrays()
     with open(s.vectors_path, "wb") as fh:
         np.savez(fh, format_version=np.array(FORMAT_VERSION + 1), ids=ids,
@@ -101,7 +117,7 @@ def test_a_format_version_mismatch_is_quarantined(tmp_path):
 
 
 def test_a_torn_trailing_index_line_costs_one_entry_not_the_file(tmp_path):
-    s = ArchiveStore(tmp_path)
+    s = _stocked(tmp_path)
     s.index_path.write_text(
         '{"id": 0}\n{"id": 1}\n{"id": 2, "nov', encoding="utf-8")
     rows, _ = s.load()
@@ -198,3 +214,71 @@ def test_run_configs_do_not_disturb_the_index_or_vectors(tmp_path):
     s.save_run_config("r1", '"x"')
     rows, arrays = s.load()
     assert rows == [] and arrays == {}
+
+
+# --- a layout that was only VISITED leaves nothing behind --------------------
+#
+# The signature directory used to be made in __init__, so merely pointing the
+# archive at a layout created it, gave it an index.jsonl and a thumbs/ folder,
+# and left it there. Dragging the Brain window's layer sliders walks through
+# every intermediate stack, so one real archive grew from 15 layout directories
+# to 27 without a single admission - and it reads as an archive holding 27
+# brains when it holds 11, each one costing an open file handle on load.
+
+def test_visiting_a_layout_creates_no_directory(tmp_path):
+    """Constructing a store is not admitting anything to it."""
+    s = ArchiveStore(tmp_path / "archive", signature="mlp-n8.8.8-a0.0.0")
+    assert s.enabled, "persistence must not be disabled by staying lazy"
+    assert not s.root.exists()
+    assert (tmp_path / "archive").is_dir(), "the ARCHIVE itself is still made"
+    s.close()
+
+
+def test_the_first_entry_is_what_creates_it(tmp_path):
+    s = ArchiveStore(tmp_path / "archive")
+    assert not s.root.exists()
+    s.append_index({"id": 0, "novelty": 0.5})
+    assert s.root.is_dir()
+    assert (s.root / "thumbs").is_dir()
+    s.close()
+    assert json.loads(s.index_path.read_text(encoding="utf-8"))["id"] == 0
+
+
+def test_vectors_create_it_too(tmp_path):
+    s = ArchiveStore(tmp_path / "archive")
+    ids, emb, brains, phys = _arrays()
+    s.flush_vectors(ids, emb, brains, phys)
+    assert s.vectors_path.is_file()
+    s.close()
+
+
+def test_a_thumbnail_creates_it_too(tmp_path):
+    s = ArchiveStore(tmp_path / "archive")
+    crop = np.zeros((8, 8, 3), dtype=np.uint8)
+    assert s.write_thumb(0, crop) == "000000.jpg"
+    assert s.thumb_path("000000.jpg").is_file()
+    s.close()
+
+
+def test_a_visited_layout_is_not_listed_as_one_of_the_archives_brains(tmp_path):
+    """signature_dirs is what load_from_store walks, and what the browser
+    counts. A layout nothing was ever admitted to is not one of them."""
+    from services.archive_io import signature_dirs
+
+    base = tmp_path / "archive"
+    written = ArchiveStore(base, signature="fourier-n10")
+    written.append_index({"id": 0, "novelty": 1.0})
+    written.close()
+    ArchiveStore(base, signature="mlp-n8.8.8-a0.0.0").close()
+
+    assert [d.name for d in signature_dirs(base)] == ["fourier-n10"]
+
+
+def test_reading_a_layout_that_was_never_written_is_empty_not_an_error(tmp_path):
+    """Its directory does not exist at all now, and load() has always had to
+    tolerate a missing index."""
+    s = ArchiveStore(tmp_path / "archive", signature="lenia-n12")
+    rows, arrays = s.load()
+    assert rows == []
+    assert not arrays
+    s.close()
