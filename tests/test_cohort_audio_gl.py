@@ -106,3 +106,60 @@ def test_an_identity_array_changes_nothing(ctx):
     base = _run(ctx, None)
     same = _run(ctx, _identity())
     assert np.array_equal(base, same)
+
+
+def _run_under(ctx, arr, signature, steps=12):
+    """`_run`, but with the entity-update program a LAYOUT change swaps in."""
+    from services.brains import layout_from_signature
+    from sim import Sim
+    from state import SimState
+
+    layout = layout_from_signature(signature)
+    assert layout is not None, signature
+    state = SimState()
+    state.num_cohorts = N_COHORTS
+    state.HAZARD_RATE = 0.0
+    sim = Sim(ctx, world_size=0.05, canvas_aspect_ratio="1:1")
+    sim.apply_state(state)
+    # Before apply_rule, which fills the cohort slots at the layout's width.
+    sim.realloc_brain_buffers(layout)
+    sim.apply_rule(None)
+    sim.reset()
+    sim.set_cohort_audio(arr)
+    for step in range(steps + 1):
+        sim.frame_count = step
+        sim.entity_update(ctx)
+    ctx.finish()
+    return _positions(sim)
+
+
+def test_masking_survives_the_program_a_layout_change_swaps_in(ctx):
+    """The two features had never coexisted, so nothing ran this combination.
+
+    A deep MLP stack needs a scratch width no uniform can carry, so a layout
+    change swaps in an entity-update program compiled under its own defines -
+    a second program, from a second cache key, carrying the cohort_audio
+    include and its SSBO alongside the widened scratch arrays. This says that
+    combination compiles and that masking still bites under it.
+
+    It is a COEXISTENCE test, not a sharper version of the one above: both go
+    through _entity_program_for, and sabotaging the include fails both. What
+    only this one would catch is the deep variant alone losing it.
+    """
+    row = ca.COHORT_AUDIO_PARAMS.index("GLOBAL_FORCE_MULT")
+    deep = "mlp-n16.8-a0.0"
+
+    off = _identity()
+    on = _identity()
+    on[row, : N_COHORTS // 2, 1] = 8.0
+    on[row, ca.MASK_SLOTS] = (0.0, 20.0)
+
+    base = _run_under(ctx, off, deep)
+    moved = _run_under(ctx, on, deep)
+
+    travel = np.abs(moved - base).sum(axis=1)
+    half = travel.shape[0] // 2
+    lit = float(travel[:half].mean())
+    dark = float(travel[half:].mean())
+
+    assert lit > dark * 4.0, (lit, dark)
