@@ -786,14 +786,44 @@ mechanics these caveats assume.
   did.** `archive_name` is in preferences, so the archive reopens; without
   `ArchiveState.layout_signature` the brain did not, and an archive whose
   entries are all one modality reopened under another with ZERO native rows —
-  where Start bootstraps the wrong brain into it. Written from
-  `sim.brain_layout` at save time rather than trusted from the field, which
-  would file the layout the archive just left. Restored only by the paths that
+  where Start bootstraps the wrong brain into it. **`_record_searched_layout`
+  is the field's ONLY writer, and it runs from the SCORED branch alone.** A
+  readout taken as the archive is let go names whatever brain happens to be
+  SELECTED then, not the one the search was in: measured twice on one real
+  archive, it filed a hand-picked layout holding none of its 2974 entries, and
+  reopening put the user on it with nothing native to breed from. It records
+  after `_apply_requested_layout`, so a layout move kept or reverted in that
+  same frame is already reflected. It also does NOT inherit, which is the one
+  place this field parts company with the rest of `PERSISTED_FIELDS`: a missing
+  key means "keep what is on screen" for a SETTING, and for a record of which
+  brain an archive was searched under it would claim a brain the archive has
+  never held — the same defect by another road. Restored only by the paths that
   OPEN an archive: `_apply_brain_layout` WRITES what `_restore_archive_layout`
   reads, so wiring one into the other puts the outgoing layout straight back. A
   signature this build cannot rebuild keeps the current brain and says so, and
   a missing key means "leave the brain alone" — so every archive written before
-  this opens untouched. Guarded by `tests/test_archive_layout_restore.py`.
+  this opens untouched. Guarded by `tests/test_archive_layout_restore.py` and
+  `tests/test_archive_settings.py`.
+
+- **A store never RESURRECTS its own archive, and a layout gets a directory
+  when it admits something rather than when it is visited.** Two faults with
+  one rule. Delete rmtree's the folder and then SWITCHES, and the switch saves
+  the OUTGOING archive first — through a store whose directory is gone — so
+  `append_history`, which mkdir'd its own parent, put the folder back and
+  `goal_list.save()` then landed in it: every entry deleted, the archive still
+  on disk and still in the dropdown. Those two files, in that order, are what
+  was left. And `ArchiveStore.__init__` made its SIGNATURE directory, so
+  `_apply_brain_layout`'s retarget gave every layout the Brain window's sliders
+  passed through an index file, a `thumbs/` folder and an open handle at load —
+  one archive reached 27 layout directories holding 11 brains' worth of
+  entries. The ARCHIVE is still made eagerly, because `_archive_path_for`
+  guarantees the caller means to work there. Everything below it waits for the
+  first writer (`append_index`, `flush_vectors`, `write_thumb`), and no write
+  path passes `parents` — `_ensure_root`, `append_history` and
+  `save_run_config` alike. A fixture that only CONSTRUCTS stores now opens no
+  handles, which is what made two close tests assert that every handle was shut
+  while none had been opened. Guarded by `tests/test_archive_close.py`,
+  `tests/test_archive_io.py` and `tests/test_archive_retarget.py`.
 
 - **The archive browser's PREVIEW and its ADOPT are two actions with two
   gates.** What owns slot 0 is a GRID, which is `ui_state.tournament.enabled` —
@@ -2146,6 +2176,24 @@ mechanics these caveats assume.
   looked like fixing the feature. `_config_borrow_layout` takes the decode
   scales from the file's own `brain_settings`, which an archive entry does not
   have.
+
+  **A preset naming NO brain is the FOURIER its genome already is, and
+  `_config_signature` is the one place that is decided.** The field arrived
+  after most of the library was written: 138 of the 175 shipped presets have
+  none, and every one of them carries exactly an 80-float `fourier-n10` rule.
+  Reading that absence as "stay put" made the whole historical library load its
+  physics under whatever brain was running — `apply_rule` refuses the genome on
+  width and `_rule_fits` deliberately SUPPRESSES the line that would say so, to
+  stop the Load menu printing one per config it passes over — so the preset
+  appeared to load, the console agreed, and the creature never changed. It only
+  misbehaves while another modality is live, and the 37 signed presets always
+  worked, which is why it reads as intermittent. The WIDTH is checked rather
+  than assumed: an unsigned file is not always Fourier — a tile saved by an
+  earlier build of this branch can be unsigned at another width — and there
+  `""` still means stay put. One home, because the borrow and the Brain window
+  must agree: the borrow moves the sim and `_handle_brain_layout` moves it
+  back. Guarded by `tests/test_menu_cross_brain_load.py`,
+  `tests/test_cross_brain_load.py` and `tests/test_config_brain_layout.py`.
 
   **A borrow therefore has an OWNER, and only its owner may return it.** Two
   previews borrow - `"menu"` and `"gallery"` - and both run every frame, the
