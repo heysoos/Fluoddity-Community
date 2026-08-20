@@ -45,6 +45,10 @@ class FourierModality:
     # see fourier.glsl's fourier_param_at, which is the same split per particle.
     UNIT_FLOATS = 8
     SCALE_OFFSETS = frozenset({0, 1, 2, 3})
+    # The OUTGOING half: the evaluation is `out += amplitude * basis`, so a
+    # centre with zero amplitude contributes nothing and a grown brain is
+    # bit-identical to its parent at birth.
+    AMPLITUDE_SLICE = (4, 8)
 
     def unit_floats(self, layout: BrainLayout):
         return self.UNIT_FLOATS

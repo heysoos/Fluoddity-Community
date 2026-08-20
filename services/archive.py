@@ -114,6 +114,10 @@ class Archive:
             dim = get_model(self.encoder).dim
 
         self.store = store
+        # Seeded from disk, so a reopened archive already knows which layout
+        # moves it refused. See record_layout_move.
+        self._layout_moves: list[dict] = (
+            store.load_layout_moves() if store is not None else [])
         self.capacity = int(capacity)
         self.k = int(k)
         self.liveness_min = float(liveness_min)
@@ -485,6 +489,58 @@ class Archive:
         self._last_settings = data
         return self.cfg_version
 
+    def close(self) -> None:
+        """Release EVERY layout's file handle, not just the running one.
+
+        An archive holds one store per signature directory and each keeps its
+        index.jsonl open for append, so closing the running layout's alone
+        leaves the others holding the FOLDER open - and Windows refuses to
+        remove a directory with an open handle. Clear and Delete then fail,
+        which surfaces as a warning and an archive that stays in the list.
+
+        Flush before calling this: a closed store drops writes silently.
+        Idempotent, because the delete path releases, deletes, and then
+        switches - which releases the same archive again.
+        """
+        for store in self._stores.values():
+            closer = getattr(store, "close", None)
+            if closer is not None:
+                closer()
+
+    # ---- the layout ledger ---------------------------------------------
+
+    def record_layout_move(self, parent: str, child: str, op: str, gens: int,
+                           admitted: int, kept: bool, gen: int) -> None:
+        """File one layout move, and ban its pair if it was reverted.
+
+        The ledger belongs to the ARCHIVE rather than to the run: a move that
+        produced nothing here will produce nothing here next session either,
+        and re-proposing it spends a cadence interval an ordinary expedition
+        would have used. So Reset does not forgive one - deleting
+        layouts.jsonl is how a user does.
+
+        Kept moves are filed too: the ledger is the record of the WALK, not
+        only of its failures.
+        """
+        row = {"ts": time.time(), "gen": int(gen), "parent": str(parent),
+               "child": str(child), "op": str(op), "gens": int(gens),
+               "admitted": int(admitted), "kept": bool(kept)}
+        self._layout_moves.append(row)
+        if self.store is not None:
+            self.store.append_layout_move(row)
+
+    def layout_moves(self) -> list[dict]:
+        """-> every move filed against this archive, oldest first."""
+        return list(self._layout_moves)
+
+    def reverted_pairs(self) -> set[tuple[str, str]]:
+        """-> (parent, child) pairs the archive has already refused.
+
+        DIRECTIONAL: growing failing says nothing about shrinking back.
+        """
+        return {(str(r.get("parent", "")), str(r.get("child", "")))
+                for r in self._layout_moves if not r.get("kept", True)}
+
     # ---- capacity ------------------------------------------------------
 
     def prune_to_capacity(self) -> int:
@@ -680,6 +736,38 @@ class Archive:
             print(f"[Archive] dropped {dropped} entries with no matching "
                   "index/vector row")
         return loaded, dropped
+
+    def retarget(self, layout) -> None:
+        """Point the archive at a different brain WITHOUT reloading it.
+
+        Every layout's entries are already here - load_from_store reads every
+        signature directory - so this changes only which rows are NATIVE. The
+        embeddings, the novelty column, the rejects ring and the thumbnails are
+        about PICTURES, and a picture does not stop being one because a
+        different brain is running.
+
+        `_novelty_clean` is deliberately left alone: nothing was admitted and
+        nothing removed, so every entry is still scored against exactly the set
+        now held.
+
+        A signature the archive has never held gets a store, because the next
+        admission writes its index row and thumbnail through it. The width is
+        recorded with setdefault - a directory that already loaded rows knows
+        its own width, and the running layout must not overwrite it.
+        """
+        from services.archive_io import ArchiveStore
+
+        sig = layout.signature()
+        if self.store is not None:
+            store = self._stores.get(sig)
+            if store is None:
+                store = ArchiveStore(self.store.base, signature=sig)
+                self._stores[sig] = store
+            self.store = store
+        self.layout = layout
+        self._widths.setdefault(sig, int(layout.length))
+        self._widen(int(layout.length))
+        self.revision += 1
 
     def _load_one(self, sig: str, store) -> tuple[int, int, int]:
         """Append one layout directory's entries.

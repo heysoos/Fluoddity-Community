@@ -54,6 +54,11 @@ class _FakeArchive:
         self._log.note("record_settings")
         return self.cfg_version
 
+    def close(self):
+        """EVERY layout's handle, not just the running store's. Windows will
+        not remove a directory any of them still holds open."""
+        self._log.note("close_layouts")
+
 
 class _FakeGoals:
     def __init__(self, log):
@@ -104,6 +109,11 @@ class _FakeApp:
         self._last_projection_size = 0
         self.ui = _Bag()
         self.command_handler = _Bag()
+        # No layout live, so restoring the archive's recorded one has nothing
+        # to compare against and stands down. These tests are about what a
+        # switch does to the ARCHIVE.
+        self.sim = _Bag()
+        self.sim.brain_layout = None
 
     def _build_archive_set(self, path):
         """The real one. _switch_archive is called unbound, so this has to be
@@ -132,6 +142,11 @@ class _FakeApp:
         from main import App
 
         return App._load_archive_settings(self, ui_state)
+
+    def _restore_archive_layout(self, ui_state):
+        from main import App
+
+        return App._restore_archive_layout(self, ui_state)
 
 
 class _UIState:
@@ -184,9 +199,14 @@ def test_the_switch_happens_in_the_order_that_keeps_data(roots):
     # record_settings rides with it, for the same reason and against the same
     # store - a change made after the last generation reaches the log nowhere
     # else.
+    #
+    # close_layouts comes AFTER the flush and before close_store: a closed
+    # store drops writes silently, and every layout's handle has to go or the
+    # folder stays open and Clear and Delete fail on it.
     assert log == ["save_settings", "record_settings", "pause",
                    "end_expedition", "flush(force=True,closing=True)",
-                   "save_goals", "close_store", "release_thumbs"]
+                   "save_goals", "close_layouts", "close_store",
+                   "release_thumbs"]
 
 
 def test_the_switch_repoints_every_holder(roots):

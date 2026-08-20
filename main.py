@@ -470,7 +470,9 @@ class App:
 
         Must run before an archive is emptied or deleted - Windows refuses to
         remove a directory with an open handle, and ArchiveStore keeps
-        index.jsonl open for append. Flush before closing the store or
+        index.jsonl open for append. EVERY layout's store, not just the
+        running one: an archive holds one per signature directory, and any one
+        of them left open holds the whole folder. Flush before closing or
         unflushed entries are lost; release the thumbnail cache too, since
         entry ids restart at 0 in every archive.
         """
@@ -484,6 +486,10 @@ class App:
             self.archive.maybe_flush(force=True, closing=True)
         if self.goal_list is not None:
             self.goal_list.save()
+        if self.archive is not None:
+            self.archive.close()
+        # Also directly: the archive may have failed to build, and this handle
+        # is the app's own.
         if self.archive_store is not None:
             self.archive_store.close()
         # Both caches: entry ids restart at 0 in every archive and the key
@@ -502,6 +508,12 @@ class App:
         """
         if self.archive_store is None:
             return
+        # From the SIM, not from whatever was last put in the field: this is a
+        # readout of the brain the archive is on, and a stale one files the
+        # layout it just left.
+        layout = getattr(getattr(self, "sim", None), "brain_layout", None)
+        if layout is not None:
+            ui_state.archive.layout_signature = layout.signature()
         settings = ui_state.archive.to_settings()
         self.archive_store.save_settings(settings)
         # A change made after the last generation would otherwise never reach
@@ -523,6 +535,37 @@ class App:
         applied = ast.apply_settings(self.archive_store.load_settings())
         if "grid" in applied and ast.grid != before:
             ast.grid_changed = True
+
+    def _restore_archive_layout(self, ui_state) -> bool:
+        """Put back the brain this archive was last searched under. -> did it.
+
+        Called only from the paths that OPEN an archive. Never from
+        _apply_brain_layout, which WRITES the setting this reads - calling one
+        from the other would put the outgoing layout straight back.
+
+        A signature this build cannot rebuild keeps the current brain and says
+        so: a plausible layout of the wrong width is worse than refusing.
+        """
+        from command_handler import CommandHandler
+        from services.brains import layout_from_signature
+
+        ast = ui_state.archive
+        sig = str(ast.layout_signature or "")
+        live = getattr(getattr(self, "sim", None), "brain_layout", None)
+        if not sig or live is None or sig == live.signature():
+            return False
+        layout = layout_from_signature(sig)
+        if layout is None:
+            ast.warning = (
+                f"this archive was searched under {sig}, which this build "
+                f"cannot rebuild; the brain is unchanged.")
+            return False
+        # The WINDOW as well as the sim: _handle_brain_layout applies whatever
+        # it finds in ui_state.brain every frame, so a restore that moves only
+        # the sim is undone by the next one.
+        CommandHandler._put_brain_window(layout, ui_state)
+        self._apply_brain_layout(layout, ui_state)
+        return True
 
     def _switch_archive(self, name, ui_state):
         """Point the search at a different archive directory. -> success."""
@@ -552,6 +595,7 @@ class App:
         was_open = ast.show_browser
         self._load_archive_settings(ui_state)
         ast.show_browser = ast.show_browser or was_open
+        self._restore_archive_layout(ui_state)
 
         ui_state.preferences.archive_name = safe
         ast.archive_name = safe
@@ -650,19 +694,22 @@ class App:
             if reset and hasattr(drv, "reset"):
                 drv.reset()
 
-    def _apply_brain_layout(self, layout, ui_state) -> bool:
-        """Switch the brain layout. A hard reset of the search, never partial.
+    def _apply_brain_layout(self, layout, ui_state, *,
+                            keep_running: bool = False) -> bool:
+        """Switch the brain layout. A hard reset of the SEARCH, never of the
+        archive.
 
-        The archive changes because its directory is keyed by the layout
-        signature, so a layout change IS an archive switch - to a sibling
-        directory under the same archive name. It therefore runs the same
-        sequence a name switch does, rather than an inline copy of it: the
-        settings are saved while the outgoing store is still open, and
-        _release_archive is what flushes, closes and drops the thumbnails.
+        One archive holds every layout, so this re-points it rather than
+        switching to a sibling: the entries, their embeddings, their novelty
+        and their thumbnails are all about pictures and survive the change.
+        Only which rows are native moves. See
+        docs/superpowers/specs/2026-08-17-brain-layout-search-design.md.
+
+        `keep_running` is for a layout the SEARCH asked for. It moved its own
+        space on purpose and has an expedition ready to start in the new one,
+        so the pause and the optimizer reset a hand switch needs would cost the
+        whole run.
         """
-        from services.archive_library import resolve
-        from utilities.paths import get_archives_root
-
         current = self.sim.brain_layout
         if layout == current:
             if tuple(layout.scales) == tuple(current.scales):
@@ -678,21 +725,24 @@ class App:
             self._refresh_driver_specs(layout)
             return True
 
-        # Said out loud because it is the one change that silently redirects
-        # where a run's results are filed: the archive is keyed by signature,
-        # so entries admitted after this land in a different directory and the
-        # previous brain's stop being reachable as parents. Nothing else
-        # records that it happened - a run config names the layout it ran
-        # under, but only once a run starts.
+        # Said out loud because it redirects where a run's results are filed:
+        # entries admitted after this land in a different signature directory
+        # and the previous brain's stop being reachable as parents. The
+        # archive's own settings record which brain it ended on, but not that
+        # the change happened, nor when.
         running = (getattr(ui_state.archive, "running", False)
                    or getattr(ui_state.auto_tournament, "running", False))
         print(f"[brain] layout {current.signature()} -> {layout.signature()}"
               + (" WHILE A SEARCH IS RUNNING" if running else ""))
 
-        # Before the release, while the outgoing store is still open.
-        self._save_archive_settings(ui_state)
-        # Same directory, so the thumbnails keep their meaning.
-        self._release_archive(ui_state, keep_thumbs=True)
+        # A layout change is an archive RE-POINT, not an archive switch: every
+        # layout's entries are already in memory and only which of them are
+        # native differs. The search still stops - its space just moved - but
+        # the teardown that used to come with that does not.
+        if not keep_running:
+            ui_state.archive.running = False
+            if self.auto_service is not None:
+                self.auto_service.pause()
 
         # The GPU side first: the per-particle readback buffer is sized by the
         # active length, and slot 0 is re-uploaded from whatever rule is live.
@@ -720,20 +770,42 @@ class App:
 
         # The optimizer searches a different number of dimensions now, so its
         # covariance and population are meaningless. Reset rather than resize.
-        self._refresh_driver_specs(layout, reset=True)
+        self._refresh_driver_specs(layout, reset=not keep_running)
 
-        if self.archive is not None or self.archive_store is not None:
-            path = resolve(get_archives_root(),
-                           ui_state.preferences.archive_name)
-            self._build_archive_set(path)
-            # settings.json lives inside the signature directory, so the
-            # incoming layout has its own. As in _switch_archive, the switch
-            # may open the browser but must never close it under the user.
-            ast = ui_state.archive
-            was_open = ast.show_browser
-            self._load_archive_settings(ui_state)
-            ast.show_browser = ast.show_browser or was_open
+        if self.archive is not None:
+            self.archive.retarget(layout)
+        # AFTER the switch, so what is written names the layout the archive is
+        # now on rather than the one it just left.
+        self._save_archive_settings(ui_state)
         return True
+
+    def _apply_requested_layout(self, ui_state) -> bool:
+        """Honour a layout the SEARCH asked for, in the frame it asked.
+        -> did anything move?
+
+        The driver cannot switch brain itself - App owns the archive, the sim
+        and the tournament - so it sets a one-shot and this reads it. The
+        expedition the move was proposed for starts AFTERWARDS, because a
+        genome of the child's width cannot be optimised under the parent's
+        spec; begin_moved_expedition verifies the switch landed and drops the
+        move if it did not.
+        """
+        from command_handler import CommandHandler
+
+        drv = getattr(self, "imgep_driver", None)
+        layout = getattr(drv, "requested_layout", None)
+        if drv is None or layout is None:
+            return False
+        # Consumed whatever happens below: left standing it would be re-applied
+        # every generation forever.
+        drv.requested_layout = None
+        applied = self._apply_brain_layout(layout, ui_state, keep_running=True)
+        # The WINDOW as well as the sim: _handle_brain_layout applies whatever
+        # it finds in ui_state.brain every frame, so a switch that moves only
+        # the sim is undone by the next one.
+        CommandHandler._put_brain_window(layout, ui_state)
+        drv.begin_moved_expedition()
+        return applied
 
     def _open_archive(self, ui_state):
         """Load the archive directory into memory, if it is not already.
@@ -756,6 +828,8 @@ class App:
         # reopening an archive show that archive's settings rather than the
         # class defaults.
         self._load_archive_settings(ui_state)
+        # After the settings, which is where layout_signature arrives.
+        self._restore_archive_layout(ui_state)
         ast.archive_name = path.name
         ast.archive_list = list_archives(get_archives_root())
         ui_state.preferences.archive_name = path.name
@@ -877,6 +951,9 @@ class App:
             fit = svc.score_and_tell()
             # None while the CLIP pass runs off-thread; retry next frame.
             if fit is not None:
+                # Before the rest: everything below reports what is live NOW,
+                # and a layout move that landed has changed it.
+                self._apply_requested_layout(ui_state)
                 self._after_generation(fit)
                 self._record_settings_version(ui_state)
             return 0
@@ -1631,6 +1708,11 @@ class App:
         # getattr, and the check INSIDE the step: a raise out here would skip
         # every step below it, which is the whole reason each one is guarded.
         self._step("close map layout thread", self._close_map_layout)
+        # Every layout's store, then the app's own handle. On quit this only
+        # tidies up, but an archive left open is what stops the NEXT session
+        # deleting the folder if the process lingers.
+        if self.archive is not None:
+            self._step("close archive layouts", self.archive.close)
         if self.archive_store is not None:
             self._step("close archive store", self.archive_store.close)
         # The lookup goes INSIDE the lambda, for the reason given below: a

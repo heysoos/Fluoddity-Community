@@ -24,7 +24,7 @@ every generation:
 | regime | when | what it proposes |
 |---|---|---|
 | expedition | a goal is being chased | `optimizer.ask()` — CMA-ES, popsize = tiles |
-| bootstrap | archive < `seed_n` | `z ~ N(0, sigma0)` — scattered, no parents |
+| bootstrap | native entries < `seed_n` **and** this layout has spent < `bootstrap_gens` bootstrap generations | `z ~ N(0, sigma0)` — scattered, no parents |
 | expansion | otherwise | per tile: one parent `p ~ novelty^alpha`, re-encoded, plus `N(0, sigma_expand)` |
 
 Expansion draws **one parent per tile, independently and with replacement**, so
@@ -36,8 +36,20 @@ An expedition starts when all three hold, and then runs for `expedition_gens`:
 ```
 expansion_between > 0                    # 0 disables expeditions entirely
 gens_since_last >= expansion_between     # counted over non-expedition gens only
-len(archive) >= seed_n                   # an expedition needs a seed
+regime == "expansion"                    # this layout is out of bootstrap
 ```
+
+**Every brain layout gets its own bootstrap**, and it ends at whichever limit
+it reaches first. Random draws are the cheapest exploration there is, and a
+layout arrived at by a move holds only what its expedition admitted — all of it
+clustered round the one genome that expedition converged on — so expanding from
+those alone explores a pinhole.
+
+`seed_n` alone cannot bound that in time. Separation is measured against the
+POOLED archive, every layout included, so a layout born into a full archive
+admits ever more slowly and takes ever longer to reach the same native count.
+`bootstrap_gens` is the ceiling that keeps each layout's bootstrap the same
+size however late it arrives.
 
 ---
 
@@ -229,7 +241,8 @@ it carries its seed directly.
 | `sigma0` | 0.5 | scatter during bootstrap |
 | `sigma_expand` | 0.15 | mutation size in expansion |
 | `expedition_sigma` | 0.1 | CMA-ES step size |
-| `seed_n` | 256 | archive size at which bootstrap ends and expeditions become possible |
+| `seed_n` | 256 | native entries at which a layout's bootstrap ends |
+| `bootstrap_gens` | 30 | generations a layout may bootstrap for, whichever limit it reaches first |
 | `expansion_between` | 25 | generations between expeditions; 0 disables them |
 | `expedition_gens` | 50 | how long a chase runs |
 | `min_separation` | 0.02 | admission radius; 0 stores everything |

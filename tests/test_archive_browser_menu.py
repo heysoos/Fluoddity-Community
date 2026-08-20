@@ -59,6 +59,11 @@ class _FakeApp:
 
         return App._load_archive_settings(self, ui_state)
 
+    def _restore_archive_layout(self, ui_state):
+        from main import App
+
+        return App._restore_archive_layout(self, ui_state)
+
 
 class _UIState:
     def __init__(self):

@@ -119,6 +119,7 @@ def _ui():
     from state.auto_tournament_state import AutoTournamentState
     from state.brain_state import BrainState
     from state.sim_state import SimState
+    from state.tournament_state import TournamentState
 
     class _UI:
         pass
@@ -127,6 +128,7 @@ def _ui():
     u.sim = SimState()
     u.archive = ArchiveState()
     u.auto_tournament = AutoTournamentState()
+    u.tournament = TournamentState()
     u.brain = BrainState()
     u.archive.live_preview = True
     return u
@@ -293,8 +295,77 @@ def test_a_tournament_takes_the_borrowed_layout_back(tmp_path):
 
     ui.archive.preview_entry_id = foreign
     h._handle_archive_preview(ui)
-    ui.auto_tournament.enabled = True
+    ui.tournament.enabled = True
     h._handle_archive_preview(ui)
 
     assert sim.brain_layout == FOURIER
     assert h._borrow is None
+
+
+# ---- the preview gate and the adopt gate are not the same gate ----------
+
+def test_a_manual_tournament_grid_is_not_written_into_by_a_hover(tmp_path):
+    """Slot 0 under a grid is TILE 0, so a hover would change one square of a
+    running grid - the defect _grid_owner() fixes for the Z and G keys. The
+    Manual tab sets neither sub-mode, so a tab-selection gate misses it."""
+    arc, _foreign, native = _mixed(tmp_path)
+    sim = _Sim(FOURIER)
+    h = _handler(arc, sim)
+    ui = _ui()
+    ui.tournament.enabled = True          # the window is open: a grid is up
+    depth = len(h.rule_manager.stack)
+
+    ui.archive.preview_entry_id = native
+    h._handle_archive_preview(ui)
+
+    assert len(h.rule_manager.stack) == depth, "a grid must not be previewed into"
+
+
+def test_clicking_a_foreign_entry_adopts_its_brain_with_the_grid_up(tmp_path):
+    """Adopting a LAYOUT is not a single-sim operation: the Brain window's
+    modality combo already switches layout while a tournament runs."""
+    arc, foreign, _native = _mixed(tmp_path)
+    sim = _Sim(FOURIER)
+    h = _handler(arc, sim)
+    ui = _ui()
+    ui.tournament.enabled = True
+    ui.archive.enabled = True             # the Explore tab is selected
+    seen = []
+    h.apply_brain_layout = lambda lay, _u: seen.append(lay)
+
+    ui.archive.load_entry_id = foreign
+    h._handle_archive_preview(ui)
+
+    assert [l.signature() for l in seen] == [GABOR.signature()]
+    assert ui.brain.modality == "gabor"
+
+
+def test_clicking_a_native_entry_under_a_grid_does_not_push_a_rule(tmp_path):
+    """Nothing to adopt and nowhere to run it: the grid owns slot 0."""
+    arc, _foreign, native = _mixed(tmp_path)
+    sim = _Sim(FOURIER)
+    h = _handler(arc, sim)
+    ui = _ui()
+    ui.tournament.enabled = True
+    depth = len(h.rule_manager.stack)
+
+    ui.archive.load_entry_id = native
+    h._handle_archive_preview(ui)
+
+    assert len(h.rule_manager.stack) == depth
+
+
+def test_with_no_grid_the_explore_tab_no_longer_blocks_anything(tmp_path):
+    """A tab selection is not a grid. With the tournament window shut the
+    browser works whichever tab was last on screen."""
+    arc, _foreign, native = _mixed(tmp_path)
+    sim = _Sim(FOURIER)
+    h = _handler(arc, sim)
+    ui = _ui()
+    ui.archive.enabled = True             # tab selected, window shut
+    depth = len(h.rule_manager.stack)
+
+    ui.archive.preview_entry_id = native
+    h._handle_archive_preview(ui)
+
+    assert len(h.rule_manager.stack) > depth

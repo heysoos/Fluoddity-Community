@@ -61,6 +61,10 @@ class _Handler:
         self._run_physics_written = ""
         self._clear_explore_flags = CommandHandler._clear_explore_flags
         self._record_run_physics = CommandHandler._record_run_physics.__get__(self)
+        # No sim, so _brain_layout answers None - which bounds_from treats as
+        # "no modality to exclude" rather than as an error.
+        self._brain_layout = CommandHandler._brain_layout.__get__(self)
+        self._push_layout_search = CommandHandler._push_layout_search
 
 
 class _Svc:

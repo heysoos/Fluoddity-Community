@@ -8,14 +8,18 @@ equations.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from services.archive import Candidate
 from services.archive_projection import Projection
+from services.brains.layout_moves import (LayoutBounds, LayoutMove,
+                                          propose_layout_move, transfer_genome)
 from services.capture_health import is_viable_tile, structure
 from services.descriptor import descriptor, liveness, stack_snapshots
 from services.expedition_fitness import contrastive
-from services.genome_spec import encode, layout_of, spec_for
+from services.genome_spec import encode, layout_of, physics_spec_for, spec_for
 from services.goal_source import (
     LATENT_DIMS,
     Goal,
@@ -33,6 +37,16 @@ from services.physics_genome import PHYSICS_DIM, PHYSICS_PARAMS, encode_physics
 
 def _phys_dict(vec) -> dict[str, float]:
     return {n: float(v) for (n, _g, _lo, _hi), v in zip(PHYSICS_PARAMS, vec)}
+
+
+@dataclass
+class _PendingMove:
+    """A layout move that has been asked for and has not landed yet."""
+    move: LayoutMove
+    goal: Goal
+    x0: np.ndarray
+    seed: int | None
+    phys_clipped: int
 
 
 class ImgepDriver:
@@ -63,6 +77,11 @@ class ImgepDriver:
         self.alpha = 4.0
         self.k = 10
         self.seed_n = 256
+        # A CEILING on each layout's bootstrap, in generations. seed_n is a
+        # native COUNT, and separation is measured against the pooled archive -
+        # so a layout born into a full one admits ever more slowly and takes
+        # ever longer to reach the same count. Whichever comes first.
+        self.bootstrap_gens = 30
         self.liveness_min = 0.002    # see CLAUDE.md
         self.n_views = 3             # see VisionScorer.embed_mean
         self.refresh_sweep_gens = 10
@@ -79,12 +98,21 @@ class ImgepDriver:
         self.seed_ess_min = 8.0
         self.seed_ess_max = 512.0
 
+        # layout search (spec 4). OFF: opening the app must never start
+        # changing brain under anyone.
+        self.layout_search = False
+        self.layout_move_chance = 0.25
+        self.layout_bounds = LayoutBounds()
+
         # The search's own projection, separate from the map's - refitting a
         # shared one every frame would thrash both.
         self.projection = Projection(LATENT_DIMS)
         self._distractors = None
 
         self._optimizer = None
+        # Bootstrap generations spent in the RUNNING layout. Reset when the
+        # space moves, which is what makes the budget per layout.
+        self._bootstrap_gens = 0
         self._goal: Goal | None = None
         self._remaining = 0
         self._since_expedition = 0
@@ -103,6 +131,16 @@ class ImgepDriver:
         # Physics genes the current origin could not reach when the running
         # expedition was seeded. Describes ONE seed, so it is cleared with it.
         self._seed_phys_clipped = 0
+
+        # A layout move in three stages. REQUESTED: the one-shot the frame loop
+        # reads, because App owns the archive, the sim and the tournament and
+        # the driver owns none of them. PENDING: asked for, switch not landed.
+        # LIVE: its expedition is running and _move_admitted is counting.
+        self.requested_layout = None
+        self._pending: _PendingMove | None = None
+        self._move: LayoutMove | None = None
+        self._move_seed: int | None = None
+        self._move_admitted = 0
 
         self.gen = 0
         self._last_score_label = "novelty"
@@ -132,16 +170,35 @@ class ImgepDriver:
     def regime(self) -> str:
         if self._remaining > 0 and self._goal is not None:
             return "expedition"
-        # max(1, ...): nothing to expand FROM stays in bootstrap whatever
-        # seed_n says. Without this, parent sampling raises on the first ask
-        # when seed_n is 0.
-        if self._native_n < max(1, self.seed_n):
+        # Nothing to expand FROM stays in bootstrap whatever either limit says.
+        # Without this, parent sampling runs in front of an empty archive.
+        if not self._native_n:
+            return "bootstrap"
+        # Enough natives to breed from, OR this layout's budget for exploring
+        # itself at random is spent - whichever comes first. Every layout gets
+        # its own bootstrap because random draws are the cheapest exploration
+        # there is and a child's entries all cluster round the genome its
+        # expedition converged on. The BUDGET is what bounds that in time: a
+        # native count does not, since separation is measured against the
+        # pooled archive and a layout born into a full one admits ever slower.
+        if (self._native_n < int(self.seed_n)
+                and self._bootstrap_gens < int(self.bootstrap_gens)):
             return "bootstrap"
         return "expansion"
 
     @property
     def optimizer(self):
         return self._optimizer
+
+    @property
+    def layout_move(self) -> LayoutMove | None:
+        """The move whose expedition is LIVE, or None."""
+        return self._move
+
+    @property
+    def layout_move_seed(self) -> int | None:
+        """The archive row the live move's genome was carried from."""
+        return self._move_seed
 
     @property
     def sigma(self) -> float:
@@ -167,10 +224,18 @@ class ImgepDriver:
                     "unit": "generations",
                     "note": f"{int(self._remaining)} left"}
         if r == "bootstrap":
-            total = max(1, int(self.seed_n))
-            done = min(self._native_n, total)
+            # Two finish lines, and the honest one to show is whichever this
+            # layout is nearer to: a fresh archive fills up and leaves on the
+            # count, a layout born into a full one runs its budget out first.
+            ents, gens = max(1, int(self.seed_n)), max(1, int(self.bootstrap_gens))
+            done_e, done_g = min(self._native_n, ents), min(self._bootstrap_gens, gens)
+            # Ties go to ENTRIES, which is what a fresh archive shows before
+            # either has moved and is the more informative of the two there.
+            by_gens = done_g / gens > done_e / ents
+            done, total = (done_g, gens) if by_gens else (done_e, ents)
             return {"label": "bootstrap: scattering to fill the archive",
-                    "done": done, "total": total, "unit": "entries",
+                    "done": done, "total": total,
+                    "unit": "generations" if by_gens else "entries",
                     "note": f"{total - done} more before expansion starts"}
         if int(self.expansion_between) <= 0:
             return {"label": "expansion: no expeditions (Expansion Between = 0)",
@@ -223,6 +288,9 @@ class ImgepDriver:
         same = self.spec.same_space_as(spec)
         self.spec = spec
         if not same:
+            # A new space is a new layout to explore, and the budget is what
+            # makes that exploration the same size wherever it happens.
+            self._bootstrap_gens = 0
             # The search dimension changed; an optimizer for the old one is
             # meaningless, and the archive is unaffected because it stores
             # phenotypes rather than z.
@@ -238,10 +306,17 @@ class ImgepDriver:
         """
         self.gen = 0
         self._since_expedition = 0
+        self._bootstrap_gens = 0
         self._n_summits = 0
         self._n_records = 0
         for v in self.trace.values():
             v.clear()
+        # A move that has not landed belongs to the run being abandoned. What
+        # the ARCHIVE learned about which moves are dead ends is not the run's
+        # to forget - the ledger is a fact about the archive, and this clears
+        # the search.
+        self.requested_layout = None
+        self._pending = None
         self.end_expedition()
 
     def end_expedition(self) -> None:
@@ -251,6 +326,14 @@ class ImgepDriver:
         self._x0_index = None
         self._expedition_best = -np.inf
         self._seed_phys_clipped = 0
+        # A live move's VERDICT is delivered before this is called. Any other
+        # path here - a grid change, a brain switch of the user's own - abandons
+        # the move unjudged, which is honest: nothing was learned about it.
+        # `_pending` is deliberately NOT cleared: set_spec calls this when the
+        # space moves, and the space moving IS the request landing.
+        self._move = None
+        self._move_seed = None
+        self._move_admitted = 0
 
     def ask(self, n: int) -> np.ndarray:
         n = int(n)
@@ -320,15 +403,23 @@ class ImgepDriver:
         zb, _clamped = encode(self.archive.brain_at(i), self.spec.layout)
         if self.spec.dim <= len(zb):
             return zb[: self.spec.dim].astype(np.float32), 0
-        entry = self.archive.entries[i]
-        if "physics" in entry.spec:
-            zp, n_clipped = encode_physics(_phys_dict(self.archive.physics[i]),
-                                           self.physics_origin)
-        else:
-            # z = 0 decodes to the current origin exactly, so a brain-only
-            # entry is well-defined rather than an error.
-            zp, n_clipped = np.zeros(PHYSICS_DIM, dtype=np.float32), 0
+        zp, n_clipped = self._physics_z(i)
         return np.concatenate([zb, zp]).astype(np.float32), n_clipped
+
+    def _physics_z(self, i: int | None):
+        """The physics half of a seed's z. -> (z, genes the origin cannot reach)
+
+        Split out because a genome carried across a layout move supplies its own
+        brain half: the physics is the seed's and the brain is not.
+
+        z = 0 decodes to the current origin exactly, so a brain-only entry -
+        and an absent one, which is what a modality jump has - is well-defined
+        rather than an error.
+        """
+        if i is not None and "physics" in self.archive.entries[i].spec:
+            return encode_physics(_phys_dict(self.archive.physics[i]),
+                                  self.physics_origin)
+        return np.zeros(PHYSICS_DIM, dtype=np.float32), 0
 
     # ---- expeditions ---------------------------------------------------
 
@@ -337,8 +428,29 @@ class ImgepDriver:
         goal = self._draw_goal()
         if goal is None:
             return False
+        # A layout move RIDES on this expedition rather than replacing it: the
+        # goal is drawn exactly as it always was, and only the space it is
+        # chased in changes.
+        if self._propose_layout_move(goal):
+            return True
         return self.start_expedition_with(goal.embedding, goal.kind, goal.text,
                                           seed_index=goal.seed_index)
+
+    def _resolve_seed(self, emb, kind: str, seed_index) -> int | None:
+        """Which archive row an expedition toward this goal should start at.
+
+        NATIVE as well as in range. A seed becomes the optimizer's mean and is
+        re-encoded under the running layout, so a row belonging to another
+        brain is not a worse start but an unreadable one - and an archive pools
+        every layout. A goal that names one falls through to _seed_index, which
+        filters, exactly as an out-of-range index does.
+        """
+        if (seed_index is not None and 0 <= int(seed_index) < len(self.archive)
+                and self.archive.is_native(int(seed_index))):
+            return int(seed_index)
+        if emb is None:
+            return None            # nothing to point at and nowhere to start
+        return self._seed_index(emb, str(kind))
 
     def start_expedition_with(self, embedding, kind: str, text: str,
                               seed_index: int | None = None) -> bool:
@@ -353,35 +465,49 @@ class ImgepDriver:
         """
         emb = (None if embedding is None
                else np.asarray(embedding, dtype=np.float32))
-        # NATIVE as well as in range. A seed becomes the optimizer's mean and is
-        # re-encoded under the running layout, so a row belonging to another
-        # brain is not a worse start but an unreadable one - and an archive
-        # pools every layout. A goal that names one falls through to
-        # _seed_index, which filters, exactly as an out-of-range index does.
-        if (seed_index is not None and 0 <= int(seed_index) < len(self.archive)
-                and self.archive.is_native(int(seed_index))):
-            i = int(seed_index)
-        elif emb is None:
-            return False            # nothing to point at and nowhere to start
-        else:
-            i = self._seed_index(emb, str(kind))
-        if i is None or self.expedition_gens <= 0:
+        i = self._resolve_seed(emb, kind, seed_index)
+        if i is None:
             return False
-        self._goal = Goal(kind, text, emb, seed_index=i)
-        self._x0_index = int(i)
+        # The seed is the one re-encode worth reporting: it becomes the
+        # optimizer's mean, so a clipped one starts the chase from a creature
+        # the user did not pick. Expansion parents re-encode too, but there are
+        # `tiles` of them every generation and a count per draw is not a signal.
+        x0, clipped = self._parent_z_clipped(i)
+        if not self.start_expedition_at(emb, kind, text, x0, seed_index=i):
+            return False
+        self._seed_phys_clipped = clipped
+        return True
+
+    def start_expedition_at(self, embedding, kind: str, text: str, x0,
+                            seed_index: int | None = None) -> bool:
+        """Begin an expedition from an explicit starting point.
+
+        `x0` rather than an archive row, because a genome carried across a
+        LAYOUT move has no row: it is a brain of a layout the archive may hold
+        nothing of yet. A width that does not match the running space is
+        REFUSED rather than sliced - the same discipline
+        GenomeSpec._check_width applies, and for the same reason.
+        """
+        if self.expedition_gens <= 0:
+            return False
+        x0 = np.asarray(x0, dtype=np.float32).reshape(-1)
+        if x0.size != self.spec.dim:
+            return False
+        emb = (None if embedding is None
+               else np.asarray(embedding, dtype=np.float32))
+        self._goal = Goal(kind, text, emb, seed_index=seed_index)
+        self._x0_index = None if seed_index is None else int(seed_index)
         self._remaining = int(self.expedition_gens)
         self._since_expedition = 0
         # Reset explicitly: chase()/UI can start a new expedition on top of a
         # running one, and fitness is not comparable across different goals.
         self._expedition_best = -np.inf
+        # Describes ONE seed, so it goes with it; the wrapper puts back the
+        # count for the row it resolved.
+        self._seed_phys_clipped = 0
         # Fresh optimizer per goal - a covariance learned for one goal doesn't
         # transfer to another. sigma << sigma0: local refinement, not a fresh
         # search.
-        # The seed is the one re-encode worth reporting: it becomes the
-        # optimizer's mean, so a clipped one starts the chase from a creature
-        # the user did not pick. Expansion parents re-encode too, but there are
-        # `tiles` of them every generation and a count per draw is not a signal.
-        x0, self._seed_phys_clipped = self._parent_z_clipped(self._x0_index)
         self._optimizer = make_optimizer(
             self.algorithm, self.spec.dim, self.tournament.tiles,
             self.expedition_sigma, self.base_seed + self.gen,
@@ -389,6 +515,115 @@ class ImgepDriver:
             layout=self.spec.layout,
         )
         return True
+
+    # ---- layout moves --------------------------------------------------
+
+    def _propose_layout_move(self, goal) -> bool:
+        """Ask for a neighbouring LAYOUT to chase this goal in. -> asked?
+
+        True the moment the request is queued, NOT once an expedition is
+        running: a genome of the child's width cannot be optimised under the
+        parent's spec, so the switch has to land first and only the frame loop
+        can land it. begin_moved_expedition is the other half.
+        """
+        if not self.layout_search or self._move is not None:
+            return False
+        if self._pending is not None:
+            return False
+        if float(self.rng.random()) >= float(self.layout_move_chance):
+            return False
+        parent = self.spec.layout
+        mv = propose_layout_move(parent, self.layout_bounds, self.rng,
+                                 banned=self.archive.reverted_pairs())
+        if mv is None:
+            return False
+        # The seed this goal would have picked anyway, under the layout still
+        # running - which is what makes this a move WITH an expedition rather
+        # than a move instead of one.
+        i = self._resolve_seed(goal.embedding, goal.kind, goal.seed_index)
+        if mv.child.modality == parent.modality:
+            if i is None:
+                return False        # nothing to carry; run an ordinary one
+            params = transfer_genome(self.archive.brain_at(i), parent,
+                                     mv.child, self.rng)
+            zb, _clamped = encode(params, mv.child)
+        else:
+            # A jump has no transfer by definition, so it seeds the way
+            # bootstrap does. It still enters as an EXPEDITION: a layout with
+            # no native entries would otherwise spend its whole budget on
+            # random genomes before expansion was reachable at all.
+            zb = (self.sigma0 * self.rng.normal(size=int(mv.child.length))
+                  ).astype(np.float32)
+        zp, n_clipped = self._physics_z(i)
+        spec = (physics_spec_for(mv.child) if self.physics_enabled
+                else spec_for(mv.child))
+        x0 = zb if spec.dim <= zb.size else np.concatenate([zb, zp])
+        self._pending = _PendingMove(mv, goal, x0.astype(np.float32), i,
+                                     int(n_clipped))
+        self.requested_layout = mv.child
+        return True
+
+    def begin_moved_expedition(self) -> bool:
+        """Start the expedition a layout move was asked for. -> did it?
+
+        VERIFIED rather than assumed: the request may have been refused, or
+        overtaken by a switch of the user's own, and a move that did not land
+        is dropped rather than started in a space its genome does not belong
+        to. Consumes the request either way.
+        """
+        p, self._pending = self._pending, None
+        if p is None or self.spec.layout != p.move.child:
+            return False
+        if not self.start_expedition_at(p.goal.embedding, p.goal.kind,
+                                        p.goal.text, p.x0):
+            return False
+        self._seed_phys_clipped = p.phys_clipped
+        self._move = p.move
+        self._move_seed = p.seed
+        self._move_admitted = 0
+        return True
+
+    def _finish_layout_move(self) -> None:
+        """Keep the layout, or ask for the parent back. Once, as its expedition
+        ends.
+
+        The archive is already the judge: an admission that cleared SEPARATION
+        means finite, viable, alive and unlike everything stored. A layout that
+        cannot produce one such tile in a whole expedition has answered the
+        question.
+
+        It counts the SEPARATED admissions, not every admission. keeper, summit
+        and record all pass `force`, which bypasses separation so that a
+        generation is never absent from the record - so `admitted` counts
+        pictures, and every layout that renders anything at all would keep
+        itself.
+
+        Comparing the admission RATE against the parent was rejected. A
+        generation's tiles share one CMA-ES population, so they clear or miss
+        any bar together - the same reason the adaptive admission threshold was
+        removed.
+        """
+        mv, self._move = self._move, None
+        admitted, self._move_admitted = self._move_admitted, 0
+        self._move_seed = None
+        if mv is None:
+            return
+        kept = admitted >= 1
+        # Said out loud for the same reason a hand switch is: it redirects
+        # where results are filed, and nothing else records that it happened.
+        print(f"[brain] layout move {mv.operator} {mv.parent.signature()} -> "
+              f"{mv.child.signature()}: {admitted} separated, "
+              f"{'kept' if kept else 'reverted'}")
+        # BOTH outcomes: the ledger is the record of the walk, and it is also
+        # what bans a reverted pair from being proposed again.
+        self.archive.record_layout_move(
+            mv.parent.signature(), mv.child.signature(), mv.operator,
+            int(self.expedition_gens), int(admitted), kept, int(self.gen))
+        if kept:
+            # It has native entries now, so ordinary expansion breeds from it
+            # next generation with no special case anywhere.
+            return
+        self.requested_layout = mv.parent
 
     def _draw_goal(self) -> Goal | None:
         """One of three kinds, by share. Text takes whatever is left over.
@@ -510,6 +745,11 @@ class ImgepDriver:
         records = self._goal_records(b, shows_something)
         self._n_records += len(records)
         admitted = 0
+        # Admissions that cleared SEPARATION on their own. keeper, summit and
+        # record all bypass it - deliberately, so a generation is never absent
+        # from the record - which makes `admitted` a count of pictures rather
+        # than of new ones. Only a layout move reads this.
+        separated = 0
 
         for i in range(n):
             phys = parts[i].get("physics")
@@ -533,6 +773,7 @@ class ImgepDriver:
             else:
                 tile_source = source
 
+            forced = (i == keeper or i == summit or record is not None)
             entry = self.archive.consider(
                 Candidate(
                     brain=np.asarray(parts[i]["brain"], dtype=np.float32),
@@ -551,19 +792,25 @@ class ImgepDriver:
                 source=tile_source,
                 thumb_crop=last[i],
                 separation=float(sep[i]),
-                force=(i == keeper or i == summit or record is not None),
+                force=forced,
                 ignore_liveness=(i == summit or record is not None),
             )
             if entry is not None:
                 admitted += 1
+                separated += not forced
                 # The batch has to separate from itself too, or converged
                 # tiles would all pass separation against the pre-generation
                 # archive and all go in.
                 sep = np.minimum(sep, 1.0 - b @ b[i])
 
+        if self._move is not None:
+            self._move_admitted += separated
+
         self.tournament.selected.clear()
         self._last_descriptors = b
         self.gen += 1
+        if source == "bootstrap":
+            self._bootstrap_gens += 1
         self.archive.refresh(self._refresh_count())
         # AFTER refresh, so eviction ranks on the freshest novelty available,
         # and once per generation rather than per admission - the whole point
@@ -576,15 +823,23 @@ class ImgepDriver:
             self._remaining -= 1
             self._record(source, admitted, n, fit)
             if self._remaining <= 0:
+                # BEFORE end_expedition, which drops the move: reaching zero
+                # remaining is the one path that has a verdict to deliver.
+                self._finish_layout_move()
                 self.end_expedition()
             self._last_score_label = "goal match"
             return fit
 
         self._record(source, admitted, n, None)
         self._since_expedition += 1
+        # Out of BOOTSTRAP, not up to seed_n. The two used to be the same
+        # question; once a layout can leave bootstrap on a generation budget
+        # they part, and asking for the count here would leave that layout in
+        # expansion forever with no expedition - and so no layout move, which
+        # only ever rides on one.
         if (self.expansion_between > 0
                 and self._since_expedition >= self.expansion_between
-                and self._native_n >= self.seed_n):
+                and source == "expansion"):
             self.start_expedition()
 
         self._last_score_label = "novelty"

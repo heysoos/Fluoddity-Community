@@ -113,6 +113,10 @@ class ArchiveStore:
     def history_path(self) -> Path:
         return self.base / "settings_history.jsonl"
 
+    @property
+    def layouts_path(self) -> Path:
+        return self.base / "layouts.jsonl"
+
     def run_config_path(self, run_id: str) -> Path:
         return self.base / "runs" / f"{safe_stem(run_id)}.json"
 
@@ -222,15 +226,23 @@ class ArchiveStore:
 
         Beside the goal list, and for the same reason: the settings that suit a
         20000-entry archive are not the ones that suit an empty one, so they
-        belong to the archive rather than to the app. Written whole and
-        atomically, like goals.json - a partially-written settings file would
-        load as defaults, which is precisely the failure it exists to prevent.
+        belong to the archive rather than to the app. Written atomically, like
+        goals.json - a partially-written settings file would load as defaults,
+        which is precisely the failure it exists to prevent.
+
+        MERGED over what is on disk, never a wholesale replacement: one
+        archives folder is shared by every copy of the app, so a build with
+        fewer PERSISTED_FIELDS than the one that wrote the file would otherwise
+        DELETE the settings it does not know about. A build writes what it
+        knows and leaves the rest alone.
         """
         if not self.enabled:
             return
+        merged = self.load_settings()
+        merged.update(dict(data))
         tmp = self.settings_path.with_suffix(".json.tmp")
         try:
-            tmp.write_text(json.dumps(dict(data), indent=2, sort_keys=True),
+            tmp.write_text(json.dumps(merged, indent=2, sort_keys=True),
                            encoding="utf-8")
             os.replace(tmp, self.settings_path)
         except (OSError, TypeError) as exc:
@@ -252,6 +264,38 @@ class ArchiveStore:
         rows: list[dict] = []
         try:
             text = self.history_path.read_text(encoding="utf-8")
+        except OSError:
+            return rows
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue        # a torn trailing line is one lost row
+        return rows
+
+    def append_layout_move(self, row: dict) -> None:
+        """One layout move. Append-only, like the settings history.
+
+        At the archive ROOT: a move is BETWEEN two signatures and belongs to
+        neither of their directories.
+        """
+        if not self.enabled:
+            return
+        try:
+            self.layouts_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.layouts_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except (OSError, TypeError) as exc:
+            print(f"[Archive] layout move not recorded ({exc})")
+
+    def load_layout_moves(self) -> list[dict]:
+        """-> every move row, oldest first. Empty for an archive with none."""
+        rows: list[dict] = []
+        try:
+            text = self.layouts_path.read_text(encoding="utf-8")
         except OSError:
             return rows
         for line in text.splitlines():

@@ -55,6 +55,11 @@ class ArchiveState:
     alpha: float = 4.0
     k: int = 10
     seed_n: int = 256
+    # A ceiling on each layout's bootstrap, in generations, because seed_n is a
+    # native COUNT and separation is pooled across every layout - so a layout
+    # born into a full archive takes ever longer to reach the same count.
+    # Bootstrap ends at whichever of the two comes first.
+    bootstrap_gens: int = 30
     # A FLOOR on the bulk, deliberately far below what looks reasonable - a
     # frozen canvas scores 0, and real presets run much lower than they seem.
     # Re-run tools.calibrate_imgep --liveness before changing it.
@@ -83,6 +88,22 @@ class ArchiveState:
     seed_ess_min: float = 8.0
     seed_ess_max: float = 512.0
 
+    # brain layout search. OFF: opening the app must never start changing
+    # brain under anyone. See services/brains/layout_moves.py.
+    layout_search: bool = False
+    layout_move_chance: float = 0.2
+    # ONE convention for all three: 0 is "the limit this build already
+    # allows". A literal bound of zero would forbid every layout, so it can
+    # never mean itself - and it is what lets these defaults be stated here
+    # without importing services, which nothing else in state/ does.
+    layout_max_depth: int = 0
+    layout_max_width: int = 0
+    layout_max_floats: int = 0
+    # Comma-separated registry keys, so a fifth modality needs no new field.
+    # Empty is the running modality alone: a jump carries no genome, and
+    # opting into a restart should be a decision.
+    layout_modalities: str = ""
+
     # browser view
     sort_by: str = "novelty"         # see GALLERY_SORTS
     sort_desc: bool = True
@@ -96,6 +117,13 @@ class ArchiveState:
     # File > Load previews a preset. Only outside tournament mode, where the
     # canvas is one simulation rather than a grid of them.
     live_preview: bool = False
+    # The brain this archive was last SEARCHED under. A readout on the way out
+    # and a command on the way in: the app remembers which archive you were in,
+    # and without this it does not remember which brain you were working on in
+    # it - so an archive of one modality reopens under another with no native
+    # entries. Empty means not recorded, which is every archive written before
+    # this one.
+    layout_signature: str = ""
     # CONTINUOUS, not a one-shot: the entry under the pointer right now, or -1.
     # CommandHandler compares it against what it is already showing, so the UI
     # does not have to track transitions itself.
@@ -235,17 +263,21 @@ PERSISTED_FIELDS = (
     "n_views", "physics_enabled", "tile_mutation_enabled",
     "variants_per_tile", "tile_mutation_strength",
     # exploration
-    "sigma0", "sigma_expand", "alpha", "k", "seed_n", "liveness_min",
+    "sigma0", "sigma_expand", "alpha", "k", "seed_n", "bootstrap_gens",
+    "liveness_min",
     "capacity", "min_separation", "refresh_sweep_gens",
     # expeditions
     "expansion_between", "expedition_gens", "expedition_sigma",
     "latent_share", "novelty_share", "goal_order",
     "seed_ess_min", "seed_ess_max",
+    # brain layout search
+    "layout_search", "layout_move_chance", "layout_max_depth",
+    "layout_max_width", "layout_max_floats", "layout_modalities",
     # browser and map view: per-archive, and restoring where you were looking
     # is most of what "open it in its last state" means once the archive is
     # large enough that the map does not fit on screen.
     "show_browser", "sort_by", "sort_desc", "pinned_only", "live_preview",
-    "thumb_size",
+    "layout_signature", "thumb_size",
     "map_zoom", "map_center_x", "map_center_y",
     "map_color_by", "map_filter", "map_render",
     "map_layout", "map_thumbs", "map_thumb_px",

@@ -1,12 +1,15 @@
 """A brain switch stays in the same directory, so it must not look like a reload.
 
-Clicking an archive entry that belongs to another brain switches layout, and a
-layout change IS an archive switch - to a SIBLING directory under the same
-archive name. Everything keyed by the directory therefore survives it: the
-thumbnails (the key carries the signature) and the map's layout (the ids and
-their positions are unchanged). Dropping either re-decodes the whole map and
-leaves the browser blank for a frame, which reads as a reload and clamps the
-window's scroll back to the top.
+Clicking an archive entry that belongs to another brain switches layout, and one
+archive holds every brain: the entries, the thumbnails (the key carries the
+signature) and the map's positions are all unchanged, so the switch RE-POINTS
+the archive rather than rebuilding it. Letting go of either cache re-decodes the
+whole map and leaves the browser blank for a frame, which reads as a reload and
+clamps the window's scroll back to the top.
+
+`_release_archive` still takes `keep_thumbs`, and an archive switch still drops
+them - that path is a real switch to a different directory, where an entry id
+means something else.
 """
 import main as main_mod
 from main import App
@@ -51,12 +54,15 @@ def test_an_archive_switch_still_drops_them():
     assert app.atlas_cache is None
 
 
-def test_the_brain_switch_path_asks_to_keep_them():
-    """The one caller that stays in the same directory. Read off the source,
+def test_the_brain_switch_path_does_not_let_go_at_all():
+    """The one caller that stays in the same directory. It RE-POINTS the
+    archive rather than rebuilding it, so there is nothing to keep - the
+    caches are never released in the first place. Read off the source,
     because building a real App needs a GL context."""
     import inspect
     src = inspect.getsource(App._apply_brain_layout)
-    assert "_release_archive(ui_state, keep_thumbs=True)" in src
+    assert "_release_archive" not in src
+    assert "retarget" in src
     assert inspect.getsource(App._switch_archive).count("keep_thumbs") == 0
 
 

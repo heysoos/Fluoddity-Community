@@ -747,6 +747,62 @@ mechanics these caveats assume.
   leaves every holder on the outgoing encoder rather than half-swapping the
   app. Guarded by `tests/test_scorer_holders.py`.
 
+- **A layout change RE-POINTS the archive; only an archive NAME change tears
+  one down.** Every layout's entries are already in memory — `load_from_store`
+  reads every signature directory — so `Archive.retarget()` moves `layout`,
+  `store` and the width map and nothing else. The embeddings, the novelty
+  column, the rejects ring, the projection and the thumbnail cache are about
+  PICTURES and survive it; `gl_loader` closes over the LIVE `stores` dict, so a
+  store added by a retarget is reachable without rebuilding the cache. It must
+  not clear `_novelty_clean` — nothing was admitted or removed, so a rescore
+  would buy nothing. ROW ORDER is the one thing a retarget does not reproduce:
+  `load_from_store` reads the RUNNING layout first, so a reload orders the rows
+  differently, and re-ordering them is exactly the array rebuild being avoided.
+  Nothing keys off a row index across the change — `thumb_key` and the map
+  cache are keyed by signature and id — so compare native sets by
+  `(signature, id)`, never by index. `settings.json`, `goals.json`,
+  `settings_history.jsonl`, `runs/` and `encoder.json` all live at the archive
+  ROOT and are shared across layouts; only `index.jsonl`, `vectors.npz` and
+  `thumbs/` are per-signature. Guarded by `tests/test_archive_retarget.py` and
+  `tests/test_brain_layout_retarget_wiring.py`.
+
+- **Letting go of an archive means closing EVERY layout's handle, not just the
+  running one.** An archive holds one `ArchiveStore` per signature directory —
+  `load_from_store` opens one for each it finds, and `retarget` opens one for
+  each brain visited — and every store keeps its `index.jsonl` open for
+  append. Windows refuses to remove a directory any handle holds open, so
+  closing `self.archive_store` alone left the siblings holding the FOLDER:
+  `shutil.rmtree` failed with WinError 32, Delete reported a warning, and the
+  archive stayed in the dropdown looking undeleted. `Archive.close()` closes
+  the whole `_stores` map and is idempotent, because the delete path releases,
+  deletes, then switches — which releases the same archive again. It comes
+  AFTER `maybe_flush(closing=True)` in the release order, since a closed store
+  drops writes silently. A single-layout archive deletes either way, which is
+  why this survived: it needs a second brain in the archive to reproduce at
+  all. Guarded by `tests/test_archive_close.py` and by the release-order
+  assertion in `tests/test_archive_switch.py`.
+
+- **An archive records the brain it was last searched under, and nothing else
+  did.** `archive_name` is in preferences, so the archive reopens; without
+  `ArchiveState.layout_signature` the brain did not, and an archive whose
+  entries are all one modality reopened under another with ZERO native rows —
+  where Start bootstraps the wrong brain into it. Written from
+  `sim.brain_layout` at save time rather than trusted from the field, which
+  would file the layout the archive just left. Restored only by the paths that
+  OPEN an archive: `_apply_brain_layout` WRITES what `_restore_archive_layout`
+  reads, so wiring one into the other puts the outgoing layout straight back. A
+  signature this build cannot rebuild keeps the current brain and says so, and
+  a missing key means "leave the brain alone" — so every archive written before
+  this opens untouched. Guarded by `tests/test_archive_layout_restore.py`.
+
+- **The archive browser's PREVIEW and its ADOPT are two actions with two
+  gates.** What owns slot 0 is a GRID, which is `ui_state.tournament.enabled` —
+  the window being open — not a sub-mode flag; gating on the flag missed the
+  Manual tab, where a hover wrote a rule into tile 0. Adopting another brain's
+  LAYOUT is not a single-sim operation and stays available under a grid,
+  because the Brain window's modality combo already does exactly that while a
+  tournament runs. This is the same split `_grid_owner()` makes for Z and G.
+
 - **The settings a run was carried out under are a LOG, not a field.**
   `settings.json` is rewritten wholesale, so the `min_separation` that admitted
   entry #4000 is gone the moment the slider moves.
@@ -786,6 +842,28 @@ mechanics these caveats assume.
   physics parameter is a PRESET parameter by default — `HAZARD_RATE` and
   `V_MAX` are both excluded from the search — and joining the search space
   needs a load-time migration before it needs anything else.
+
+- **EVERY layout bootstraps, and it ends at `seed_n` natives OR
+  `bootstrap_gens` generations — whichever comes first.** Random draws are the
+  cheapest exploration there is, and a layout arrived at by a move holds only
+  what its expedition admitted, all of it clustered round the one genome that
+  expedition converged on — so expanding from those alone explores a pinhole.
+  A native COUNT cannot bound that in time, which is the whole reason for the
+  budget: separation is measured against the POOLED archive, so a layout born
+  into a full one admits ever more slowly and takes ever longer to reach the
+  same count. Measured over one real run, bootstrap admission fell from
+  7.9/generation over the first half to 2.6 over the second, and ~1.7 over the
+  last ten — so at `seed_n` 256 the first layout's bootstrap cost ~30
+  generations and a later one would cost hundreds, growing without limit.
+  The counter counts BOOTSTRAP generations only and is reset by `set_spec`
+  when the space moves, which is what makes it per layout; a decode-scale
+  tweak is the same space and does not restart it. **The expedition cadence
+  gate asks `source == "expansion"`, not `_native_n >= seed_n`** — those were
+  the same question until a layout could leave bootstrap on the budget, and
+  asking for the count there would strand such a layout in expansion with no
+  expedition, and so no layout move, which only ever rides on one. Zero
+  natives stays in bootstrap whatever either limit says. Guarded by
+  `tests/test_bootstrap_budget.py`.
 
 - **Admission does not gate on novelty; capacity prunes.** Everything finite,
   viable and alive is admitted, and `prune_to_capacity()` evicts the least
@@ -948,20 +1026,23 @@ mechanics these caveats assume.
   on a switch: it is keyed by thumbnail filename, which derives from the entry
   id, so reusing it shows the previous archive's pictures.
   **A BRAIN SWITCH IS NOT THAT SWITCH, and treating it as one reads as a
-  reload.** A layout change moves to a SIBLING directory under the same
-  archive name, so the ids, the thumbnail keys and the map's positions are all
-  unchanged - and clicking an archive entry of another brain performs one.
-  Dropping the caches there re-decoded the whole atlas, and dropping the map
-  layout left `_render_map` with nothing to project for a frame: the tab
-  collapsed to one line of text, which made ImGui clamp the browser window's
-  scroll back to the TOP. `_release_archive(keep_thumbs=True)` and a `bind()`
-  that keeps its layouts when the PATH and encoder are unchanged are the two
-  halves; `_build_archive_set` reuses a surviving cache through
-  `set_loader`, since only the stores the loader resolves through are new.
-  The ordering is what makes the blank frame reachable at all -
-  `_update_map_layout` runs at the top of `orchestrate_frame` and the switch
-  runs in `process_commands` below it, so the refit cannot land until the
-  NEXT frame. Guarded by `tests/test_archive_switch_thumbs.py`.
+  reload.** One archive holds every brain, so a layout change leaves the ids,
+  the thumbnail keys and the map's positions all unchanged - and clicking an
+  archive entry of another brain performs one. Dropping the caches there
+  re-decoded the whole atlas, and dropping the map layout left `_render_map`
+  with nothing to project for a frame: the tab collapsed to one line of text,
+  which made ImGui clamp the browser window's scroll back to the TOP.
+  `_apply_brain_layout` therefore RE-POINTS the archive and releases NOTHING -
+  see the `Archive.retarget()` caveat - so there is no cache to keep and no
+  projection to refit. `_release_archive(keep_thumbs=True)` and
+  `ThumbCache.set_loader` are what the release-and-rebuild version of this fix
+  needed and have no caller now; they are kept, not relied on. The ordering is
+  what made the blank frame reachable at all - `_update_map_layout` runs at the
+  top of `orchestrate_frame` and the switch runs in `process_commands` below
+  it, so a refit cannot land until the NEXT frame - and `bind()` still keeps
+  its layouts when the PATH and encoder are unchanged, which is what stops
+  re-selecting the archive already open from throwing a UMAP fit away.
+  Guarded by `tests/test_archive_switch_thumbs.py`.
 
 - **Explore settings belong to the ARCHIVE, not to the app**, and live in
   `settings.json` beside its `goals.json`. The settings that suit a
@@ -977,6 +1058,18 @@ mechanics these caveats assume.
   before the store is closed (a switch, and quitting); `grid` is the one
   restored field that also needs `grid_changed`, since the per-frame
   `configure()` push does not rebuild the tournament grid.
+  **The file is MERGED, not replaced, because one archives folder is shared by
+  every copy of the app.** `to_settings()` returns only the fields the RUNNING
+  build knows, so a wholesale rewrite deleted every setting added since
+  whichever build happened to close the archive last — a worktree left every
+  layout-search field on disk, another opened the same archive and stripped all
+  seven, and the setting read as never having been saved. The same shape as the
+  shared `audio_rig.json`, and worse in one way: the loss is silent on BOTH
+  sides, since `settings_history.jsonl` diffs against the running build's block
+  and so records no change either. That log is what the values are recoverable
+  from. A build writes what it knows and leaves the rest alone; a key dropped
+  from `PERSISTED_FIELDS` therefore lingers, which costs nothing —
+  `apply_settings` ignores what it does not recognise.
 
 - **`Archive.maybe_flush` only rewrites `vectors.npz` every 200 admissions.**
   `index.jsonl` is flushed per entry, so anything that closes an archive —
@@ -2124,6 +2217,137 @@ mechanics these caveats assume.
   `runs/*.json` files and the per-directory entry counts.
   `_apply_brain_layout` logs both signatures, and says so louder when a search
   is running.
+
+- **A GROW move is phenotype-preserving, and that is the whole point of
+  transferring rather than redrawing.** A new unit is drawn and then SILENCED —
+  its amplitude zeroed for the three unit modalities, its outgoing column
+  zeroed for MLP — so the child computes bit-for-bit what its parent computed
+  until the search moves it. Without that, a child's novelty comes from the
+  random restart rather than from the extra capacity, and a layout move looks
+  productive whatever shape it proposed. The INCOMING half is drawn, not
+  zeroed: a unit silent on both sides is inert in a way `sigma` takes
+  generations to undo. Amplitude is an OFFSET-type float, so zero encodes to
+  zero and the transferred genome makes a clean CMA-ES mean — the unit's WIDTH
+  (Gabor's and Lenia's `sigma`) is a scale and does clip at zero, which is why
+  only the amplitude is silenced. `shrink`, `drop_layer` and `activation` are
+  lossy or different by definition: only what survives survives unchanged.
+
+- **`add_layer` CANNOT be phenotype-preserving, and that is the architecture
+  rather than the transfer.** Appending a layer puts a new nonlinearity between
+  the old last hidden layer and `W_out`, and none of `tanh`, `sin` or `gelu`
+  has an identity region to pass the signal through — Net2DeeperNet does this
+  with `ReLU`, where `ReLU(x) = x` for `x > 0`. A depth change therefore
+  carries the parent's earlier layers and draws the rest, which is better than
+  a full restart but is still a jump. It reads exactly like a broken transfer,
+  so it is asserted as a PROPERTY in
+  `tests/test_layout_move_phenotype_gpu.py` rather than left to be
+  rediscovered. Guarded there on the real shader, because the phenotype is
+  what the SHADER computes and a NumPy check compares Python against itself.
+
+- **A layout move is PROPOSED, REBUILT and COMPARED.** `_shape_from_layers`
+  CLAMPS rather than raising — deliberately, because its input may be a config
+  from a build with different limits — so a proposal that hits `MAX_DEPTH`,
+  `MAX_WIDTH`, `MAX_BRAIN_FLOATS` or the user's own bound comes back as a
+  DIFFERENT layout, silently: growing `mlp-n48.14` at the second layer asks for
+  more than the budget and returns `mlp-n47.15`, which also SHRANK the first
+  layer. `candidate_moves` rebuilds each proposal and compares `settings_of`
+  against it, which turns that into a rejected move rather than a move that did
+  something else. The float budget is checked BEFORE the `BrainLayout` is
+  constructed, because `__post_init__` raises past `MAX_BRAIN_FLOATS` and a
+  bounded search must not take the app down at its own ceiling. A new MLP layer
+  is APPENDED, never inserted: an inserted layer renumbers every layer after
+  it, leaving nothing for the transfer to carry across. Fourier's phase offset
+  is a function of the centre INDEX, so its new centre goes at the END for the
+  same reason.
+
+- **A layout move is TWO STAGES, because only the frame loop can switch
+  brain.** `App` owns the archive, the sim and the tournament and the driver
+  owns none of them, so `_propose_layout_move` sets a one-shot
+  `requested_layout` and `_apply_requested_layout` reads it in the frame the
+  generation that proposed it was scored. The two halves run under DIFFERENT
+  layouts and each needs its own: the proposal reads the seed's genome, which
+  only exists under the PARENT, and the expedition optimises the carried
+  genome, whose width is only legal under the CHILD. `begin_moved_expedition`
+  therefore VERIFIES the landing rather than assuming it — the request can be
+  refused, or overtaken by a switch of the user's own — and drops the move
+  rather than starting it in a space its genome does not belong to. It
+  consumes the request either way, or a refused one is re-applied every
+  generation forever. The Brain WINDOW moves with the sim, for the reason
+  `_restore_archive_layout` already does: `_handle_brain_layout` applies
+  `ui_state.brain` every frame and would put the old layout straight back.
+
+- **`_pending` deliberately survives `end_expedition()`.** `set_spec` calls
+  that whenever the space moves, and the space moving IS the request landing —
+  so clearing the request there would kill every move at the moment it
+  succeeded. `end_expedition` clears the LIVE move instead, which is what
+  makes an abandoned move (a grid change, a hand switch) neither kept nor
+  banned: nothing was learned about it.
+
+- **The verdict counts the SEPARATED admissions, never `admitted`, and
+  `admitted` is what the obvious version used.** `keeper`, `summit` and
+  `record` all pass `force`, which bypasses separation deliberately so that a
+  generation is never silently absent from the record — and `keeper` fires
+  whenever ANY tile is viable. So `admitted` counts pictures rather than new
+  ones: with separation raised past reach, every layout kept itself and the
+  ban set stayed empty, which is a revert path that never fires. An admission
+  that cleared separation on its own means finite, viable, alive and unlike
+  everything stored, which is the criterion the rule was always stated in.
+  The verdict is delivered ONCE, from `tell()` at `_remaining <= 0` and before
+  `end_expedition` drops the move; a reverted `(parent, child)` pair is banned
+  so the cadence is not spent re-proposing it, and a layout with every move
+  banned settles rather than thrashing. Comparing the admission RATE against
+  the parent was rejected: a generation's tiles share one CMA-ES population,
+  so they clear or miss any bar together, the same reason the adaptive
+  admission threshold was removed. A reverted layout still keeps whatever its
+  forced keepers deposited under its own signature — bounded by the ban set,
+  not by the revert. `_apply_brain_layout(keep_running=True)` skips the pause
+  and the optimizer reset ONLY — the realloc, the retarget and the settings
+  write all still happen — because the search moved its own space on purpose
+  and has an expedition ready to start in it. Guarded by
+  `tests/test_layout_expedition.py`, `tests/test_layout_verdict.py` and
+  `tests/test_layout_move_wiring.py`.
+
+- **`<archive>/layouts.jsonl` is what BANS a move, so it belongs to the
+  ARCHIVE and not to the run.** It sits at the archive root beside
+  `settings_history.jsonl` and for the same reason — a move is BETWEEN two
+  signatures and belongs to neither of their directories, and nothing else
+  records that a run changed brain. A move that produced nothing in this
+  archive will produce nothing in it next session either, so `Archive`
+  seeds `reverted_pairs()` from the file at construction: **Reset does not
+  forgive one**, because Reset clears the SEARCH and the ledger is a fact
+  about the archive, and deleting the file is how a user does. The ban is
+  DIRECTIONAL — growing failing says nothing about shrinking back — and kept
+  moves are filed too, because the ledger is the record of the WALK and a
+  settled search has nowhere else to explain itself. Guarded by
+  `tests/test_layout_ledger.py`.
+
+- **Every layout bound is 0 for "the limit this build already allows", and
+  that is one convention rather than three.** A literal bound of zero would
+  forbid every layout, so it can never mean itself — which is also what lets
+  `ArchiveState` state these defaults without importing `services`, as nothing
+  else in `state/` does. `bounds_from` resolves them and drops the RUNNING
+  modality from the jump list, since a move to the layout the search is
+  standing on is not a move. `layout_modalities` is ONE comma-separated string
+  rather than a boolean per modality, so a fifth needs no new field, and its
+  checkboxes are derived from `REGISTRY` — a second list of modalities is the
+  declared-but-never-read defect this codebase has already shipped twice. An
+  unknown key is dropped rather than raising, because the bound is written to
+  disk and outlives the build that understood it. **The width bound names the
+  scratch bucket it implies**, because `MAX_MLP_WIDTH` is a compile-time
+  define whose cost every brain in the build pays — crossing a bucket is a
+  cost to see when it is set, not to discover in the frame time. Spec §7 asks
+  for the bounds to be SEEDED from the live layout instead; that is
+  deliberately not implemented, because every concrete seeding constant would
+  be invented rather than measured.
+
+- **A cross-MODALITY jump lands on the target's DEFAULT layout and carries no
+  genome.** There is no correspondence between a Fourier centre count and an
+  MLP width, so preserving a size would be a fiction; `transfer_genome`
+  refuses the pair outright and the expedition seeds from a `sigma0` draw
+  instead. It still enters as an EXPEDITION rather than as bootstrap — a
+  layout with zero native entries would otherwise spend its whole budget on
+  random genomes before expansion was reachable at all. It is opt-in for that
+  reason: `LayoutBounds.modalities` empty means the running modality only.
 
 ### The MLP layer stack
 

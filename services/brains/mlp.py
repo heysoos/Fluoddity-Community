@@ -51,6 +51,9 @@ MIN_WIDTH = 1
 # MAX_BRAIN_FLOATS, which BrainLayout enforces.
 MAX_WIDTH = 48
 MAX_DEPTH = 8
+# A new layer's width. The `layers` Setting's own default, so the search adds
+# what the `+ Add layer` button adds.
+DEFAULT_NEW_LAYER_WIDTH = 16
 
 # What mlp.glsl's ping-pong locals must hold, and the ONLY thing the compiled
 # shader is sized by. Bucketed so a width drag lands on a handful of variants
@@ -235,6 +238,108 @@ class MLPModality:
     def settings_of(self, layout: BrainLayout) -> dict:
         return {"layers": [[int(w), int(a)] for w, a
                            in zip(layout.shape[0::2], layout.shape[1::2])]}
+
+    def layout_moves(self, layout: BrainLayout, bounds):
+        """The stack's own operators. -> [(operator, settings), ...]
+
+        Proposals only: layout_moves.candidate_moves rebuilds each one and
+        rejects any that _shape_from_layers clamped, which is the check that
+        makes a bounded proposal safe.
+
+        Growth is by ONE unit and a new layer is APPENDED. An inserted layer
+        would renumber every layer after it, leaving nothing for the transfer
+        to carry across; a large jump is a restart wearing a growth move's
+        name.
+        """
+        base = self.settings_of(layout)
+        base.update({k: float(v) for k, v in layout.scales})
+        layers = [list(p) for p in base["layers"]]
+        depth = len(layers)
+        max_depth = (MAX_DEPTH if bounds.max_depth is None
+                     else min(MAX_DEPTH, int(bounds.max_depth)))
+        max_width = (MAX_WIDTH if bounds.max_width is None
+                     else min(MAX_WIDTH, int(bounds.max_width)))
+        out = []
+
+        def with_layers(new):
+            return {**base, "layers": new}
+
+        for i in range(depth):
+            w, a = layers[i]
+            if w + 1 <= max_width:
+                grown = [list(p) for p in layers]
+                grown[i][0] = w + 1
+                out.append(("grow", with_layers(grown)))
+            if w - 1 >= MIN_WIDTH:
+                shrunk = [list(p) for p in layers]
+                shrunk[i][0] = w - 1
+                out.append(("shrink", with_layers(shrunk)))
+            # The LAST hidden layer may not go: a brain with none is not a
+            # smaller brain, it is a different model.
+            if depth > 1:
+                dropped = [list(p) for j, p in enumerate(layers) if j != i]
+                out.append(("drop_layer", with_layers(dropped)))
+            for act in range(len(ACTIVATIONS)):
+                if act != a:
+                    swapped = [list(p) for p in layers]
+                    swapped[i][1] = act
+                    out.append(("activation", with_layers(swapped)))
+
+        if depth < max_depth:
+            width = min(int(DEFAULT_NEW_LAYER_WIDTH), max_width)
+            out.append(("add_layer",
+                        with_layers([list(p) for p in layers] + [[width, 0]])))
+        return out
+
+    def transfer_genome(self, params, parent: BrainLayout,
+                        child: BrainLayout, rng) -> np.ndarray:
+        """Repack a decoded stack into `child`'s shape.
+
+        A hidden unit is three regions - input weights, bias, and a COLUMN of
+        the next matrix - and W_out is OUTPUT-MAJOR, so that column is one
+        strided entry per output rather than a contiguous append. Every offset
+        comes from layer_spans, which is the definition mlp.glsl is checked
+        against.
+
+        Whatever a layer does not inherit is DRAWN, then its outgoing column is
+        zeroed: the child evaluates exactly as its parent did at birth, while a
+        new unit still has an incoming half to contribute the moment the search
+        moves its output weight.
+        """
+        p = np.asarray(params, dtype=np.float32).reshape(-1)
+        out = np.asarray(self.random(rng, child),
+                         dtype=np.float32).reshape(-1)
+        p_hidden, p_ow, p_ob, _pn = layer_spans(parent.shape)
+        c_hidden, c_ow, c_ob, _cn = layer_spans(child.shape)
+
+        # Layer l of the child inherits from layer l of the parent, which is
+        # what makes APPENDING a layer the only safe way to deepen a stack.
+        for li, (w_off, b_off, fan_in, w) in enumerate(c_hidden):
+            if li >= len(p_hidden):
+                break
+            pw_off, pb_off, p_fan, p_w = p_hidden[li]
+            rows, cols = min(w, p_w), min(fan_in, p_fan)
+            src = p[pw_off:pb_off].reshape(p_w, p_fan)
+            dst = out[w_off:b_off].reshape(w, fan_in)
+            dst[:rows, :cols] = src[:rows, :cols]
+            # A widened fan-in means the layer BELOW grew: those columns are
+            # the new unit's outgoing weights and start silent.
+            dst[:rows, cols:] = 0.0
+            out[b_off:b_off + rows] = p[pb_off:pb_off + rows]
+
+        # W_out, output-major (OUT_DIM, fan_in of the last hidden layer).
+        p_fan = p_hidden[-1][3] if p_hidden else IN_DIM
+        c_fan = c_hidden[-1][3] if c_hidden else IN_DIM
+        src = p[p_ow:p_ob].reshape(OUT_DIM, p_fan)
+        dst = out[c_ow:c_ob].reshape(OUT_DIM, c_fan)
+        cols = min(c_fan, p_fan)
+        # Only when the LAST layer is the same one: a dropped or added layer
+        # changes which units W_out reads, and those weights mean nothing.
+        if len(c_hidden) == len(p_hidden):
+            dst[:, :cols] = src[:, :cols]
+            dst[:, cols:] = 0.0
+            out[c_ob:c_ob + OUT_DIM] = p[p_ob:p_ob + OUT_DIM]
+        return out.astype(np.float32)
 
     def layout_uniforms(self, layout: BrainLayout) -> dict:
         """The stack, for mlp.glsl. `shape` verbatim and zero-padded, so there

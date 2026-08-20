@@ -12,6 +12,7 @@ from services.brains import default_layout
 from state.archive_state import ArchiveState
 from state.auto_tournament_state import AutoTournamentState
 from state.sim_state import SimState
+from state.tournament_state import TournamentState
 
 
 class _Entry:
@@ -105,6 +106,7 @@ class _UI:
         self.sim = SimState()
         self.archive = ArchiveState()
         self.auto_tournament = AutoTournamentState()
+        self.tournament = TournamentState()
 
 
 class _FakeStore:
@@ -333,32 +335,43 @@ def test_a_commit_stays_quiet_when_the_entry_did_store_physics():
 
 # ---- the mode guard --------------------------------------------------------
 
-@pytest.mark.parametrize("mode", ["archive", "auto_tournament"])
-def test_tournament_mode_refuses_to_preview(mode):
+def test_a_grid_refuses_to_be_previewed_into():
     """The canvas is a grid of simulations there; one rule swapped into it
-    would mean nothing."""
+    would land in tile 0."""
     h, ui = _handler(), _UI()
     ui.archive.live_preview = True
-    getattr(ui, mode).enabled = True
+    ui.tournament.enabled = True
     hover(h, ui, 2)
     assert h.rule_manager.depth == 0
     assert h.sim.applied == []
 
 
-def test_entering_tournament_mode_ends_a_running_preview():
+@pytest.mark.parametrize("tab", ["archive", "auto_tournament"])
+def test_a_selected_tab_is_not_a_grid(tab):
+    """Which tab the tournament window last showed says nothing about whether
+    a grid is on the canvas - the WINDOW being open is what puts one there."""
+    h, ui = _handler(), _UI()
+    ui.archive.live_preview = True
+    getattr(ui, tab).enabled = True
+    hover(h, ui, 2)
+    assert h.rule_manager.depth == 1
+    assert h.sim.applied != []
+
+
+def test_putting_a_grid_up_ends_a_running_preview():
     h, ui = _handler(), _UI()
     ui.archive.live_preview = True
     hover(h, ui, 2)
-    ui.archive.enabled = True
+    ui.tournament.enabled = True
     h._handle_archive_preview(ui)
     assert h.rule_manager.depth == 0
     assert np.allclose(h.sim.applied[-1], h.rule_manager.base[0])
 
 
-def test_a_pending_click_is_dropped_rather_than_queued_in_tournament_mode():
+def test_a_pending_click_is_dropped_rather_than_queued_under_a_grid():
     h, ui = _handler(), _UI()
     ui.archive.live_preview = True
-    ui.archive.enabled = True
+    ui.tournament.enabled = True
     ui.archive.load_entry_id = 2
     h._handle_archive_preview(ui)
     assert ui.archive.load_entry_id == -1

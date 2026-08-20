@@ -40,6 +40,26 @@ signature-qualified. At 1650 entries that is ~140 ms of pure waste, and
 `rescore_all` is O(n^2) — see the `rescore_all()` caveat in `CLAUDE.md` for what
 it costs at capacity.
 
+**What `retarget()` costs instead, over a synthetic archive spanning all four
+modalities at 512-d**, walking every layout in both directions:
+
+| pooled entries | cold open | `retarget` | reload it replaces |
+|---|---|---|---|
+| 4000 (4 x 1000) | 336 ms | 0.014 ms | 221 ms |
+| 12000 (4 x 3000) | 1808 ms | 0.022 ms | 1737 ms |
+
+It is FLAT in archive size — the only work proportional to anything is the
+one-off `_widen` on the first move to a wider layout, which is why the first
+retarget of a session is a few times the rest. The embeddings, the novelty
+column and `_novelty_clean` come through every move untouched, and a genome
+still reads at its own width after a round trip through all four. Admitting
+after a move writes to the new signature's directory, and reopening cold under
+either brain recovers the right native set.
+
+These are random unit vectors, not CLIP embeddings — which is sound here only
+because `retarget` never touches novelty or separation. Do not reuse this
+harness for anything that ranks entries.
+
 ## Scope
 
 In scope:
@@ -265,9 +285,26 @@ Also a registry hook, and this is what makes a layout move continuous rather
 than a restart.
 
 **Generic:** for the unit-structured modalities, copy `min(n_old, n_new)` whole
-units and draw the remainder. `unit_floats()` already defines the unit and
-`crossover` already relies on it, so `fourier-n10 -> fourier-n11` keeps ten
-centres and gains one.
+units, draw the remainder, and then ZERO the new unit's amplitude.
+`unit_floats()` already defines the unit and `crossover` already relies on it,
+so `fourier-n10 -> fourier-n11` keeps ten centres and gains one.
+
+Drawing the remainder outright was the first design and it is wrong for the
+same reason a randomly initialised MLP unit is: all three unit modalities
+evaluate as `out += amplitude * basis`, so an amplitude of zero makes the new
+unit silent and the grown child bit-identical to its parent. `AMPLITUDE_SLICE`
+is declared by each modality beside `UNIT_FLOATS`, because where a unit keeps
+its outgoing weight is the modality's own fact.
+
+**`add_layer` is the exception, and it is a fact about the architecture rather
+than a limit of the transfer.** Appending a layer puts a new NONLINEARITY
+between the old last hidden layer and `W_out`, and none of `tanh`, `sin` or
+`gelu` has an identity region to pass the signal through unchanged —
+Net2DeeperNet manages this only because `ReLU(x) = x` for `x > 0`. So a depth
+change carries the parent's earlier layers and draws the rest: better than a
+full restart, but discontinuous, and section 4 should treat it as the jump it
+is rather than as ordinary growth. Only `grow` is phenotype-preserving, in
+every modality.
 
 **MLP override:** repack the weight matrices. Growing hidden layer *l* adds a
 row to `W_l`, an entry to `b_l`, and a column to every row of `W_{l+1}` — which
@@ -322,17 +359,31 @@ entire life bootstrapping.
 
 ## 5. Keep or revert
 
-`tell()` already counts `admitted`. Accumulate it while a layout expedition is
-live, and at `end_expedition`:
+`tell()` counts the admissions that cleared SEPARATION on their own. Accumulate
+that while a layout expedition is live, and as the expedition ends:
 
-- **admitted >= 1 -> keep.** The layout now has native entries, so ordinary
+- **separated >= 1 -> keep.** The layout now has native entries, so ordinary
   expansion breeds from it next generation with no special case anywhere.
-- **admitted 0 -> revert** to the parent layout, through a second retarget.
+- **separated 0 -> revert** to the parent layout, through a second retarget.
 
-The archive is already the judge and this adds no second opinion: admission
-means finite, viable, alive, and separated from everything stored. A layout
-that cannot produce one such tile in a whole expedition has answered the
-question.
+The archive is already the judge and this adds no second opinion: an admission
+that cleared separation means finite, viable, alive, and unlike everything
+stored. A layout that cannot produce one such tile in a whole expedition has
+answered the question.
+
+**It cannot be `admitted` itself, and that was the first version.** `keeper`,
+`summit` and `record` all pass `force`, which bypasses separation so that a
+generation is never silently absent from the record — so `admitted` counts
+PICTURES, not new ones, and `keeper` fires whenever any tile is viable at all.
+Measured over a run with separation raised past reach, every layout kept itself
+and the ban set stayed empty forever: a revert path that never fires and a
+ledger with nothing in it. Counting only the unforced admissions is also what
+the paragraph above already claims in words.
+
+A reverted layout still keeps whatever its forced keepers deposited under its
+own signature — the same one-tile-per-generation deposit `keeper` makes
+everywhere. It is bounded by the ban set, which stops the pair being proposed
+again, rather than by anything in the revert.
 
 The alternative — comparing admission RATE against the parent — was rejected.
 A generation's tiles are not independent draws (they share one CMA-ES
@@ -366,11 +417,21 @@ explicit allowlist and a field not named there simply does not persist:
 
 Defaults: `layout_search` off, so opening the app never starts changing brain
 under anyone; `layout_move_chance` low enough that most expeditions are
-ordinary ones; the three bounds seeded from the LIVE layout rather than from
-the hard maxima, so switching the feature on explores around the brain that is
-already running instead of immediately reaching for the expensive end of the
-space. `layout_modalities` starts as the running modality alone — a
+ordinary ones. `layout_modalities` starts as the running modality alone — a
 cross-modality jump is a restart, and opting into one should be a decision.
+
+**The three bounds are NOT seeded from the live layout, and that is a
+deliberate departure from this section as first written.** Every concrete
+seeding constant — live width plus four? live floats doubled? — would be
+invented rather than measured, and an invented number buried in a default is
+exactly what the writing rules exist to stop. All three default to **0**, one
+convention meaning "the limit this build already allows"; a literal bound of
+zero would forbid every layout, so it can never mean itself, which also lets
+`ArchiveState` state its defaults without importing anything from `services`.
+The REASON the seeding was asked for — that the user should not walk into the
+expensive end of the space without noticing — is served instead by making the
+cost visible where the bound is set: the width slider names the `MAX_MLP_WIDTH`
+scratch bucket it implies.
 
 `layout_modalities` is one string rather than four booleans so that a fifth
 modality needs no new field, and its checkboxes are derived from `REGISTRY`

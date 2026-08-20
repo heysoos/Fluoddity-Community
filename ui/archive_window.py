@@ -166,6 +166,7 @@ class ArchiveWindowMixin:
         # Above the fold with the transport: it decides what the search is FOR,
         # and a folded header's body does not run at all.
         self._render_physics_search(ast)
+        self._render_layout_search(ast)
         imgui.separator()
 
         layout.push_settings_width()
@@ -183,6 +184,10 @@ class ArchiveWindowMixin:
             self._render_archive_settings(ast)
         if imgui.collapsing_header("Expeditions"):
             self._render_expedition_settings(ast)
+        # Absent rather than empty while the search is off: the header IS the
+        # feature, and a section that only ever says "turn this on" is noise.
+        if ast.layout_search and imgui.collapsing_header("Brain Layout"):
+            self._render_layout_bounds(ast)
         self._render_config_history(ast)
         imgui.pop_item_width()
 
@@ -541,6 +546,12 @@ class ArchiveWindowMixin:
         hints.tip(ALPHA_TOOLTIP)
         _, ast.k = imgui.slider_int("Neighbours (k)", ast.k, 1, 50)
         _, ast.seed_n = imgui.slider_int("Seed Entries", ast.seed_n, 64, 2048)
+        hints.tip("Entries of the running brain before it stops scattering "
+                  "at random.")
+        _, ast.bootstrap_gens = imgui.slider_int(
+            "Bootstrap Gens", ast.bootstrap_gens, 0, 200)
+        hints.tip("Generations a NEW brain shape scatters for, whichever "
+                  "finish line it reaches first.")
         _, ast.sigma0 = imgui.slider_float("Bootstrap Sigma", ast.sigma0, 0.05, 1.5)
 
     def _render_encoder_combo(self, ast):
@@ -665,6 +676,79 @@ class ArchiveWindowMixin:
             "Seed Pool Max", ast.seed_ess_max, 16.0, 4096.0)
         hints.tip("Most entries in the running as a starting point.")
 
+    def _render_layout_search(self, ast):
+        """The primary control, so it sits above the fold beside the physics
+        one: a folded header's body does not run at all."""
+        _, ast.layout_search = imgui.checkbox(
+            "Search Brain Layouts Too", ast.layout_search)
+        hints.tip("Let an expedition also grow, shrink or restructure the "
+                  "brain it is searching.")
+        if not ast.layout_search:
+            layout.text_disabled_wrapped(
+                "one brain shape - the Brain window fixes it")
+            return
+        layout.text_disabled_wrapped(
+            "a layout that admits nothing is handed back and not tried again")
+
+    def _render_layout_bounds(self, ast):
+        """How far a layout search may roam, and what the width bound costs."""
+        from services.brains import MAX_BRAIN_FLOATS, REGISTRY
+        from services.brains.mlp import MAX_DEPTH, MAX_WIDTH, scratch_width
+
+        _, ast.layout_move_chance = imgui.slider_float(
+            "Layout Move Chance", ast.layout_move_chance, 0.0, 1.0)
+        hints.tip("How often an expedition also moves the brain layout.")
+        _, ast.layout_max_floats = imgui.slider_int(
+            "Max Brain Floats", ast.layout_max_floats, 0, MAX_BRAIN_FLOATS)
+        _, ast.layout_max_depth = imgui.slider_int(
+            "Max Layers", ast.layout_max_depth, 0, MAX_DEPTH)
+        _, ast.layout_max_width = imgui.slider_int(
+            "Max Layer Width", ast.layout_max_width, 0, MAX_WIDTH)
+        hints.tip("0 leaves every bound to the brain type.")
+        # The width bound names the SCRATCH BUCKET it implies. MAX_MLP_WIDTH is
+        # a compile-time define whose cost every brain in the build pays, not
+        # only the wide stack, so crossing a bucket is a cost to see at the
+        # moment it is set rather than to discover in the frame time.
+        w = int(ast.layout_max_width) or MAX_WIDTH
+        layout.text_disabled_wrapped(
+            f"a deep stack this wide compiles at scratch width "
+            f"{scratch_width((w, 0, w, 0))}")
+
+        layout.text_disabled_wrapped("brain types the search may jump to:")
+        chosen = {k.strip() for k in str(ast.layout_modalities).split(",")}
+        picked = []
+        right = layout.row_right_edge()
+        for key in REGISTRY:
+            # Derived from the registry, never a hand-written list: a second
+            # list of modalities is a defect this codebase has shipped twice.
+            if imgui.checkbox(key, key in chosen)[1]:
+                picked.append(key)
+            layout.wrap_row(right, layout.button_width(key) + 24.0)
+        imgui.new_line()
+        ast.layout_modalities = ",".join(picked)
+        layout.text_disabled_wrapped(
+            "a jump carries no genome - it is a restart in another brain type")
+        self._render_layout_ledger()
+
+    def _render_layout_ledger(self):
+        """The walk this archive has already taken.
+
+        Nothing else records that a run changed brain, and a reverted pair is
+        never proposed again - so this is the only place a settled search
+        explains itself.
+        """
+        arc = self.archive_obj
+        rows = arc.layout_moves() if arc is not None else []
+        if not rows:
+            return
+        imgui.separator()
+        for r in rows[-12:]:
+            layout.text_disabled_wrapped(
+                f"gen {r.get('gen', 0)}  {r.get('op', '')}  "
+                f"{r.get('parent', '')} -> {r.get('child', '')}  "
+                f"{r.get('admitted', 0)} separated, "
+                f"{'kept' if r.get('kept') else 'reverted'}")
+
     # ---- the browser ---------------------------------------------------
 
     def render_archive_window(self):
@@ -747,10 +831,11 @@ class ArchiveWindowMixin:
     def _render_live_preview_toggle(self, ast):
         """Run the hovered entry in the live sim, like hovering File > Load.
 
-        Only outside tournament mode: there the canvas is a grid of
-        simulations, so there is no single sim for an entry to run in.
+        Unavailable under a grid: the canvas is many simulations there, so
+        there is no single sim for one entry to run in. Clicking an entry of
+        another brain still switches to it.
         """
-        busy = ast.enabled or self.state.auto_tournament.enabled
+        busy = bool(self.state.tournament.enabled)
         imgui.begin_disabled(busy)
         _, ast.live_preview = imgui.checkbox("Live preview", ast.live_preview)
         imgui.end_disabled()
@@ -759,7 +844,8 @@ class ArchiveWindowMixin:
                 "Hover an entry to run it; click to keep it.")
         if busy:
             imgui.same_line()
-            imgui.text_disabled("(close the Tournament window first)")
+            imgui.text_disabled("(no single sim under a grid - "
+                                "clicking still switches brain)")
         elif ast.live_preview:
             imgui.same_line()
             imgui.text_colored(imgui.ImVec4(*_OK),
