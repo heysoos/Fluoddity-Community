@@ -95,6 +95,11 @@ class PreferencesState:
     # Parameter locks
     parameter_locks_enabled: bool = False  # Master toggle for parameter lock feature
 
+    # Perform mode. `enabled` is deliberately NOT here: opening the app must
+    # not light up a projector.
+    perform_monitor: str = ""  # Which display perform mode last used
+    show_perform_window: bool = False  # Whether the Perform Mode panel is visible
+
     # Exploration archive
     archive_name: str = "default"  # which Documents/Fluoddity/archives/<name> Explore mode loads
 
@@ -113,6 +118,7 @@ NOT_UNDOABLE: dict[str, str] = {
     "mouse_mode": "tool selection, not a change to the creature",
     "record_notice": "the last take's message, shown once and dismissed",
     "archive_name": "names an external archive; switching it reloads the store",
+    "perform_monitor": "names an external display, not the look of the simulation",
 }
 
 UNDOABLE_FIELDS: tuple[str, ...] = tuple(

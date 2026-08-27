@@ -17,6 +17,8 @@ from camera_input import process_camera_input
 from controller_input import ControllerCam, process_controller_input
 from utilities.advanced_drawing import AdvancedDrawingProcessor
 from utilities.field_bus import FieldBus
+from services.perform_window import (
+    PerformWindow, choose_monitor, list_monitors, overlays_hidden)
 from state import view_modes
 
 
@@ -116,6 +118,10 @@ class App:
         entity_stride = SIZE_OF_ENTITY_STRUCT // 4
         self.entity_picker = EntityPicker(self.sim.get_entity_buffer(), entity_stride)
         self.video_service = VideoRecorderService()
+        self.perform_window = PerformWindow(self.window)
+        # What was ASKED for when the window opened, which is not what it
+        # landed on when that display was absent. See _drive_perform_window.
+        self._perform_requested = None
         self.config_saver = ConfigSaver()
         self.arrow_debug_service = ArrowDebugService(self.ctx)
         self.multi_load_service = MultiLoadService()
@@ -1057,12 +1063,37 @@ class App:
                 glfw.poll_events()
                 self.orchestrate_frame()
                 glfw.swap_buffers(self.window)
+                self._draw_perform_frame()
         except BaseException:
             # Before cleanup, in case cleanup dies too on a lost GL context.
             self._write_crash_log()
             raise
         finally:
             self._cleanup_safely()
+
+    def _draw_perform_frame(self) -> None:
+        """Mirror the frame to a second display, if one is open.
+
+        AFTER the main swap: SwapBuffers performs an implicit flush, which is
+        what makes a texture written in the main context safe to read in the
+        perform window's without a per-frame ctx.finish().
+
+        A projector is worth strictly less than the run it is showing, so a
+        failure here turns perform mode off instead of reaching run()'s
+        re-raise. Unplugging a display can fail a GL call on that context.
+        """
+        if not self.perform_window.is_open:
+            return
+        try:
+            self.perform_window.draw(self.camera.last_display)
+        except Exception as exc:
+            print(f"[perform] stopped: {exc}")
+            try:
+                self.perform_window.close()
+            except Exception:
+                pass
+            self.ui.state.perform.enabled = False
+            self.ui.state.perform.notice = f"Perform mode stopped: {exc}"
 
     def _write_crash_log(self) -> None:
         """Record the traceback where an overnight run can still find it."""
@@ -1110,6 +1141,7 @@ class App:
         self._auto_was_enabled = auto.enabled
         self._follow_auto_encoder(ui_state)
         self._update_map_layout(ui_state)
+        self._drive_perform_window(ui_state)
 
         # Extras > Archive Browser. Before process_commands, which is where the
         # browser's own flags are read, and cleared first so a failure to open
@@ -1356,7 +1388,11 @@ class App:
         # 5.5. Calculate sweep reticle info
         sweep_reticle_x, sweep_reticle_y, sweep_reticle_visible = self.sim.get_sweep_reticle_position()
 
-        if is_recording or self.screenshot_in_progress:
+        hide_overlays = overlays_hidden(
+            performing=ui_state.perform.enabled,
+            recording=is_recording,
+            screenshotting=self.screenshot_in_progress)
+        if hide_overlays:
             sweep_reticle_visible = False
 
         width, height = glfw.get_framebuffer_size(self.window)
@@ -1395,7 +1431,8 @@ class App:
 
         # 7. Render camera view
         self._render_camera_view(ui_state, sweep_mode, sweep_reticle_pos,
-                                  sweep_reticle_visible, screen_aspect, tiling_mode)
+                                  sweep_reticle_visible, screen_aspect, tiling_mode,
+                                  hide_overlays=hide_overlays)
 
         # 7.5. Render arrow debug overlay if enabled
         if ui_state.preferences.debug_arrows:
@@ -1433,10 +1470,55 @@ class App:
         })
         self.ui.render()
 
+    def _drive_perform_window(self, ui_state) -> None:
+        """Open, close or move the perform window to follow the UI.
+
+        The window is only opened and closed here. What it DRAWS happens in
+        run(), after the main window's swap - see PerformWindow.draw.
+        """
+        perform = ui_state.perform
+        prefs = ui_state.preferences
+        want = perform.enabled
+        # Against what was REQUESTED at open, never against where it landed:
+        # a remembered display that is absent falls back, so comparing with
+        # the live monitor name would reopen the window every single frame.
+        moved = (self.perform_window.is_open
+                 and prefs.perform_monitor != self._perform_requested)
+
+        if want and (not self.perform_window.is_open or moved):
+            monitor, notice = choose_monitor(list_monitors(),
+                                             prefs.perform_monitor)
+            if monitor is None:
+                perform.enabled = False
+                perform.notice = notice
+            else:
+                try:
+                    self.perform_window.open(monitor)
+                except Exception as exc:
+                    # A failed open must disturb nothing else.
+                    self._perform_requested = None
+                    perform.enabled = False
+                    perform.notice = f"Could not open the perform window: {exc}"
+                else:
+                    self._perform_requested = prefs.perform_monitor
+                    perform.notice = notice
+                    # Remember only a display the user picked, never a
+                    # fallback: re-plugging theirs must resume on it.
+                    if not prefs.perform_monitor:
+                        prefs.perform_monitor = monitor.name
+                        self._perform_requested = monitor.name
+        elif not want and self.perform_window.is_open:
+            self.perform_window.close()
+            self._perform_requested = None
+
+        perform.active_monitor = self.perform_window.monitor_name
+
     def _render_camera_view(self, ui_state, sweep_mode, sweep_reticle_pos,
-                             sweep_reticle_visible, screen_aspect, tiling_mode):
+                             sweep_reticle_visible, screen_aspect, tiling_mode,
+                             hide_overlays=False):
         """Render the camera view to screen."""
-        draw_trail_mode = ui_state.preferences.mouse_mode == "Draw Trail"
+        draw_trail_mode = (ui_state.preferences.mouse_mode == "Draw Trail"
+                           and not hide_overlays)
 
         width, height = glfw.get_framebuffer_size(self.window)
         mouse_x_norm = ui_state.mouse_pos[0] / width if width > 0 else 0.5
@@ -1748,6 +1830,7 @@ class App:
         self._step("advanced drawing", self.advanced_drawing_processor.cleanup)
         self._step("video", self.video_service.cleanup)
         self._step("ui", self.ui.cleanup)
+        self._step("perform", lambda: self.perform_window.close())
         self._step("glfw", glfw.terminate)
 
 

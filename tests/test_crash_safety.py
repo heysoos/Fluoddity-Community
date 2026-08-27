@@ -33,6 +33,15 @@ class _FakeGlfw:
         self.terminated = True
 
 
+class _NoPerform:
+    """run() mirrors to a second display when one is open. None ever is here."""
+
+    is_open = False
+
+    def close(self):
+        pass
+
+
 class _App:
     """A stand-in wearing the REAL shutdown methods.
 
@@ -44,6 +53,7 @@ class _App:
     cleanup = App.cleanup
     _step = staticmethod(App._step)
     _write_crash_log = App._write_crash_log
+    _draw_perform_frame = App._draw_perform_frame
     _cleanup_safely = App._cleanup_safely
     _save_last_rig = App._save_last_rig
     _close_map_layout = App._close_map_layout
@@ -60,6 +70,7 @@ class _App:
         self.ui = self
         self.advanced_drawing_processor = self
         self.video_service = self
+        self.perform_window = _NoPerform()
 
     # -- the frame loop
     def orchestrate_frame(self):

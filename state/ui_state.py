@@ -10,6 +10,7 @@ from .archive_state import ArchiveState
 from .brain_state import BrainState
 from .audio_in_state import AudioInState
 from .field_stack import FieldStack
+from .perform_state import PerformState
 
 
 @dataclass
@@ -26,6 +27,7 @@ class UIState:
     brain: BrainState = field(default_factory=BrainState)
     audio: AudioInState = field(default_factory=AudioInState)
     field_stack: FieldStack = field(default_factory=FieldStack)
+    perform: PerformState = field(default_factory=PerformState)
 
     # Input state (updated by callbacks)
     keys_pressed: set = field(default_factory=set)

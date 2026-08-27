@@ -5,6 +5,27 @@ import moderngl
 from state import CameraState
 from utilities.frame_assembler import FrameAssembler
 from state import view_modes
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class DisplayFrame:
+    """What the camera just put on screen, and the uniforms it used.
+
+    The whole interface between Camera and perform mode. `texture` is the one
+    render() actually drew - render chooses between the accumulated texture and
+    a freshly assembled one depending on pause state, so mirroring
+    assembled_texture instead freezes a second display every time the sim is
+    paused. `window_size` is the MAIN framebuffer's, so a mirror composes the
+    identical image and only decides where it lands.
+    """
+
+    texture: object
+    cam_pos: tuple
+    cam_zoom: float
+    tex_size: tuple
+    window_size: tuple
+
 
 class Camera:
     def __init__(self, ctx, sim, window):
@@ -82,6 +103,7 @@ class Camera:
         # Frame assembler (temporal accumulation + gamma correction)
         self.frame_assembler = FrameAssembler(self.ctx, self.cam_brush_target)
         self.assembled_texture = None
+        self.last_display = None
         # The canvas rect that was valid when assembled_texture was produced.
         # Assigned together with it, never recomputed - see canvas_view_rect.
         self.assembled_view_rect = None
@@ -270,18 +292,29 @@ class Camera:
         self.ctx.viewport = (0, 0, width, height)
         self.ctx.clear(0.0, 0.0, 0.0, 1.0)
 
-        self.program['cam_pos'].value = tuple(self.position)
-        self.program['cam_zoom'].value = self.zoom
+        cam_pos = tuple(self.position)
+        cam_zoom = self.zoom
+        if self.cam_brush_mode:
+            cam_pos, cam_zoom = (0, 0), 1
+
+        self.program['cam_pos'].value = cam_pos
+        self.program['cam_zoom'].value = cam_zoom
         self.program['tex_size'].value = TEX_TO_VIEW.size
         self.program['window_size'].value = (width, height)
-
-        if self.cam_brush_mode:
-            tryset(self.program, 'cam_pos', (0, 0))
-            tryset(self.program, 'cam_zoom', 1)
 
         TEX_TO_VIEW.use(location=0)
         self.program['view_tex'].value = 0
         self.vao.render()
+
+        # What a second display mirrors. Recorded from the values actually
+        # sent, so cam_brush_mode's override needs no second implementation.
+        self.last_display = DisplayFrame(
+            texture=TEX_TO_VIEW,
+            cam_pos=cam_pos,
+            cam_zoom=cam_zoom,
+            tex_size=TEX_TO_VIEW.size,
+            window_size=(width, height),
+        )
 
     def reload(self):
         winx, winy =glfw.get_framebuffer_size(self.window)

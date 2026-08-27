@@ -1517,6 +1517,86 @@ mechanics these caveats assume.
   which reloads the archive — `rescore_all()` is load-bearing there, so it
   must be asked for exactly ONCE and never per frame.
 
+### Perform mode
+
+- **The perform window MIRRORS THE TEXTURE THE CAMERA JUST DREW, never
+  `assembled_texture`.** `Camera.render()` picks between two different
+  textures - the accumulated one while the sim runs, a freshly assembled one
+  while it is PAUSED - so a mirror reading `assembled_texture` freezes on a
+  stale frame every time the sim is paused, which is a normal thing to do
+  mid-show. `Camera.render()` therefore ends by recording a frozen
+  `DisplayFrame` of the texture and the four uniforms it actually sent, and
+  that dataclass is the WHOLE interface: Camera stays unaware perform mode
+  exists. `cam_brush_mode`'s override of `cam_pos`/`cam_zoom` is folded in
+  because the values are captured after it, not before - a second
+  implementation of that override is what a naive mirror needs. Guarded by
+  `tools/drive_perform.py`, which is the only thing that can open a second
+  window.
+
+- **A second GL context is unavoidable, and `external_texture` is what crosses
+  it.** OpenGL shares textures, buffers and programs between contexts created
+  with `share`, but NOT VAOs or FBOs - which is most of what a moderngl
+  `Context` is. So `PerformWindow` owns a second `Context`, recompiles
+  `shaders/camera.vert`/`.frag` into it and builds its own VAO, and reaches the
+  frame through `ctx.external_texture`. The wrapper is rebuilt when the
+  texture's `glo`, size, components or dtype move, because `FrameAssembler`
+  drops and recreates its accumulation texture whenever `total_samples` or the
+  canvas size changes - a wrapper made once points at a released name.
+
+- **The projector is drawn AFTER the main window's swap, and that is what
+  removes a per-frame `ctx.finish()`.** A texture written in one context is
+  only safely readable in another once the writer has flushed, and
+  `SwapBuffers` performs an implicit flush; a `finish()` instead would block
+  the CPU until the GPU went idle. So the draw lives in `run()`, not in
+  `orchestrate_frame`, and the projector is ONE FRAME BEHIND the laptop -
+  about 16 ms, which is what buys this. `swap_interval` is a property of the
+  CURRENT context, so `open()` sets 1 on the perform context and 0 on the main
+  one and `close()` puts 1 back: the loop paces off the display that must not
+  tear, and waiting on both would throttle the sim to the slower panel.
+  `PerformWindow.draw` takes an `on_drawn` hook that runs BEFORE the swap,
+  because after one the back buffer holds the other frame and a readback
+  placed after it reports the PREVIOUS frame - which is exactly how the first
+  version of the driver "verified" a working letterbox against stale pixels.
+
+- **A projector is worth strictly less than the run it is showing.** The frame
+  loop's `try` re-raises, so a GL failure on the perform context - which an
+  unplug can cause - would cost the session. `_draw_perform_frame` catches,
+  closes the window and turns perform mode off with a notice. Same discipline
+  as `RecordingAudio.finish()` never taking the recording down with it.
+
+- **The perform window NEVER TAKES KEYBOARD FOCUS, and everything about
+  unplugging rests on that.** It is borderless, fills the monitor and accepts
+  no input, so when a display vanishes and Windows drops the surviving window
+  over the laptop screen, the toggle key still reaches the MAIN window and can
+  close it. Without `FOCUS_ON_SHOW` false that window is unclosable. It is
+  also what makes performing on the primary display safe, which is the only
+  way to test the feature at a desk.
+
+- **`moved` compares against what was REQUESTED, never against where the
+  window landed.** A remembered display that is absent falls back to another,
+  so `prefs.perform_monitor != perform_window.monitor_name` is permanently
+  true and recreates the window every single frame. `_perform_requested`
+  records the request at open time. The fallback also never overwrites the
+  remembered name, or re-plugging the display you asked for would not resume
+  on it. Guarded by `tests/test_perform_wiring.py`.
+
+- **The on-canvas overlays are HIDDEN ON BOTH SCREENS while performing.** The
+  sweep reticle and the draw-brush circle are added additively inside
+  `frame_assembly.frag`'s `final_sample` block, into the same accumulation
+  texture the display path reads - so there is no clean copy to hand a second
+  display without either splitting display from accumulation or assembling
+  twice. `overlays_hidden` is the one home for all three reasons to hide them
+  (performing, recording, screenshotting), and it is applied where the values
+  are DERIVED in `orchestrate_frame`, so the direct assembly call and
+  `SimulationRunner`'s motion-blur one cannot disagree.
+
+- **A keybinding added after a user has run the app reaches nobody.**
+  `keyboard_controls.json` is copied from the default ONCE and never updated,
+  and an unbound action is a key that silently does nothing rather than an
+  error. `KeybindingManager._fill_missing_from_default` binds the missing
+  actions IN MEMORY at load; nothing is written back, because the user's own
+  choices are theirs.
+
 ### Recording
 
 - **`generate_view_texture()` returns two different things, and the recorder

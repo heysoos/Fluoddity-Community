@@ -34,6 +34,7 @@ from .auto_tournament_window import AutoTournamentWindowMixin
 from .archive_window import ArchiveWindowMixin
 from .brain_window import BrainWindowMixin
 from .audio_reactive_window import AudioReactiveWindowMixin
+from .perform_window import PerformWindowMixin
 from state import view_modes
 
 
@@ -62,6 +63,7 @@ class UI(
     ArchiveWindowMixin,
     BrainWindowMixin,
     AudioReactiveWindowMixin,
+    PerformWindowMixin,
 ):
     """Passive UI - renders widgets, exposes state, handles no logic."""
 
@@ -409,6 +411,8 @@ class UI(
                 self._request_screenshot = True
             elif key == self.keybindings.get_key("record_screen"):
                 self._toggle_recording = True
+            elif key == self.keybindings.get_key("toggle_perform_mode"):
+                self.state.perform.enabled = not self.state.perform.enabled
             elif key == self.keybindings.get_key("toggle_pause"):
                 self.state.sim.going = not self.state.sim.going
             elif key == self.keybindings.get_key("randomize_mutations"):
@@ -728,6 +732,9 @@ class UI(
 
         if self.state.preferences.show_undo_window:
             self.render_undo_window()
+
+        if self.state.preferences.show_perform_window:
+            self.render_perform_window()
 
         # Render Advanced Drawing window if enabled (hidden when windows toggled off)
         if self.state.preferences.show_sidebar and self.state.preferences.advanced_drawing_enabled:

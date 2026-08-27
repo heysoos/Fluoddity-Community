@@ -88,6 +88,16 @@ Whatever the modality, the size settings fix the search dimension printed under 
 
 The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space. For a deep MLP the tiles are the **last** hidden layer's units, the only ones that add up to the output. `Slice` chooses the plane and **Reseed plane** redraws the random one; `Output` chooses what is drawn, defaulting to a random projection of all four outputs into red, green and blue. The single-value views are blue for negative and orange for positive.
 
+## Perform Mode
+
+**Extras > Perform Mode Panel**, or **F11**, puts the picture on a second display with no interface on top of it, while every control stays here on the laptop.
+
+Pick the display from the panel and press **Start**. The chosen one is remembered between sessions, but perform mode itself never resumes on its own — launching the app does not light up a projector.
+
+The second window mirrors this one exactly: the same camera, the same view mode, the same exposure and bloom. It is not squashed to fit — you get your window's rectangle scaled up, with black bars on whichever axis does not match. It accepts no mouse or keyboard of its own and never takes focus, so **F11** always reaches this window even if the display is unplugged and Windows drops the leftover window on top of you.
+
+Two things are hidden on **both** screens while performing: the parameter-sweep reticle and the draw-brush circle. Both are painted into the frame itself rather than drawn over it, so there is no clean copy to send without them.
+
 ## Inject Texture
 
 **Extras > Inject Texture** injects texture into the fields the particles move through — procedural noise, an image, your own GLSL, or the simulation's own canvas fed back into itself.

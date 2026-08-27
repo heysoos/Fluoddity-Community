@@ -110,6 +110,30 @@ class KeybindingManager:
         except Exception as e:
             print(f"Error loading keybindings from {self.config_path}: {e}")
 
+        self._fill_missing_from_default()
+
+    def _fill_missing_from_default(self):
+        """Bind actions the user's file predates, in memory only.
+
+        The user's file is copied from the default ONCE and never updated, so a
+        binding added later reaches nobody who has already run the app - and an
+        unbound action is a key that silently does nothing rather than an
+        error. Nothing is written back: the user's own choices are theirs.
+        """
+        if self.config_path == self.default_config_path:
+            return
+        try:
+            with open(self.default_config_path, 'r') as f:
+                defaults = json.load(f)
+        except Exception:
+            return
+        for action, key_name in defaults.items():
+            if action in self.bindings:
+                continue
+            key = self.KEY_NAME_TO_GLFW.get(str(key_name).upper())
+            if key is not None:
+                self.bindings[action] = key
+
     def get_key(self, action: str) -> int | None:
         """
         Get the GLFW key code for a given action.

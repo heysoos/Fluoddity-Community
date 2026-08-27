@@ -19,6 +19,7 @@
   "toggle_parameter_sweep": "F",
   "randomize_rules": "Z",
   "toggle_sidebar": "X",
+  "toggle_perform_mode": "F11",
   "exit_keybinding": "ESCAPE",
   "reset_keybinding": "R"
 }

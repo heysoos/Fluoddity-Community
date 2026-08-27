@@ -323,6 +323,13 @@ class MenuBarMixin:
                     self.state.preferences.show_video_recording_window
                 )
 
+                # Perform Mode panel
+                _, self.state.preferences.show_perform_window = imgui.checkbox(
+                    "Perform Mode Panel",
+                    self.state.preferences.show_perform_window
+                )
+                hints.tip("Mirror the canvas on another display with no UI on top.")
+
                 # Tournament mode (interactive evolution)
                 _, self.state.tournament.enabled = imgui.checkbox(
                     "Tournament Mode",
