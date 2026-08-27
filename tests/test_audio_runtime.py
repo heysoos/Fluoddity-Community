@@ -340,3 +340,76 @@ def test_probing_full_scale_does_not_disturb_the_live_shaper_state():
     rt.overlays(st, first)
     second, _ = rt.update(st, 1 / 60, None, None)
     assert second.SENSOR_GAIN == pytest.approx(first.SENSOR_GAIN, abs=1e-6)
+
+
+# --- which device Start actually opens ---------------------------------------
+
+from services import audio_capture  # noqa: E402
+
+
+def _default_row():
+    return {"index": None, "name": audio_capture.DEFAULT_DEVICE_NAME,
+            "loopback": False, "rate": 0.0, "api": "", "rank": 0}
+
+
+def _device(index, name):
+    return {"index": index, "name": name, "loopback": False,
+            "rate": 48000.0, "api": "Windows WASAPI", "rank": 0}
+
+
+def _watch_start(rt):
+    """Record what Start is handed, without opening a real stream."""
+    opened = []
+
+    def fake_start(index, auto_gain=True):
+        opened.append(index)
+        return True
+
+    rt.capture.start = fake_start
+    return opened
+
+
+def _ask_start(rt, device_name, choices):
+    st = UIState()
+    st.audio.device_name = device_name
+    st.audio.request_start = True
+    import unittest.mock as m
+    with m.patch.object(audio_capture, "device_choices", lambda: choices):
+        rt._sync_capture(st.audio)
+    return st.audio
+
+
+def test_choosing_the_default_row_opens_the_os_default_device():
+    rt = AudioRuntime()
+    opened = _watch_start(rt)
+    _ask_start(rt, audio_capture.DEFAULT_DEVICE_NAME,
+               [_default_row(), _device(7, "Mic")])
+    assert opened == [None]
+
+
+def test_choosing_nothing_is_the_default_row():
+    """A rig saved before (Default) existed carries an empty name."""
+    rt = AudioRuntime()
+    opened = _watch_start(rt)
+    _ask_start(rt, "", [_default_row(), _device(7, "Mic")])
+    assert opened == [None]
+
+
+def test_choosing_a_device_opens_that_device():
+    rt = AudioRuntime()
+    opened = _watch_start(rt)
+    _ask_start(rt, "Mic", [_default_row(), _device(7, "Mic")])
+    assert opened == [7]
+
+
+def test_a_device_that_has_gone_is_not_replaced_by_the_os_default():
+    """Falling back opens a different microphone than the one named, and says
+    nothing about it - the same defect as a shader picker substituting a file.
+    """
+    rt = AudioRuntime()
+    opened = _watch_start(rt)
+    ast = _ask_start(rt, "Microphone (K66)", [_default_row()])
+    assert opened == [], "opened some other device than the one named"
+    assert ast.status == "error"
+    assert "K66" in ast.last_error
+    assert ast.enabled is False

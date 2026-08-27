@@ -113,6 +113,15 @@ class TraceRing:
         return self._buf
 
 
+def _device_label(d: dict) -> str:
+    """(Default) and a device that has gone carry no index, so no prefix."""
+    if d.get("missing"):
+        return f"missing: {d['name']}"
+    if d["index"] is None:
+        return d["name"]
+    return f"{'loopback' if d['loopback'] else 'input'}: {d['name']}"
+
+
 class AudioReactiveWindowMixin(CohortStripMixin):
     """Combined into UI via multiple inheritance."""
 
@@ -138,8 +147,9 @@ class AudioReactiveWindowMixin(CohortStripMixin):
         return self._audio_shaped_trace_rings
 
     def _audio_devices(self, refresh: bool = False) -> list:
+        """(Default) and the devices, cached: enumerating opens PortAudio."""
         if refresh or not hasattr(self, "_audio_device_cache"):
-            self._audio_device_cache = audio_capture.list_devices()
+            self._audio_device_cache = audio_capture.device_choices()
         return self._audio_device_cache
 
     # --- window ---------------------------------------------------------
@@ -251,15 +261,20 @@ class AudioReactiveWindowMixin(CohortStripMixin):
                 "Audio input needs PyAudioWPatch, which is not installed.")
             return
 
-        devices = self._audio_devices()
-        names = [f"{'loopback' if d['loopback'] else 'input'}: {d['name']}"
-                 for d in devices]
-        current = next((i for i, d in enumerate(devices)
-                        if d["name"] == ast.device_name), 0)
-        if names:
-            changed, idx = imgui.combo("Device", current, names)
-            if changed:
-                ast.device_name = devices[idx]["name"]
+        choices = self._audio_devices()
+        name = ast.device_name or audio_capture.DEFAULT_DEVICE_NAME
+        current = next((i for i, d in enumerate(choices)
+                        if d["name"] == name), -1)
+        if current < 0:
+            # Offered back, never replaced: showing another row here would
+            # start a different device than the one named.
+            choices = [{"index": None, "name": name, "loopback": False,
+                        "rate": 0.0, "missing": True}] + choices
+            current = 0
+        changed, idx = imgui.combo("Device", current,
+                                   [_device_label(d) for d in choices])
+        if changed:
+            ast.device_name = choices[idx]["name"]
         hints.tip("Which input the bands are read from.")
 
         if ast.enabled:

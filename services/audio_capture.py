@@ -30,8 +30,69 @@ def is_available() -> bool:
         return False
 
 
+DEFAULT_DEVICE_NAME = "(Default)"
+
+# MME cuts a device name to this many characters, so a name at exactly this
+# length may be a longer one cut short.
+_MME_NAME_LIMIT = 31
+
+# A host API this build does not rank: preferred over the legacy wrappers,
+# never over WASAPI.
+_UNRANKED_API = 1
+
+
+def _api_ranks(pa_mod) -> dict[int, int]:
+    """How much each host API is preferred, lowest first.
+
+    Windows offers one row per host API, so the same microphone is listed
+    several times. WASAPI is the only one carrying loopback endpoints, and it
+    reports a device's real sample rate where MME reports a fixed one.
+    """
+    return {pa_mod.paWASAPI: 0, pa_mod.paDirectSound: 2, pa_mod.paMME: 3}
+
+
+def _device_row(info, apis: dict, loopback: bool) -> dict:
+    api, rank = apis.get(int(info.get("hostApi", -1)), ("", _UNRANKED_API))
+    return {"index": int(info["index"]), "name": str(info["name"]),
+            "loopback": loopback, "rate": float(info["defaultSampleRate"]),
+            "api": api, "rank": rank}
+
+
+def _same_device(kept: dict, other: dict) -> bool:
+    """Do two rows name one device, allowing for MME's truncation?
+
+    `kept` is the better-ranked row, so it holds the full name. A name under
+    the MME limit was never cut and must match in full - a prefix test over
+    those pairs two devices that merely start alike.
+    """
+    if kept["loopback"] != other["loopback"]:
+        return False
+    full, short = kept["name"], other["name"]
+    if full == short:
+        return True
+    return (len(short) == _MME_NAME_LIMIT and len(full) > len(short)
+            and full.startswith(short))
+
+
+def dedupe_devices(devices: list[dict]) -> list[dict]:
+    """One row per device: loopbacks first, then the best-ranked host API.
+
+    A device that no better-ranked API offers is kept as it stands.
+    """
+    kept: list[dict] = []
+    for d in sorted(devices, key=lambda d: (not d["loopback"], d["rank"],
+                                            d["index"])):
+        if not any(_same_device(k, d) for k in kept):
+            kept.append(d)
+    return kept
+
+
 def list_devices() -> list[dict]:
-    """Inputs and loopbacks, or an empty list if the package is absent."""
+    """Inputs and loopbacks, one row per device, or [] if the package is absent.
+
+    The selection is keyed by NAME, in the combo and again at Start, so a
+    repeated name makes the second row unselectable - see `dedupe_devices`.
+    """
     if not is_available():
         return []
     pa_mod = _pyaudio()
@@ -39,13 +100,19 @@ def list_devices() -> list[dict]:
     out: list[dict] = []
     try:
         pa = pa_mod.PyAudio()
+        ranks = _api_ranks(pa_mod)
+        apis = {}
+        for a in range(pa.get_host_api_count()):
+            try:
+                api = pa.get_host_api_info_by_index(a)
+            except Exception:
+                continue
+            apis[a] = (str(api["name"]), ranks.get(int(api["type"]),
+                                                   _UNRANKED_API))
         seen = set()
         try:
             for info in pa.get_loopback_device_info_generator():
-                out.append({"index": int(info["index"]),
-                            "name": str(info["name"]),
-                            "loopback": True,
-                            "rate": float(info["defaultSampleRate"])})
+                out.append(_device_row(info, apis, loopback=True))
                 seen.add(int(info["index"]))
         except Exception:
             pass
@@ -56,18 +123,26 @@ def list_devices() -> list[dict]:
                 continue
             if i in seen or int(info.get("maxInputChannels", 0)) < 1:
                 continue
-            out.append({"index": i, "name": str(info["name"]),
-                        "loopback": False,
-                        "rate": float(info["defaultSampleRate"])})
+            out.append(_device_row(info, apis, loopback=False))
     except Exception:
-        return out
+        pass
     finally:
         if pa is not None:
             try:
                 pa.terminate()
             except Exception:
                 pass
-    return out
+    return dedupe_devices(out)
+
+
+def device_choices() -> list[dict]:
+    """What the Device combo offers: (Default) first, then the devices.
+
+    (Default) carries no index - it is whichever input Windows calls the
+    default at the moment Start is pressed.
+    """
+    return [{"index": None, "name": DEFAULT_DEVICE_NAME, "loopback": False,
+             "rate": 0.0, "api": "", "rank": 0}] + list_devices()
 
 
 class AudioCapture:
@@ -192,6 +267,12 @@ class AudioCapture:
             self.stop()
             self.status = "error"
             return False
+
+    def fail(self, message: str) -> None:
+        """Report a device the caller could not resolve, with none to open."""
+        self.stop()
+        self.status = "error"
+        self.last_error = message
 
     def stop(self) -> None:
         # The analyser and the tap go first, so a callback still in flight

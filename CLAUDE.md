@@ -1258,6 +1258,39 @@ mechanics these caveats assume.
 
 ### Audio input
 
+- **Windows lists ONE ROW PER HOST API, and the device is chosen BY NAME, so a
+  list that is not deduped has rows that cannot be clicked.** MME, DirectSound
+  and WASAPI each offer the same microphone, and the DirectSound and WASAPI
+  copies carry BYTE-IDENTICAL names - measured on this machine, 16 rows for 8
+  devices. Both lookups take the FIRST name match (the combo in
+  `ui/audio_reactive_window.py`, and `AudioRuntime._start_capture`), so the
+  three WASAPI inputs at the bottom snapped back to their DirectSound twins the
+  moment they were clicked and Start opened the twin at 44100 rather than the
+  device's real 48000. That is what makes a repeated name an unselectable row
+  rather than a cosmetic duplicate, and it reads as a list that is merely
+  glitchy. `dedupe_devices` keeps the best-ranked API's copy - WASAPI first,
+  the only one carrying loopback endpoints and the only one reporting a true
+  sample rate - and KEEPS a device no better-ranked API offers, so the MME-only
+  "Microsoft Sound Mapper - Input" and the DirectSound-only "Primary Sound
+  Capture Driver" both survive. **MME truncates a name to 31 characters**, so
+  its rows are matched as a prefix; the rule is that a name UNDER the limit was
+  never cut and must match in FULL, or two devices that merely start alike fold
+  into one. Name is the identity because indices SHUFFLE - a Bluetooth headset
+  connecting renumbers everything after it - and the name is what every saved
+  rig carries.
+
+- **`(Default)` is a ROW, and a device that has gone is named back rather than
+  replaced.** The old lookup fell through to `index = None`, which is the OS
+  default input, so unplugging the headset a rig names made Start open a
+  different microphone while the combo showed row 0 - a third device again.
+  Both halves of that are now sayable: the default is something the user picks
+  rather than something that happens to them, and an unresolvable name reaches
+  `AudioCapture.fail` instead of a silent substitution, the same discipline as
+  a field layer offering back a shader file it cannot find. Guarded by
+  `tests/test_audio_capture.py::test_no_two_devices_offered_share_a_name`,
+  which reads the REAL device table, and by the pure-function cases beside it,
+  which run anywhere.
+
 - **The window sets FREQUENCY resolution and the HOP sets time resolution, and
   a transient is a hop problem, not a width one.** FFT_SIZE is 2048 and HOP is
   512. Narrowing the window is the obvious fix for a soft transient and it is

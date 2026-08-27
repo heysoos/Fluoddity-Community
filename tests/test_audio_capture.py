@@ -131,3 +131,113 @@ def test_the_channel_count_is_public():
     interleaving; reaching into _channels for that would be luck."""
     cap = _listening_capture(channels=2)
     assert cap.channels == 2
+
+
+# --- one row per device ------------------------------------------------------
+# Windows lists the same microphone under every host API it supports, and two
+# of those copies carry byte-identical names - which a name-keyed selection
+# cannot tell apart. These drive the dedup as a pure function over a table, so
+# they say the same thing on a machine with no sound card.
+
+def _row(index, name, rank, loopback=False):
+    return {"index": index, "name": name, "loopback": loopback,
+            "rate": 48000.0, "api": "", "rank": rank}
+
+
+WASAPI, DSOUND, MME = 0, 2, 3
+
+
+def test_a_device_listed_under_every_host_api_is_offered_once():
+    kept = audio_capture.dedupe_devices([
+        _row(1, "Microphone Array (Intel Smart Sound Technology)", MME),
+        _row(11, "Microphone Array (Intel Smart Sound Technology)", DSOUND),
+        _row(27, "Microphone Array (Intel Smart Sound Technology)", WASAPI),
+    ])
+    assert len(kept) == 1
+    assert kept[0]["index"] == 27, "the WASAPI copy is the one worth keeping"
+
+
+def test_a_name_cut_short_by_mme_names_the_same_device():
+    """MME caps a name at 31 characters, so its row looks like a different
+    device until the truncation is allowed for."""
+    full = "CABLE Output (VB-Audio Virtual Cable)"
+    kept = audio_capture.dedupe_devices([
+        _row(3, full[:31], MME),
+        _row(26, full, WASAPI),
+    ])
+    assert [d["index"] for d in kept] == [26]
+
+
+def test_a_short_name_that_merely_starts_alike_is_a_different_device():
+    """The truncation rule may not pair two devices that only share a prefix:
+    a name under the MME limit was never cut, so it has to match in full."""
+    kept = audio_capture.dedupe_devices([
+        _row(1, "Microphone", MME),
+        _row(27, "Microphone Array (Intel)", WASAPI),
+    ])
+    assert len(kept) == 2
+
+
+def test_a_device_no_better_host_api_offers_is_kept():
+    kept = audio_capture.dedupe_devices([
+        _row(0, "Microsoft Sound Mapper - Input", MME),
+        _row(27, "Microphone Array", WASAPI),
+    ])
+    assert {d["name"] for d in kept} == {"Microsoft Sound Mapper - Input",
+                                         "Microphone Array"}
+
+
+def test_a_loopback_is_never_the_same_device_as_an_input():
+    kept = audio_capture.dedupe_devices([
+        _row(30, "Speakers (Realtek)", WASAPI, loopback=True),
+        _row(22, "Speakers (Realtek)", WASAPI),
+    ])
+    assert len(kept) == 2
+
+
+def test_loopbacks_come_first():
+    """Every saved rig points at one, so they are what the list is for."""
+    kept = audio_capture.dedupe_devices([
+        _row(27, "Microphone Array", WASAPI),
+        _row(30, "Speakers [Loopback]", WASAPI, loopback=True),
+    ])
+    assert [d["loopback"] for d in kept] == [True, False]
+
+
+def test_no_two_devices_offered_share_a_name():
+    """The selection is keyed by name in the combo and again at Start, so a
+    repeated name makes the second row unselectable."""
+    names = [d["name"] for d in audio_capture.list_devices()]
+    assert len(names) == len(set(names)), f"duplicate names: {names}"
+
+
+# --- (Default) as a choice ---------------------------------------------------
+
+def test_the_default_device_is_offered_as_a_row():
+    """Rather than being what nothing-selected happens to fall back to."""
+    choices = audio_capture.device_choices()
+    assert choices[0]["name"] == audio_capture.DEFAULT_DEVICE_NAME
+    assert choices[0]["index"] is None, "no index: resolved when Start is hit"
+
+
+def test_the_default_row_is_offered_even_with_no_devices(monkeypatch):
+    monkeypatch.setattr(audio_capture, "list_devices", lambda: [])
+    assert len(audio_capture.device_choices()) == 1
+
+
+def test_the_real_devices_follow_the_default_row():
+    monkey = [{"index": 7, "name": "Mic", "loopback": False, "rate": 48000.0}]
+    import unittest.mock as m
+    with m.patch.object(audio_capture, "list_devices", lambda: monkey):
+        assert [d["name"] for d in audio_capture.device_choices()] == \
+            [audio_capture.DEFAULT_DEVICE_NAME, "Mic"]
+
+
+# --- a device that has gone --------------------------------------------------
+
+def test_a_capture_can_report_a_device_it_could_not_resolve():
+    """Named back rather than silently replaced, as an unfindable shader is."""
+    cap = audio_capture.AudioCapture()
+    cap.fail("Microphone (K66) is not available.")
+    assert cap.status == "error"
+    assert "K66" in cap.last_error

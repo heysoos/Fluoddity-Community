@@ -65,15 +65,24 @@ class AudioRuntime:
         for uid in [u for u in self._states if u not in live]:
             del self._states[uid]
 
+    def _start_capture(self, ast) -> bool:
+        """Open the chosen device, or name the one that has gone.
+
+        An unplugged device is offered back rather than silently replaced by
+        the OS default, which is a different microphone.
+        """
+        name = ast.device_name or audio_capture.DEFAULT_DEVICE_NAME
+        for d in audio_capture.device_choices():
+            if d["name"] == name:
+                return self.capture.start(d["index"], ast.auto_gain)
+        self.capture.fail(f"{name} is not available. Pick another device, "
+                          f"or {audio_capture.DEFAULT_DEVICE_NAME}.")
+        return False
+
     def _sync_capture(self, ast) -> None:
         if ast.request_start:
             ast.request_start = False
-            index = None
-            for d in audio_capture.list_devices():
-                if d["name"] == ast.device_name:
-                    index = d["index"]
-                    break
-            ast.enabled = self.capture.start(index, ast.auto_gain)
+            ast.enabled = self._start_capture(ast)
         if ast.request_stop:
             ast.request_stop = False
             self.capture.stop()

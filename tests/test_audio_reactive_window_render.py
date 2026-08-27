@@ -705,3 +705,79 @@ def test_a_scoped_band_is_marked_on_the_row(monkeypatch):
     host.state.audio.mappings[0].cohorts[:8] = False
     _draw(imgui, host)
     assert any(s.startswith("B*##") for s in seen), seen
+
+
+# --- the device combo -------------------------------------------------------
+
+def _dev(index, name, loopback=False):
+    return {"index": index, "name": name, "loopback": loopback,
+            "rate": 48000.0, "api": "Windows WASAPI", "rank": 0}
+
+
+def _device_combo(monkeypatch, devices, device_name=""):
+    """-> (selected row, the option list) of the Device combo, in a real frame.
+
+    A combo's options are what the user picks from, and a source-level reading
+    cannot see them - so this drives the widget and records what it was given.
+    """
+    from services import audio_capture
+
+    imgui, host = _host(True)
+    host.state.audio.device_name = device_name
+    monkeypatch.setattr(audio_capture, "is_available", lambda: True)
+    monkeypatch.setattr(audio_capture, "list_devices", lambda: devices)
+
+    seen = {}
+    real = imgui.combo
+
+    def wrapper(label, current, items, *a, **kw):
+        if label.startswith("Device"):
+            seen["row"] = (current, list(items))
+        return real(label, current, items, *a, **kw)
+
+    monkeypatch.setattr(imgui, "combo", wrapper)
+    imgui.new_frame()
+    imgui.begin("host")
+    host._render_audio_source(host.state.audio)
+    imgui.end()
+    imgui.end_frame()
+    imgui.render()
+    return seen.get("row")
+
+
+def test_the_device_combo_offers_the_default_as_a_row(monkeypatch):
+    """Rather than being whatever no-selection happens to fall back to."""
+    from services import audio_capture
+    _current, options = _device_combo(monkeypatch, [_dev(7, "Mic")])
+    assert options[0] == audio_capture.DEFAULT_DEVICE_NAME
+
+
+def test_choosing_nothing_selects_the_default_row(monkeypatch):
+    current, options = _device_combo(monkeypatch, [_dev(7, "Mic")])
+    assert options[current] == "(Default)"
+
+
+def test_a_chosen_device_is_the_row_shown(monkeypatch):
+    current, options = _device_combo(monkeypatch, [_dev(7, "Mic")],
+                                     device_name="Mic")
+    assert "Mic" in options[current]
+
+
+def test_a_device_that_has_gone_is_named_rather_than_replaced(monkeypatch):
+    """Showing an unrelated row makes Start open a different microphone than
+    the one on screen."""
+    current, options = _device_combo(monkeypatch, [_dev(7, "Mic")],
+                                     device_name="Microphone (K66)")
+    assert "K66" in options[current], f"showed {options[current]!r} instead"
+
+
+def test_a_device_that_has_gone_still_leaves_the_others_pickable(monkeypatch):
+    _current, options = _device_combo(monkeypatch, [_dev(7, "Mic")],
+                                      device_name="Microphone (K66)")
+    assert any("Mic" in o for o in options)
+    assert "(Default)" in options
+
+
+def test_the_combo_renders_with_no_devices_at_all(monkeypatch):
+    current, options = _device_combo(monkeypatch, [])
+    assert options == ["(Default)"] and current == 0
