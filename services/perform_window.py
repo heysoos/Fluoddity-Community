@@ -168,17 +168,6 @@ def fit_rect(src_aspect: float, dst_size: tuple[int, int]) -> tuple[int, int, in
     return ((dst_w - w) // 2, (dst_h - h) // 2, w, h)
 
 
-def overlays_hidden(*, performing: bool, recording: bool,
-                    screenshotting: bool) -> bool:
-    """The one home for every reason to hide the on-canvas overlays.
-
-    The sweep reticle and the draw-brush circle are baked into the assembled
-    frame by frame_assembly.frag, so there is no clean copy to hand a projector
-    - perform mode turns them off on both screens instead.
-    """
-    return bool(performing or recording or screenshotting)
-
-
 class PerformWindow:
     """The second window. Closed until opened; a no-op while closed."""
 

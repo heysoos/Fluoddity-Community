@@ -49,13 +49,29 @@ class _FakeWindow:
 
 
 class _App:
-    """A stand-in wearing the real orchestrator methods."""
+    """A stand-in wearing the real orchestrator methods.
+
+    The fixed-viewpoint render is faked rather than built: it needs a GL
+    context and a sim, and what these tests are about is whether it is
+    installed and released in step with the window.
+    """
 
     _drive_perform_window = App._drive_perform_window
 
     def __init__(self, fail=False):
         self.perform_window = _FakeWindow(fail=fail)
         self._perform_requested = None
+        self.perform_view = None
+        self.installed = []          # projector sizes handed to the renderer
+        self.released = 0
+
+    def _install_perform_view(self, monitor):
+        self.perform_view = object()
+        self.installed.append((monitor.width, monitor.height))
+
+    def _release_perform_view(self):
+        self.perform_view = None
+        self.released += 1
 
 
 @pytest.fixture
@@ -73,6 +89,9 @@ def test_enabling_opens_the_window(displays):
     app._drive_perform_window(state)
     assert app.perform_window.opens == ["Projector"]
     assert "Projector" in state.perform.active_monitor
+    # The projector renders its own frame; without this it has nothing to show.
+    assert app.perform_view is not None
+    assert app.installed == [(1920, 1080)]
 
 
 def test_staying_enabled_does_not_reopen_it(displays):
@@ -106,6 +125,8 @@ def test_picking_another_display_moves_the_window(displays):
     app._drive_perform_window(state)
     app._drive_perform_window(state)
     assert app.perform_window.opens == ["Projector", "Laptop"]
+    # And the renderer follows it to the new display's resolution.
+    assert app.installed == [(1920, 1080), (1920, 1080)]
 
 
 def test_disabling_closes_the_window(displays):
@@ -117,6 +138,10 @@ def test_disabling_closes_the_window(displays):
     app._drive_perform_window(state)
     assert app.perform_window.closes == 1
     assert state.perform.active_monitor == ""
+    # The fixed-viewpoint render costs a particle pass per motion-blur sample,
+    # so it must not outlive the window it feeds.
+    assert app.perform_view is None
+    assert app.released == 1
 
 
 def test_staying_disabled_closes_nothing(displays):
@@ -134,6 +159,8 @@ def test_a_failed_open_turns_perform_mode_off_and_says_so(displays):
     app._drive_perform_window(state)
     assert state.perform.enabled is False
     assert "no GL for you" in state.perform.notice
+    # A failed open must not leave a renderer running with nothing to feed.
+    assert app.perform_view is None
     # And it does not retry forever.
     app._drive_perform_window(state)
     assert app.perform_window.opens == ["Projector"]

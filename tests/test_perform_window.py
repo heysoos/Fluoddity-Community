@@ -5,9 +5,7 @@ is the only thing that can open a second window.
 """
 import pytest
 
-from services.perform_window import (
-    MonitorInfo, choose_monitor, fit_rect, overlays_hidden,
-)
+from services.perform_window import MonitorInfo, choose_monitor, fit_rect
 
 
 def _mon(name, w=1920, h=1080, primary=False, x=0, y=0, phys=(380, 210),
@@ -163,22 +161,3 @@ def test_choosing_never_rewrites_what_was_remembered():
     before = remembered
     choose_monitor(mons, remembered)
     assert remembered == before
-
-
-# --- overlays_hidden ------------------------------------------------------
-
-def test_performing_hides_the_on_canvas_overlays():
-    assert overlays_hidden(performing=True, recording=False,
-                           screenshotting=False)
-
-
-def test_the_reasons_already_in_the_app_still_hide_them():
-    assert overlays_hidden(performing=False, recording=True,
-                           screenshotting=False)
-    assert overlays_hidden(performing=False, recording=False,
-                           screenshotting=True)
-
-
-def test_an_ordinary_frame_keeps_them():
-    assert not overlays_hidden(performing=False, recording=False,
-                               screenshotting=False)

@@ -94,9 +94,11 @@ The **Inspector** in the same window draws what the brain actually computes — 
 
 Pick the display from the panel and press **Start**. The chosen one is remembered between sessions, but perform mode itself never resumes on its own — launching the app does not light up a projector.
 
-The second window mirrors this one exactly: the same camera, the same view mode, the same exposure and bloom. It is not squashed to fit — you get your window's rectangle scaled up, with black bars on whichever axis does not match. It accepts no mouse or keyboard of its own and never takes focus, so **F11** always reaches this window even if the display is unplugged and Windows drops the leftover window on top of you.
+**The projector always shows the whole simulation, filling the display, and your camera cannot move it.** Pan and zoom on the laptop as much as you like — the projection does not follow. It gets the same view mode, exposure, bloom and motion blur, rendered at the display's own resolution, and none of the on-screen overlays: no sweep reticle, no brush circle, no interface.
 
-Two things are hidden on **both** screens while performing: the parameter-sweep reticle and the draw-brush circle. Both are painted into the frame itself rather than drawn over it, so there is no clean copy to send without them.
+That costs one extra particle pass per motion-blur sample — the same work the laptop's own view already does — which is why the projector's framing is fixed rather than a second camera you could steer.
+
+It accepts no mouse or keyboard of its own and never takes focus, so **F11** always reaches this window even if the display is unplugged and Windows drops the leftover window on top of you.
 
 ## Inject Texture
 

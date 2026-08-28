@@ -1519,19 +1519,54 @@ mechanics these caveats assume.
 
 ### Perform mode
 
-- **The perform window MIRRORS THE TEXTURE THE CAMERA JUST DREW, never
-  `assembled_texture`.** `Camera.render()` picks between two different
-  textures - the accumulated one while the sim runs, a freshly assembled one
-  while it is PAUSED - so a mirror reading `assembled_texture` freezes on a
-  stale frame every time the sim is paused, which is a normal thing to do
-  mid-show. `Camera.render()` therefore ends by recording a frozen
-  `DisplayFrame` of the texture and the four uniforms it actually sent, and
-  that dataclass is the WHOLE interface: Camera stays unaware perform mode
-  exists. `cam_brush_mode`'s override of `cam_pos`/`cam_zoom` is folded in
-  because the values are captured after it, not before - a second
-  implementation of that override is what a naive mirror needs. Guarded by
-  `tools/drive_perform.py`, which is the only thing that can open a second
-  window.
+- **The projector RENDERS ITS OWN FRAME at a fixed viewpoint; it cannot
+  mirror the laptop's.** The camera is baked into `cam_brush_target` during
+  RASTERISATION - `generate_view_texture` sends `cam_pos`/`cam_zoom` to
+  `cam_brush.vert` - so no display-time transform can undo a zoom, and a
+  mirror puts the laptop's framing in front of the audience. `PerformView`
+  therefore redoes the particle pass with an identity camera at the display's
+  own shape, exactly as `services/capture_view.py` does for the tournament
+  capture, and `_fixed_kwargs` neutralises every camera-dependent assembly
+  kwarg for the same reason `_capture_kwargs` does. `cam_brush.vert` takes
+  `window_size` as a uniform, so one pass fills any shape with the canvas
+  FITTED - no crop rect, no distortion.
+
+- **It is driven from the SAME sample loop as the laptop's view, with the same
+  sample counts.** A projector rendered once per frame would be the screen
+  with the worse picture, which is backwards - so `SimulationRunner` calls it
+  inside both render loops and it accumulates the identical motion blur. That
+  is one extra particle pass per motion-blur SAMPLE, not per frame: measured
+  at 240k particles it is ~1.5 ms a sample, and `blur_quality` 2 at
+  `speedmult` 5 means 3 samples, so **+4.5 ms/frame** at the defaults. It is
+  the same work the laptop's view already does - the projector doubles the
+  render half of the frame - which is why the framing is FIXED rather than a
+  second camera anyone can steer. Re-measure before widening it.
+
+- **The paused path builds its kwargs FRESH.** `run_simulation_frame` does not
+  run while the sim is stopped, so `App._render_perform_view_paused` renders
+  one sample - and reusing `last_assemble_kwargs` there would leave exposure
+  and brightness stale, which are exactly what someone adjusts while paused.
+
+- **A `PerformView` frame is an IDENTITY `DisplayFrame`.** The texture is
+  already at the display's shape and framing, so `fit_rect` is a no-op and the
+  perform window's shader has nothing left to do but blit. `Camera` still
+  records its own `DisplayFrame`; nothing reads it now, and it is what a
+  mirror would need.
+
+- **The on-canvas overlays reach the laptop and never the projector, and that
+  needs no suppression anywhere.** The sweep reticle and the draw-brush circle
+  are baked into the assembled frame by `frame_assembly.frag`, but the
+  projector assembles its OWN frame with those kwargs zeroed - so the laptop
+  keeps both. An earlier mirror-based version hid them on both screens; there
+  is no longer any reason to.
+
+- **A GL test of this cannot use `array_equal`.** Particles splat additively
+  into a shared texture, which races, so two renders of ONE scene differ -
+  measured at 9.7e-05 max on a 320x180 frame, and identical to the difference
+  a moved laptop camera produces, which is to say zero.
+  `tests/test_perform_view_gl.py` measures that race floor in the same run and
+  asserts against it, plus a control proving a real camera move is orders of
+  magnitude larger. A guessed tolerance would pass on a broken build.
 
 - **A second GL context is unavoidable, and `external_texture` is what crosses
   it.** OpenGL shares textures, buffers and programs between contexts created
@@ -1602,16 +1637,6 @@ mechanics these caveats assume.
   records the request at open time. The fallback also never overwrites the
   remembered name, or re-plugging the display you asked for would not resume
   on it. Guarded by `tests/test_perform_wiring.py`.
-
-- **The on-canvas overlays are HIDDEN ON BOTH SCREENS while performing.** The
-  sweep reticle and the draw-brush circle are added additively inside
-  `frame_assembly.frag`'s `final_sample` block, into the same accumulation
-  texture the display path reads - so there is no clean copy to hand a second
-  display without either splitting display from accumulation or assembling
-  twice. `overlays_hidden` is the one home for all three reasons to hide them
-  (performing, recording, screenshotting), and it is applied where the values
-  are DERIVED in `orchestrate_frame`, so the direct assembly call and
-  `SimulationRunner`'s motion-blur one cannot disagree.
 
 - **A keybinding added after a user has run the app reaches nobody.**
   `keyboard_controls.json` is copied from the default ONCE and never updated,

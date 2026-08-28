@@ -586,19 +586,26 @@ projector.
 - [ ] **p1.** Extras > Perform Mode Panel, pick the projector, Start. The
       image appears on it with no ImGui on top, and the laptop is unchanged.
 - [ ] **p2.** F11 toggles it off and on again without the panel open.
-- [ ] **p3.** Pan and zoom on the laptop. The projector follows exactly.
-      Then PAUSE (Space) and pan again - the projector must keep following.
-      A frozen projector while paused means it is mirroring
-      `assembled_texture` rather than the frame the camera drew.
-- [ ] **p4.** Whatever the projector's aspect, the image is never squashed:
-      it is the laptop's rectangle scaled to fit, with black bars on one
-      axis. Resize the main window and the bars move accordingly.
+- [ ] **p3.** Pan and zoom on the laptop. The projector must NOT move: it
+      always shows the whole canvas filling the display. Zoom right in and
+      right out - the projection is unchanged throughout.
+- [ ] **p4.** Whatever the projector's aspect, the image is never squashed
+      or cropped: the whole canvas is fitted, so a square canvas on a 16:9
+      projector has bars left and right. Resize the main window - the
+      projector does not change at all.
 - [ ] **p5.** Press F for parameter sweeps, and switch to Draw Trail (T).
-      Neither the sweep reticle nor the brush circle appears on EITHER
-      screen while performing. Both come back when it is off.
+      Both overlays appear on the laptop and NEITHER reaches the projector.
+- [ ] **p5b.** PAUSE (Space), then change Exposure and Brightness. The
+      projector must follow. A projector that only updates while the sim
+      runs is reusing the last frame's assembly settings.
 - [ ] **p6.** With perform mode on, the sim keeps up: it paces off the
-      projector's refresh rate, not the laptop's. A sim that has halved its
-      speed means both windows are waiting on vsync.
+      projector's refresh rate, not the laptop's. The projector costs one
+      extra particle pass per motion-blur sample, so check the frame rate at
+      YOUR speedmult and blur quality - at Blur Quality 1 with a high
+      speedmult that is the setting where it will show.
+- [ ] **p6b.** Switch to Tiled view while performing. The projector tiles to
+      fill its own screen, from its own viewpoint - not a copy of the
+      laptop's tiling, which would repeat the wrong rectangle.
 - [ ] **p7.** Unplug the projector while performing. The app keeps running.
       The surviving window may land over the laptop screen - F11 must still
       close it, because the perform window never takes keyboard focus.

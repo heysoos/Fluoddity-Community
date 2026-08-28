@@ -18,7 +18,7 @@ from controller_input import ControllerCam, process_controller_input
 from utilities.advanced_drawing import AdvancedDrawingProcessor
 from utilities.field_bus import FieldBus
 from services.perform_window import (
-    PerformWindow, choose_monitor, list_monitors, overlays_hidden)
+    PerformWindow, choose_monitor, list_monitors)
 from state import view_modes
 
 
@@ -119,6 +119,7 @@ class App:
         self.entity_picker = EntityPicker(self.sim.get_entity_buffer(), entity_stride)
         self.video_service = VideoRecorderService()
         self.perform_window = PerformWindow(self.window)
+        self.perform_view = None
         # What was ASKED for when the window opened, which is not what it
         # landed on when that display was absent. See _drive_perform_window.
         self._perform_requested = None
@@ -1084,8 +1085,10 @@ class App:
         """
         if not self.perform_window.is_open:
             return
+        frame = (self.perform_view.frame if self.perform_view is not None
+                 else None)
         try:
-            self.perform_window.draw(self.camera.last_display)
+            self.perform_window.draw(frame)
         except Exception as exc:
             print(f"[perform] stopped: {exc}")
             try:
@@ -1388,11 +1391,7 @@ class App:
         # 5.5. Calculate sweep reticle info
         sweep_reticle_x, sweep_reticle_y, sweep_reticle_visible = self.sim.get_sweep_reticle_position()
 
-        hide_overlays = overlays_hidden(
-            performing=ui_state.perform.enabled,
-            recording=is_recording,
-            screenshotting=self.screenshot_in_progress)
-        if hide_overlays:
+        if is_recording or self.screenshot_in_progress:
             sweep_reticle_visible = False
 
         width, height = glfw.get_framebuffer_size(self.window)
@@ -1431,8 +1430,13 @@ class App:
 
         # 7. Render camera view
         self._render_camera_view(ui_state, sweep_mode, sweep_reticle_pos,
-                                  sweep_reticle_visible, screen_aspect, tiling_mode,
-                                  hide_overlays=hide_overlays)
+                                  sweep_reticle_visible, screen_aspect, tiling_mode)
+
+        # 7.2. The projector's own frame while the sim is paused; the sample
+        # loop covers it while the sim runs.
+        self._render_perform_view_paused(
+            ui_state, sweep_mode, sweep_reticle_pos, sweep_reticle_visible,
+            screen_aspect, tiling_mode)
 
         # 7.5. Render arrow debug overlay if enabled
         if ui_state.preferences.debug_arrows:
@@ -1502,6 +1506,7 @@ class App:
                 else:
                     self._perform_requested = prefs.perform_monitor
                     perform.notice = notice
+                    self._install_perform_view(monitor)
                     # Remember only a display the user picked, never a
                     # fallback: re-plugging theirs must resume on it.
                     if not prefs.perform_monitor:
@@ -1510,15 +1515,63 @@ class App:
         elif not want and self.perform_window.is_open:
             self.perform_window.close()
             self._perform_requested = None
+            self._release_perform_view()
 
         perform.active_monitor = self.perform_window.monitor_label
 
+    def _install_perform_view(self, monitor) -> None:
+        """The projector renders its OWN frame, at a fixed viewpoint.
+
+        It cannot mirror the laptop's picture: the camera is baked into
+        cam_brush_target during rasterisation, so a display-time transform
+        cannot undo a zoom. See services/perform_view.py.
+        """
+        from services.perform_view import PerformView
+
+        if self.perform_view is None:
+            self.perform_view = PerformView(self.ctx, self.sim, self.camera)
+        self.sim_runner.perform_size = (monitor.width, monitor.height)
+        self.sim_runner.perform_view = self.perform_view
+
+    def _release_perform_view(self) -> None:
+        self.sim_runner.perform_view = None
+        if self.perform_view is not None:
+            self.perform_view.cleanup()
+            self.perform_view = None
+
+    def _render_perform_view_paused(self, ui_state, sweep_mode,
+                                    sweep_reticle_pos, sweep_reticle_visible,
+                                    screen_aspect, tiling_mode) -> None:
+        """Keep the projector live while the sim is paused.
+
+        run_simulation_frame does not run when the sim is stopped, so without
+        this the projector holds the frame from before the pause while the
+        laptop keeps repainting - and pausing to re-frame or re-light is a
+        normal thing to do mid-show. One sample, which is all a still frame
+        has.
+
+        The kwargs are built FRESH rather than reusing the last running
+        frame's: exposure, brightness and the rest are exactly what someone
+        adjusts while paused, and a stale dict updates the laptop and not the
+        projector.
+        """
+        if self.perform_view is None or ui_state.sim.going:
+            return
+        width, height = glfw.get_framebuffer_size(self.window)
+        mouse = ((ui_state.mouse_pos[0] / width) if width > 0 else 0.5,
+                 (ui_state.mouse_pos[1] / height) if height > 0 else 0.5)
+        view_min, view_max = self.sim_runner._compute_view_bounds(
+            tiling_mode, screen_aspect)
+        kwargs = self.sim_runner._build_assemble_kwargs(
+            ui_state, sweep_mode, sweep_reticle_pos, sweep_reticle_visible,
+            screen_aspect, mouse, tiling_mode, view_min, view_max)
+        self.perform_view.render(ui_state, kwargs, self.sim_runner.perform_size,
+                                 1, 0)
+
     def _render_camera_view(self, ui_state, sweep_mode, sweep_reticle_pos,
-                             sweep_reticle_visible, screen_aspect, tiling_mode,
-                             hide_overlays=False):
+                             sweep_reticle_visible, screen_aspect, tiling_mode):
         """Render the camera view to screen."""
-        draw_trail_mode = (ui_state.preferences.mouse_mode == "Draw Trail"
-                           and not hide_overlays)
+        draw_trail_mode = ui_state.preferences.mouse_mode == "Draw Trail"
 
         width, height = glfw.get_framebuffer_size(self.window)
         mouse_x_norm = ui_state.mouse_pos[0] / width if width > 0 else 0.5
@@ -1831,6 +1884,7 @@ class App:
         self._step("video", self.video_service.cleanup)
         self._step("ui", self.ui.cleanup)
         self._step("perform", lambda: self.perform_window.close())
+        self._step("perform view", lambda: self._release_perform_view())
         self._step("glfw", glfw.terminate)
 
 

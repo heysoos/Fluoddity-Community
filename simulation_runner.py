@@ -29,6 +29,13 @@ class SimulationRunner:
         # Mouse tracking for draw trail mode
         self.prev_mouse_tex_coords = (0.0, 0.0)
 
+        # Perform mode's fixed-viewpoint render, installed by the orchestrator
+        # while a second display is open and None otherwise. Driven from the
+        # same sample loop as the camera's own view so the two get identical
+        # motion blur.
+        self.perform_view = None
+        self.perform_size = (0, 0)
+
     def run_simulation_frame(self, ui_state, sweep_mode, sweep_reticle_pos,
                               sweep_reticle_visible, screen_aspect,
                               watercolor_mode=False, tiling_mode=False,
@@ -417,6 +424,10 @@ class SimulationRunner:
                 current_sample_index=render_sample_index,
                 **assemble_kwargs
             )
+            if self.perform_view is not None:
+                self.perform_view.render(
+                    ui_state, assemble_kwargs, self.perform_size,
+                    total_render_samples, render_sample_index)
             render_sample_index += 1
 
             self._process_assembled_frame(assembled_tex, ui_state)
@@ -439,5 +450,8 @@ class SimulationRunner:
             current_sample_index=0,
             **assemble_kwargs
         )
+        if self.perform_view is not None:
+            self.perform_view.render(ui_state, assemble_kwargs,
+                                     self.perform_size, 1, 0)
 
         self._process_assembled_frame(assembled_tex, ui_state)

@@ -27,6 +27,56 @@ class DisplayFrame:
     window_size: tuple
 
 
+def tiling_view_bounds(window_size, tex_size, position, zoom):
+    """Entity-space rectangle visible in a window of `window_size`.
+
+    Inverts the cam_brush vertex shader transform, accounting for both canvas
+    and window aspect. Free of any camera instance so a FIXED viewpoint - the
+    perform view's - can ask the same question without a second copy of the
+    arithmetic.
+    """
+    import math
+    width, height = window_size
+    window_aspect = width / max(height, 1)
+    tex_w, tex_h = tex_size
+    tex_aspect = tex_w / max(tex_h, 1)
+    x_edge = math.sqrt(tex_aspect)
+    y_edge = 1.0 / math.sqrt(tex_aspect)
+
+    if tex_aspect > window_aspect:
+        scale_x = 1.0 / zoom
+        scale_y = window_aspect / (tex_aspect * zoom)
+    else:
+        scale_x = tex_aspect / (window_aspect * zoom)
+        scale_y = 1.0 / zoom
+
+    cx, cy = position[0], position[1]
+    view_min = np.array([
+        (-1.0 + cx / zoom) * x_edge / scale_x,
+        (-1.0 - cy / zoom) * y_edge / scale_y,
+    ])
+    view_max = np.array([
+        (1.0 + cx / zoom) * x_edge / scale_x,
+        (1.0 - cy / zoom) * y_edge / scale_y,
+    ])
+    return view_min, view_max
+
+
+def tiling_scale(window_size, tex_size):
+    """Converts frame_assembly world_pos to entity space. Zoom cancels out."""
+    import math
+    tex_w, tex_h = tex_size
+    tex_aspect = tex_w / max(tex_h, 1)
+    width, height = window_size
+    window_aspect = max(width, 1) / max(height, 1)
+    x_edge = math.sqrt(tex_aspect)
+    y_edge = 1.0 / math.sqrt(tex_aspect)
+
+    if tex_aspect > window_aspect:
+        return (x_edge, y_edge * tex_aspect / window_aspect)
+    return (x_edge * window_aspect / tex_aspect, y_edge)
+
+
 class Camera:
     def __init__(self, ctx, sim, window):
         self.ctx = ctx
@@ -160,58 +210,15 @@ class Camera:
         self.cam_brush_mode = state.cam_brush_mode
 
     def compute_tiling_view_bounds(self):
-        """Compute entity-space view bounds for tiling mode.
-
-        Inverts the cam_brush vertex shader transform to find the rectangle
-        of entity positions visible on screen. Accounts for both canvas and
-        window aspect ratios with area-preserving entity space bounds.
-        """
-        import math
-        width, height = glfw.get_framebuffer_size(self.window)
-        window_aspect = width / max(height, 1)
-        tex_w, tex_h = self.sim.view_tex.size
-        tex_aspect = tex_w / max(tex_h, 1)
-        x_edge = math.sqrt(tex_aspect)
-        y_edge = 1.0 / math.sqrt(tex_aspect)
-
-        if tex_aspect > window_aspect:
-            scale_x = 1.0 / self.zoom
-            scale_y = window_aspect / (tex_aspect * self.zoom)
-        else:
-            scale_x = tex_aspect / (window_aspect * self.zoom)
-            scale_y = 1.0 / self.zoom
-
-        cx, cy = self.position[0], self.position[1]
-        view_min = np.array([
-            (-1.0 + cx / self.zoom) * x_edge / scale_x,
-            (-1.0 - cy / self.zoom) * y_edge / scale_y,
-        ])
-        view_max = np.array([
-            (1.0 + cx / self.zoom) * x_edge / scale_x,
-            (1.0 - cy / self.zoom) * y_edge / scale_y,
-        ])
-        return view_min, view_max
+        """This camera's entity-space view bounds. See tiling_view_bounds."""
+        return tiling_view_bounds(
+            glfw.get_framebuffer_size(self.window), self.sim.view_tex.size,
+            self.position, self.zoom)
 
     def compute_tiling_scale(self):
-        """Compute tiling_scale that converts frame_assembly world_pos to entity space.
-
-        tiling_scale = (x_edge, y_edge) / (scale * zoom) where scale is the
-        letterbox scaling factor from the vertex shader.
-        """
-        import math
-        tex_w, tex_h = self.sim.view_tex.size
-        tex_aspect = tex_w / max(tex_h, 1)
-        width, height = glfw.get_framebuffer_size(self.window)
-        window_aspect = max(width,1) / max(height, 1)
-        x_edge = math.sqrt(tex_aspect)
-        y_edge = 1.0 / math.sqrt(tex_aspect)
-
-        if tex_aspect > window_aspect:
-            # scale * zoom = (1, window_aspect / tex_aspect)
-            return (x_edge, y_edge * tex_aspect / window_aspect)
-        else:
-            # scale * zoom = (tex_aspect / window_aspect, 1)
-            return (x_edge * window_aspect / tex_aspect, y_edge)
+        """This camera's tiling scale. See tiling_scale."""
+        return tiling_scale(glfw.get_framebuffer_size(self.window),
+                            self.sim.view_tex.size)
 
     def apply_bloom(self, texture, threshold, intensity, radius,
                     tonemap_softness=3.0):
