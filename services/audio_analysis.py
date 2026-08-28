@@ -85,6 +85,18 @@ BAND_NAMES: tuple[str, ...] = ("bass", "mid", "presence", "hi")
 # so `volume`'s floor slider moves the gate with it.
 CENTROID_GATE = 0.25
 
+# Nothing reports on anything above this: `hi` tops out at 20 kHz, the mel
+# display at 16 kHz, the centroid's window at 8 kHz. Content above it is
+# therefore never a measurement, only a contaminant - and a real USB mic put
+# 92.5% of its energy at 22-24 kHz, which is ADC noise shaping and inaudible.
+# `volume` is a time-domain RMS over the whole block and `centroid` an
+# energy-weighted mean over the whole spectrum, so both read that noise
+# instead of the music: a silent room gave volume 0.32 - above the gate, so
+# the centroid was never held - and a centroid pinned at 1.000 that then
+# tracked LEVEL rather than brightness. Devices without such a shelf carry
+# no energy up here at all, so removing it changes nothing for them.
+ANALYSIS_CEILING_HZ = 20000.0
+
 # The DISPLAY spectrum's own smoothing. Not the band release below: the bars
 # are there to be read, and an unsmoothed spectrum vibrates.
 DISPLAY_SMOOTHING_SECONDS = 0.075
@@ -348,6 +360,11 @@ class Analyzer:
         self._freqs = np.fft.rfftfreq(fft_size,
                                       d=1.0 / self.sample_rate).astype(
                                           np.float32)
+        # None when this device's Nyquist is already at or below the ceiling,
+        # which makes the whole filter a no-op worth skipping.
+        self._above_ceiling = (self._freqs >= ANALYSIS_CEILING_HZ
+                               if self.sample_rate / 2.0 > ANALYSIS_CEILING_HZ
+                               else None)
         # None until a second block arrives: the first one has nothing to be
         # new against, and calling all of it new would fire every flux mapping
         # the moment capture starts.
@@ -407,6 +424,12 @@ class Analyzer:
         b = np.asarray(block, dtype=np.float32)
         if b.size != self.fft_size:
             b = np.resize(b, self.fft_size)
+        # Band-limit ONCE, before anything is measured, so the level and the
+        # spectrum agree about what the signal is. See ANALYSIS_CEILING_HZ.
+        if self._above_ceiling is not None:
+            spec = np.fft.rfft(b)
+            spec[self._above_ceiling] = 0.0
+            b = np.fft.irfft(spec, n=self.fft_size).astype(np.float32)
         mag = np.abs(np.fft.rfft(b * self._window)).astype(np.float32)
 
         db = 20.0 * np.log10(np.maximum(mag, _MAG_FLOOR)).astype(np.float32)

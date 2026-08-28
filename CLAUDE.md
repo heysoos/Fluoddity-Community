@@ -1350,6 +1350,34 @@ mechanics these caveats assume.
   because every percussive setting is under a second and would otherwise share
   the first pixel.
 
+- **The analysed block is BAND-LIMITED to 20 kHz before anything is measured,
+  because a microphone's ultrasonic noise is not a signal.** Measured on a real
+  USB mic (`Microphone (USBAudio2.0)`): **92.5% of its total energy sat in
+  22-24 kHz**, which is ADC noise shaping - inaudible, and above everything the
+  app reports on (`hi` tops at 20 kHz, the mel display at 16 kHz, the
+  centroid's window at 8 kHz). Two signals integrated it anyway: `volume` is a
+  time-domain RMS over the whole block and `centroid` an energy-weighted mean
+  over the whole spectrum. So a SILENT ROOM read `volume` **0.32** and
+  `centroid` **1.000**, and neither moved for anything played in - which is
+  what "the signals are stuck" looks like. Two things made it worse than a
+  wrong number. 0.32 is above `CENTROID_GATE`, so the hold that exists for
+  exactly this case never engaged; and with music present the centroid then
+  tracked LEVEL rather than brightness - 0.999, 0.638, 0.466 for one 1 kHz
+  tone at -40, -30, -20 dBFS, which is the tone against the noise. After the
+  cut it reads 0.436 at all three, and the room rests at 0.000.
+  `ANALYSIS_CEILING_HZ` is 20000 - the top of `hi`, so `hi`'s own bins are
+  untouched - and the filter is SKIPPED where Nyquist is already below it.
+  It is a NO-OP for a healthy device: the machine's two other inputs carried
+  0.0% of their energy above 16 kHz, and
+  `python -m tools.measure_audio_response` is unchanged. Cost is 0.039 ms a
+  block, 0.4% of a hop. Guarded by `tests/test_audio_ultrasonic.py`, whose
+  synthetic profile reproduces the measured device to within 0.01.
+  **The low end is deliberately NOT cut to match.** A second USB mic on the
+  same machine put 61% of its energy in the DC bin, which inflates `volume`
+  the same way - but its signals MOVE, so nothing is broken there, and
+  `bass` starts at 20 Hz and legitimately carries content. Do not add a
+  high-pass without a defect to point at.
+
 - **The band smoother is ASYMMETRIC, and the rise is not smoothed at all.** The
   two directions solve different problems: falling slowly is what stops a
   steady note drawing a fuzzy hash, while rising slowly only costs the
