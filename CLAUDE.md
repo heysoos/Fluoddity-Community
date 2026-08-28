@@ -1564,6 +1564,29 @@ mechanics these caveats assume.
   closes the window and turns perform mode off with a notice. Same discipline
   as `RecordingAudio.finish()` never taking the recording down with it.
 
+- **A MONITOR'S NAME IS NOT ITS IDENTITY, and on Windows two displays
+  routinely share one.** Measured with a laptop panel and a projector
+  attached: GLFW reports BOTH as `Generic PnP Monitor`, byte-identical, so a
+  list keyed by name has a second row that snaps back onto the first the
+  moment it is clicked and a Start that opens the wrong display - the same
+  defect as the audio device list, and it reads as the projector not being
+  detected at all. `MonitorInfo.key` is `name|WxH|physWxphysH|x,y` and is what
+  `perform_monitor` stores; `device_key` drops the POSITION, so rearranging
+  displays in Windows does not make a remembered one unrecognisable.
+  `choose_monitor` matches in three passes, loosest last - exact key, device,
+  then bare name, which is what a preference written before displays had a key
+  holds. The relaxed pass must compare the remembered key's own device part
+  (`rsplit("|", 1)[0]`) against `device_key`: comparing a stored FULL key
+  against a candidate's device key never matches and silently skips the pass.
+  The LABEL carries a `#n` suffix whenever a name repeats, plus the position,
+  because two rows reading the same thing is a row nobody can choose.
+
+- **A GLFW monitor handle is a ctypes pointer, and `==` on two of them is
+  False AT THE SAME ADDRESS.** `handle == glfw.get_primary_monitor()` therefore
+  made `is_primary` False for every display, which silently disabled the
+  "prefer a non-primary display" fallback. `_same_handle` compares
+  `ctypes.addressof(x.contents)`. Nothing raises; the flag is just wrong.
+
 - **The perform window NEVER TAKES KEYBOARD FOCUS, and everything about
   unplugging rests on that.** It is borderless, fills the monitor and accepts
   no input, so when a display vanishes and Windows drops the surviving window

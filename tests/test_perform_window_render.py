@@ -64,15 +64,17 @@ class Harness(PerformWindowMixin):
         self.keybindings = _Keys()
 
 
-def _mon(name, primary=False):
+def _mon(name, primary=False, x=0, phys=(380, 210), dup=0):
     return MonitorInfo(name=name, width=1920, height=1080, refresh=60,
-                       x=0, y=0, is_primary=primary)
+                       x=x, y=0, is_primary=primary, phys_mm=phys,
+                       dup_index=dup)
 
 
 @pytest.fixture
 def two_displays(monkeypatch):
     monkeypatch.setattr("ui.perform_window.list_monitors",
-                        lambda: [_mon("Laptop", primary=True), _mon("Projector")])
+                        lambda: [_mon("Laptop", primary=True),
+                                 _mon("Projector", x=1920)])
 
 
 def test_the_panel_draws(gui, two_displays):

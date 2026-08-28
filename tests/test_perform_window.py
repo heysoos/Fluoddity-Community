@@ -10,9 +10,11 @@ from services.perform_window import (
 )
 
 
-def _mon(name, w=1920, h=1080, primary=False, x=0, y=0):
+def _mon(name, w=1920, h=1080, primary=False, x=0, y=0, phys=(380, 210),
+         dup=0):
     return MonitorInfo(name=name, width=w, height=h, refresh=60,
-                       x=x, y=y, is_primary=primary)
+                       x=x, y=y, is_primary=primary, phys_mm=phys,
+                       dup_index=dup)
 
 
 # --- fit_rect -------------------------------------------------------------
@@ -60,28 +62,81 @@ def test_a_degenerate_source_aspect_does_not_divide_by_zero():
 # --- choose_monitor -------------------------------------------------------
 
 def test_the_remembered_display_wins_when_it_is_connected():
-    mons = [_mon("Laptop", primary=True), _mon("Projector")]
-    chosen, notice = choose_monitor(mons, "Projector")
+    mons = [_mon("Laptop", primary=True), _mon("Projector", x=1920)]
+    chosen, notice = choose_monitor(mons, mons[1].key)
     assert chosen.name == "Projector"
     assert notice == ""
 
 
+# --- two displays Windows reports under ONE name -------------------------
+
+def _generic_pair():
+    """A laptop panel and a projector, byte-identical names.
+
+    Measured on a real machine: Windows reports both as "Generic PnP
+    Monitor". A name is therefore not an identity, and keying on one makes
+    the second row unselectable.
+    """
+    return [
+        _mon("Generic PnP Monitor", primary=True, x=0,
+             phys=(382, 215), dup=1),
+        _mon("Generic PnP Monitor", x=1920, phys=(508, 286), dup=2),
+    ]
+
+
+def test_two_displays_sharing_a_name_are_told_apart():
+    a, b = _generic_pair()
+    assert a.key != b.key
+    assert a.device_key != b.device_key
+
+
+def test_the_second_of_two_identically_named_displays_is_selectable():
+    """The whole complaint: picking the projector must not snap to the laptop."""
+    mons = _generic_pair()
+    chosen, notice = choose_monitor(mons, mons[1].key)
+    assert chosen is mons[1]
+    assert notice == ""
+
+
+def test_no_two_displays_offered_share_a_label():
+    """Two rows reading the same thing is a row that cannot be chosen."""
+    labels = [m.label() for m in _generic_pair()]
+    assert len(set(labels)) == len(labels)
+
+
+def test_a_remembered_display_survives_being_rearranged():
+    """Moving a display in Windows changes its position, not its identity."""
+    a, b = _generic_pair()
+    moved = _mon(b.name, x=-1920, phys=b.phys_mm, dup=2)
+    chosen, notice = choose_monitor([a, moved], b.key)
+    assert chosen is moved
+    assert notice == ""
+
+
+def test_a_preference_holding_a_bare_name_still_resolves():
+    """Every perform_monitor written before displays had a key holds a name."""
+    mons = _generic_pair()
+    chosen, notice = choose_monitor(mons, "Generic PnP Monitor")
+    assert chosen is mons[0]
+    assert notice == ""
+
+
 def test_an_absent_remembered_display_falls_back_to_the_first_secondary():
-    mons = [_mon("Laptop", primary=True), _mon("TV")]
-    chosen, notice = choose_monitor(mons, "Projector")
+    mons = [_mon("Laptop", primary=True), _mon("TV", x=1920)]
+    chosen, notice = choose_monitor(mons, "a display from last week")
     assert chosen.name == "TV"
-    assert "Projector" in notice
+    assert notice
 
 
 def test_an_absent_remembered_display_falls_back_to_the_primary_alone():
     mons = [_mon("Laptop", primary=True)]
-    chosen, notice = choose_monitor(mons, "Projector")
+    chosen, notice = choose_monitor(mons, "a display from last week")
     assert chosen.name == "Laptop"
-    assert "Projector" in notice
+    assert notice
 
 
 def test_nothing_remembered_prefers_a_secondary_over_the_primary():
-    mons = [_mon("Laptop", primary=True), _mon("Projector")]
+    mons = [_mon("Laptop", primary=True), _mon("Projector", x=1920)]
     chosen, notice = choose_monitor(mons, "")
     assert chosen.name == "Projector"
     assert notice == ""
@@ -96,7 +151,7 @@ def test_a_single_display_is_allowed_and_says_so():
 
 
 def test_no_displays_at_all_chooses_nothing():
-    chosen, notice = choose_monitor([], "Projector")
+    chosen, notice = choose_monitor([], "anything")
     assert chosen is None
     assert notice
 
@@ -104,9 +159,10 @@ def test_no_displays_at_all_chooses_nothing():
 def test_choosing_never_rewrites_what_was_remembered():
     """Re-plugging the display and toggling again must resume on it."""
     mons = [_mon("Laptop", primary=True)]
-    remembered = "Projector"
+    remembered = _mon("Projector", x=1920).key
+    before = remembered
     choose_monitor(mons, remembered)
-    assert remembered == "Projector"
+    assert remembered == before
 
 
 # --- overlays_hidden ------------------------------------------------------

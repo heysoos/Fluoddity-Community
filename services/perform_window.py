@@ -8,6 +8,7 @@ frame through `external_texture`.
 """
 from __future__ import annotations
 
+import ctypes
 from dataclasses import dataclass
 
 import glfw
@@ -18,7 +19,14 @@ from utilities.gl_helpers import read_shader, tryset
 
 @dataclass(frozen=True)
 class MonitorInfo:
-    """One connected display, as GLFW reports it."""
+    """One connected display, as GLFW reports it.
+
+    A NAME IS NOT AN IDENTITY. Windows reports displays attached to some
+    drivers as "Generic PnP Monitor" - byte-identical for a laptop panel and a
+    projector both - so a list keyed by name has rows that snap back to the
+    first match the moment they are clicked, and Start opens the wrong
+    display. `key` is the identity; `name` is only ever shown.
+    """
 
     name: str
     width: int
@@ -27,17 +35,51 @@ class MonitorInfo:
     x: int
     y: int
     is_primary: bool
+    phys_mm: tuple = (0, 0)
+    dup_index: int = 0        # 0 unless another display shares this name
     handle: object = None
 
+    @property
+    def key(self) -> str:
+        """What a preference stores. Never shown to anyone."""
+        pw, ph = self.phys_mm
+        return (f"{self.name}|{self.width}x{self.height}"
+                f"|{pw}x{ph}|{self.x},{self.y}")
+
+    @property
+    def device_key(self) -> str:
+        """The DEVICE, without where it currently sits.
+
+        Rearranging displays in Windows moves every position, which must not
+        make a remembered display unrecognisable.
+        """
+        pw, ph = self.phys_mm
+        return f"{self.name}|{self.width}x{self.height}|{pw}x{ph}"
+
     def label(self) -> str:
-        primary = " (primary)" if self.is_primary else ""
-        return f"{self.name} - {self.width}x{self.height} @ {self.refresh}Hz{primary}"
+        """A row a person can tell from the one above it.
+
+        The suffix is what separates two identically named displays; the
+        position is what maps them onto the arrangement Windows itself shows.
+        """
+        dup = f" #{self.dup_index}" if self.dup_index else ""
+        where = "primary" if self.is_primary else f"at {self.x},{self.y}"
+        return (f"{self.name}{dup} - {self.width}x{self.height} "
+                f"@ {self.refresh}Hz ({where})")
+
+
+def _same_handle(a, b) -> bool:
+    """GLFW handles are ctypes pointers: `==` is False even at one address."""
+    try:
+        return ctypes.addressof(a.contents) == ctypes.addressof(b.contents)
+    except Exception:
+        return a is b
 
 
 def list_monitors() -> list[MonitorInfo]:
     """Every connected display. Enumerated fresh, so plugging one in works."""
     primary = glfw.get_primary_monitor()
-    out = []
+    raw = []
     for handle in glfw.get_monitors() or []:
         mode = glfw.get_video_mode(handle)
         if mode is None:
@@ -46,15 +88,29 @@ def list_monitors() -> list[MonitorInfo]:
         if isinstance(name, bytes):
             name = name.decode("utf-8", "replace")
         x, y = glfw.get_monitor_pos(handle)
-        out.append(MonitorInfo(
-            name=name,
-            width=mode.size.width,
-            height=mode.size.height,
-            refresh=mode.refresh_rate,
-            x=x, y=y,
-            is_primary=bool(handle == primary),
+        try:
+            phys = tuple(glfw.get_monitor_physical_size(handle))
+        except Exception:
+            phys = (0, 0)
+        raw.append(dict(
+            name=name, width=mode.size.width, height=mode.size.height,
+            refresh=mode.refresh_rate, x=x, y=y, phys_mm=phys,
+            is_primary=bool(primary is not None
+                            and _same_handle(handle, primary)),
             handle=handle,
         ))
+
+    counts = {}
+    for r in raw:
+        counts[r["name"]] = counts.get(r["name"], 0) + 1
+    seen = {}
+    out = []
+    for r in raw:
+        dup = 0
+        if counts[r["name"]] > 1:
+            seen[r["name"]] = seen.get(r["name"], 0) + 1
+            dup = seen[r["name"]]
+        out.append(MonitorInfo(dup_index=dup, **r))
     return out
 
 
@@ -62,20 +118,33 @@ def choose_monitor(monitors: list[MonitorInfo],
                    remembered: str) -> tuple[MonitorInfo | None, str]:
     """Pick where to perform, and say so when it is not what was asked for.
 
-    Falls back to the first non-primary display, then to the primary. The
-    remembered name is never rewritten here, so re-plugging that display and
-    toggling again resumes on it.
+    Matched in three passes, loosest last: the exact key, then the DEVICE
+    (which survives rearranging the displays), then the bare name - which is
+    what a preference written before displays had a key holds, so an existing
+    setup keeps working. Falls back to the first non-primary display, then to
+    the primary. `remembered` is never rewritten here, so re-plugging the
+    display that was asked for resumes on it.
     """
     if not monitors:
         return None, "No displays reported by GLFW."
-    for m in monitors:
-        if m.name == remembered:
-            return m, ""
+    if remembered:
+        # A key's last field is the position, so dropping it is the same
+        # display somewhere else. Comparing a stored FULL key against a
+        # candidate's device key never matches and silently skips this pass.
+        device = remembered.rsplit("|", 1)[0]
+        for match in (lambda m: m.key == remembered,
+                      lambda m: m.device_key == device,
+                      lambda m: m.name == remembered):
+            found = [m for m in monitors if match(m)]
+            if found:
+                return found[0], ""
     secondary = [m for m in monitors if not m.is_primary]
     if remembered and secondary:
-        return secondary[0], f"'{remembered}' is not connected - using {secondary[0].name}."
+        return secondary[0], (f"That display is not connected - using "
+                              f"{secondary[0].label()}.")
     if remembered:
-        return monitors[0], f"'{remembered}' is not connected - using the primary display."
+        return monitors[0], ("That display is not connected - using the "
+                             "primary one.")
     if secondary:
         return secondary[0], ""
     return monitors[0], "Only one display is connected - performing on it."
@@ -123,7 +192,8 @@ class PerformWindow:
         self._ibo = None
         self._external = None
         self._external_key = None
-        self.monitor_name = ""
+        self.monitor_key = ""
+        self.monitor_label = ""
 
     @property
     def is_open(self) -> bool:
@@ -156,11 +226,12 @@ class PerformWindow:
         try:
             glfw.set_window_pos(window, monitor.x, monitor.y)
             glfw.make_context_current(window)
-            glfw.swap_interval(1)          # the show is the thing that must not tear
+            glfw.swap_interval(1)          # the show must not tear
             self._ctx = moderngl.create_context()
             self._build_program()
             self._window = window
-            self.monitor_name = monitor.name
+            self.monitor_key = monitor.key
+            self.monitor_label = monitor.label()
         except Exception:
             # Leave nothing half-built: a failed open must not strand a window.
             glfw.make_context_current(self._main_window)
@@ -262,7 +333,8 @@ class PerformWindow:
     def close(self) -> None:
         """Idempotent. Restores vsync on the main window."""
         window, self._window = self._window, None
-        self.monitor_name = ""
+        self.monitor_key = ""
+        self.monitor_label = ""
         if window is None:
             return
         glfw.make_context_current(window)

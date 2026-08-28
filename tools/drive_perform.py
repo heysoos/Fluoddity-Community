@@ -8,7 +8,7 @@ It deliberately does NOT boot the real App: an App-based driver writes the
 user's audio_rig.json and preferences.config on exit.
 
     python -m tools.drive_perform
-    python -m tools.drive_perform --monitor "Generic PnP Monitor" --seconds 5
+    python -m tools.drive_perform --monitor 1 --seconds 5
 """
 from __future__ import annotations
 
@@ -89,7 +89,8 @@ def _inspect(img, expect_src_aspect, fb_size, drawn_rect) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--monitor", default="", help="display name to perform on")
+    ap.add_argument("--monitor", default="",
+                    help="display key, name, or list index to perform on")
     ap.add_argument("--seconds", type=float, default=2.0,
                     help="how long to hold each phase on screen")
     args = ap.parse_args(argv)
@@ -109,14 +110,17 @@ def main(argv=None) -> int:
     monitors = list_monitors()
     for m in monitors:
         print(f"  {m.label()}  at ({m.x}, {m.y})")
-    monitor, notice = choose_monitor(monitors, args.monitor)
+    want = args.monitor
+    if want.isdigit() and int(want) < len(monitors):
+        want = monitors[int(want)].key
+    monitor, notice = choose_monitor(monitors, want)
     if monitor is None:
         print(notice)
         glfw.terminate()
         return 1
     if notice:
         print(notice)
-    print(f"performing on: {monitor.name}")
+    print(f"performing on: {monitor.label()}")
 
     failures = []
     pw = PerformWindow(main_window)

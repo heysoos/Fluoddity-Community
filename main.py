@@ -1505,13 +1505,13 @@ class App:
                     # Remember only a display the user picked, never a
                     # fallback: re-plugging theirs must resume on it.
                     if not prefs.perform_monitor:
-                        prefs.perform_monitor = monitor.name
-                        self._perform_requested = monitor.name
+                        prefs.perform_monitor = monitor.key
+                        self._perform_requested = monitor.key
         elif not want and self.perform_window.is_open:
             self.perform_window.close()
             self._perform_requested = None
 
-        perform.active_monitor = self.perform_window.monitor_name
+        perform.active_monitor = self.perform_window.monitor_label
 
     def _render_camera_view(self, ui_state, sweep_mode, sweep_reticle_pos,
                              sweep_reticle_visible, screen_aspect, tiling_mode,

@@ -161,6 +161,17 @@ above.
 **Extras > Perform Mode Panel** — a checkbox writing
 `preferences.show_perform_window`, alongside Config Clipboard and the rest.
 
+**A display is identified by a KEY, never by its name.** Found while testing
+against a real projector: Windows reports a laptop panel and a projector under
+one byte-identical name, `Generic PnP Monitor`. Keying on the name makes the
+second row snap back onto the first the instant it is clicked, and Start opens
+the wrong display — the same defect the audio device list already carries a
+caveat about. `MonitorInfo.key` is `name|WxH|physWxphysH|x,y`;
+`device_key` drops the position so rearranging displays does not lose the
+memory; `choose_monitor` matches exact key, then device, then bare name, the
+last of which is what a preference written before this holds. Labels carry a
+`#n` suffix whenever a name repeats, plus the position.
+
 **The panel** (`ui/perform_window.py`, `PerformWindowMixin`) holds:
 
 - A monitor combo, enumerated fresh each frame from `glfw.get_monitors()` so
@@ -230,8 +241,11 @@ including the archive flush.
 
 - `fit_rect` at wider, taller and exactly-matching aspects, asserting the
   matched case is an identity with no rounding bar.
-- Monitor selection: remembered name present, remembered name absent with a
-  secondary available, remembered name absent with only a primary.
+- Monitor selection: remembered display present, absent with a secondary
+  available, absent with only a primary; two displays sharing one name being
+  told apart, selectable, and separately labelled; a remembered display
+  surviving a rearrangement; and a preference holding a bare name still
+  resolving.
 - The overlay-suppression predicate is true while performing and false
   otherwise, including while recording (where it was already true).
 
