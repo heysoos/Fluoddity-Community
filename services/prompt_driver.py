@@ -6,10 +6,13 @@ files pass UNMODIFIED once the service is rewired onto it.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 from services.genome_spec import layout_of, spec_for
 from services.optimizers import make_optimizer
+from services.vision_scorer import load_goal_image
 
 
 class PromptDriver:
@@ -25,6 +28,10 @@ class PromptDriver:
         self.sigma0 = 0.5
         self.base_seed = 1000
         self.prompt = ""
+        # The goal is the prompt OR a picture, never both: a set path is what
+        # makes the goal an image, and set_prompt clears it.
+        self.goal_image = ""
+        self.goal_distractors = True
         self._optimizer = None
         self._x0 = None
         self._n_nan = 0
@@ -40,14 +47,27 @@ class PromptDriver:
     def sigma(self) -> float:
         return float(self._optimizer.sigma) if self._optimizer else float(self.sigma0)
 
+    @property
+    def goal_kind(self) -> str:
+        return "image" if self.goal_image else "text"
+
+    @property
+    def goal_label(self) -> str:
+        """What the run log and the tab call the goal."""
+        if self.goal_image:
+            return f"image: {Path(self.goal_image).name}"
+        return self.prompt
+
     def status(self) -> dict:
+        cosine = self.goal_kind == "image" and not self.goal_distractors
         return {
-            "prompt": self.prompt,
+            "prompt": self.goal_label,
+            "goal_kind": self.goal_kind,
             "algorithm": self.algorithm,
             "sigma": self.sigma,
             "nan_replaced": int(self._n_nan),
             "elites_injected": int(self._n_elites),
-            "score_label": "fitness",
+            "score_label": "cosine" if cosine else "fitness",
         }
 
     # ---- configuration -------------------------------------------------
@@ -64,8 +84,21 @@ class PromptDriver:
         """Changing the prompt keeps the learned covariance and simply starts
         climbing a new landscape."""
         self.prompt = text
+        self.goal_image = ""
         if self.scorer is not None:
             self.scorer.set_prompt(text)
+
+    def set_image_goal(self, path: str, distractors: bool = True) -> None:
+        """Make a picture on disk the goal. Raises OSError on a file that
+        cannot be read, and then changes nothing - the previous goal stands."""
+        if self.scorer is not None:
+            image = load_goal_image(path, self.scorer.model.px)
+            self.scorer.set_image_goal(image, distractors=bool(distractors))
+        elif not Path(path).is_file():
+            raise FileNotFoundError(path)
+        self.goal_image = str(path)
+        self.goal_distractors = bool(distractors)
+        self.prompt = ""
 
     def set_x0(self, z: np.ndarray) -> None:
         """Load a genome as the search starting point. Discards optimizer state;
@@ -144,6 +177,9 @@ class PromptDriver:
             "optimizer_name": self.algorithm,
             "optimizer_state": self._optimizer.state_dict() if self._optimizer else {},
             "prompt": self.prompt,
+            "goal_kind": self.goal_kind,
+            "goal_image": self.goal_image,
+            "goal_distractors": bool(self.goal_distractors),
             "distractors": [],
             "best_z": best_z,
             "best_fitness": float(best_f) if np.isfinite(best_f) else 0.0,
@@ -156,4 +192,10 @@ class PromptDriver:
         self._ensure(self.tournament.tiles)
         if d.get("optimizer_state"):
             self._optimizer.load_state_dict(d["optimizer_state"])
-        self.set_prompt(str(d.get("prompt", "")))
+        # The goal last, so a picture that has gone leaves the optimizer
+        # restored and the previous goal standing.
+        if d.get("goal_kind", "text") == "image" and d.get("goal_image"):
+            self.set_image_goal(str(d["goal_image"]),
+                                bool(d.get("goal_distractors", True)))
+        else:
+            self.set_prompt(str(d.get("prompt", "")))

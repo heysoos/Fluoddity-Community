@@ -143,6 +143,21 @@ class AutoTournamentService:
     def set_prompt(self, text: str) -> None:
         self.driver.set_prompt(text)
 
+    def set_image_goal(self, path: str, distractors: bool = True) -> None:
+        self.driver.set_image_goal(path, distractors)
+
+    @property
+    def goal_kind(self) -> str:
+        return getattr(self.driver, "goal_kind", "text")
+
+    @property
+    def goal_image(self) -> str:
+        return getattr(self.driver, "goal_image", "")
+
+    @property
+    def goal_distractors(self) -> bool:
+        return bool(getattr(self.driver, "goal_distractors", True))
+
     def set_x0(self, z) -> None:
         self.driver.set_x0(z)
 
@@ -447,6 +462,9 @@ class AutoTournamentService:
             "optimizer_state": d.get("optimizer_state", {}),
             "base_seed": self.base_seed,
             "prompt": d.get("prompt", ""),
+            "goal_kind": d.get("goal_kind", "text"),
+            "goal_image": d.get("goal_image", ""),
+            "goal_distractors": bool(d.get("goal_distractors", True)),
             "distractors": d.get("distractors", []),
             "settings": {
                 "grid": self.tournament.grid,

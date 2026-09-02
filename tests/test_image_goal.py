@@ -169,3 +169,160 @@ def test_score_before_any_goal_names_both_setters():
     s = _scorer()
     with pytest.raises(RuntimeError, match="set_image_goal"):
         s.score(_tiles(1))
+
+
+# ---- the driver and the service -----------------------------------------
+
+import types
+
+from services.auto_tournament_service import AutoTournamentService
+from services.prompt_driver import PromptDriver
+from services.run_checkpoint import load_checkpoint, save_checkpoint
+from services.tournament_service import TournamentService
+
+
+class FakeScorer:
+    """Records what it was handed; scores nothing."""
+
+    def __init__(self, px=32):
+        self.model = types.SimpleNamespace(px=px)
+        self.prompt = ""
+        self.image_calls = []
+
+    def set_prompt(self, text, distractors=None):
+        self.prompt = text
+
+    def set_image_goal(self, image, distractors=True):
+        self.image_calls.append((np.asarray(image), bool(distractors)))
+        self.prompt = ""
+
+    def score(self, images):
+        return np.zeros(len(images), dtype=np.float32)
+
+
+def _png(tmp_path, name="cat.png", px=40):
+    p = tmp_path / name
+    Image.fromarray(np.full((px, px, 3), 90, dtype=np.uint8)).save(p)
+    return str(p)
+
+
+def _driver(scorer=None):
+    ts = TournamentService(grid=2)
+    ts.init_population()
+    return PromptDriver(ts, scorer if scorer is not None else FakeScorer())
+
+
+def test_the_driver_loads_the_picture_at_the_encoders_size(tmp_path):
+    sc = FakeScorer(px=32)
+    d = _driver(sc)
+    path = _png(tmp_path)
+    d.set_image_goal(path, distractors=True)
+    assert len(sc.image_calls) == 1
+    img, distractors = sc.image_calls[0]
+    assert img.shape == (1, 32, 32, 3) and distractors is True
+    assert d.goal_kind == "image"
+    assert d.goal_image == path
+    assert d.goal_distractors is True
+    assert d.prompt == ""
+
+
+def test_the_status_label_names_the_picture_and_the_number(tmp_path):
+    d = _driver()
+    path = _png(tmp_path, "reef.jpg")
+    d.set_image_goal(path, distractors=True)
+    assert d.status()["prompt"] == "image: reef.jpg"
+    assert d.status()["score_label"] == "fitness"
+    d.set_image_goal(path, distractors=False)
+    assert d.status()["score_label"] == "cosine"
+
+
+def test_a_prompt_puts_the_driver_back_on_text(tmp_path):
+    sc = FakeScorer()
+    d = _driver(sc)
+    d.set_image_goal(_png(tmp_path))
+    d.set_prompt("a cat")
+    assert d.goal_kind == "text"
+    assert d.goal_image == ""
+    assert d.status()["prompt"] == "a cat"
+    assert sc.prompt == "a cat"
+
+
+def test_an_unreadable_picture_raises_and_leaves_the_goal_alone(tmp_path):
+    sc = FakeScorer()
+    d = _driver(sc)
+    d.set_prompt("a cat")
+    with pytest.raises(OSError):
+        d.set_image_goal(str(tmp_path / "missing.png"))
+    assert d.goal_kind == "text"
+    assert sc.prompt == "a cat"
+    assert sc.image_calls == []
+
+
+def test_a_driver_without_a_scorer_still_remembers_the_goal(tmp_path):
+    ts = TournamentService(grid=2)
+    ts.init_population()
+    d = PromptDriver(ts, None)
+    path = _png(tmp_path)
+    d.set_image_goal(path, distractors=False)
+    assert d.goal_kind == "image" and d.goal_image == path
+
+
+def _service(scorer):
+    ts = TournamentService(grid=2)
+    ts.init_population()
+    svc = AutoTournamentService(ts, scorer=scorer, logger=None)
+    svc.configure(steps_per_gen=100, snapshots_per_gen=2,
+                  sim_steps_per_frame=10)
+    return svc
+
+
+def test_the_checkpoint_round_trips_the_picture_goal(tmp_path):
+    path = _png(tmp_path)
+    svc = _service(FakeScorer())
+    svc.set_image_goal(path, distractors=False)
+    assert svc.goal_kind == "image"
+    ck = tmp_path / "ck.npz"
+    save_checkpoint(ck, svc.checkpoint_state())
+
+    sc = FakeScorer()
+    other = _service(sc)
+    other.set_prompt("stale")
+    other.restore(load_checkpoint(ck))
+    assert other.goal_kind == "image"
+    assert other.goal_image == path
+    assert other.goal_distractors is False
+    assert sc.image_calls and sc.image_calls[-1][1] is False
+
+
+def test_an_old_checkpoint_restores_as_a_text_goal(tmp_path):
+    svc = _service(FakeScorer())
+    svc.set_prompt("glowing coral")
+    state = svc.checkpoint_state()
+    for k in ("goal_kind", "goal_image", "goal_distractors"):
+        state.pop(k, None)
+    ck = tmp_path / "old.npz"
+    save_checkpoint(ck, state)
+
+    sc = FakeScorer()
+    other = _service(sc)
+    other.restore(load_checkpoint(ck))
+    assert other.goal_kind == "text"
+    assert other.prompt == "glowing coral"
+    assert sc.prompt == "glowing coral"
+
+
+def test_a_checkpoint_whose_picture_is_gone_keeps_the_optimizer(tmp_path):
+    path = _png(tmp_path, "gone.png")
+    svc = _service(FakeScorer())
+    svc.set_image_goal(path)
+    ck = tmp_path / "ck.npz"
+    save_checkpoint(ck, svc.checkpoint_state())
+    (tmp_path / "gone.png").unlink()
+
+    sc = FakeScorer()
+    other = _service(sc)
+    other.set_prompt("before")
+    with pytest.raises(OSError):
+        other.restore(load_checkpoint(ck))
+    assert other.generation == svc.generation
+    assert other.goal_kind == "text" and sc.prompt == "before"

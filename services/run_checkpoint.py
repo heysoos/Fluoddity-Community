@@ -27,6 +27,7 @@ _META_KEYS = (
     "genome_spec_signature", "brain_layout_signature", "generation",
     "optimizer_name", "base_seed",
     "prompt", "distractors", "settings", "history", "best_fitness",
+    "goal_kind", "goal_image", "goal_distractors",
 )
 
 
