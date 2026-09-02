@@ -89,6 +89,8 @@ class AutoTournamentService:
         self.tile_mutation_enabled = False
         self.variants_per_tile = 4
         self.tile_mutation_strength = 0.1
+        # Score the capture as density alone. See CLAUDE.md.
+        self.grayscale = False
         self.autosave_every = 10
 
         self.phase = Phase.IDLE
@@ -143,8 +145,14 @@ class AutoTournamentService:
     def set_prompt(self, text: str) -> None:
         self.driver.set_prompt(text)
 
-    def set_image_goal(self, path: str, distractors: bool = True) -> None:
-        self.driver.set_image_goal(path, distractors)
+    def set_image_goal(self, path: str, distractors: bool = True,
+                       crop=(0.5, 0.5, 1.0)) -> None:
+        self.driver.set_image_goal(path, distractors, crop,
+                                   grayscale=self.grayscale)
+
+    @property
+    def goal_crop(self):
+        return tuple(getattr(self.driver, "goal_crop", (0.5, 0.5, 1.0)))
 
     @property
     def goal_kind(self) -> str:
@@ -165,7 +173,7 @@ class AutoTournamentService:
         """Push the UI-owned settings the driver understands, and the current
         genome layout. Only attributes the driver already has are set, so a
         driver may ignore settings that mean nothing to it."""
-        for k in ("algorithm", "sigma0", "base_seed",
+        for k in ("algorithm", "sigma0", "base_seed", "grayscale",
                   "physics_origin", "physics_enabled", "run_id"):
             if hasattr(self.driver, k):
                 setattr(self.driver, k, getattr(self, k))
@@ -465,6 +473,7 @@ class AutoTournamentService:
             "goal_kind": d.get("goal_kind", "text"),
             "goal_image": d.get("goal_image", ""),
             "goal_distractors": bool(d.get("goal_distractors", True)),
+            "goal_crop": list(d.get("goal_crop", [0.5, 0.5, 1.0])),
             "distractors": d.get("distractors", []),
             "settings": {
                 "grid": self.tournament.grid,
@@ -477,6 +486,7 @@ class AutoTournamentService:
                 "physics_enabled": self.physics_enabled,
                 "variants_per_tile": self.variants_per_tile,
                 "tile_mutation_strength": self.tile_mutation_strength,
+                "grayscale": bool(self.grayscale),
             },
             "history": self.logger.history() if self.logger else {},
             "best_z": d.get("best_z", np.zeros(self.spec.dim, np.float32)),
@@ -498,6 +508,7 @@ class AutoTournamentService:
             physics_enabled=bool(s.get("physics_enabled", False)),
             variants_per_tile=int(s.get("variants_per_tile", 4)),
             tile_mutation_strength=float(s.get("tile_mutation_strength", 0.1)),
+            grayscale=bool(s.get("grayscale", False)),
             algorithm=str(state["optimizer_name"]),
         )
         self.base_seed = int(state["base_seed"])

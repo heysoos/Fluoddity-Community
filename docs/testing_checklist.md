@@ -185,6 +185,8 @@ Sync is the thing only a person can confirm, so use material with a hard beat.
 - [ ] Auto: `Goal` = Image, Browse to a photo: the thumbnail appears, Start enables with no prompt, the tab says "steering toward image: <name>", and the run log's prompt column names the picture
 - [ ] Auto: Clear empties the picture and disables Start; `Goal` back to Text re-applies the prompt
 - [ ] Auto: a checkpoint saved with a picture goal reloads with the picture on screen; with the file deleted it resumes with a warning and the previous goal
+- [ ] Auto: a wide picture previews at its own aspect with the crop square on it; dragging the square and releasing, or letting go of Crop Zoom, re-sets the goal (the "steering toward" line stays green); a checkpoint reloads the crop
+- [ ] Auto: with Grayscale ticked the laptop view stays in colour while a run scores; the fitness moves when only the shape changes
 - [ ] Toggling physics search mid-run ends any expedition without crashing
 - [ ] Changing the grid mid-expedition does not crash
 

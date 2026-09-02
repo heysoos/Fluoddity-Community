@@ -49,7 +49,7 @@ class CaptureView:
 
         self._assembler = FrameAssembler(self.ctx, self._tex)
 
-    def render(self, ui_state, assemble_kwargs, side):
+    def render(self, ui_state, assemble_kwargs, side, grayscale=False):
         """-> the assembled square texture, WITHOUT bloom, or None.
 
         Bloom is deliberately not applied here: it has to run per tile, after
@@ -57,7 +57,7 @@ class CaptureView:
         pictures. See draw_grid().
         """
         self.resize(side)
-        src = self._render_particles(ui_state)
+        src = self._render_particles(ui_state, grayscale)
         if src is None:
             return None
         return self._assembler.assemble_frame(
@@ -127,12 +127,16 @@ class CaptureView:
         self._tile_tex = self.ctx.texture((tile_px, tile_px), 4, dtype="f4")
         self._tile_fbo = self.ctx.framebuffer(color_attachments=[self._tile_tex])
 
-    def _render_particles(self, ui_state):
+    def _render_particles(self, ui_state, grayscale=False):
         """The cam_brush pass with an IDENTITY camera.
 
         cam_pos 0 and cam_zoom 1 against a square window_size make the vertex
         shader's letterbox scale exactly (1, 1) for a square canvas, so entity
         space maps onto the target one-to-one.
+
+        `grayscale` zeroes every particle's saturation for THIS pass only: the
+        program is shared with the laptop's own view, so the uniform is put
+        back before returning.
         """
         if not self.camera.cam_brush_mode:
             # The other view modes are the canvas texture itself; there is no
@@ -152,14 +156,19 @@ class CaptureView:
         # Tiling repeats the canvas across the VIEW; the capture is exactly one
         # canvas, so there is nothing to repeat.
         tryset(prog, "tiling_mode_enabled", False)
+        tryset(prog, "GRAYSCALE", bool(grayscale))
 
         self.ctx.enable(moderngl.BLEND)
         self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE
         self.ctx.blend_equation = moderngl.FUNC_ADD
-        self.camera.cam_brush_vao.render(
-            mode=moderngl.TRIANGLE_FAN, instances=self.sim.entity_count,
-            vertices=4)
-        self.ctx.disable(moderngl.BLEND)
+        try:
+            self.camera.cam_brush_vao.render(
+                mode=moderngl.TRIANGLE_FAN, instances=self.sim.entity_count,
+                vertices=4)
+        finally:
+            self.ctx.disable(moderngl.BLEND)
+            if grayscale:
+                tryset(prog, "GRAYSCALE", False)
         return self._tex
 
     @staticmethod

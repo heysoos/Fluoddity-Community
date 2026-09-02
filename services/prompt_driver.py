@@ -12,7 +12,7 @@ import numpy as np
 
 from services.genome_spec import layout_of, spec_for
 from services.optimizers import make_optimizer
-from services.vision_scorer import load_goal_image
+from services.vision_scorer import DEFAULT_CROP, load_goal_image
 
 
 class PromptDriver:
@@ -32,6 +32,10 @@ class PromptDriver:
         # makes the goal an image, and set_prompt clears it.
         self.goal_image = ""
         self.goal_distractors = True
+        self.goal_crop = DEFAULT_CROP
+        # Score density rather than colour; the service owns the setting and
+        # pushes it here, see AutoTournamentService._sync_driver.
+        self.grayscale = False
         self._optimizer = None
         self._x0 = None
         self._n_nan = 0
@@ -88,16 +92,22 @@ class PromptDriver:
         if self.scorer is not None:
             self.scorer.set_prompt(text)
 
-    def set_image_goal(self, path: str, distractors: bool = True) -> None:
+    def set_image_goal(self, path: str, distractors: bool = True,
+                       crop=DEFAULT_CROP, grayscale=None) -> None:
         """Make a picture on disk the goal. Raises OSError on a file that
         cannot be read, and then changes nothing - the previous goal stands."""
+        crop = tuple(float(v) for v in crop)
+        if grayscale is not None:
+            self.grayscale = bool(grayscale)
         if self.scorer is not None:
-            image = load_goal_image(path, self.scorer.model.px)
-            self.scorer.set_image_goal(image, distractors=bool(distractors))
+            image = load_goal_image(path, self.scorer.model.px, crop)
+            self.scorer.set_image_goal(image, distractors=bool(distractors),
+                                       grayscale=self.grayscale)
         elif not Path(path).is_file():
             raise FileNotFoundError(path)
         self.goal_image = str(path)
         self.goal_distractors = bool(distractors)
+        self.goal_crop = crop
         self.prompt = ""
 
     def set_x0(self, z: np.ndarray) -> None:
@@ -180,6 +190,7 @@ class PromptDriver:
             "goal_kind": self.goal_kind,
             "goal_image": self.goal_image,
             "goal_distractors": bool(self.goal_distractors),
+            "goal_crop": [float(v) for v in self.goal_crop],
             "distractors": [],
             "best_z": best_z,
             "best_fitness": float(best_f) if np.isfinite(best_f) else 0.0,
@@ -196,6 +207,7 @@ class PromptDriver:
         # restored and the previous goal standing.
         if d.get("goal_kind", "text") == "image" and d.get("goal_image"):
             self.set_image_goal(str(d["goal_image"]),
-                                bool(d.get("goal_distractors", True)))
+                                bool(d.get("goal_distractors", True)),
+                                tuple(d.get("goal_crop", DEFAULT_CROP)))
         else:
             self.set_prompt(str(d.get("prompt", "")))

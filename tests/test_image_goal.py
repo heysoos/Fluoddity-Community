@@ -192,8 +192,9 @@ class FakeScorer:
     def set_prompt(self, text, distractors=None):
         self.prompt = text
 
-    def set_image_goal(self, image, distractors=True):
-        self.image_calls.append((np.asarray(image), bool(distractors)))
+    def set_image_goal(self, image, distractors=True, grayscale=False):
+        self.image_calls.append((np.asarray(image), bool(distractors),
+                                 bool(grayscale)))
         self.prompt = ""
 
     def score(self, images):
@@ -218,7 +219,7 @@ def test_the_driver_loads_the_picture_at_the_encoders_size(tmp_path):
     path = _png(tmp_path)
     d.set_image_goal(path, distractors=True)
     assert len(sc.image_calls) == 1
-    img, distractors = sc.image_calls[0]
+    img, distractors, _grey = sc.image_calls[0]
     assert img.shape == (1, 32, 32, 3) and distractors is True
     assert d.goal_kind == "image"
     assert d.goal_image == path
@@ -373,6 +374,8 @@ class _FakeSvc:
         self.phase = type("P", (), {"value": "idle"})()
         self.prompts = []
         self.image_goals = []
+        self.crops = []
+        self.configured = {}
         self.starts = []
         self.prompt = ""
         self.goal_kind = "text"
@@ -380,15 +383,16 @@ class _FakeSvc:
         self.goal_distractors = True
 
     def configure(self, **kw):
-        pass
+        self.configured.update(kw)
 
     def set_prompt(self, text):
         self.prompts.append(text)
 
-    def set_image_goal(self, path, distractors=True):
+    def set_image_goal(self, path, distractors=True, crop=(0.5, 0.5, 1.0)):
         if not Path(path).is_file():
             raise FileNotFoundError(path)
         self.image_goals.append((path, distractors))
+        self.crops.append(tuple(crop))
 
     def start(self, prompt=None):
         self.starts.append(prompt)

@@ -52,20 +52,33 @@ DEFAULT_DISTRACTORS = [
 ]
 
 
-def load_goal_image(path: str, px: int) -> np.ndarray:
-    """A picture on disk -> uint8 (1, px, px, 3), centre-cropped square.
+DEFAULT_CROP = (0.5, 0.5, 1.0)
 
-    The crop keeps the middle of the longer side; nothing is squeezed, so the
-    picture the user framed is what the encoder sees.
+
+def load_goal_image(path: str, px: int, crop=DEFAULT_CROP) -> np.ndarray:
+    """A picture on disk -> uint8 (1, px, px, 3), a square crop of it.
+
+    `crop` is (x, y, zoom): the square's side is the shorter side over zoom,
+    and x, y in 0..1 slide it across whatever room is left on each axis. The
+    default is the centre crop. Nothing is squeezed.
     """
+    cx, cy, zoom = crop
     img = Image.open(path).convert("RGB")
     w, h = img.size
-    side = min(w, h)
-    left = (w - side) // 2
-    top = (h - side) // 2
+    side = max(1, int(round(min(w, h) / max(1.0, float(zoom)))))
+    left = int(round((w - side) * min(1.0, max(0.0, float(cx)))))
+    top = int(round((h - side) * min(1.0, max(0.0, float(cy)))))
     img = img.crop((left, top, left + side, top + side))
     img = img.resize((int(px), int(px)), Image.LANCZOS)
     return np.asarray(img, dtype=np.uint8)[None]
+
+
+def to_grayscale(images: np.ndarray) -> np.ndarray:
+    """uint8 (B, px, px, 3) -> the same shape with every channel the luma."""
+    x = np.asarray(images, dtype=np.float32)
+    luma = x[..., 0] * 0.299 + x[..., 1] * 0.587 + x[..., 2] * 0.114
+    g = np.clip(np.rint(luma), 0, 255).astype(np.uint8)
+    return np.repeat(g[..., None], 3, axis=-1)
 
 
 def distractor_images(px: int) -> np.ndarray:
@@ -175,7 +188,7 @@ class VisionScorer:
         self._model = get(model_key)
         self._goal_emb = None
         self._goal_scale = None
-        self._distractor_emb = None
+        self._distractor_emb = {}      # grayscale flag -> (4, dim)
         self._prompt = ""
         self._n_views = n_views
         self._rng = np.random.default_rng(seed)
@@ -245,29 +258,38 @@ class VisionScorer:
         self._goal_scale = self._model.text_logit_scale
         self._prompt = text
 
-    def set_image_goal(self, image: np.ndarray, distractors: bool = True) -> None:
+    def set_image_goal(self, image: np.ndarray, distractors: bool = True,
+                       grayscale: bool = False) -> None:
         """Make a picture the goal: uint8 (1, px, px, 3), see load_goal_image.
 
         The reference is embedded as the untouched frame - the user chose the
         framing - and the synthesized distractors once per scorer. With
         `distractors` off the goal is the target alone and score() is the
-        cosine to it.
+        cosine to it. `grayscale` reads the picture and the distractors by
+        luma, to match a capture rendered as density.
         """
-        target = self.embed(np.asarray(image, dtype=np.uint8), n_views=1)
-        rows = [target]
+        target = np.asarray(image, dtype=np.uint8)
+        if grayscale:
+            target = to_grayscale(target)
+        rows = [self.embed(target, n_views=1)]
         if distractors:
-            rows.append(self._distractor_embeddings())
+            rows.append(self._distractor_embeddings(bool(grayscale)))
         self._goal_emb = np.concatenate(rows, axis=0)
         self._goal_scale = self._model.image_logit_scale
         self._prompt = ""
 
-    def _distractor_embeddings(self) -> np.ndarray:
+    def _distractor_embeddings(self, grayscale: bool = False) -> np.ndarray:
         # getattr, because the tests build a scorer without running __init__.
-        cached = getattr(self, "_distractor_emb", None)
-        if cached is None:
-            cached = self._embed_images(distractor_images(self._model.px))
-            self._distractor_emb = cached
-        return cached
+        cache = getattr(self, "_distractor_emb", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._distractor_emb = cache
+        if grayscale not in cache:
+            pics = distractor_images(self._model.px)
+            if grayscale:
+                pics = to_grayscale(pics)
+            cache[grayscale] = self._embed_images(pics)
+        return cache[grayscale]
 
     def embed_text(self, prompts: list[str]) -> np.ndarray:
         """(P,) strings -> float32 (P, dim), L2-normalised.

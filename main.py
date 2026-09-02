@@ -170,7 +170,7 @@ class App:
         self.ui.multi_load_service = self.multi_load_service
         self.ui.tournament_service = self.tournament_service
         self.ui.advanced_drawing_processor = self.advanced_drawing_processor
-        self.ui.goal_image_loader = file_loader(self.ctx, self.ui.GOAL_THUMB_PX)
+        self.ui.goal_image_loader = file_loader(self.ctx, self.ui.GOAL_PREVIEW_PX)
 
         # Physics configs directories
         self.app_configs_dir = get_app_physics_configs_dir()
@@ -935,7 +935,9 @@ class App:
         if kwargs is None:
             return None            # nothing rendered yet this session
         grid = self.tournament_service.grid
-        tex = self.capture_view.render(ui_state, kwargs, grid * TILE_PX)
+        tex = self.capture_view.render(
+            ui_state, kwargs, grid * TILE_PX,
+            grayscale=bool(getattr(self.auto_service, "grayscale", False)))
         if tex is None:
             return None
 

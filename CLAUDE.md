@@ -1160,6 +1160,33 @@ mechanics these caveats assume.
   label carries the filename into the run log's `prompt` column, so nothing
   downstream gained a field. Guarded by `tests/test_image_goal.py`.
 
+- **The picture's crop is the USER'S - (x, y, zoom), default the centre
+  crop - and the goal re-embeds on RELEASE.** `load_goal_image` slides a
+  square of the shorter side over zoom across whatever room each axis has;
+  the preview draws the whole picture at its own aspect with that square on
+  it, and a drag or the zoom slider moves the square every frame but sets
+  `goal_changed` only when the pointer lets go, or one encoder pass per pixel
+  would freeze the tab. The thumbnail used to be drawn into a SQUARE box,
+  which squashed a wide picture on screen while the encoder saw a correct
+  crop of it - the display lied about what was scored. Guarded by
+  `tests/test_image_goal_crop.py`.
+
+- **Greyscale scoring renders DENSITY, and the uniform that does it is on a
+  SHARED program.** `GRAYSCALE` in `cam_brush.vert` zeroes every particle's
+  saturation, so hsv2rgb yields white and the capture is particle density
+  with no colour term at all; a luma mix of the colour frame is NOT the same
+  thing, because every particle has brightness 1.0 and hue is the force
+  term, so luma still varies with hue. The program is the laptop's own
+  particle pass, so `_render_particles` puts the uniform back before
+  returning or the next frame on screen goes grey too. The reference picture
+  and the synthesized distractors are read by luma to match, cached per
+  flag. It is Auto's setting, checkpointed, and deliberately NOT yet
+  Explore's: an archive pools embeddings, and a grey descriptor among colour
+  ones is silently wrong at equal width - taking it to Explore means pinning
+  it per archive the way the encoder is, and re-measuring `min_separation`
+  on grey renders. Guarded by `tests/test_capture_grayscale_gl.py`, which
+  reads pixels off the real shader, and `tests/test_image_goal_crop.py`.
+
 - **A latent or chase goal has ONE reference, which makes its fitness a
   monotone squash of raw cosine — and raw cosine to an arbitrary direction is
   maximised by NOISE.** Text goals were never exposed because

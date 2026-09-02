@@ -420,6 +420,7 @@ def test_the_thumbnail_is_loaded_once_and_released_on_change(gui, tmp_path):
     class _Tex:
         def __init__(self):
             self.glo = 1
+            self.size = (96, 48)
             self.released = 0
 
         def release(self):
@@ -462,4 +463,49 @@ def test_clearing_the_picture_sets_the_one_shot(gui, tmp_path):
     finally:
         imgui.button = real
     assert ats.goal_image == ""
+    assert ats.goal_changed is True
+
+
+def test_image_mode_draws_a_crop_zoom_and_a_grayscale_switch(
+        gui, tmp_path, monkeypatch):
+    class _Tex:
+        glo = 1
+        size = (96, 48)
+
+        def release(self):
+            pass
+
+    h = Harness(_service(tmp_path))
+    h.goal_image_loader = lambda path: _Tex()
+    ats = h.state.auto_tournament
+    ats.goal_kind = "image"
+    ats.goal_image = "wide.png"
+    seen = _labels_of(monkeypatch, h.render_auto_tournament_tab,
+                      ("slider_float", "checkbox"))
+    assert "Crop Zoom" in seen
+    assert "Grayscale" in seen
+
+
+def test_the_grayscale_switch_is_there_for_a_text_goal_too(
+        gui, tmp_path, monkeypatch):
+    h = Harness(_service(tmp_path))
+    h.state.auto_tournament.goal_kind = "text"
+    seen = _labels_of(monkeypatch, h.render_auto_tournament_tab, ("checkbox",))
+    assert "Grayscale" in seen
+
+
+def test_flipping_grayscale_re_sets_the_goal(gui, tmp_path, monkeypatch):
+    h = Harness(_service(tmp_path))
+    ats = h.state.auto_tournament
+    real = imgui.checkbox
+
+    def flip(label, value, *a, **kw):
+        if label == "Grayscale":
+            real(label, value, *a, **kw)
+            return True, not value
+        return real(label, value, *a, **kw)
+
+    monkeypatch.setattr(imgui, "checkbox", flip)
+    frame(h.render_auto_tournament_tab, n=1)
+    assert ats.grayscale is True
     assert ats.goal_changed is True

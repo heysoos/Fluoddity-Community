@@ -7,6 +7,7 @@ uniform vec2 window_size;
 
 // Tiling mode uniforms
 uniform bool tiling_mode_enabled;
+uniform bool GRAYSCALE;   // the capture scoring density alone, never the view
 uniform vec2 view_min;  // World-space minimum of view rectangle
 uniform vec2 view_max;  // World-space maximum of view rectangle
 
@@ -154,5 +155,5 @@ void main() {
     // Brightness and alpha are the same for every particle, so they are
     // supplied here rather than stored 600k times.
     view_col = vec4(entities[instance_id].hue,
-                    entities[instance_id].sat, 1.0, 0.045);
+                    GRAYSCALE ? 0.0 : entities[instance_id].sat, 1.0, 0.045);
 }

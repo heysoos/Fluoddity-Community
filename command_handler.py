@@ -12,7 +12,8 @@ def set_auto_picture(svc, ats) -> None:
     is a warning, never a crash: the previous goal stands and the tab says
     the picture is not set."""
     try:
-        svc.set_image_goal(ats.goal_image, ats.goal_distractors)
+        svc.set_image_goal(ats.goal_image, ats.goal_distractors,
+                           crop=ats.goal_crop())
     except OSError as exc:
         ats.warning = f"picture not loaded: {exc}"
         print(f"[auto] {ats.warning}")
@@ -898,6 +899,7 @@ class CommandHandler:
             tile_mutation_enabled=ats.tile_mutation_enabled,
             variants_per_tile=ats.variants_per_tile,
             tile_mutation_strength=ats.tile_mutation_strength,
+            grayscale=ats.grayscale,
         )
 
         if ats.prompt_changed or (ats.goal_changed and ats.goal_kind != "image"
@@ -1652,6 +1654,8 @@ class CommandHandler:
         ats.goal_kind = svc.goal_kind
         ats.goal_image = svc.goal_image
         ats.goal_distractors = svc.goal_distractors
+        ats.goal_crop_x, ats.goal_crop_y, ats.goal_crop_zoom = svc.goal_crop
+        ats.grayscale = bool(svc.grayscale)
         ats.steps_per_gen = svc.steps_per_gen
         ats.snapshots_per_gen = svc.snapshots_per_gen
         ats.sim_steps_per_frame = svc.sim_steps_per_frame

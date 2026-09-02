@@ -21,6 +21,13 @@ class AutoTournamentState:
     goal_kind: str = "text"
     goal_image: str = ""
     goal_distractors: bool = True
+    # The square crop of the picture: where it sits on each axis and how
+    # tight it is. The defaults are the centre crop.
+    goal_crop_x: float = 0.5
+    goal_crop_y: float = 0.5
+    goal_crop_zoom: float = 1.0
+    # Score the capture as particle density, with no colour term.
+    grayscale: bool = False
     algorithm: str = "CMA-ES"
     grid: int = 4
     steps_per_gen: int = 300
@@ -57,6 +64,9 @@ class AutoTournamentState:
     load_checkpoint_path: str = ""
     load_genome_path: str = ""
     download_model_requested: bool = False
+
+    def goal_crop(self) -> tuple:
+        return (self.goal_crop_x, self.goal_crop_y, self.goal_crop_zoom)
 
     def has_goal(self) -> bool:
         """Is there something to start a search toward, under the selected

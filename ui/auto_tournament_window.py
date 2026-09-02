@@ -21,6 +21,42 @@ GOAL_KIND_KEYS = ["text", "image"]
 
 DISTRACTORS_TOOLTIP = "Scores the picture against black, white, grey and noise."
 
+GRAYSCALE_TOOLTIP = "Scores particle density alone, with no colour."
+
+_CROP_COLOR = (1.0, 0.85, 0.3, 1.0)
+
+
+def preview_layout(tex_size, box_px: int) -> tuple:
+    """(w, h) that fits a texture of tex_size into a box_px square, keeping
+    its aspect; the longer side fills the box."""
+    w, h = max(1, int(tex_size[0])), max(1, int(tex_size[1]))
+    scale = float(box_px) / max(w, h)
+    return (int(round(w * scale)), int(round(h * scale)))
+
+
+def crop_square_px(draw_w: int, draw_h: int, crop) -> tuple:
+    """(x, y, side) of the crop square inside a preview drawn at draw_w by
+    draw_h, for crop = (x, y, zoom) as load_goal_image reads it."""
+    cx, cy, zoom = crop
+    side = int(round(min(draw_w, draw_h) / max(1.0, float(zoom))))
+    x = int(round((draw_w - side) * min(1.0, max(0.0, float(cx)))))
+    y = int(round((draw_h - side) * min(1.0, max(0.0, float(cy)))))
+    return (x, y, side)
+
+
+def crop_after_drag(crop, dx: float, dy: float, draw_w: int,
+                    draw_h: int) -> tuple:
+    """The crop after the pointer moved (dx, dy) preview pixels. An axis with
+    no room does not move; both are clamped to 0..1."""
+    cx, cy, zoom = crop
+    side = min(draw_w, draw_h) / max(1.0, float(zoom))
+    slack_x, slack_y = draw_w - side, draw_h - side
+    if slack_x > 0:
+        cx = min(1.0, max(0.0, float(cx) + float(dx) / slack_x))
+    if slack_y > 0:
+        cy = min(1.0, max(0.0, float(cy) + float(dy) / slack_y))
+    return (cx, cy, float(zoom))
+
 COHORT_TOOLTIP = "Gives each tile several variants of its genome."
 
 PHYSICS_TOOLTIP = "Searches the physics sliders as well as the brain."
@@ -58,7 +94,7 @@ class AutoTournamentWindowMixin:
     _auto_load_path = ""
     # path -> RGB texture, set by the orchestrator; None draws no thumbnail.
     goal_image_loader = None
-    GOAL_THUMB_PX = 96
+    GOAL_PREVIEW_PX = 160
     _goal_thumb = None          # (path, texture) of the picture on screen
     _goal_pick = None           # an open file dialog
 
@@ -169,6 +205,12 @@ class AutoTournamentWindowMixin:
             self._render_image_goal(ats, svc)
         else:
             self._render_text_goal(ats, svc)
+        # Either kind: the capture is scored as density, so a picture is
+        # re-read by luma to match and a prompt needs nothing.
+        ch, ats.grayscale = imgui.checkbox("Grayscale", ats.grayscale)
+        hints.tip(GRAYSCALE_TOOLTIP)
+        if ch:
+            ats.goal_changed = True
 
     def _render_image_goal(self, ats, svc):
         """A picture applies the moment it is chosen; there is no Set."""
@@ -203,9 +245,7 @@ class AutoTournamentWindowMixin:
 
         tex = self._goal_thumbnail(ats.goal_image)
         if tex is not None:
-            imgui.image(imgui.ImTextureRef(tex.glo),
-                        imgui.ImVec2(self.GOAL_THUMB_PX, self.GOAL_THUMB_PX))
-            imgui.same_line()
+            self._render_crop_preview(ats, tex)
         active = (svc.goal_image if svc is not None
                   and getattr(svc, "goal_kind", "text") == "image" else "")
         if not ats.goal_image:
@@ -215,6 +255,33 @@ class AutoTournamentWindowMixin:
                 _OK, f"steering toward image: {Path(ats.goal_image).name}")
         else:
             layout.text_colored_wrapped(_WARN, "not set")
+
+    def _render_crop_preview(self, ats, tex):
+        """The whole picture at its own aspect, with the crop square drawn on
+        it. Dragging slides the square; the goal re-embeds on release."""
+        w, h = preview_layout(getattr(tex, "size", (1, 1)), self.GOAL_PREVIEW_PX)
+        p0 = imgui.get_cursor_screen_pos()
+        imgui.image(imgui.ImTextureRef(tex.glo), imgui.ImVec2(w, h))
+        imgui.set_cursor_screen_pos(p0)
+        imgui.invisible_button("##goal_crop", imgui.ImVec2(w, h))
+        hints.tip("Drag to move the crop.")
+        if imgui.is_item_active():
+            d = imgui.get_io().mouse_delta
+            ats.goal_crop_x, ats.goal_crop_y, _z = crop_after_drag(
+                ats.goal_crop(), d.x, d.y, w, h)
+        if imgui.is_item_deactivated():
+            ats.goal_changed = True
+        x, y, side = crop_square_px(w, h, ats.goal_crop())
+        dl = imgui.get_window_draw_list()
+        dl.add_rect(imgui.ImVec2(p0.x + x, p0.y + y),
+                    imgui.ImVec2(p0.x + x + side, p0.y + y + side),
+                    imgui.get_color_u32(imgui.ImVec4(*_CROP_COLOR)),
+                    0.0, 2.0)
+        _, ats.goal_crop_zoom = imgui.slider_float(
+            "Crop Zoom", ats.goal_crop_zoom, 1.0, 4.0)
+        hints.tip("Tightens the crop around its centre.")
+        if imgui.is_item_deactivated_after_edit():
+            ats.goal_changed = True
 
     def _collect_goal_pick(self, ats):
         """Take the chosen path once the dialog closes."""

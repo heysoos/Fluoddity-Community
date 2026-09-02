@@ -23,7 +23,8 @@ class _Prog:
     # declare the same set cam_brush.vert does or the test would pass by
     # silently skipping the assignment it is checking.
     DECLARED = ("cam_pos", "cam_zoom", "canvas_resolution", "window_size",
-                "WATERCOLOR_MODE", "tiling_mode_enabled", "view_min", "view_max")
+                "WATERCOLOR_MODE", "tiling_mode_enabled", "view_min", "view_max",
+                "GRAYSCALE")
 
     def __init__(self):
         self._u = {name: _Uniform() for name in self.DECLARED}
@@ -314,3 +315,25 @@ def test_watercolor_mode_skips_bloom_as_it_does_on_screen():
     blit = _Blit()
     cv.draw_grid(_Fbo(), _Tex((448, 448)), 2, blit, ui, 224)
     assert cv._bloom.inputs == []
+
+
+def test_the_capture_can_be_asked_for_density_alone():
+    """Greyscale scoring forces saturation to zero in the PARTICLE PASS, so
+    what the encoder sees is particle density with no colour term at all - a
+    luma mix of the colour frame would still vary with hue."""
+    cam = _Cam()
+    prog = cam.cam_brush_program
+    seen = []
+
+    class _SpyVao:
+        def render(self, **kw):
+            seen.append(prog.get("GRAYSCALE"))
+
+    cam.cam_brush_vao = _SpyVao()
+    cv = view_at(cam)
+    cv._render_particles(_UI())
+    cv._render_particles(_UI(), grayscale=True)
+    assert seen == [False, True]
+    # The program is shared with the laptop's own view, so the pass puts the
+    # uniform back before returning.
+    assert prog.get("GRAYSCALE") is False
