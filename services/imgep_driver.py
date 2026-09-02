@@ -1063,7 +1063,7 @@ class ImgepDriver:
     def _distractor_embeddings(self):
         """The Auto tab's distractor set, embedded once for the whole run.
 
-        Deliberately NOT via scorer.set_prompt(): that writes scorer._text_emb,
+        Deliberately NOT via scorer.set_prompt(): that writes scorer._goal_emb,
         which the Auto tab owns, and the two modes must not clobber each other.
         """
         if self._distractors is None and self.scorer is not None:

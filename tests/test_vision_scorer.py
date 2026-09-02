@@ -92,7 +92,8 @@ def _scorer_with_stubs():
     s._text_in = "input_ids"
     s._text_out = "text_embeds"
     s._tokenizer = None
-    s._text_emb = None
+    s._goal_emb = None
+    s._goal_scale = LOGIT_SCALE
     s._prompt = ""
     s._n_views = 3
     s._rng = np.random.default_rng(0)
@@ -104,7 +105,7 @@ def _scorer_with_stubs():
 def test_score_returns_probability_per_image():
     s = _scorer_with_stubs()
     # 1 target + 6 distractors, all identical -> uniform softmax = 1/7
-    s._text_emb = np.tile(np.array([[1.0, 0, 0, 0]], dtype=np.float32), (7, 1))
+    s._goal_emb = np.tile(np.array([[1.0, 0, 0, 0]], dtype=np.float32), (7, 1))
     out = s.score(np.zeros((4, 224, 224, 3), dtype=np.uint8))
     assert out.shape == (4,)
     assert out.dtype == np.float32
@@ -117,14 +118,14 @@ def test_score_target_is_index_zero():
     emb[0] = [1.0, 0, 0, 0]
     emb[1] = [0, 1.0, 0, 0]
     emb[2] = [0, 0, 1.0, 0]
-    s._text_emb = emb
+    s._goal_emb = emb
     out = s.score(np.zeros((1, 224, 224, 3), dtype=np.uint8))
     assert out[0] > 0.99, "an image aligned with prompt 0 must score near 1"
 
 
 def test_score_chunks_large_batches():
     s = _scorer_with_stubs()
-    s._text_emb = np.tile(np.array([[1.0, 0, 0, 0]], dtype=np.float32), (7, 1))
+    s._goal_emb = np.tile(np.array([[1.0, 0, 0, 0]], dtype=np.float32), (7, 1))
     # 64 tiles x 3 views = 192 images -> must not be one 192-image call
     s.score(np.zeros((64, 224, 224, 3), dtype=np.uint8))
     assert max(s._vision.batch_sizes) <= VisionScorer.MAX_CHUNK
@@ -237,7 +238,7 @@ def test_score_is_recoverable_from_embed():
     emb[0] = [1.0, 0, 0, 0]
     emb[1] = [0, 1.0, 0, 0]
     emb[2] = [0, 0, 1.0, 0]
-    s._text_emb = emb
+    s._goal_emb = emb
 
     images = np.zeros((4, 224, 224, 3), dtype=np.uint8)
     s._rng = np.random.default_rng(7)
@@ -264,11 +265,11 @@ def test_embed_text_does_not_disturb_the_cached_prompt_embedding():
 
     s._tokenizer = _Tok()
     cached = np.full((7, 4), 0.5, dtype=np.float32)
-    s._text_emb = cached
+    s._goal_emb = cached
     out = s.embed_text(["a", "b"])
     assert out.shape == (2, 4)
     assert np.allclose(np.linalg.norm(out, axis=1), 1.0, atol=1e-5)
-    assert s._text_emb is cached, "embed_text must not overwrite the score() cache"
+    assert s._goal_emb is cached, "embed_text must not overwrite the score() cache"
 
 
 # ---- averaged views ----------------------------------------------------

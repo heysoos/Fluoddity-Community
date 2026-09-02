@@ -1,4 +1,4 @@
-"""Text-image scoring for the automatic tournament.
+"""Goal scoring for the automatic tournament: a text prompt or a picture.
 
 Depends only on onnxruntime, tokenizers, numpy and PIL. Knows nothing about
 tournaments, tiles or OpenGL. Everything model-specific - paths, preprocessing,
@@ -50,6 +50,31 @@ DEFAULT_DISTRACTORS = [
     "an empty black background",
     "a dark empty scene",
 ]
+
+
+def load_goal_image(path: str, px: int) -> np.ndarray:
+    """A picture on disk -> uint8 (1, px, px, 3), centre-cropped square.
+
+    The crop keeps the middle of the longer side; nothing is squeezed, so the
+    picture the user framed is what the encoder sees.
+    """
+    img = Image.open(path).convert("RGB")
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    img = img.crop((left, top, left + side, top + side))
+    img = img.resize((int(px), int(px)), Image.LANCZOS)
+    return np.asarray(img, dtype=np.uint8)[None]
+
+
+def distractor_images(px: int) -> np.ndarray:
+    """The pictures an image goal is scored against: black, white, mid-grey and
+    seeded uniform noise, uint8 (4, px, px, 3). Same arrays every call."""
+    px = int(px)
+    flat = [np.full((px, px, 3), v, dtype=np.uint8) for v in (0, 255, 128)]
+    noise = np.random.default_rng(0).integers(0, 256, (px, px, 3), dtype=np.uint8)
+    return np.stack(flat + [noise], axis=0)
 
 
 def _scale_offset(model):
@@ -133,7 +158,14 @@ def pick_embedding_output(outputs, preferred) -> str:
 
 
 class VisionScorer:
-    """Turns a text prompt into a per-image fitness in [0, 1]."""
+    """Turns a goal - a text prompt or a picture - into a per-image fitness.
+
+    ONE goal at a time: a target at row 0 of `_goal_emb`, the references after
+    it, and the logit scale that goes with them. A text goal is scored against
+    the text distractors at the text scale; a picture against the synthesized
+    pictures at the image scale, or against nothing at all, which is the plain
+    cosine.
+    """
 
     MAX_CHUNK = 64  # images per session.run; 64 fp32 NCHW inputs ~= 38 MB
 
@@ -141,7 +173,9 @@ class VisionScorer:
                  n_views: int = 3, seed: int = 0):
         self._available = False
         self._model = get(model_key)
-        self._text_emb = None
+        self._goal_emb = None
+        self._goal_scale = None
+        self._distractor_emb = None
         self._prompt = ""
         self._n_views = n_views
         self._rng = np.random.default_rng(seed)
@@ -207,13 +241,38 @@ class VisionScorer:
         prompts = [text] + list(
             DEFAULT_DISTRACTORS if distractors is None else distractors
         )
-        self._text_emb = self.embed_text(prompts)
+        self._goal_emb = self.embed_text(prompts)
+        self._goal_scale = self._model.text_logit_scale
         self._prompt = text
+
+    def set_image_goal(self, image: np.ndarray, distractors: bool = True) -> None:
+        """Make a picture the goal: uint8 (1, px, px, 3), see load_goal_image.
+
+        The reference is embedded as the untouched frame - the user chose the
+        framing - and the synthesized distractors once per scorer. With
+        `distractors` off the goal is the target alone and score() is the
+        cosine to it.
+        """
+        target = self.embed(np.asarray(image, dtype=np.uint8), n_views=1)
+        rows = [target]
+        if distractors:
+            rows.append(self._distractor_embeddings())
+        self._goal_emb = np.concatenate(rows, axis=0)
+        self._goal_scale = self._model.image_logit_scale
+        self._prompt = ""
+
+    def _distractor_embeddings(self) -> np.ndarray:
+        # getattr, because the tests build a scorer without running __init__.
+        cached = getattr(self, "_distractor_emb", None)
+        if cached is None:
+            cached = self._embed_images(distractor_images(self._model.px))
+            self._distractor_emb = cached
+        return cached
 
     def embed_text(self, prompts: list[str]) -> np.ndarray:
         """(P,) strings -> float32 (P, dim), L2-normalised.
 
-        Deliberately does NOT write self._text_emb: the exploration archive's
+        Deliberately does NOT write self._goal_emb: the exploration archive's
         goal embeddings and score()'s prompt+distractor cache are different
         things and must not be able to clobber each other.
         """
@@ -305,14 +364,20 @@ class VisionScorer:
         return _l2(e.reshape(len(b), v, -1).mean(axis=1))
 
     def score(self, images: np.ndarray) -> np.ndarray:
-        """uint8 (B,px,px,3) -> float32 (B,). Softmax probability of the
-        target prompt against the distractor set, averaged over augmented views.
+        """uint8 (B,px,px,3) -> float32 (B,), averaged over augmented views.
+
+        Softmax probability of the target against the goal's references; with
+        no references, the cosine to the target.
         """
-        if self._text_emb is None:
-            raise RuntimeError("set_prompt() must be called before score()")
+        if self._goal_emb is None:
+            raise RuntimeError(
+                "set_prompt() or set_image_goal() must be called before score()")
         b = len(images)
         emb = self.embed(images, self._n_views)
-        logits = self._model.text_logit_scale * (emb @ self._text_emb.T)
+        if len(self._goal_emb) == 1:
+            cos = emb @ self._goal_emb[0]
+            return cos.reshape(b, -1).mean(axis=1).astype(np.float32)
+        logits = float(self._goal_scale) * (emb @ self._goal_emb.T)
         logits -= logits.max(axis=1, keepdims=True)
         probs = np.exp(logits)
         probs /= probs.sum(axis=1, keepdims=True)
