@@ -12,6 +12,9 @@ uniform int view_mode;  // 0=canvas, 1=camera, 2=camera tiled, 3/4=field, 5=came
                         // SYNCHRONIZED: state/view_modes.py holds these numbers
 uniform sampler2D trail_tex;          // Persistent trail canvas, for view_mode 5
 uniform float TRAIL_OVERLAY_STRENGTH; // How strongly trails show under particles (view_mode 5)
+// The capture scoring density alone: every direction-as-hue colouring drops
+// its saturation, the same rule cam_brush.vert applies to the particles.
+uniform bool GRAYSCALE;
 uniform bool PARAMETER_SWEEP_MODE;  // Whether parameter sweeps are active
 uniform vec2 sweep_reticle_pos;     // Screen UV position of sweep reticle (0-1 range)
 uniform bool sweep_reticle_visible; // Whether to show the reticle
@@ -272,7 +275,8 @@ void main() {
         if (clamp(trail_uv, vec2(0.0), vec2(1.0)) == trail_uv) {
             vec4 t = texture(trail_tex, trail_uv);
             vec3 trail_col = 8.0 * hsv2rgb(vec3(atan(t.y, t.x) / 2.0 / 3.1415,
-                                                0.75, length(t.xy)));
+                                                GRAYSCALE ? 0.0 : 0.75,
+                                                length(t.xy)));
             current_color += TRAIL_OVERLAY_STRENGTH * trail_col;
         }
     }
@@ -302,7 +306,8 @@ void main() {
     if (final_sample) {
         //if we are in canvas, brush, or field view, we must interpret raw texture before gamma correction and display:
         if(view_mode == 0 || view_mode == 3 || view_mode == 4){
-            fragColor.xyz = 8*hsv2rgb(vec3(atan(fragColor.y,fragColor.x)/2./3.1415,.75,length(fragColor.xy)));
+            fragColor.xyz = 8*hsv2rgb(vec3(atan(fragColor.y,fragColor.x)/2./3.1415,
+                                           GRAYSCALE ? 0.0 : .75, length(fragColor.xy)));
         }
         // Apply brightness multiplier before gamma correction
 

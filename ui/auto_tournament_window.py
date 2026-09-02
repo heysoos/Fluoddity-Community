@@ -95,6 +95,10 @@ class AutoTournamentWindowMixin:
     # path -> RGB texture, set by the orchestrator; None draws no thumbnail.
     goal_image_loader = None
     GOAL_PREVIEW_PX = 160
+    # Tile 0 as the encoder saw it, published by the orchestrator after
+    # every capture. None until the first one.
+    capture_preview_tex = None
+    CAPTURE_PREVIEW_PX = 112
     _goal_thumb = None          # (path, texture) of the picture on screen
     _goal_pick = None           # an open file dialog
 
@@ -146,6 +150,7 @@ class AutoTournamentWindowMixin:
 
         imgui.separator()
         self._render_metrics(svc)
+        self._render_capture_preview()
 
         imgui.separator()
         self._render_save_load(ats, svc)
@@ -473,6 +478,17 @@ class AutoTournamentWindowMixin:
                 imgui.table_next_column()
                 imgui.text(f"{mean[i]:.3f}" if i < len(mean) else "-")
             imgui.end_table()
+
+    def _render_capture_preview(self):
+        """What the encoder scores, which the screen cannot show: the capture
+        has its own view, crop and greyscale rules."""
+        tex = getattr(self, "capture_preview_tex", None)
+        if tex is None:
+            return
+        imgui.text_disabled("what the encoder sees (tile 0)")
+        imgui.image(imgui.ImTextureRef(tex.glo),
+                    imgui.ImVec2(self.CAPTURE_PREVIEW_PX,
+                                 self.CAPTURE_PREVIEW_PX))
 
     _TRACE_H = 92.0
     _TRACE_PAD = 6.0

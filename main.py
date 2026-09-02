@@ -159,6 +159,9 @@ class App:
         self.map_layout_service = None
         self.thumb_cache = None
         self.atlas_cache = None
+        # Tile 0 of the last capture, as the encoder saw it. See
+        # _publish_capture_preview.
+        self.capture_preview = None
         # Brain Inspector: None until the window is first opened, False if it
         # could not be built (a diagnostic panel must not take the app down).
         self.brain_preview = None
@@ -949,7 +952,25 @@ class App:
         self.ctx.screen.use()
         width, height = glfw.get_framebuffer_size(self.window)
         self.ctx.viewport = (0, 0, width, height)
+        self._publish_capture_preview(crops)
         return crops
+
+    def _publish_capture_preview(self, crops):
+        """Hand tile 0 of the capture to the Auto tab, so what the encoder
+        scores can be looked at: the capture has its own view, crop and
+        greyscale rules, and the screen is not evidence of any of them."""
+        if crops is None or len(crops) == 0:
+            return
+        tile = np.ascontiguousarray(crops[0])
+        h, w = tile.shape[:2]
+        tex = self.capture_preview
+        if tex is None or tuple(tex.size) != (w, h):
+            if tex is not None:
+                tex.release()
+            tex = self.ctx.texture((w, h), 3)
+            self.capture_preview = tex
+        tex.write(tile.tobytes())
+        self.ui.capture_preview_tex = tex
 
     def _drive_auto_tournament(self, ui_state):
         """Advance the auto loop one frame. Returns the number of physics steps

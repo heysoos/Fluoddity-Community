@@ -84,9 +84,15 @@ def _pixels(tex):
 
 
 def _capture(rig, grayscale):
-    ctx, sim, camera, view = rig
-    tex = view.render(_state(), _kwargs(camera, sim), SIDE,
-                      grayscale=grayscale)
+    return _capture_in(rig, None, grayscale)
+
+
+def _render_twice(view, kw, grayscale):
+    """The assembler's first-frame mix keeps a 1e-4 sliver of the PREVIOUS
+    accumulation buffer, so the second of two identical renders is the one
+    that says what this render draws."""
+    for _ in range(2):
+        tex = view.render(_state(), kw, SIDE, grayscale=grayscale)
     assert tex is not None
     return _pixels(tex)
 
@@ -113,3 +119,48 @@ def test_the_view_after_a_grey_capture_is_still_in_colour(rig):
     _capture(rig, True)
     raw = camera.generate_view_texture(tiling_mode=False)
     assert _chroma(_pixels(raw)) > 1e-3
+
+
+# -- the OTHER two colour sources ------------------------------------------
+# The capture follows the live view mode. The Canvas view and the trail
+# overlay under Camera + Trails both paint flow DIRECTION as hue, in the
+# assembler rather than the particle pass, so zeroing saturation there alone
+# left the encoder looking at colour whenever the view was not plain Camera.
+
+def _capture_in(rig, view_mode, grayscale, **extra):
+    from state import view_modes
+
+    ctx, sim, camera, view = rig
+    if view_mode is None:
+        view_mode = view_modes.CAMERA
+    was = camera.cam_brush_mode
+    camera.cam_brush_mode = view_mode in view_modes.CAMERA_VIEWS
+    try:
+        kw = _kwargs(camera, sim)
+        kw["view_mode"] = view_mode
+        kw.update(extra)
+        return _render_twice(view, kw, grayscale)
+    finally:
+        camera.cam_brush_mode = was
+
+
+def test_the_canvas_view_is_grey_when_asked(rig):
+    from state import view_modes
+
+    colour = _capture_in(rig, view_modes.CANVAS, False)
+    assert _chroma(colour) > 1e-3, "the canvas view paints direction as hue"
+    grey = _capture_in(rig, view_modes.CANVAS, True)
+    assert grey.max() > 0.0
+    assert _chroma(grey) < 1e-4
+
+
+def test_the_trail_overlay_is_grey_when_asked(rig):
+    from state import view_modes
+
+    ctx, sim, camera, view = rig
+    overlay = dict(trail_tex=sim.view_tex, trail_overlay_strength=1.0)
+    colour = _capture_in(rig, view_modes.CAMERA_TRAILS, False, **overlay)
+    assert _chroma(colour) > 1e-3, "the overlay paints direction as hue"
+    grey = _capture_in(rig, view_modes.CAMERA_TRAILS, True, **overlay)
+    assert grey.max() > 0.0
+    assert _chroma(grey) < 1e-4

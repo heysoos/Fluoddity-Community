@@ -1171,21 +1171,43 @@ mechanics these caveats assume.
   crop of it - the display lied about what was scored. Guarded by
   `tests/test_image_goal_crop.py`.
 
-- **Greyscale scoring renders DENSITY, and the uniform that does it is on a
-  SHARED program.** `GRAYSCALE` in `cam_brush.vert` zeroes every particle's
-  saturation, so hsv2rgb yields white and the capture is particle density
-  with no colour term at all; a luma mix of the colour frame is NOT the same
-  thing, because every particle has brightness 1.0 and hue is the force
-  term, so luma still varies with hue. The program is the laptop's own
-  particle pass, so `_render_particles` puts the uniform back before
-  returning or the next frame on screen goes grey too. The reference picture
-  and the synthesized distractors are read by luma to match, cached per
-  flag. It is Auto's setting, checkpointed, and deliberately NOT yet
-  Explore's: an archive pools embeddings, and a grey descriptor among colour
-  ones is silently wrong at equal width - taking it to Explore means pinning
-  it per archive the way the encoder is, and re-measuring `min_separation`
-  on grey renders. Guarded by `tests/test_capture_grayscale_gl.py`, which
-  reads pixels off the real shader, and `tests/test_image_goal_crop.py`.
+- **Greyscale scoring renders DENSITY, and the capture has THREE colour
+  sources, not one.** The particle pass colours by the brain's hue; the
+  Canvas view and the trail overlay under Camera + Trails are coloured by
+  the ASSEMBLER as `hsv2rgb(flow direction, 0.75, magnitude)`; and the
+  capture inherits whichever view is live. The first version zeroed
+  saturation in `cam_brush.vert` alone, so the encoder still saw
+  direction-as-hue in any view but plain Camera, and it read as the search
+  matching the picture's colours - which it was. `GRAYSCALE` therefore
+  exists in BOTH shaders and drops the saturation at every site, the same
+  rule three times: hsv2rgb with s=0 is the value alone, so the picture is
+  density (or flow magnitude) and nothing else. A luma mix of the colour
+  frame is NOT the same thing - every particle has brightness 1.0 and hue is
+  the force term, so luma still varies with hue. Two traps. `cam_brush` is
+  the laptop's own particle program, so `_render_particles` puts its uniform
+  back before returning or the next frame on screen goes grey; the
+  assembler's is set on EVERY call from a kwarg that defaults to false, so
+  the laptop's own assembly resets it. And the assembler's first-frame mix
+  keeps a `-0.0001` sliver of the PREVIOUS accumulation buffer whatever
+  `exposure` says, so a GL test reads the second of two identical renders,
+  and `exposure` itself is deliberately NOT neutralised in the capture - an
+  earlier decision (`test_the_look_of_the_creature_is_preserved`) counts it
+  as the creature's look, though for the capture the previous frame is the
+  previous SNAPSHOT, which across a generation boundary is another genome.
+  The reference picture and the synthesized distractors are read by luma to
+  match, cached per flag. It is Auto's setting, checkpointed, and
+  deliberately NOT yet Explore's: an archive pools embeddings, and a grey
+  descriptor among colour ones is silently wrong at equal width - taking it
+  to Explore means pinning it per archive the way the encoder is, and
+  re-measuring `min_separation` on grey renders. Guarded by
+  `tests/test_capture_grayscale_gl.py`, which reads pixels off the real
+  shaders in all three views, and `tests/test_image_goal_crop.py`.
+  **The Auto tab shows tile 0 AS CAPTURED**, published by
+  `_publish_capture_preview` after every capture: the capture has its own
+  view, crop and greyscale rules, so the screen is evidence of none of them,
+  and the first greyscale defect above was found by eye rather than by that
+  picture because there was no such picture. Guarded by
+  `tests/test_capture_preview.py`.
 
 - **A latent or chase goal has ONE reference, which makes its fitness a
   monotone squash of raw cosine — and raw cosine to an arbitrary direction is

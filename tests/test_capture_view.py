@@ -337,3 +337,11 @@ def test_the_capture_can_be_asked_for_density_alone():
     # The program is shared with the laptop's own view, so the pass puts the
     # uniform back before returning.
     assert prog.get("GRAYSCALE") is False
+
+
+def test_greyscale_reaches_the_assembler_too():
+    # The Canvas view and the trail overlay are coloured in the assembler,
+    # not the particle pass, so the flag has to ride in the kwargs as well.
+    kw = CaptureView._capture_kwargs({"view_mode": 0}, grayscale=True)
+    assert kw["grayscale"] is True
+    assert CaptureView._capture_kwargs({"view_mode": 0})["grayscale"] is False

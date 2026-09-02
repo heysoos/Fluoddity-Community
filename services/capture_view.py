@@ -62,7 +62,7 @@ class CaptureView:
             return None
         return self._assembler.assemble_frame(
             src, total_samples=1, current_sample_index=0,
-            **self._capture_kwargs(assemble_kwargs))
+            **self._capture_kwargs(assemble_kwargs, grayscale))
 
     def draw_grid(self, fbo, src, grid, blit, ui_state, tile_px):
         """Fill the bound capture framebuffer, blooming each tile ALONE.
@@ -172,12 +172,16 @@ class CaptureView:
         return self._tex
 
     @staticmethod
-    def _capture_kwargs(assemble_kwargs) -> dict:
+    def _capture_kwargs(assemble_kwargs, grayscale=False) -> dict:
         """The shared assembly kwargs, with every camera-dependent entry
         neutralised. Anything left pointing at the live camera would put the
-        user's viewpoint back into the score."""
+        user's viewpoint back into the score.
+
+        `grayscale` has to ride here as well as in the particle pass: the
+        Canvas view and the trail overlay are coloured by the ASSEMBLER."""
         kw = dict(assemble_kwargs)
         kw.update(
+            grayscale=bool(grayscale),
             screen_aspect=1.0,
             camera_position=(0.0, 0.0),
             camera_zoom=1.0,

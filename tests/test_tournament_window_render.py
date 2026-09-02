@@ -509,3 +509,36 @@ def test_flipping_grayscale_re_sets_the_goal(gui, tmp_path, monkeypatch):
     frame(h.render_auto_tournament_tab, n=1)
     assert ats.grayscale is True
     assert ats.goal_changed is True
+
+
+def _image_calls(monkeypatch, draw):
+    """-> the sizes of every imgui.image call while draw runs."""
+    seen = []
+    real = imgui.image
+
+    def spy(tex_ref, size, *a, **kw):
+        seen.append((size.x, size.y))
+        return real(tex_ref, size, *a, **kw)
+
+    # Restored by hand rather than left to monkeypatch: a second call would
+    # otherwise wrap the first spy and append the later frame's calls to it.
+    imgui.image = spy
+    try:
+        frame(draw)
+    finally:
+        imgui.image = real
+    return seen
+
+
+def test_the_tab_shows_what_the_encoder_sees(gui, tmp_path, monkeypatch):
+    class _Tex:
+        glo = 1
+        size = (224, 224)
+
+    h = Harness(_service(tmp_path))
+    before = _image_calls(monkeypatch, h.render_auto_tournament_tab)
+    h.capture_preview_tex = _Tex()
+    after = _image_calls(monkeypatch, h.render_auto_tournament_tab)
+    px = float(h.CAPTURE_PREVIEW_PX)
+    assert (px, px) not in before
+    assert (px, px) in after
