@@ -17,6 +17,10 @@ class AutoTournamentState:
     # stored, so there are no vectors a change could invalidate.
     model_key: str = "clip-b32"
     prompt: str = ""
+    # The goal is the prompt OR a picture, by `goal_kind`; never both.
+    goal_kind: str = "text"
+    goal_image: str = ""
+    goal_distractors: bool = True
     algorithm: str = "CMA-ES"
     grid: int = 4
     steps_per_gen: int = 300
@@ -40,6 +44,8 @@ class AutoTournamentState:
     pause_requested: bool = False
     reset_requested: bool = False
     prompt_changed: bool = False
+    # Kind switched, picture chosen or cleared, distractors toggled.
+    goal_changed: bool = False
     grid_changed: bool = False
     save_checkpoint_requested: bool = False
     # No save_best flag: the button opens the shared name dialog directly.
@@ -51,3 +57,10 @@ class AutoTournamentState:
     load_checkpoint_path: str = ""
     load_genome_path: str = ""
     download_model_requested: bool = False
+
+    def has_goal(self) -> bool:
+        """Is there something to start a search toward, under the selected
+        kind? A prompt is not a goal while Image is selected."""
+        if self.goal_kind == "image":
+            return bool(self.goal_image)
+        return bool(self.prompt.strip())

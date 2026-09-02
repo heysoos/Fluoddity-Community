@@ -4,15 +4,22 @@ Passive: renders widgets and sets state, runs no logic.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from imgui_bundle import imgui
 
-from services import save_targets
+from services import file_picker, save_targets
 from services.capture_health import sweeping_parameters
 from services.cohort_tiling import cohorts_for, max_variants
 from ui import hints, layout
 from ui.notices import OK, render_banner
 
 ALGORITHM_NAMES = ["CMA-ES", "Sep-CMA-ES", "GA", "Random Search"]
+
+GOAL_KIND_LABELS = ["Text", "Image"]
+GOAL_KIND_KEYS = ["text", "image"]
+
+DISTRACTORS_TOOLTIP = "Scores the picture against black, white, grey and noise."
 
 COHORT_TOOLTIP = "Gives each tile several variants of its genome."
 
@@ -49,6 +56,11 @@ class AutoTournamentWindowMixin:
     auto_service = None
     auto_unavailable = ""
     _auto_load_path = ""
+    # path -> RGB texture, set by the orchestrator; None draws no thumbnail.
+    goal_image_loader = None
+    GOAL_THUMB_PX = 96
+    _goal_thumb = None          # (path, texture) of the picture on screen
+    _goal_pick = None           # an open file dialog
 
     def render_auto_tournament_tab(self):
         ats = self.state.auto_tournament
@@ -145,6 +157,95 @@ class AutoTournamentWindowMixin:
             imgui.text_disabled("pip install onnxruntime-directml tokenizers cmaes")
 
     def _render_goal(self, ats, svc):
+        """The goal is a prompt or a picture, chosen by kind; switching kind
+        re-sets whichever is selected."""
+        idx = (GOAL_KIND_KEYS.index(ats.goal_kind)
+               if ats.goal_kind in GOAL_KIND_KEYS else 0)
+        ch, idx = imgui.combo("Goal", idx, GOAL_KIND_LABELS)
+        if ch and GOAL_KIND_KEYS[idx] != ats.goal_kind:
+            ats.goal_kind = GOAL_KIND_KEYS[idx]
+            ats.goal_changed = True
+        if ats.goal_kind == "image":
+            self._render_image_goal(ats, svc)
+        else:
+            self._render_text_goal(ats, svc)
+
+    def _render_image_goal(self, ats, svc):
+        """A picture applies the moment it is chosen; there is no Set."""
+        style = imgui.get_style()
+        buttons = layout.button_width("Clear")
+        if file_picker.available():
+            buttons += style.item_spacing.x + layout.button_width("Browse...")
+        imgui.set_next_item_width(
+            -(imgui.calc_text_size("Picture").x + style.item_inner_spacing.x
+              + style.item_spacing.x + buttons))
+        changed, ats.goal_image = imgui.input_text(
+            "Picture", ats.goal_image, imgui.InputTextFlags_.enter_returns_true)
+        hints.tip("Picture the search steers toward.")
+        if changed:
+            ats.goal_changed = True
+        if file_picker.available():
+            imgui.same_line()
+            if imgui.button("Browse..."):
+                self._goal_pick = file_picker.open_image(
+                    file_picker.folder_of(ats.goal_image))
+        imgui.same_line()
+        if imgui.button("Clear"):
+            ats.goal_image = ""
+            ats.goal_changed = True
+        self._collect_goal_pick(ats)
+
+        ch, ats.goal_distractors = imgui.checkbox("Distractors",
+                                                  ats.goal_distractors)
+        hints.tip(DISTRACTORS_TOOLTIP)
+        if ch:
+            ats.goal_changed = True
+
+        tex = self._goal_thumbnail(ats.goal_image)
+        if tex is not None:
+            imgui.image(imgui.ImTextureRef(tex.glo),
+                        imgui.ImVec2(self.GOAL_THUMB_PX, self.GOAL_THUMB_PX))
+            imgui.same_line()
+        active = (svc.goal_image if svc is not None
+                  and getattr(svc, "goal_kind", "text") == "image" else "")
+        if not ats.goal_image:
+            imgui.text_disabled("no picture chosen")
+        elif active == ats.goal_image:
+            layout.text_colored_wrapped(
+                _OK, f"steering toward image: {Path(ats.goal_image).name}")
+        else:
+            layout.text_colored_wrapped(_WARN, "not set")
+
+    def _collect_goal_pick(self, ats):
+        """Take the chosen path once the dialog closes."""
+        pick = getattr(self, "_goal_pick", None)
+        if pick is None:
+            return
+        chosen = pick.result()
+        if chosen is None:
+            return
+        self._goal_pick = None
+        if chosen:
+            ats.goal_image = chosen
+            ats.goal_changed = True
+
+    def _goal_thumbnail(self, path):
+        """The texture for `path`, decoded once per path. A file that cannot
+        be decoded is remembered as None rather than retried every frame."""
+        cur = getattr(self, "_goal_thumb", None)
+        if cur is not None and cur[0] == path:
+            return cur[1]
+        if cur is not None and cur[1] is not None:
+            cur[1].release()
+        self._goal_thumb = None
+        loader = getattr(self, "goal_image_loader", None)
+        if not path or loader is None:
+            return None
+        tex = loader(path)
+        self._goal_thumb = (path, tex)
+        return tex
+
+    def _render_text_goal(self, ats, svc):
         """Typed text is not the goal until submitted, so the box is tinted
         while the two differ."""
         active = (svc.prompt if svc is not None else "").strip()
@@ -160,10 +261,10 @@ class AutoTournamentWindowMixin:
         # Room for the label AND the Set button that follows it.
         style = imgui.get_style()
         imgui.set_next_item_width(
-            -(imgui.calc_text_size("Goal").x + style.item_inner_spacing.x
+            -(imgui.calc_text_size("Prompt").x + style.item_inner_spacing.x
               + style.item_spacing.x + layout.button_width("Set")))
         changed, ats.prompt = imgui.input_text(
-            "Goal", ats.prompt, imgui.InputTextFlags_.enter_returns_true
+            "Prompt", ats.prompt, imgui.InputTextFlags_.enter_returns_true
         )
         if pending:
             imgui.pop_style_color(3)
@@ -224,7 +325,7 @@ class AutoTournamentWindowMixin:
             if imgui.button("Pause"):
                 ats.pause_requested = True
         else:
-            imgui.begin_disabled(not ats.prompt.strip())
+            imgui.begin_disabled(not ats.has_goal())
             if imgui.button("Start"):
                 ats.start_requested = True
             imgui.end_disabled()

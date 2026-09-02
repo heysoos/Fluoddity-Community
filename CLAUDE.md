@@ -1130,6 +1130,36 @@ mechanics these caveats assume.
   16-tile generation distinguishable to a rank-based optimizer. `contrastive()`
   has no default scale on purpose.
 
+- **An Auto-mode goal can be a PICTURE, and a picture is scored against
+  SYNTHESIZED pictures - never against the text distractors.** The scorer
+  holds ONE goal - a target, its references and the scale that goes with them
+  - and `score()` is one function over either. A prompt keeps the text
+  distractors at the text scale; a picture gets black, white, mid-grey and
+  seeded noise at the encoder's image scale, or nothing at all, which is the
+  plain cosine (`Distractors` unticked). A picture target among the TEXT list
+  cannot work: image-image similarity sits near 0.9 and image-text near 0.2,
+  so it would win the softmax for every tile and the landscape would go flat.
+  **The box ships TICKED, and the measurement is why.** Over 283 thumbnails of
+  one real archive against four photographs (`python -m
+  tools.measure_image_goal --refs ...`), plain cosine put a WHITE canvas above
+  **77%** of the real tiles on average and above **99.6%** for one landscape,
+  black and grey above 80% - the dead-canvas attractor the text path's
+  distractors exist for. With the four pictures every dead tile ranked LAST
+  for every goal, nothing floored, and all 16 ranks of a grid stayed
+  distinct. Against thumbnail goals (a picture the archive already holds) the
+  two losses agree (Spearman 0.73) and the contrastive readout sits near
+  saturation - 2.2% of tiles at or above 0.999 - without losing a rank. A
+  photo goal's readout is SMALL (median 0.001-0.15) because the tiles really
+  are more like a blank canvas than like a photograph; the trace normalises.
+  Two traps. The reference is embedded as the untouched frame - the user chose
+  the framing - while the tiles keep their three views. And the driver's
+  `set_image_goal` RAISES on a file it cannot read and changes nothing, so a
+  checkpoint whose picture has gone restores the optimizer and keeps the
+  previous goal - the goal is restored LAST - and `set_auto_picture` turns
+  that into a warning at every call site, including the encoder switch. The
+  label carries the filename into the run log's `prompt` column, so nothing
+  downstream gained a field. Guarded by `tests/test_image_goal.py`.
+
 - **A latent or chase goal has ONE reference, which makes its fitness a
   monotone squash of raw cosine — and raw cosine to an arbitrary direction is
   maximised by NOISE.** Text goals were never exposed because

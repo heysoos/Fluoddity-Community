@@ -182,6 +182,9 @@ Sync is the thing only a person can confirm, so use material with a hard beat.
 - [ ] "Refit projection" does not mirror the layout
 - [ ] Switching Explore -> Auto -> Manual and back leaves each mode working
 - [ ] The Auto tab still has Grid, Steps per Gen, Sim Steps per Frame, Snapshots per Gen, Start/Reset and Initial Sigma
+- [ ] Auto: `Goal` = Image, Browse to a photo: the thumbnail appears, Start enables with no prompt, the tab says "steering toward image: <name>", and the run log's prompt column names the picture
+- [ ] Auto: Clear empties the picture and disables Start; `Goal` back to Text re-applies the prompt
+- [ ] Auto: a checkpoint saved with a picture goal reloads with the picture on screen; with the file deleted it resumes with a warning and the previous goal
 - [ ] Toggling physics search mid-run ends any expedition without crashing
 - [ ] Changing the grid mid-expedition does not crash
 

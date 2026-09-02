@@ -6,12 +6,13 @@ from camera import Camera
 from sim import Sim, SIZE_OF_ENTITY_STRUCT
 from ui import UI
 from services import RuleManager, EntityPicker, VideoRecorderService, ConfigSaver, ArrowDebugService, MultiLoadService, TournamentService
+from services.thumb_cache import file_loader
 from services.field_handler import FieldHandler
 from services.parameter_lock_service import ParameterLockService
 from utilities.paths import initialize_user_data, get_user_physics_configs_dir, get_app_physics_configs_dir, get_screenshots_dir
 from state import load_preferences, save_preferences, SimState
 from state.audio_in_state import to_dict as rig_to_dict
-from command_handler import CommandHandler
+from command_handler import CommandHandler, set_auto_picture
 from simulation_runner import SimulationRunner
 from camera_input import process_camera_input
 from controller_input import ControllerCam, process_controller_input
@@ -169,6 +170,7 @@ class App:
         self.ui.multi_load_service = self.multi_load_service
         self.ui.tournament_service = self.tournament_service
         self.ui.advanced_drawing_processor = self.advanced_drawing_processor
+        self.ui.goal_image_loader = file_loader(self.ctx, self.ui.GOAL_THUMB_PX)
 
         # Physics configs directories
         self.app_configs_dir = get_app_physics_configs_dir()
@@ -328,9 +330,14 @@ class App:
         # The goal was embedded by the outgoing encoder, and the two spaces are
         # not comparable - at 512 against 768 the score is not even a shape
         # error until the first tile arrives.
-        prompt = ui_state.auto_tournament.prompt.strip()
-        if prompt:
-            svc.set_prompt(prompt)
+        auto = ui_state.auto_tournament
+        if getattr(auto, "goal_kind", "text") == "image":
+            if auto.goal_image:
+                set_auto_picture(svc, auto)
+        else:
+            prompt = auto.prompt.strip()
+            if prompt:
+                svc.set_prompt(prompt)
         # A generation half-scored in one space and half in another ranks
         # nothing, so the one in flight is thrown away rather than finished.
         svc.abort_generation()

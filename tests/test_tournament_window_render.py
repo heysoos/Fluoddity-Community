@@ -367,3 +367,99 @@ def test_the_open_window_still_enables_the_tab_that_is_showing(gui):
     h.state.tournament.enabled = True
     frame(h.render_tournament_window)
     assert h.state.tournament.enabled
+
+
+# -- the picture goal --------------------------------------------------------
+
+def _labels_of(monkeypatch, draw, names):
+    """-> every label handed to the imgui calls in names while draw runs."""
+    seen = []
+    for name in names:
+        real = getattr(imgui, name)
+
+        def wrapper(label, *a, _real=real, **kw):
+            seen.append(label)
+            return _real(label, *a, **kw)
+
+        monkeypatch.setattr(imgui, name, wrapper)
+    frame(draw)
+    return seen
+
+
+def test_the_goal_kind_is_a_combo_on_the_auto_tab(gui, tmp_path, monkeypatch):
+    h = Harness(_service(tmp_path))
+    assert "Goal" in _combo_labels(monkeypatch, h.render_auto_tournament_tab)
+
+
+def test_text_mode_draws_the_prompt_and_image_mode_the_picture(
+        gui, tmp_path, monkeypatch):
+    h = Harness(_service(tmp_path))
+    ats = h.state.auto_tournament
+    ats.goal_kind = "text"
+    seen = _labels_of(monkeypatch, h.render_auto_tournament_tab,
+                      ("input_text", "checkbox"))
+    assert "Prompt" in seen and "Picture" not in seen
+    assert "Distractors" not in seen
+
+    ats.goal_kind = "image"
+    ats.goal_image = "C:/pictures/reef.png"
+    seen = _labels_of(monkeypatch, h.render_auto_tournament_tab,
+                      ("input_text", "checkbox"))
+    assert "Picture" in seen and "Prompt" not in seen
+    assert "Distractors" in seen
+
+
+def test_image_mode_offers_clear(gui, tmp_path):
+    h = Harness(_service(tmp_path))
+    h.state.auto_tournament.goal_kind = "image"
+    h.state.auto_tournament.goal_image = "C:/pictures/reef.png"
+    assert "Clear" in button_labels(h.render_auto_tournament_tab)
+
+
+def test_the_thumbnail_is_loaded_once_and_released_on_change(gui, tmp_path):
+    class _Tex:
+        def __init__(self):
+            self.glo = 1
+            self.released = 0
+
+        def release(self):
+            self.released += 1
+
+    made = []
+
+    def loader(path):
+        made.append(path)
+        return _Tex()
+
+    h = Harness(_service(tmp_path))
+    h.goal_image_loader = loader
+    ats = h.state.auto_tournament
+    ats.goal_kind = "image"
+    ats.goal_image = "a.png"
+    frame(h.render_auto_tournament_tab, n=3)
+    assert made == ["a.png"], "one decode per path, not one per frame"
+    first = h._goal_thumb[1]
+    ats.goal_image = "b.png"
+    frame(h.render_auto_tournament_tab)
+    assert made == ["a.png", "b.png"]
+    assert first.released == 1
+
+
+def test_clearing_the_picture_sets_the_one_shot(gui, tmp_path):
+    h = Harness(_service(tmp_path))
+    ats = h.state.auto_tournament
+    ats.goal_kind = "image"
+    ats.goal_image = "a.png"
+    real = imgui.button
+
+    def press_clear(label, *a, **kw):
+        real(label, *a, **kw)
+        return label == "Clear"
+
+    imgui.button = press_clear
+    try:
+        frame(h.render_auto_tournament_tab)
+    finally:
+        imgui.button = real
+    assert ats.goal_image == ""
+    assert ats.goal_changed is True

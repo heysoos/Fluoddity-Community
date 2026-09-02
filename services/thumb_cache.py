@@ -54,6 +54,24 @@ def gl_loader(ctx, stores, max_px: int | None = None):
     return load
 
 
+def file_loader(ctx, max_px: int):
+    """A picture on disk -> an RGB texture no wider than max_px, or None."""
+
+    def load(path: str):
+        try:
+            from PIL import Image
+
+            with Image.open(path) as img:
+                img.draft("RGB", (int(max_px), int(max_px)))
+                rgb = img.convert("RGB")
+                rgb.thumbnail((int(max_px), int(max_px)))
+                return ctx.texture(rgb.size, 3, rgb.tobytes())
+        except Exception:
+            return None
+
+    return load
+
+
 class ThumbCache:
     def __init__(self, loader, capacity: int = 256,
                  max_capacity: int = MAX_CAPACITY):

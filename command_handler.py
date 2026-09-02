@@ -7,6 +7,17 @@ import numpy as np
 from utilities.gl_helpers import readback_rule
 
 
+def set_auto_picture(svc, ats) -> None:
+    """Make the tab's picture the service's goal. A file that cannot be read
+    is a warning, never a crash: the previous goal stands and the tab says
+    the picture is not set."""
+    try:
+        svc.set_image_goal(ats.goal_image, ats.goal_distractors)
+    except OSError as exc:
+        ats.warning = f"picture not loaded: {exc}"
+        print(f"[auto] {ats.warning}")
+
+
 class CommandHandler:
     """Processes one-shot commands from UI state.
 
@@ -842,6 +853,7 @@ class CommandHandler:
         ats.pause_requested = False
         ats.reset_requested = False
         ats.prompt_changed = False
+        ats.goal_changed = False
         ats.grid_changed = False
         ats.save_checkpoint_requested = False
         ats.save_tile_requested = -1
@@ -888,8 +900,11 @@ class CommandHandler:
             tile_mutation_strength=ats.tile_mutation_strength,
         )
 
-        if ats.prompt_changed:
+        if ats.prompt_changed or (ats.goal_changed and ats.goal_kind != "image"
+                                  and ats.prompt.strip()):
             svc.set_prompt(ats.prompt)
+        if ats.goal_changed and ats.goal_kind == "image" and ats.goal_image:
+            set_auto_picture(svc, ats)
         if ats.reset_requested:
             svc.reset()
         if ats.pause_requested:
@@ -898,9 +913,10 @@ class CommandHandler:
             self._load_auto_genome(svc, ats)
         if ats.load_checkpoint_path:
             self._load_auto_checkpoint(svc, ats)
-        if ats.start_requested and ats.prompt.strip():
+        if ats.start_requested and ats.has_goal():
             self._auto_capture_warned = False
-            svc.start(ats.prompt)
+            # start(prompt) would put the text goal back over a picture.
+            svc.start(ats.prompt if ats.goal_kind != "image" else None)
         if ats.save_tile_requested >= 0:
             # Not saved here: handed back to the UI so it can ask for a name.
             # Only this side knows Explore has not already claimed the click.
@@ -1625,10 +1641,17 @@ class CommandHandler:
             ats.warning = f"checkpoint not loaded: {exc}"
             print(f"[auto] {ats.warning}")
             return
+        except OSError as exc:
+            # The optimizer is restored by then; only the picture is missing.
+            ats.warning = f"checkpoint resumed without its picture: {exc}"
+            print(f"[auto] {ats.warning}")
         # Loading forces the grid to the checkpoint's value; keep the UI in sync.
         ats.grid = svc.tournament.grid
         ats.algorithm = svc.algorithm
         ats.prompt = svc.prompt
+        ats.goal_kind = svc.goal_kind
+        ats.goal_image = svc.goal_image
+        ats.goal_distractors = svc.goal_distractors
         ats.steps_per_gen = svc.steps_per_gen
         ats.snapshots_per_gen = svc.snapshots_per_gen
         ats.sim_steps_per_frame = svc.sim_steps_per_frame
