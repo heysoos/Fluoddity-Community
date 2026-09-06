@@ -83,6 +83,15 @@ def channel_key(k: int) -> str:
     return f"AUDIO_IN_{int(k)}"
 
 
+def channel_index(key: str):
+    """The channel a target key names, or None for any other target."""
+    prefix = "AUDIO_IN_"
+    if isinstance(key, str) and key.startswith(prefix) \
+            and key[len(prefix):].isdigit():
+        return int(key[len(prefix):])
+    return None
+
+
 def channel_targets(layout, channels) -> list[TargetDef]:
     """One target per audio input the LAYOUT declares. A channel list shorter
     than that reads defaults for the rest; a longer one keeps its extras

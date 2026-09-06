@@ -171,15 +171,47 @@ class AudioRuntime:
 
     def _channel_inputs(self, ui_state, ast, signals, dt, layout, held):
         """The brain's channel array, or None for silence."""
+        self._channel_targets = []
         if layout is None or not ast.feed:
             return None
         targets = channel_targets(layout, ast.channels)
         if not targets:
             return None
+        self._channel_targets = targets
         return channel_values(
             ast.channel_mappings, targets, signals, self._states,
             ast.strengths, ast.global_strength, dt, muted_targets(ast),
             ui_state.sim.num_cohorts, held=held, rate_scale=ast.rate_scale)
+
+    def _channel_overlays(self, ui_state) -> dict:
+        """Per-channel drawing data: cohort 0's live value, and where a
+        full-scale signal would land."""
+        ast = ui_state.audio
+        arr = self.audio_inputs
+        targets = getattr(self, "_channel_targets", None) or []
+        if arr is None or not targets:
+            return {}
+        from ui.audio_reactive_window import SIGNAL_COLORS
+
+        deaf = muted_targets(ast)
+        signals = {n: 1.0 for n in SIGNAL_COLORS}
+        full = channel_values(
+            ast.channel_mappings, targets, signals, {}, ast.strengths,
+            ast.global_strength, 1 / 60.0, deaf, ui_state.sim.num_cohorts,
+            apply_shapers=False)
+        out = {}
+        for row, t in enumerate(targets):
+            bound = [m for m in ast.channel_mappings
+                     if m.target == t.key and m.enabled and t.key not in deaf]
+            if not bound or row >= arr.shape[0]:
+                continue
+            out[t.key] = {
+                "lo": t.lo, "hi": t.hi, "base": 0.0,
+                "live": float(arr[row, 0]),
+                "reach": float(full[row, 0]) if full is not None else 0.0,
+                "color": SIGNAL_COLORS[bound[0].signal],
+            }
+        return out
 
     def overlays(self, ui_state, modulated_sim) -> dict:
         """Per-target drawing data for the physics sliders.
@@ -188,8 +220,11 @@ class AudioRuntime:
         the modulation's size rather than its current value.
         """
         ast = ui_state.audio
-        if not ast.enabled or modulated_sim is ui_state.sim:
+        if not ast.enabled:
             return {}
+        out = self._channel_overlays(ui_state)
+        if modulated_sim is ui_state.sim:
+            return out
         from ui.audio_reactive_window import SIGNAL_COLORS
 
         deaf = deaf_targets(ui_state.sim) | muted_targets(ast)
@@ -205,7 +240,6 @@ class AudioRuntime:
                         dict(), ast.strengths, ast.global_strength, 1 / 60.0,
                         deaf, apply_shapers=False)
 
-        out = {}
         for key, target in targets.items():
             bound = [m for m in ast.mappings
                      if m.target == key and m.enabled and key not in deaf]

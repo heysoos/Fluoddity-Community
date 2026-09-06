@@ -159,7 +159,8 @@ def read_mask(mask: np.ndarray, raw) -> None:
 
 def channel_values(mappings, targets, signals, states, strengths,
                    global_strength: float, dt: float, deaf, n_cohorts: int,
-                   held=(), rate_scale: float = 1.0):
+                   held=(), rate_scale: float = 1.0,
+                   apply_shapers: bool = True):
     """The brain's audio channels, one value per (channel, cohort), or None.
 
     The same chain as build_arrays over a base of ZERO, so a channel is a
@@ -189,8 +190,9 @@ def channel_values(mappings, targets, signals, states, strengths,
     shaped: dict[int, float] = {}
     for m in live:
         s = min(1.0, max(0.0, signals[m.signal] * m.gain))
-        s = states.setdefault(m.uid, ShaperState()).apply(
-            s, dt, m.shaper, m.signal not in held, rate_scale)
+        if apply_shapers:
+            s = states.setdefault(m.uid, ShaperState()).apply(
+                s, dt, m.shaper, m.signal not in held, rate_scale)
         shaped[m.uid] = s
 
     arr = np.zeros((len(targets), MASK_SLOTS), dtype=np.float32)

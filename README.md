@@ -88,6 +88,18 @@ Whatever the modality, the size settings fix the search dimension printed under 
 
 The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space. For a deep MLP the tiles are the **last** hidden layer's units, the only ones that add up to the output. `Slice` chooses the plane and **Reseed plane** redraws the random one; `Output` chooses what is drawn, defaulting to a random projection of all four outputs into red, green and blue. The single-value views are blue for negative and orange for positive.
 
+## Brain Inputs
+
+Every brain reads four numbers: the trail at its left and right sensors. `Audio Reactive > Brain Inputs` gives it up to eight more, each an audio channel the brain reads beside the sensors, so a creature can *be* a different creature on a kick rather than merely a faster one.
+
+The top line names the brain and its input count. `-` and `+` change the count, which is a layout change: the loaded brain is carried across with its new audio weights drawn from a seed, and going back to zero returns exactly the brain you had. **Feed** is the master switch. With every channel at zero, or Feed off, or capture stopped, the brain computes precisely what it did before it had ears — so any preset in the library can take audio inputs and lose nothing.
+
+**Reroll** draws fresh audio weights from a new seed without touching the rest of the brain; the seed is saved with the preset. **Audio Scale** scales every audio weight at once, and at zero the brain is deaf again.
+
+Below that, one row per channel, shaped like the rows in the Modulate tab: the six signal dots bind bands to it, and the drawer holds each band's shaper and cohort mask, plus a **Channel** tab with the channel's name and **Range** — what a full-scale sum reads as, in the brain's own input units. A channel is a signed sum: add rows push it up, subtract rows pull it below zero, and it is zero whenever its rows are. The count and Reroll are unavailable while the tournament grid is running or a hover preview is borrowing the brain.
+
+Explore and Auto hear nothing: a search runs with every channel at zero and judges the brain as its original preset.
+
 ## Perform Mode
 
 **Extras > Perform Mode Panel**, or **F11**, puts the picture on a second display with no interface on top of it, while every control stays here on the laptop.

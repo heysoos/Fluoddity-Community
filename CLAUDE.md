@@ -1624,6 +1624,51 @@ mechanics these caveats assume.
   which reloads the archive — `rescore_all()` is load-bearing there, so it
   must be asked for exactly ONCE and never per frame.
 
+### Brain audio inputs
+
+See `docs/superpowers/specs/2026-09-06-brain-audio-inputs-design.md` for the
+design; these are the rules it rests on.
+
+- **An audio weight may live ONLY in a term multiplied by its input, and the
+  audio terms are added AFTER the sensor dot product, behind a
+  `BRAIN_AUDIO_IN > 0` branch.** That is what makes a brain with its channels
+  at zero its deaf ancestor BIT FOR BIT, which is the feature's whole
+  contract: any preset takes audio inputs and loses nothing. Gabor's audio
+  weights therefore extend its FREQUENCY and never its centre — an audio
+  centre makes silence read as a distance. MLP seeds its scratch array with
+  the channels after the four taps, so `scratch_width` takes `4 + K` and a
+  count above 4 crosses into the next bucket. Guarded by
+  `tests/test_brain_audio_inputs_gpu.py` on the pure brain functions and by
+  `tests/test_audio_inputs_gl.py` through the real entity-update program.
+
+- **The count lives on `BrainLayout.audio_inputs`, NOT in `shape`, and rides
+  the signature as a `+aK` SUFFIX.** Every positional parser is untouched and
+  a K=0 signature is character-identical to before. `positional_structure`
+  is what every zip of shape numbers against the schema must use; the setting
+  is declared once as `AUDIO_INPUTS_SETTING`. The audio weights sit at the
+  END of each unit, so every existing offset holds and a K=0 brain is
+  byte-identical in VRAM. `candidate_moves` compares a proposal over the
+  proposal's OWN keys, because a layout whose scales predate `audio_scale`
+  could otherwise never move.
+
+- **Changing the count alone is the one structural change the rule
+  SURVIVES.** `_apply_brain_layout` carries it across with
+  `transfer_audio_inputs`, which copies every non-audio float and draws the
+  rest from `audio_seed`; every other structural change still drops the rule.
+  The generic `transfer_genome` copies by CHILD stride and MLP's own zeroes a
+  widened fan-in, so neither can be reused. Stub apps that borrow
+  `_apply_brain_layout` must borrow `_carry_rule_across_inputs` too.
+
+- **`audio_scale` is a decode scale, so `test_brain_scales` builds its base
+  at one audio input.** At K=0 the scale has no weight to act on and the
+  schema-derived guard would call it decorative.
+
+- **ImGui applies `TabItemFlags_.set_selected` a FRAME LATE.** The panel's
+  tab request stands until the bar shows it and the bar's own choice writes
+  back only while none is pending; a version that wrote the selection back
+  every frame lost the request on the first frame, and the drawer's nested
+  bar needs a third frame in a render test.
+
 ### Perform mode
 
 - **The projector RENDERS ITS OWN FRAME at a fixed viewpoint; it cannot

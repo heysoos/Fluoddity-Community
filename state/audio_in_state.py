@@ -97,6 +97,11 @@ class AudioInState:
     # item writes open_target to jump straight to a row.
     open_target: str = ""
     open_band: str = ""
+    # Which of the matrix's two tabs is up: "" for Modulate, "channels" for
+    # Brain Inputs. A view state, so not persisted.
+    tab: str = ""
+    # One-shot: show the open channel drawer's Channel tab.
+    open_channel_tab: bool = False
 
     # Live view state, written by the orchestrator for the panel to draw.
     status: str = "idle"                # "idle" | "active" | "error" | "waiting"

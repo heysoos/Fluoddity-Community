@@ -95,6 +95,11 @@ class _App:
 
         return App._apply_brain_layout(self, layout, ui_state, **kw)
 
+    def _carry_rule_across_inputs(self, current, layout, ui_state):
+        from main import App
+
+        return App._carry_rule_across_inputs(self, current, layout, ui_state)
+
 
 class _UI:
     def __init__(self):

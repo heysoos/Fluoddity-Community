@@ -18,7 +18,8 @@ from imgui_bundle import imgui
 from services import audio_capture
 from services import cohort_audio as ca
 from services.audio_analysis import BAND_NAMES, SIGNAL_NAMES
-from services.audio_mapping import (MODES, Mapping, brain_targets,
+from services.audio_mapping import (MODES, Channel, Mapping, brain_targets,
+                                    channel_index, channel_targets,
                                     deaf_targets, physics_targets)
 from services.audio_shapers import SHAPER_KINDS, ShaperParams
 from ui import hints, layout, notices
@@ -497,9 +498,134 @@ class AudioReactiveWindowMixin(CohortStripMixin):
     def _mapping_list(self, ast, group: str) -> list:
         if group == "physics":
             return ast.mappings
+        if group == "channel":
+            return ast.channel_mappings
         return ast.brain_mappings.setdefault(self.state.brain.modality, [])
 
     def _render_audio_matrix(self, ast):
+        """Two tabs: Modulate, which is everything the rig drove before, and
+        Brain Inputs, the channels the brain reads."""
+        with layout.sub_tab_bar("##audio_mode") as opened:
+            if not opened:
+                return
+            shown = getattr(self, "_audio_tab_shown", None)
+            # A request stands until the bar shows it - ImGui honours the
+            # flag a frame late - and only while none is pending does the
+            # bar's own choice write back, or the user could never click the
+            # other tab.
+            pending = ast.tab if ast.tab != shown else None
+            for name, label, draw in (
+                    ("", "Modulate", self._render_modulate_tab),
+                    ("channels", "Brain Inputs", self._render_audio_channels)):
+                flags = (imgui.TabItemFlags_.set_selected
+                         if pending == name else 0)
+                selected, _open = imgui.begin_tab_item(f"{label}##audio_tab",
+                                                       None, flags)
+                if not selected:
+                    continue
+                self._audio_tab_shown = name
+                if pending is None:
+                    ast.tab = name
+                draw(ast)
+                imgui.end_tab_item()
+
+    # ---- the Brain Inputs tab ------------------------------------------
+
+    def _audio_inputs_locked(self) -> str:
+        """Why the count and the weights cannot be edited now, or ""."""
+        if getattr(self.state.tournament, "enabled", False):
+            return "The tournament grid owns slot 0, so there is no one brain to widen."
+        if getattr(self.state.brain, "borrow_active", False):
+            return "A preview is borrowing another brain."
+        return ""
+
+    def _bump_audio_inputs(self, delta: int) -> bool:
+        """Move the Brain window's input count. A layout change, so it goes
+        through the same setting the Brain window writes. -> did it move?"""
+        from services.brains import MAX_AUDIO_INPUTS
+
+        if self._audio_inputs_locked():
+            return False
+        bst = self.state.brain
+        k = int(bst.settings.get("audio_inputs", 0))
+        new = k + int(delta)
+        if not 0 <= new <= MAX_AUDIO_INPUTS or new == k:
+            return False
+        bst.settings = {**bst.settings, "audio_inputs": new}
+        return True
+
+    @staticmethod
+    def _channel_at(ast, i: int) -> Channel:
+        """The i-th channel, padding the list so the index exists."""
+        while len(ast.channels) <= i:
+            ast.channels.append(Channel())
+        return ast.channels[i]
+
+    def _render_audio_channels(self, ast):
+        from services.brains import AUDIO_SCALE_SETTING
+        from ui.brain_window import layout_for
+
+        bst = self.state.brain
+        b_layout = layout_for(bst.modality, bst.settings)
+        k = int(b_layout.audio_inputs)
+        locked = self._audio_inputs_locked()
+
+        imgui.text("Brain")
+        imgui.same_line()
+        imgui.text_colored(imgui.ImVec4(0.94, 0.85, 0.45, 1.0),
+                           b_layout.signature())
+        imgui.same_line()
+        imgui.begin_disabled(bool(locked))
+        if imgui.small_button("-##audio_inputs"):
+            self._bump_audio_inputs(-1)
+        imgui.same_line()
+        imgui.text(f"{k} inputs")
+        imgui.same_line()
+        if imgui.small_button("+##audio_inputs"):
+            self._bump_audio_inputs(+1)
+        imgui.end_disabled()
+        hints.tip(locked or "How many audio channels the brain reads. A "
+                            "layout change: the loaded brain is carried "
+                            "across.")
+        imgui.same_line()
+        changed, on = imgui.checkbox("Feed##audio_feed", ast.feed)
+        if changed:
+            ast.feed = on
+        hints.tip("Feeds the channels to the brain; off is exactly silence.")
+
+        imgui.text_disabled(f"seed {self.state.sim.audio_seed:.3f}")
+        imgui.same_line()
+        imgui.begin_disabled(bool(locked) or k == 0)
+        if imgui.small_button("Reroll##audio_weights"):
+            bst.reroll_audio_requested = True
+        imgui.end_disabled()
+        hints.tip("Redraws the audio weights from a fresh seed; the brain "
+                  "underneath is untouched.")
+        cur = float(bst.settings.get("audio_scale",
+                                     AUDIO_SCALE_SETTING.default))
+        changed, v = imgui.slider_float("Audio Scale##audio_scale", cur,
+                                        AUDIO_SCALE_SETTING.lo,
+                                        AUDIO_SCALE_SETTING.hi)
+        if changed:
+            bst.settings = {**bst.settings, "audio_scale": v}
+        hints.tip("Scales every audio weight; zero makes the brain deaf.")
+
+        if k == 0:
+            imgui.text_disabled("No audio inputs. Raise the count to give "
+                                "the brain ears.")
+            return
+        live = tuple(bst.audio_live)
+        imgui.text_disabled("  ".join(
+            f"A{i + 1} {live[i]:+.3f}" if i < len(live) else f"A{i + 1} 0.000"
+            for i in range(k)))
+        hints.tip("What cohort 0's brain reads on each channel right now.")
+        imgui.separator()
+
+        mappings = self._mapping_list(ast, "channel")
+        for target in channel_targets(b_layout, ast.channels):
+            self._render_audio_row(ast, "channel", mappings, target, False)
+
+    def _render_modulate_tab(self, ast):
         deaf = deaf_targets(self.state.sim)
 
         if imgui.collapsing_header("Physics##audio_group",
@@ -541,7 +667,7 @@ class AudioReactiveWindowMixin(CohortStripMixin):
         # The row's own switch: every band on this parameter at once, without
         # touching what each band's On box says. A brain row's key carries its
         # modality, since two brains may declare the same scale name.
-        mute_key = (target.key if group == "physics"
+        mute_key = (target.key if group in ("physics", "channel")
                     else f"{self.state.brain.modality}:{target.key}")
         muted = bool(ast.muted.get(mute_key))
         if bound:
@@ -629,8 +755,44 @@ class AudioReactiveWindowMixin(CohortStripMixin):
                 ast.open_band = ""
                 self._render_audio_total_tab(target, bound, overlay)
                 imgui.end_tab_item()
+            if channel_index(target.key) is not None:
+                flags = (imgui.TabItemFlags_.set_selected
+                         if ast.open_channel_tab else 0)
+                if imgui.begin_tab_item("Channel##tab_channel", None, flags)[0]:
+                    ast.open_channel_tab = False
+                    ast.open_band = ""
+                    self._render_channel_tab(ast, target)
+                    imgui.end_tab_item()
             imgui.end_tab_bar()
         imgui.unindent()
+
+    def _render_channel_tab(self, ast, target):
+        """What the brain reads: the label, the range, and the summed rows."""
+        c = self._channel_at(ast, channel_index(target.key))
+        changed, name = imgui.input_text("Name##channel_name", c.name)
+        if changed:
+            c.name = name
+        hints.tip("A label for the rig; the brain knows this channel by its "
+                  "number.")
+        changed, r = self._audio_slider("Range", c.range, 0.001, 4.0, "%.3f",
+                                        Channel().range, log=True)
+        if changed:
+            c.range = max(1e-6, float(r))
+        hints.tip("What a full-scale sum reads as, in the brain's own input "
+                  "units.")
+        bound = [m for m in ast.channel_mappings if m.target == target.key]
+        imgui.text_disabled(" + ".join(
+            f"{m.signal}·{m.shaper.kind}·{m.mode} {m.depth:.2f}"
+            for m in bound))
+        tring = self._audio_target_rings().get(target.key)
+        if tring is None:
+            imgui.text_disabled("Start audio to see the channel.")
+            return
+        colour = SIGNAL_COLORS[bound[0].signal] if bound else (1, 1, 1, 1)
+        self._audio_trace("##channel_trace", tring.values, colour,
+                          imgui.get_content_region_avail().x, 44)
+        imgui.text_disabled("Zero whenever its rows are, and the moment Feed "
+                            "or capture is off.")
 
     def _render_audio_band_tab(self, m):
         imgui.text_colored(imgui.ImVec4(*SIGNAL_COLORS[m.signal]), m.signal)
@@ -706,7 +868,8 @@ class AudioReactiveWindowMixin(CohortStripMixin):
         self._render_cohort_section(m)
 
     def _render_cohort_section(self, m):
-        if m.target not in ca.COHORT_AUDIO_PARAMS:
+        if m.target not in ca.COHORT_AUDIO_PARAMS \
+                and channel_index(m.target) is None:
             imgui.text_disabled(
                 "This parameter is one value for the whole canvas, so it "
                 "cannot be split by cohort.")
