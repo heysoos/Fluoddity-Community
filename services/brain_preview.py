@@ -155,12 +155,14 @@ class BrainPreview:
 
     def render(self, layout, brain_buffer, *, axes=(0, 2), channel: int = 0,
                value_range: float = 2.0, gain: float = 1.0, seed: int = 0,
-               include_total: bool = True, slot: int = 0) -> moderngl.Texture:
+               include_total: bool = True, slot: int = 0,
+               audio=()) -> moderngl.Texture:
         """-> the atlas texture. Tile 0 is the whole brain when include_total.
 
         `slot` indexes the flat brain buffer: 0 is the loaded rule or the
         tournament's tile 0, and the cohort slots hold one brain each when no
-        rule is loaded.
+        rule is loaded. `audio` is the live channel values the brain is
+        evaluated at; missing ones read as zero.
 
         Re-rendered on demand rather than cached: at 96 px a full 48-unit brain
         is ~450k fragments of pure arithmetic, far below one simulation step,
@@ -175,6 +177,10 @@ class BrainPreview:
 
         brain_buffer.bind_to_storage_buffer(4)
         p = self.program
+        from services.brains import MAX_AUDIO_INPUTS
+        full = ([float(a) for a in audio] + [0.0] * MAX_AUDIO_INPUTS
+                )[:MAX_AUDIO_INPUTS]
+        tryset(p, "PREVIEW_AUDIO", tuple(full))
         tryset(p, "PREVIEW_OUT", tuple(float(c) for c in output_direction(seed)))
         tryset(p, "PREVIEW_RGB",
                [tuple(float(c) for c in row) for row in output_basis(seed)])

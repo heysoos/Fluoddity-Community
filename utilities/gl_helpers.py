@@ -89,6 +89,7 @@ def set_brain_layout_uniforms(program, layout) -> None:
 
     shape = tuple(int(v) for v in layout.shape)
     tryset(program, 'BRAIN_SHAPE', (shape + (0, 0, 0, 0))[:4])
+    tryset(program, 'BRAIN_AUDIO_IN', int(layout.audio_inputs))
     extra = getattr(get(layout.modality), "layout_uniforms", None)
     for name, value in (extra(layout) if extra is not None else {}).items():
         tryset(program, name, value)

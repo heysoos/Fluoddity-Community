@@ -110,7 +110,8 @@ def test_the_signature_round_trips(layers):
     # them; only `layers` is structural and so only it is in the signature.
     got = settings_of(lay)
     assert got.pop("layers") == layers
-    assert got == {"w_scale": W_SCALE, "b_scale": B_SCALE}
+    assert got.pop("audio_inputs") == 0
+    assert got == {"w_scale": W_SCALE, "b_scale": B_SCALE, "audio_scale": 1.0}
 
 
 @pytest.mark.parametrize("sig", ["mlp-n16-a1", "mlp-n16-a2"])

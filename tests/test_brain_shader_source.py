@@ -17,12 +17,14 @@ def test_the_header_mirrors_the_python_slot_constants():
     """Three constants live in both services/brains/__init__.py and
     _header.glsl, and they index the same buffer from opposite sides. A drift
     is silent: the host writes one slot and the GPU reads another."""
-    from services.brains import COHORT_BRAIN_SLOT0, MAX_COHORT_BRAINS
+    from services.brains import (COHORT_BRAIN_SLOT0, MAX_AUDIO_INPUTS,
+                                 MAX_COHORT_BRAINS)
 
     src = read("shaders/brains/_header.glsl")
     for name, value in (("MAX_BRAIN_FLOATS", MAX_BRAIN_FLOATS),
                         ("COHORT_BRAIN_SLOT0", COHORT_BRAIN_SLOT0),
-                        ("MAX_COHORT_BRAINS", MAX_COHORT_BRAINS)):
+                        ("MAX_COHORT_BRAINS", MAX_COHORT_BRAINS),
+                        ("MAX_AUDIO_INPUTS", MAX_AUDIO_INPUTS)):
         assert f"#define {name} {value}\n" in src, (
             f"{name} is {value} in Python and something else in the shader"
         )
@@ -61,7 +63,10 @@ def test_the_depth_one_path_is_still_there():
     assert src.count("if (BRAIN_DEPTH <= 1)") == 2, (
         "brain_mlp and mlp_unit must each keep the old path"
     )
-    assert "5 * h + j" in src and "9 * h" in src, "the old offsets are gone"
+    # The old offsets 5h and 9h, written with the fan-in so that at zero
+    # audio inputs they are the same numbers.
+    assert "(f0 + 1) * h + j" in src and "(4 + BRAIN_AUDIO_IN + 5) * h" in src, (
+        "the old offsets are gone")
 
 
 def test_header_declares_the_flat_brain_buffer():

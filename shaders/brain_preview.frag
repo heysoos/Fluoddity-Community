@@ -46,6 +46,8 @@ uniform float PREVIEW_GAIN;     // display scale only; does not touch the brain
 // a different distance along each one and the picture would be sheared.
 uniform vec4  PREVIEW_U;
 uniform vec4  PREVIEW_V;
+// The live channel values, so the tiles move with the music.
+uniform float PREVIEW_AUDIO[MAX_AUDIO_INPUTS];
 
 // Blue for negative, near-black at zero, orange for positive. Diverging rather
 // than a single ramp because the SIGN is the whole point - a Lenia bump is
@@ -63,6 +65,7 @@ vec3 diverging(float v) {
 void main() {
     vec2 p = (texcoord * 2.0 - 1.0) * PREVIEW_RANGE;
     vec4 x = PREVIEW_U * p.x + PREVIEW_V * p.y;
+    for (int k = 0; k < BRAIN_AUDIO_IN; k++) g_audio[k] = PREVIEW_AUDIO[k];
 
     uint base = uint(max(PREVIEW_BASE, 0));
     vec4 r = (PREVIEW_UNIT < 0) ? eval_brain(base, x)

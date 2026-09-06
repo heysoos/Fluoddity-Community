@@ -66,7 +66,7 @@ float mlp_param_at(uint base, int i) {
 // Layer l's weight block, its bias block, and its fan-in.
 void mlp_layer_off(int l, out int w_off, out int b_off, out int fan) {
     int off = 0;
-    fan = 4;
+    fan = 4 + BRAIN_AUDIO_IN;
     for (int i = 0; i < l; i++) {
         int w = mlp_width(i);
         off += fan * w + w;
@@ -90,7 +90,10 @@ int mlp_out_off() {
 int mlp_hidden(uint base, vec4 x, int stop, inout float cur[MAX_MLP_WIDTH]) {
     float nxt[MAX_MLP_WIDTH];
     cur[0] = x.x; cur[1] = x.y; cur[2] = x.z; cur[3] = x.w;
-    int fan = 4;
+    // The audio channels sit after the taps, so the fan-in loop below reads
+    // the sensor columns first and the audio columns after.
+    for (int k = 0; k < BRAIN_AUDIO_IN && 4 + k < MAX_MLP_WIDTH; k++) cur[4 + k] = g_audio[k];
+    int fan = 4 + BRAIN_AUDIO_IN;
     int off = 0;
     for (int l = 0; l < stop; l++) {
         int w = mlp_width(l);
@@ -136,11 +139,16 @@ vec4 mlp_unit(uint base, int j, vec4 x) {
         // Today's path, verbatim. A uniform branch, so no divergence, and a
         // depth-1 brain cannot regress.
         int h = BRAIN_SHAPE.x;
-        int r = j * 4;
+        int f0 = 4 + BRAIN_AUDIO_IN;
+        int r = j * f0;
         vec4 w1 = vec4(mlp_param_at(base, r),     mlp_param_at(base, r + 1),
                        mlp_param_at(base, r + 2), mlp_param_at(base, r + 3));
-        float a = mlp_act(dot(x, w1) + mlp_param_at(base, 4 * h + j));
-        int c = 5 * h + j;
+        float s = dot(x, w1);
+        if (BRAIN_AUDIO_IN > 0) {
+            for (int k = 0; k < BRAIN_AUDIO_IN; k++) s += g_audio[k] * mlp_param_at(base, r + 4 + k);
+        }
+        float a = mlp_act(s + mlp_param_at(base, f0 * h + j));
+        int c = (f0 + 1) * h + j;
         return a * vec4(mlp_param_at(base, c),
                         mlp_param_at(base, c + h),
                         mlp_param_at(base, c + 2 * h),
@@ -163,7 +171,7 @@ vec4 mlp_unit(uint base, int j, vec4 x) {
 vec4 brain_mlp(uint base, vec4 x) {
     if (BRAIN_DEPTH <= 1) {
         int h = BRAIN_SHAPE.x;
-        int b2 = 9 * h;
+        int b2 = (4 + BRAIN_AUDIO_IN + 5) * h;
         // The output bias belongs to no hidden unit, so it is added here and
         // the Inspector's per-unit tiles do not include it.
         vec4 result = vec4(mlp_param_at(base, b2),     mlp_param_at(base, b2 + 1),

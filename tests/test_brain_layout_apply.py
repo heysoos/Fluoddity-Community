@@ -93,6 +93,10 @@ class _StubApp:
     def _build_archive_set(self, path):
         raise AssertionError("unreachable: archive and store are both None")
 
+    def _carry_rule_across_inputs(self, current, layout, ui_state):
+        return main.App._carry_rule_across_inputs(self, current, layout,
+                                                  ui_state)
+
     def apply(self, layout, ui_state):
         return main.App._apply_brain_layout(self, layout, ui_state)
 

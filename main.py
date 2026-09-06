@@ -681,6 +681,7 @@ class App:
                 gain=bst.preview_gain,
                 seed=bst.preview_seed,
                 slot=self._brain_preview_slot(bst),
+                audio=bst.audio_live,
             )
         except Exception as exc:
             print(f"[brain] inspector render failed ({exc})")
@@ -789,6 +790,11 @@ class App:
         if self.command_handler is not None:
             pending = self.command_handler.take_pending_brain_rule(
                 layout.signature())
+        # A change of AUDIO INPUT COUNT alone is the one structural change
+        # the rule survives: every other float keeps its meaning, so the
+        # rule is carried across with its audio weights drawn from the seed.
+        if pending is None:
+            pending = self._carry_rule_across_inputs(current, layout, ui_state)
         self.sim.apply_rule(pending)
 
         # The interactive tournament breeds genomes of the layout it is told
@@ -808,6 +814,29 @@ class App:
         # now on rather than the one it just left.
         self._save_archive_settings(ui_state)
         return True
+
+    def _carry_rule_across_inputs(self, current, layout, ui_state):
+        """The loaded rule widened or narrowed to `layout`, pushed onto the
+        rule stack, when the two layouts differ ONLY in their audio input
+        count. None otherwise, which is the old behaviour: the rule is dropped.
+        """
+        from services.brains import brain_rng
+        from services.brains.layout_moves import (transfer_audio_inputs,
+                                                  with_audio_inputs)
+
+        rm = getattr(self, "rule_manager", None)
+        rule = rm.get_current_rule() if rm is not None else None
+        if rule is None or current.audio_inputs == layout.audio_inputs:
+            return None
+        if with_audio_inputs(current, 0) != with_audio_inputs(layout, 0):
+            return None
+        arr = np.asarray(rule, dtype=np.float32).reshape(-1)
+        if arr.size != current.length:
+            return None
+        out = transfer_audio_inputs(arr, current, layout,
+                                    brain_rng(ui_state.sim.audio_seed))
+        rm.push_rule(out, ui_state.sim.rule_seed)
+        return out
 
     def _apply_requested_layout(self, ui_state) -> bool:
         """Honour a layout the SEARCH asked for, in the frame it asked.
@@ -1317,6 +1346,11 @@ class App:
             self.rule_manager.get_current_rule())
         self.sim.apply_state(_audio_sim)
         self.sim.set_cohort_audio(self.audio_runtime.cohort_audio)
+        self.sim.set_audio_inputs(self.audio_runtime.audio_inputs)
+        # Cohort 0's channels, for the Inspector and the panel's readout.
+        _ai = self.audio_runtime.audio_inputs
+        ui_state.brain.audio_live = (tuple(float(v) for v in _ai[:, 0])
+                                     if _ai is not None else ())
         if _audio_brain is not None:
             self.sim.apply_rule(_audio_brain)
         # The panel draws the modulation inside each slider's own track.

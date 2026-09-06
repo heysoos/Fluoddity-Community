@@ -157,6 +157,63 @@ def read_mask(mask: np.ndarray, raw) -> None:
         mask[:] = [bool(v) for v in raw]
 
 
+def channel_values(mappings, targets, signals, states, strengths,
+                   global_strength: float, dt: float, deaf, n_cohorts: int,
+                   held=(), rate_scale: float = 1.0):
+    """The brain's audio channels, one value per (channel, cohort), or None.
+
+    The same chain as build_arrays over a base of ZERO, so a channel is a
+    signed sum that is exactly 0.0 when its rows are:
+
+        value = strength * range * A * M       clamped to [-range, +range]
+
+    with A the summed add/subtract terms and M the product of the multiply
+    terms. `targets` is channel_targets(); its `hi` is the range. Indexed
+    [channel, COHORT], as the shader reads it. None whenever no row is live,
+    which the caller uploads as silence.
+    """
+    from services.audio_shapers import ShaperState
+
+    if not targets:
+        return None
+    by_target = {t.key: t for t in targets}
+    live = [m for m in mappings
+            if m.enabled and m.target in by_target and m.target not in deaf
+            and m.signal in signals]
+    if not live:
+        return None
+
+    n = min(MASK_SLOTS, max(1, int(n_cohorts)))
+    slots = np.minimum(MASK_SLOTS - 1,
+                       ((np.arange(n) + 0.5) / n * MASK_SLOTS).astype(np.int64))
+    shaped: dict[int, float] = {}
+    for m in live:
+        s = min(1.0, max(0.0, signals[m.signal] * m.gain))
+        s = states.setdefault(m.uid, ShaperState()).apply(
+            s, dt, m.shaper, m.signal not in held, rate_scale)
+        shaped[m.uid] = s
+
+    arr = np.zeros((len(targets), MASK_SLOTS), dtype=np.float32)
+    for row, t in enumerate(targets):
+        bound = [m for m in live if m.target == t.key]
+        if not bound:
+            continue
+        strength = float(strengths.get(t.key, 1.0)) * float(global_strength)
+        a = np.zeros(n, dtype=np.float64)
+        mul = np.ones(n, dtype=np.float64)
+        for m in bound:
+            covered = m.cohorts[slots]
+            s = shaped[m.uid]
+            if m.mode == "multiply":
+                mul[covered] *= 1.0 + s * m.depth
+            else:
+                sign = -1.0 if m.mode == "subtract" else 1.0
+                a[covered] += sign * s * m.depth
+        v = strength * t.hi * a * mul
+        arr[row, :n] = np.clip(v, t.lo, t.hi).astype(np.float32)
+    return arr
+
+
 def build_arrays(mappings, targets, signals, states, strengths,
                  global_strength: float, dt: float, deaf, n_cohorts: int,
                  held=(), rate_scale: float = 1.0,

@@ -76,6 +76,12 @@ class BrainState:
     # One-shot layer operation, as (layer index, op, argument). Read and
     # cleared by CommandHandler, which owns the rule stack.
     layer_op: object = None
+    # One-shot: redraw the brain's audio weights from a fresh seed. A genome
+    # edit like the layer operations, and refused in the same two states.
+    reroll_audio_requested: bool = False
+    # The audio channels cohort 0 hears this frame, pushed in by the
+    # orchestrator; empty when silent. The Inspector evaluates at these.
+    audio_live: tuple = ()
     # Which distribution each layer's Reroll draws from, by layer index. A UI
     # preference, not part of the genome, the layout or the signature - the
     # weights are what a preset saves, so there is no round trip to break.

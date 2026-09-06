@@ -66,6 +66,37 @@ class Mapping:
         )
 
 
+@dataclass
+class Channel:
+    """One audio input to the brain, as the rig sees it.
+
+    The channel's identity is its INDEX - the weight column it drives - and
+    the name is a label saved with the rig. `range` is what a full-scale sum
+    reads as, in the brain's own input units.
+    """
+    name: str = ""
+    range: float = 0.25
+    uid: int = field(default_factory=_next_uid)
+
+
+def channel_key(k: int) -> str:
+    return f"AUDIO_IN_{int(k)}"
+
+
+def channel_targets(layout, channels) -> list[TargetDef]:
+    """One target per audio input the LAYOUT declares. A channel list shorter
+    than that reads defaults for the rest; a longer one keeps its extras
+    waiting, as brain_mappings waits for its modality."""
+    k = int(getattr(layout, "audio_inputs", 0) or 0) if layout is not None else 0
+    out = []
+    for i in range(k):
+        c = channels[i] if i < len(channels) else Channel()
+        r = max(float(c.range), 1e-6)
+        out.append(TargetDef(channel_key(i), c.name or f"A{i + 1}", "channel",
+                             -r, r, -r, r))
+    return out
+
+
 def physics_targets(sim_state) -> list[TargetDef]:
     """Every physics slider except those whose maximum switches them off."""
     from ui.physics_params import PHYSICS_PARAMS

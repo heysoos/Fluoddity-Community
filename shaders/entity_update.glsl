@@ -647,6 +647,13 @@ void main() {
     g_brain_mut = cohort_audio(calculate_setting(get_particle_mutation_scale(),e.pos,cohort),CA_MUTATION_SCALE,cohort);
     g_brain_cohort = get_particle_rule_seed()+floor(cohort);
 
+    // The audio channels this cohort hears. Left at zero unless a rig feeds
+    // them, so a silent channel is the deaf brain exactly.
+    if (AUDIO_IN_ACTIVE) {
+        int ac = clamp(int(floor(cohort)), 0, CA_SLOTS - 1);
+        for (int k = 0; k < BRAIN_AUDIO_IN; k++) g_audio[k] = audio_in[k * CA_SLOTS + ac];
+    }
+
     // Only write brains when explicitly requested, and only for the particle
     // being adopted. The buffer is ONE brain wide and the write lands at 0:
     // readback_rule() reads that one brain and nothing else reads this buffer.

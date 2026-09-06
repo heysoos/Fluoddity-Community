@@ -22,6 +22,7 @@ PERSISTED_FIELDS: tuple[str, ...] = (
     "mappings", "brain_mappings", "strengths", "global_strength",
     "auto_gain", "device_name", "modulate", "muted", "bands",
     "release_seconds", "rate_scale",
+    "channels", "channel_mappings", "feed",
 )
 
 _STRENGTH_MAX = 2.0
@@ -42,6 +43,13 @@ class AudioInState:
     # built for one brain is waiting when you switch back to it.
     mappings: list[Mapping] = field(default_factory=list)
     brain_mappings: dict[str, list[Mapping]] = field(default_factory=dict)
+
+    # The brain's audio inputs: a label and range per channel, the rows that
+    # sum into them (target AUDIO_IN_<k>), and the tab's master switch. Feed
+    # off is exact silence, which is the deaf brain.
+    channels: list = field(default_factory=list)
+    channel_mappings: list[Mapping] = field(default_factory=list)
+    feed: bool = True
 
     strengths: dict[str, float] = field(default_factory=dict)
     global_strength: float = 1.0
@@ -176,9 +184,30 @@ def _mapping_from_dict(d) -> Mapping | None:
     return m
 
 
+def _channel_from_dict(d):
+    """A malformed entry is a default channel, never a dropped one: the
+    index is the identity and dropping one would renumber the rest."""
+    from services.audio_mapping import Channel
+
+    c = Channel()
+    if not isinstance(d, dict):
+        return c
+    if isinstance(d.get("name"), str):
+        c.name = d["name"]
+    r = d.get("range")
+    if isinstance(r, (int, float)) and not isinstance(r, bool) and r > 0:
+        c.range = float(r)
+    return c
+
+
 def to_dict(state: AudioInState) -> dict:
     return {
         "mappings": [_mapping_to_dict(m) for m in state.mappings],
+        "channels": [{"name": str(c.name), "range": float(c.range)}
+                     for c in state.channels],
+        "channel_mappings": [_mapping_to_dict(m)
+                             for m in state.channel_mappings],
+        "feed": bool(state.feed),
         "brain_mappings": {k: [_mapping_to_dict(m) for m in v]
                            for k, v in state.brain_mappings.items()},
         "strengths": {k: float(v) for k, v in state.strengths.items()},
@@ -210,6 +239,15 @@ def apply_dict(state: AudioInState, data: dict) -> None:
         state.mappings = [m for m in
                           (_mapping_from_dict(d) for d in data["mappings"])
                           if m is not None]
+
+    if isinstance(data.get("channels"), list):
+        state.channels = [_channel_from_dict(d) for d in data["channels"]]
+    if isinstance(data.get("channel_mappings"), list):
+        state.channel_mappings = [
+            m for m in (_mapping_from_dict(d) for d in data["channel_mappings"])
+            if m is not None]
+    if isinstance(data.get("feed"), bool):
+        state.feed = data["feed"]
 
     if isinstance(data.get("brain_mappings"), dict):
         state.brain_mappings = {

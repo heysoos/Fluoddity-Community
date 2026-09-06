@@ -39,6 +39,11 @@ class BrainLayout:
     # archive stores DECODED brains, so a creature already in it is unaffected
     # by a later change here. Only how new z decode moves.
     scales: tuple[tuple[str, float], ...] = field(default=(), compare=False)
+    # Audio channels fed to the brain beside the four sensor taps. Structural:
+    # every unit gains this many weights. Kept out of `shape` so positional
+    # indexing and every signature parser are untouched, and 0 is a layout
+    # that is character-identical to one written before it existed.
+    audio_inputs: int = 0
 
     def scale(self, key: str, default: float) -> float:
         for k, v in self.scales:
@@ -65,7 +70,8 @@ class BrainLayout:
         """
         m = REGISTRY.get(self.modality)
         fn = getattr(m, "signature_of", None)
-        return fn(self) if fn is not None else default_signature(self)
+        base = fn(self) if fn is not None else default_signature(self)
+        return f"{base}+a{self.audio_inputs}" if self.audio_inputs else base
 
 
 def default_signature(layout: BrainLayout) -> str:
@@ -96,6 +102,27 @@ class Setting:
 # change to one of these resets the optimizer and switches archive; everything
 # else is a decode SCALE and is free to change mid-run.
 STRUCTURAL_KINDS = ("int", "choice", "layers")
+
+# Mirrored in shaders/brains/_header.glsl as MAX_AUDIO_INPUTS.
+MAX_AUDIO_INPUTS = 8
+
+# Declared ONCE and appended by every modality's schema, so the count and the
+# scale mean the same thing under every brain. The count is structural; the
+# scale is a decode scale, so it moves live and reaches zero, where the brain
+# is deaf without a weight being touched.
+AUDIO_INPUTS_SETTING = Setting("audio_inputs", "Audio Inputs", "int",
+                               0, MAX_AUDIO_INPUTS, 0)
+AUDIO_SCALE_SETTING = Setting("audio_scale", "Audio Scale", "float",
+                              0.0, 4.0, 1.0)
+
+
+def audio_inputs_of(s: dict) -> int:
+    """The count a settings dict asks for, bounded. Raises past the maximum,
+    as a width past MAX_BRAIN_FLOATS does."""
+    k = int(s.get("audio_inputs", 0))
+    if not 0 <= k <= MAX_AUDIO_INPUTS:
+        raise ValueError(f"audio_inputs {k} is outside 0..{MAX_AUDIO_INPUTS}")
+    return k
 
 
 REGISTRY: dict = {}
@@ -141,17 +168,21 @@ def layout_from_signature(sig: str, settings: dict | None = None):
     still plays back, since the archive holds it decoded, but re-encoding it
     would use different scales.
     """
-    modality = str(sig).split("-")[0]
+    base, _sep, suffix = str(sig).partition("+a")
+    if _sep and not suffix.isdigit():
+        return None
+    modality = base.split("-")[0]
     m = REGISTRY.get(modality)
     if m is None:
         return None
     parse = getattr(m, "settings_from_signature", None)
-    structural = (parse(str(sig)) if parse is not None
-                  else default_settings_from_signature(m, str(sig)))
+    structural = (parse(base) if parse is not None
+                  else default_settings_from_signature(m, base))
     if structural is None:
         return None
     merged = dict(settings or {})
     merged.update(structural)
+    merged["audio_inputs"] = int(suffix) if _sep else 0
     try:
         layout = m.layout_from_settings(merged)
     except (TypeError, ValueError, KeyError):
@@ -174,8 +205,17 @@ def default_settings_from_signature(m, sig: str):
         if not body.lstrip("-").isdigit():
             return None
         nums.append(int(body))
-    keys = [s.key for s in m.settings_schema() if s.kind in STRUCTURAL_KINDS]
+    keys = [s.key for s in positional_structure(m)]
     return dict(zip(keys, nums))
+
+
+def positional_structure(m) -> list:
+    """The structural settings a signature carries POSITIONALLY. The audio
+    input count is structural too, but it rides as a suffix rather than a
+    position, so every parser that zips shape numbers against the schema has
+    to leave it out."""
+    return [s for s in m.settings_schema()
+            if s.kind in STRUCTURAL_KINDS and s.key != "audio_inputs"]
 
 
 def settings_of(layout: BrainLayout) -> dict:
@@ -199,15 +239,42 @@ def settings_of(layout: BrainLayout) -> dict:
     """
     m = get(layout.modality)
     out: dict = {k: float(v) for k, v in layout.scales}
+    out["audio_inputs"] = int(layout.audio_inputs)
     fn = getattr(m, "settings_of", None)
     if fn is not None:
         out.update(fn(layout))
         return out
-    structural = [s for s in m.settings_schema() if s.kind in STRUCTURAL_KINDS]
-    for i, s in enumerate(structural):
+    for i, s in enumerate(positional_structure(m)):
         if i < len(layout.shape):
             out[s.key] = int(layout.shape[i])
     return out
+
+
+def audio_weight_index(layout: BrainLayout) -> np.ndarray:
+    """Flat indices, into the DECODED brain, of every audio weight.
+
+    A modality owns this because it owns its packing; everything generic -
+    the transfer, the shrink, the Inspector's readout - is written against
+    these indices rather than against a reading of each modality's table.
+    Empty at zero inputs.
+    """
+    if not layout.audio_inputs:
+        return np.zeros(0, dtype=np.int64)
+    return np.asarray(get(layout.modality).audio_weight_index(layout),
+                      dtype=np.int64).reshape(-1)
+
+
+def audio_z_index(layout: BrainLayout) -> np.ndarray:
+    """The same weights' coordinates in the SEARCH vector. Identical to the
+    decoded indices unless a modality orders z by block rather than by unit,
+    which Fourier does."""
+    if not layout.audio_inputs:
+        return np.zeros(0, dtype=np.int64)
+    m = get(layout.modality)
+    fn = getattr(m, "audio_z_index", None)
+    if fn is None:
+        return audio_weight_index(layout)
+    return np.asarray(fn(layout), dtype=np.int64).reshape(-1)
 
 
 def unit_count(layout: BrainLayout) -> int:

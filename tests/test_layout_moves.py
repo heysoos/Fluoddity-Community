@@ -56,7 +56,8 @@ def test_a_move_keeps_the_decode_scales():
     tuned = BrainLayout("fourier", (10,), 80,
                         scales=(("freq_scale", 3.5), ("low_freq_bias", 0.25)))
     child = _by_op(tuned, "grow").child
-    assert dict(child.scales) == {"freq_scale": 3.5, "low_freq_bias": 0.25}
+    kept = {k: v for k, v in child.scales if k in ("freq_scale", "low_freq_bias")}
+    assert kept == {"freq_scale": 3.5, "low_freq_bias": 0.25}
 
 
 def test_the_modality_own_floor_and_ceiling_are_respected():

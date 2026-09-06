@@ -11,13 +11,23 @@
 // mutation - the evaluation below reads through it rather than duplicating the
 // field mapping, because two copies of that mapping is precisely how the
 // Fourier writeback came to disagree with its own evaluation.
+// One filter: centre(4), frequency(4), amplitude(4), sigma, phase, then its
+// audio weights, which extend the FREQUENCY and never the centre.
+int gabor_stride() { return 14 + BRAIN_AUDIO_IN; }
+
 float gabor_param_at(uint base, int i) {
-    int k = i % 14;
-    // Frequency and envelope width SCALE; centre, amplitude and phase OFFSET.
-    // Offsetting the width would let mutation walk it through zero, and the
-    // envelope divides by its square.
-    if ((k >= 4 && k < 8) || k == 12) return brain_mul(base, i);
+    int k = i % gabor_stride();
+    // Frequency, envelope width and audio SCALE; centre, amplitude and phase
+    // OFFSET. Offsetting the width would let mutation walk it through zero,
+    // and the envelope divides by its square.
+    if ((k >= 4 && k < 8) || k == 12 || k >= 14) return brain_mul(base, i);
     return brain_add(base, i);
+}
+
+float gabor_audio_phase(uint base, int o) {
+    float s = 0.0;
+    for (int k = 0; k < BRAIN_AUDIO_IN; k++) s += g_audio[k] * gabor_param_at(base, o + k);
+    return s;
 }
 
 vec4 gabor_v4(uint base, int i) {
@@ -27,7 +37,7 @@ vec4 gabor_v4(uint base, int i) {
 
 // ONE filter's contribution. The Brain Inspector draws exactly this.
 vec4 gabor_unit(uint base, int i, vec4 x) {
-    int o = i * 14;
+    int o = i * gabor_stride();
     vec4 c = gabor_v4(base, o);
     vec4 f = gabor_v4(base, o + 4);
     vec4 a = gabor_v4(base, o + 8);
@@ -39,7 +49,9 @@ vec4 gabor_unit(uint base, int i, vec4 x) {
     float ph = gabor_param_at(base, o + 13);
     vec4 d = x - c;
     float env = exp(-dot(d, d) / (2.0 * sg * sg));
-    return a * (env * cos(dot(x, f) + ph));
+    float arg = dot(x, f);
+    if (BRAIN_AUDIO_IN > 0) arg += gabor_audio_phase(base, o + 14);
+    return a * (env * cos(arg + ph));
 }
 
 vec4 brain_gabor(uint base, vec4 x) {

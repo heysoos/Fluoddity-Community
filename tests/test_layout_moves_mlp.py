@@ -112,7 +112,8 @@ def test_the_scales_survive_every_operator():
     lay = MLP.layout_from_settings({"layers": [[16, 0]], "w_scale": 4.0,
                                     "b_scale": 0.5})
     for m in candidate_moves(lay, LayoutBounds()):
-        assert dict(m.child.scales) == {"w_scale": 4.0, "b_scale": 0.5}
+        scales = dict(m.child.scales)
+        assert (scales["w_scale"], scales["b_scale"]) == (4.0, 0.5)
 
 
 def test_proposing_from_a_deep_stack_terminates():

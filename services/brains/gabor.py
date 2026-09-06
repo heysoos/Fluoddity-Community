@@ -15,9 +15,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.brains import (BrainLayout, Setting, register,
+from services.brains import (AUDIO_INPUTS_SETTING, AUDIO_SCALE_SETTING,
+                             BrainLayout, Setting, audio_inputs_of, register,
                              unit_scale_mask)
 
+# Before any audio weights, which extend the FREQUENCY and never the centre:
+# the envelope measures distance from the centre, and an audio centre would
+# make silence read as a distance.
 FLOATS_PER_FILTER = 14
 
 # INPUT SCALE - the typical magnitude of one sensor component, and the only
@@ -65,29 +69,43 @@ class GaborModality:
             Setting("freq_cycles", "Freq Cycles", "float", 0.25, 6.0, FREQ_CYCLES),
             Setting("envelope_width", "Envelope Width", "float", 0.2, 2.0, 1.0),
             Setting("phase_spread", "Phase Spread", "float", 0.0, 3.1416, 3.1416),
+            AUDIO_INPUTS_SETTING,
+            AUDIO_SCALE_SETTING,
         ]
 
     # One filter is 14 floats: centre(4), frequency(4), amplitude(4), sigma,
-    # phase. Frequency and sigma SCALE - see gabor.glsl's gabor_param_at.
+    # phase, then the audio weights. Frequency, sigma and audio SCALE - see
+    # gabor.glsl's gabor_param_at.
     UNIT_FLOATS = FLOATS_PER_FILTER
     SCALE_OFFSETS = frozenset({4, 5, 6, 7, 12})
     # The OUTGOING half - see fourier.py. centre(4), frequency(4) come first.
     AMPLITUDE_SLICE = (8, 12)
 
     def unit_floats(self, layout: BrainLayout):
-        return self.UNIT_FLOATS
+        return FLOATS_PER_FILTER + layout.audio_inputs
 
     def scale_mask(self, layout: BrainLayout):
-        return unit_scale_mask(layout, self.UNIT_FLOATS, self.SCALE_OFFSETS)
+        stride = self.unit_floats(layout)
+        return unit_scale_mask(layout, stride, self.SCALE_OFFSETS
+                               | set(range(FLOATS_PER_FILTER, stride)))
+
+    def audio_weight_index(self, layout: BrainLayout) -> np.ndarray:
+        n, k = layout.shape[0], layout.audio_inputs
+        stride = FLOATS_PER_FILTER + k
+        return (np.arange(n)[:, None] * stride + FLOATS_PER_FILTER
+                + np.arange(k)[None, :]).reshape(-1)
 
     def layout_from_settings(self, s: dict) -> BrainLayout:
         n = int(s.get("filters", 12))
-        return BrainLayout("gabor", (n,), FLOATS_PER_FILTER * n, scales=(
+        k = audio_inputs_of(s)
+        return BrainLayout("gabor", (n,), (FLOATS_PER_FILTER + k) * n, scales=(
             ("input_scale", float(s.get("input_scale", INPUT_SCALE))),
             ("freq_cycles", float(s.get("freq_cycles", FREQ_CYCLES))),
             ("envelope_width", float(s.get("envelope_width", 1.0))),
             ("phase_spread", float(s.get("phase_spread", np.pi))),
-        ))
+            ("audio_scale", float(s.get("audio_scale",
+                                        AUDIO_SCALE_SETTING.default))),
+        ), audio_inputs=k)
 
     @staticmethod
     def _scales(layout: BrainLayout):
@@ -109,7 +127,7 @@ class GaborModality:
 
     def decode(self, z: np.ndarray, layout: BrainLayout) -> np.ndarray:
         n = layout.shape[0]
-        z = np.asarray(z, dtype=np.float32).reshape(n, FLOATS_PER_FILTER)
+        z = np.asarray(z, dtype=np.float32).reshape(n, self.unit_floats(layout))
         out = np.empty_like(z)
         cs, fs, s_lo, s_hi, ps = self._scales(layout)
         out[:, 0:4] = _squash(z[:, 0:4], cs)
@@ -118,11 +136,12 @@ class GaborModality:
         half = 0.5 * (s_hi - s_lo)
         out[:, 12] = s_lo + half * (1.0 + np.tanh(z[:, 12]))
         out[:, 13] = _squash(z[:, 13], ps)
+        out[:, 14:] = _squash(z[:, 14:], fs * layout.scale("audio_scale", 1.0))
         return out.reshape(-1).astype(np.float32)
 
     def encode(self, params: np.ndarray, layout: BrainLayout):
         n = layout.shape[0]
-        p = np.asarray(params, dtype=np.float32).reshape(n, FLOATS_PER_FILTER)
+        p = np.asarray(params, dtype=np.float32).reshape(n, self.unit_floats(layout))
         raw = np.empty_like(p)
         cs, fs, s_lo, s_hi, ps = self._scales(layout)
         raw[:, 0:4] = p[:, 0:4] / cs
@@ -131,6 +150,8 @@ class GaborModality:
         half = 0.5 * (s_hi - s_lo)
         raw[:, 12] = (p[:, 12] - s_lo) / half - 1.0
         raw[:, 13] = p[:, 13] / ps
+        raw[:, 14:] = p[:, 14:] / (fs * max(layout.scale("audio_scale", 1.0),
+                                            EPS))
         n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))
         return z.reshape(-1).astype(np.float32), n_clamped

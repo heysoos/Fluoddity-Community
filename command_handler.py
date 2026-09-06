@@ -393,6 +393,7 @@ class CommandHandler:
         bst = ui_state.brain
         op, bst.layer_op = bst.layer_op, None
         adopt, bst.adopt_requested = bst.adopt_requested, False
+        reroll, bst.reroll_audio_requested = bst.reroll_audio_requested, False
         sim = getattr(self, "sim", None)
         if sim is None:
             return
@@ -412,9 +413,30 @@ class CommandHandler:
                                             ui_state.sim.rule_seed)
                 sim.apply_rule(params)
             return
+        if reroll:
+            self._reroll_audio_weights(ui_state, sim, kind, i)
+            return
         if op is None:
             return
         self._apply_layer_op(ui_state, sim, kind, i, op)
+
+    def _reroll_audio_weights(self, ui_state, sim, kind: str, i: int) -> None:
+        """Fresh audio weights under the brain that is running, from a fresh
+        seed. The deaf half is untouched: the transfer copies every non-audio
+        float and redraws only the rest."""
+        from services.brains import brain_rng
+        from services.brains.layout_moves import transfer_audio_inputs
+
+        layout = sim.brain_layout
+        if not layout.audio_inputs:
+            return
+        current = self._current_brain(sim, kind, i)
+        if current is None:
+            return
+        seed = float(np.random.default_rng().random())
+        ui_state.sim.audio_seed = seed
+        out = transfer_audio_inputs(current, layout, layout, brain_rng(seed))
+        self._put_brain(ui_state, sim, kind, i, out, push=True)
 
     def _brain_source_count(self, ui_state, sim, kind: str) -> int:
         if kind == "cohort":

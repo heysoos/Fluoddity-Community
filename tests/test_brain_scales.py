@@ -45,8 +45,10 @@ def test_every_modality_with_settings_is_covered():
 @pytest.mark.parametrize("name,key,value", SCALE_SETTINGS)
 def test_a_scale_setting_changes_the_decoded_brain(name, key, value):
     m = REGISTRY[name]
-    base = m.layout_from_settings({})
-    tuned = m.layout_from_settings({key: value})
+    # At one audio input, so the audio scale has a weight to act on; every
+    # other scale is indifferent to it.
+    base = m.layout_from_settings({"audio_inputs": 1})
+    tuned = m.layout_from_settings({key: value, "audio_inputs": 1})
     assert base.length == tuned.length, "a scale must not change the width"
 
     z = np.random.default_rng(0).normal(0, 0.6, base.length).astype(np.float32)

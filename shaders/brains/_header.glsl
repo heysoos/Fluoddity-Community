@@ -45,6 +45,21 @@ uniform int BRAIN_PER_COHORT;
 float g_brain_mut = 0.0;
 float g_brain_cohort = 0.0;
 
+// Audio channels the brain reads beside its four sensor taps, one value per
+// cohort. Mirrored in services/brains/__init__.py as MAX_AUDIO_INPUTS.
+#define MAX_AUDIO_INPUTS 8
+layout(std430, binding = 6) buffer AudioInputBuffer {
+    float audio_in[];               // [channel * cohort slots + cohort]
+};
+uniform int  BRAIN_AUDIO_IN;        // layout.audio_inputs; bounds every audio loop
+uniform bool AUDIO_IN_ACTIVE;
+// Invocation-local like g_brain_mut, so every brain_*() keeps its signature
+// and the Inspector fills it from a uniform. Zero unless the host fills it,
+// which is what makes a silent channel the deaf brain exactly. Every audio
+// term is added AFTER the sensor dot product and only when a channel exists.
+float g_audio[MAX_AUDIO_INPUTS] = float[MAX_AUDIO_INPUTS](
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+
 // Per-cohort mutation jitter for one float index, in [-amount, +amount].
 // Deterministic in (cohort, index), so a cohort's variant is stable frame to
 // frame.

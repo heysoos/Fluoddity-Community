@@ -16,8 +16,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from services.brains import (MAX_BRAIN_FLOATS, REGISTRY, STRUCTURAL_KINDS,
-                             BrainLayout, get, settings_of)
+from services.brains import (MAX_AUDIO_INPUTS, MAX_BRAIN_FLOATS, REGISTRY,
+                             STRUCTURAL_KINDS, BrainLayout, audio_weight_index,
+                             get, positional_structure, settings_of)
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,7 @@ def bounds_from(max_depth, max_width, max_floats, modalities,
 
 def _structural_int(m):
     """The one integer that IS this modality's structure, or None."""
-    ints = [s for s in m.settings_schema() if s.kind in STRUCTURAL_KINDS]
+    ints = positional_structure(m)
     if len(ints) != 1 or ints[0].kind != "int":
         return None
     return ints[0]
@@ -168,8 +169,11 @@ def candidate_moves(layout, bounds, modality=None) -> list[LayoutMove]:
         child = _build(m, settings, bounds)
         if child is None or child.signature() == parent_sig:
             continue
-        # The round trip: what was asked for is what was built.
-        if settings_of(child) != dict(settings):
+        # The round trip: what was asked for is what was built. Compared over
+        # the proposal's own keys, so a layout whose scales predate a scale
+        # key added since can still move.
+        built = settings_of(child)
+        if any(built.get(k) != v for k, v in dict(settings).items()):
             continue
         out.append(LayoutMove(parent=layout, child=child, operator=op))
     out.extend(_modality_jumps(layout, bounds))
@@ -227,4 +231,55 @@ def transfer_genome(params, parent, child, rng) -> np.ndarray:
     lo, hi = getattr(m, "AMPLITUDE_SLICE", (0, 0))
     for start in range(keep, out.size, stride):
         out[start + lo:start + hi] = 0.0
+    return out.astype(np.float32)
+
+
+# ---- audio inputs -----------------------------------------------------------
+
+def with_audio_inputs(layout: BrainLayout, k: int) -> BrainLayout:
+    """The same layout with `k` audio inputs. Scales and structure kept."""
+    k = int(k)
+    if not 0 <= k <= MAX_AUDIO_INPUTS:
+        raise ValueError(f"audio inputs {k} is outside 0..{MAX_AUDIO_INPUTS}")
+    return get(layout.modality).layout_from_settings(
+        {**settings_of(layout), "audio_inputs": k})
+
+
+def grow_inputs(layout: BrainLayout, k: int) -> BrainLayout:
+    if int(k) <= layout.audio_inputs:
+        raise ValueError(f"grow_inputs to {k} from {layout.audio_inputs}")
+    return with_audio_inputs(layout, k)
+
+
+def shrink_inputs(layout: BrainLayout, k: int) -> BrainLayout:
+    if int(k) >= layout.audio_inputs:
+        raise ValueError(f"shrink_inputs to {k} from {layout.audio_inputs}")
+    return with_audio_inputs(layout, k)
+
+
+def transfer_audio_inputs(params, parent: BrainLayout, child: BrainLayout,
+                          rng) -> np.ndarray:
+    """Carry a DECODED brain between layouts that differ ONLY in their audio
+    input count, or reroll one in place.
+
+    Every non-audio float is copied to its position in the child; the
+    child's audio weights are drawn fresh. So a widened brain is its parent
+    with ears it has not yet used, a narrowed one is its parent deaf, and a
+    reroll (parent is child) keeps the deaf brain underneath untouched.
+    The generic transfer copies by child stride, which is wrong the moment
+    the stride changes, and MLP's own zeroes a widened fan-in, which is right
+    for a grown layer and wrong for weights that are meant to hear.
+    """
+    p = np.asarray(params, dtype=np.float32).reshape(-1)
+    if with_audio_inputs(parent, 0) != with_audio_inputs(child, 0):
+        raise ValueError(
+            f"{parent.signature()} -> {child.signature()} differs in more "
+            "than its audio inputs; transfer_genome carries that")
+    if p.size != parent.length:
+        raise ValueError(f"{p.size} floats is not a {parent.signature()}")
+    m = get(child.modality)
+    out = np.asarray(m.random(rng, child), dtype=np.float32).reshape(-1)
+    p_keep = np.setdiff1d(np.arange(parent.length), audio_weight_index(parent))
+    c_keep = np.setdiff1d(np.arange(child.length), audio_weight_index(child))
+    out[c_keep] = p[p_keep]
     return out.astype(np.float32)

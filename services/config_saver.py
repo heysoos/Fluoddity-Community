@@ -103,6 +103,7 @@ class PhysicsConfig:
     initial_conditions: int = 0   # 0=Grid, 1=Random, 2=Ring
     num_cohorts: int = 64
     rule_seed: float = DEFAULT_RULE_SEED
+    audio_seed: float = SimState.audio_seed
 
     # Appearance settings
     ink_weight: float = 1.0
@@ -174,6 +175,7 @@ class PhysicsConfig:
                 'initial_conditions': self.initial_conditions,
                 'num_cohorts': self.num_cohorts,
                 'rule_seed': self.rule_seed,
+                'audio_seed': self.audio_seed,
             },
             'appearance': {
                 'ink_weight': self.ink_weight,
@@ -262,6 +264,7 @@ class PhysicsConfig:
             initial_conditions=settings.get('initial_conditions', 0),
             num_cohorts=settings.get('num_cohorts', 64),
             rule_seed=settings.get('rule_seed', DEFAULT_RULE_SEED),
+            audio_seed=float(settings.get('audio_seed', SimState.audio_seed)),
             ink_weight=appearance.get('ink_weight', 1.0),
             hue_sensitivity=appearance.get('hue_sensitivity', 0.5),
             color_by_cohort=appearance.get('color_by_cohort', True),
@@ -335,6 +338,7 @@ class ConfigSaver:
             initial_conditions=sim_state.initial_conditions,
             num_cohorts=sim_state.num_cohorts,
             rule_seed=sim_state.rule_seed,
+            audio_seed=sim_state.audio_seed,
             ink_weight=sim_state.ink_weight,
             hue_sensitivity=sim_state.hue_sensitivity,
             color_by_cohort=sim_state.color_by_cohort,
@@ -400,6 +404,7 @@ class ConfigSaver:
         sim_state.initial_conditions = config.initial_conditions
         sim_state.num_cohorts = config.num_cohorts
         sim_state.rule_seed = config.rule_seed
+        sim_state.audio_seed = config.audio_seed
 
         # Appearance settings
         sim_state.ink_weight = config.ink_weight

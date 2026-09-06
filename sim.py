@@ -146,6 +146,13 @@ class Sim:
         self.cohort_audio_buffer.clear()
         self._cohort_audio = None
         self.cohort_audio_buffer.bind_to_storage_buffer(5)
+        # The brain's audio channels, one value per cohort per channel.
+        from services.brains import MAX_AUDIO_INPUTS
+        self.audio_input_buffer = self.ctx.buffer(
+            reserve=MAX_AUDIO_INPUTS * MASK_SLOTS * 4)
+        self.audio_input_buffer.clear()
+        self._audio_inputs = None
+        self.audio_input_buffer.bind_to_storage_buffer(6)
 
         # Double-buffered canvas, RG32F: the trail is a VELOCITY FIELD and
         # nothing reads a third channel. Ping-ponged so a pass never reads and
@@ -394,6 +401,10 @@ class Sim:
         tryset(self.entity_update_program, 'COHORT_AUDIO_ACTIVE', _ca is not None)
         if _ca is not None:
             self.cohort_audio_buffer.write(np.ascontiguousarray(_ca, dtype='f4'))
+        _ai = self._audio_inputs
+        tryset(self.entity_update_program, 'AUDIO_IN_ACTIVE', _ai is not None)
+        if _ai is not None:
+            self.audio_input_buffer.write(np.ascontiguousarray(_ai, dtype='f4'))
         # Tournament tiling uniforms
         tryset(self.entity_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
         tryset(self.entity_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
@@ -668,6 +679,11 @@ class Sim:
     def set_cohort_audio(self, arr) -> None:
         """Per-cohort modulation for the next step, or None for no masking."""
         self._cohort_audio = arr
+
+    def set_audio_inputs(self, arr) -> None:
+        """Per-cohort brain channel values for the next step, (K, MASK_SLOTS),
+        or None for silence."""
+        self._audio_inputs = arr
 
     def apply_camera_state(self, camera_state) -> None:
         """Apply camera state from Orchestrator before update."""

@@ -59,7 +59,7 @@ def test_brain_targets_are_the_float_settings_only():
     m = brains.get("fourier")
     layout = m.layout_from_settings({})
     keys = [t.key for t in brain_targets(m, layout)]
-    assert keys == ["freq_scale", "low_freq_bias"]
+    assert keys == ["freq_scale", "low_freq_bias", "audio_scale"]
 
 
 def test_structural_brain_settings_are_never_targets():

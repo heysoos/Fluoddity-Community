@@ -12,9 +12,9 @@ import numpy as np
 from services import audio_capture
 from services.audio_brain import BrainModulator
 from services.audio_capture import AudioCapture
-from services.audio_mapping import (brain_targets, deaf_targets, modulate,
-                                    physics_targets)
-from services.cohort_audio import build_arrays
+from services.audio_mapping import (brain_targets, channel_targets,
+                                    deaf_targets, modulate, physics_targets)
+from services.cohort_audio import build_arrays, channel_values
 
 
 def muted_targets(ast, prefix: str = "") -> set[str]:
@@ -48,6 +48,9 @@ class AudioRuntime:
         # Per-cohort gain and offset for the sim, or None when nothing is
         # masked. Read by the orchestrator, never returned from update().
         self.cohort_audio = None
+        # The brain's audio channels per cohort, or None for silence. Read
+        # the same way.
+        self.audio_inputs = None
 
     def close(self) -> None:
         self.capture.stop()
@@ -60,6 +63,7 @@ class AudioRuntime:
         must not restart the shapers that were waiting there.
         """
         live = {m.uid for m in ast.mappings}
+        live.update(m.uid for m in ast.channel_mappings)
         for rows in ast.brain_mappings.values():
             live.update(m.uid for m in rows)
         for uid in [u for u in self._states if u not in live]:
@@ -119,6 +123,7 @@ class AudioRuntime:
         # Likewise before any early return, or a bypassed rig keeps driving the
         # sim with whatever the last frame computed.
         self.cohort_audio = None
+        self.audio_inputs = None
         # Nothing tells the runtime a row was deleted, so the table is cut back
         # to the rig every frame.
         self._prune_states(ast)
@@ -157,10 +162,24 @@ class AudioRuntime:
             ast.global_strength, dt, deaf, ui_state.sim.num_cohorts,
             held=held, rate_scale=ast.rate_scale)
         self.cohort_audio = arr if active else None
+        self.audio_inputs = self._channel_inputs(ui_state, ast, signals, dt,
+                                                 brain_layout, held)
 
         brain_out = self._update_brain(ui_state, ast, signals, dt,
                                        brain_layout, current_rule, held)
         return sim_out, brain_out
+
+    def _channel_inputs(self, ui_state, ast, signals, dt, layout, held):
+        """The brain's channel array, or None for silence."""
+        if layout is None or not ast.feed:
+            return None
+        targets = channel_targets(layout, ast.channels)
+        if not targets:
+            return None
+        return channel_values(
+            ast.channel_mappings, targets, signals, self._states,
+            ast.strengths, ast.global_strength, dt, muted_targets(ast),
+            ui_state.sim.num_cohorts, held=held, rate_scale=ast.rate_scale)
 
     def overlays(self, ui_state, modulated_sim) -> dict:
         """Per-target drawing data for the physics sliders.

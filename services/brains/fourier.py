@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from services.brains import (BrainLayout, Setting, register,
+from services.brains import (AUDIO_INPUTS_SETTING, AUDIO_SCALE_SETTING,
+                             BrainLayout, Setting, audio_inputs_of, register,
                              unit_scale_mask)
 
 FREQ_SCALE = 3.0
 AMP_SCALE = 1.0
 EPS = 1e-4
+# One centre: frequency(4), amplitude(4), then its audio weights, which
+# extend the frequency vector and decode as frequencies do.
+BASE_FLOATS = 8
 
 
 class FourierModality:
@@ -32,18 +36,24 @@ class FourierModality:
             # that a choice rather than an accident.
             Setting("freq_scale", "Freq Scale", "float", 0.5, 4.0, FREQ_SCALE),
             Setting("low_freq_bias", "Low-Freq Bias", "float", 0.0, 1.0, 0.0),
+            AUDIO_INPUTS_SETTING,
+            AUDIO_SCALE_SETTING,
         ]
 
     def layout_from_settings(self, s: dict) -> BrainLayout:
         n = int(s.get("centers", 10))
-        return BrainLayout("fourier", (n,), 8 * n, scales=(
+        k = audio_inputs_of(s)
+        return BrainLayout("fourier", (n,), (BASE_FLOATS + k) * n, scales=(
             ("freq_scale", float(s.get("freq_scale", FREQ_SCALE))),
             ("low_freq_bias", float(s.get("low_freq_bias", 0.0))),
-        ))
+            ("audio_scale", float(s.get("audio_scale",
+                                        AUDIO_SCALE_SETTING.default))),
+        ), audio_inputs=k)
 
-    # One centre is 8 floats: frequency(4) then amplitude(4). Frequency SCALES -
-    # see fourier.glsl's fourier_param_at, which is the same split per particle.
-    UNIT_FLOATS = 8
+    # One centre is 8 floats: frequency(4) then amplitude(4), then the audio
+    # weights. Frequency and audio SCALE - see fourier.glsl's
+    # fourier_param_at, which is the same split per particle.
+    UNIT_FLOATS = BASE_FLOATS
     SCALE_OFFSETS = frozenset({0, 1, 2, 3})
     # The OUTGOING half: the evaluation is `out += amplitude * basis`, so a
     # centre with zero amplitude contributes nothing and a grown brain is
@@ -51,10 +61,23 @@ class FourierModality:
     AMPLITUDE_SLICE = (4, 8)
 
     def unit_floats(self, layout: BrainLayout):
-        return self.UNIT_FLOATS
+        return BASE_FLOATS + layout.audio_inputs
 
     def scale_mask(self, layout: BrainLayout):
-        return unit_scale_mask(layout, self.UNIT_FLOATS, self.SCALE_OFFSETS)
+        stride = self.unit_floats(layout)
+        return unit_scale_mask(layout, stride, self.SCALE_OFFSETS
+                               | set(range(BASE_FLOATS, stride)))
+
+    def audio_weight_index(self, layout: BrainLayout) -> np.ndarray:
+        n, k = layout.shape[0], layout.audio_inputs
+        stride = BASE_FLOATS + k
+        return (np.arange(n)[:, None] * stride + BASE_FLOATS
+                + np.arange(k)[None, :]).reshape(-1)
+
+    def audio_z_index(self, layout: BrainLayout) -> np.ndarray:
+        """z is [all frequencies, all amplitudes, all audio weights]."""
+        n, k = layout.shape[0], layout.audio_inputs
+        return BASE_FLOATS * n + np.arange(n * k)
 
     @staticmethod
     def _bias(t, b):
@@ -83,33 +106,50 @@ class FourierModality:
         z is ordered [all frequencies, all amplitudes]; the GPU wants them
         interleaved per center. Preserved from genome_spec.decode.
         """
-        n = layout.shape[0]
-        z = np.asarray(z, dtype=np.float32).reshape(n * 2, 4)
+        n, k = layout.shape[0], layout.audio_inputs
+        z = np.asarray(z, dtype=np.float32).reshape(-1)
+        zb = z[:BASE_FLOATS * n].reshape(n * 2, 4)
         b = float(np.clip(layout.scale("low_freq_bias", 0.0), 0.0, 1.0))
-        freq = (layout.scale("freq_scale", FREQ_SCALE)
-                * self._bias(np.tanh(z[:n]), b))
-        amp = AMP_SCALE * np.tanh(z[n:])
-        return np.concatenate([freq, amp], axis=1).astype(np.float32).reshape(-1)
+        fs = layout.scale("freq_scale", FREQ_SCALE)
+        freq = fs * self._bias(np.tanh(zb[:n]), b)
+        amp = AMP_SCALE * np.tanh(zb[n:])
+        parts = [freq, amp]
+        if k:
+            za = z[BASE_FLOATS * n:].reshape(n, k)
+            parts.append(fs * layout.scale("audio_scale", 1.0)
+                         * self._bias(np.tanh(za), b))
+        return np.concatenate(parts, axis=1).astype(np.float32).reshape(-1)
 
     def encode(self, params: np.ndarray, layout: BrainLayout):
-        n = layout.shape[0]
-        g = np.asarray(params, dtype=np.float32).reshape(n, 8)
+        n, k = layout.shape[0], layout.audio_inputs
+        g = np.asarray(params, dtype=np.float32).reshape(n, BASE_FLOATS + k)
         fs = layout.scale("freq_scale", FREQ_SCALE)
         b = float(np.clip(layout.scale("low_freq_bias", 0.0), 0.0, 1.0))
-        raw = np.concatenate([self._unbias(g[:, :4] / fs, b),
-                              g[:, 4:] / AMP_SCALE], axis=0)
+        parts = [self._unbias(g[:, :4] / fs, b), g[:, 4:8] / AMP_SCALE]
+        if k:
+            # Floored, because the scale legitimately reaches zero.
+            a_s = max(layout.scale("audio_scale", 1.0), EPS)
+            parts.append(self._unbias(g[:, BASE_FLOATS:] / (fs * a_s), b))
+        raw = np.concatenate([p.reshape(-1) for p in parts])
         n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))
         return z.reshape(-1).astype(np.float32), n_clamped
 
     def random(self, rng, layout: BrainLayout) -> np.ndarray:
         """Mirrors services.genome.random_genome, which biases frequencies low
-        'for smoother base behaviors'."""
-        n = layout.shape[0]
+        'for smoother base behaviors'. The audio weights are drawn the same
+        way AFTER the historical draws, so a K=0 brain is the one this
+        always produced."""
+        n, k = layout.shape[0], layout.audio_inputs
         freq_scale = 1.0 + 2.0 * rng.random((n, 4)) ** 2
         freq = (rng.random((n, 4)) * 2.0 - 1.0) * freq_scale
         amp = rng.random((n, 4)) * 2.0 - 1.0
-        return np.concatenate([freq, amp], axis=1).astype(np.float32).reshape(-1)
+        parts = [freq, amp]
+        if k:
+            a_scale = 1.0 + 2.0 * rng.random((n, k)) ** 2
+            parts.append((rng.random((n, k)) * 2.0 - 1.0) * a_scale
+                         * layout.scale("audio_scale", 1.0))
+        return np.concatenate(parts, axis=1).astype(np.float32).reshape(-1)
 
 
 register(FourierModality())

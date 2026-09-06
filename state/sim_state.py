@@ -40,6 +40,7 @@ class SimState:
     initial_conditions: int = 0   # 0=Grid, 1=Random, 2=Ring (default: Grid)
     num_cohorts: int = 64         # Number of cohorts (1-144, default: 64)
     rule_seed: float = 0.42       # Seed for procedural rule generation (fixed default for reproducibility)
+    audio_seed: float = 0.5       # Seed the brain's audio weights are drawn from
 
     # Appearance settings (saved with physics config)
     ink_weight: float = 1.0  # Watercolor mode: controls optical density in exp()

@@ -23,11 +23,20 @@
 // The seed the original hashed: centers[4].frequency.xy + centers[7].amplitude.yx
 // + centers[1].frequency.zw, plus the cohort. The modulo keeps a short layout
 // (Centers < 8) in range; at the legacy 10 centres it is the identity.
+// One centre: frequency(4), amplitude(4), then its audio weights.
+int fourier_stride() { return 8 + BRAIN_AUDIO_IN; }
+
+// ONE scalar scales the whole frequency vector, audio components included.
+float fourier_freq_factor(int i, float mseed) {
+    return 1.0 + g_brain_mut * 0.5 * (hash(vec2(mseed, float(i))) - .5);
+}
+
 float fourier_mut_seed(uint base, int n) {
     int m = max(n, 1);
-    uint c4 = uint(4 % m) * 8u;
-    uint c7 = uint(7 % m) * 8u;
-    uint c1 = uint(1 % m) * 8u;
+    uint s = uint(fourier_stride());
+    uint c4 = uint(4 % m) * s;
+    uint c7 = uint(7 % m) * s;
+    uint c1 = uint(1 % m) * s;
     vec2 a = vec2(brain_params[base + c4 + 0u], brain_params[base + c4 + 1u]);
     vec2 b = vec2(brain_params[base + c7 + 5u], brain_params[base + c7 + 4u]);
     vec2 c = vec2(brain_params[base + c1 + 2u], brain_params[base + c1 + 3u]);
@@ -39,11 +48,11 @@ float fourier_mut_seed(uint base, int n) {
 // the particle was never running.
 void fourier_mutate(inout vec4 freq, inout vec4 amp, int i, float mseed) {
     amp += g_brain_mut * (-1.0 + 2.0 * hash4(-.5 + vec2(float(-i) + mseed, float(i))));
-    freq *= 1.0 + g_brain_mut * 0.5 * (hash(vec2(mseed, float(i))) - .5);
+    freq *= fourier_freq_factor(i, mseed);
 }
 
 void fourier_load(uint base, int i, out vec4 freq, out vec4 amp) {
-    uint o = base + uint(i * 8);
+    uint o = base + uint(i * fourier_stride());
     freq = vec4(brain_params[o + 0u], brain_params[o + 1u],
                 brain_params[o + 2u], brain_params[o + 3u]);
     amp  = vec4(brain_params[o + 4u], brain_params[o + 5u],
@@ -56,8 +65,18 @@ void fourier_load(uint base, int i, out vec4 freq, out vec4 amp) {
 // be previewed by pointing `base` at it and setting n=1: centre 5 seen at index
 // 0 is a different function from the one the particles run. `i` is therefore a
 // parameter rather than something the caller can fake.
-vec4 fourier_eval(vec4 f, vec4 a, int i, vec4 x) {
+// The audio half of a centre's phase, unmutated: the caller applies the
+// frequency factor, since it is the same scalar.
+float fourier_audio_phase(uint base, int i) {
+    uint o = base + uint(i * fourier_stride()) + 8u;
+    float s = 0.0;
+    for (int k = 0; k < BRAIN_AUDIO_IN; k++) s += g_audio[k] * brain_params[o + uint(k)];
+    return s;
+}
+
+vec4 fourier_eval(vec4 f, vec4 a, int i, vec4 x, float fa) {
     float phase = dot(x, f);
+    if (BRAIN_AUDIO_IN > 0) phase += fa;
     float po = 2.0 * float(i) * 0.6283 + a.w * 3.14159;
     vec4 basis = vec4(
         sin(phase + po),
@@ -71,8 +90,12 @@ vec4 fourier_eval(vec4 f, vec4 a, int i, vec4 x) {
 vec4 fourier_unit_at(uint base, int i, vec4 x, float mseed) {
     vec4 f, a;
     fourier_load(base, i, f, a);
-    if (g_brain_mut != 0.0) fourier_mutate(f, a, i, mseed);
-    return fourier_eval(f, a, i, x);
+    float fa = (BRAIN_AUDIO_IN > 0) ? fourier_audio_phase(base, i) : 0.0;
+    if (g_brain_mut != 0.0) {
+        fourier_mutate(f, a, i, mseed);
+        fa *= fourier_freq_factor(i, mseed);
+    }
+    return fourier_eval(f, a, i, x, fa);
 }
 
 // The same unit, for a caller with no seed to hand (the Brain Inspector).
@@ -103,12 +126,17 @@ vec4 brain_fourier(uint base, vec4 x) {
 void fourier_write(uint base, uint out_base) {
     int n = BRAIN_SHAPE.x;
     float mseed = (g_brain_mut == 0.0) ? 0.0 : fourier_mut_seed(base, n);
+    int s = fourier_stride();
     for (int i = 0; i < n; i++) {
-        if (i * 8 + 7 >= BRAIN_LEN) break;
+        if (i * s + s - 1 >= BRAIN_LEN) break;
         vec4 f, a;
         fourier_load(base, i, f, a);
-        if (g_brain_mut != 0.0) fourier_mutate(f, a, i, mseed);
-        uint o = out_base + uint(i * 8);
+        float ff = 1.0;
+        if (g_brain_mut != 0.0) {
+            fourier_mutate(f, a, i, mseed);
+            ff = fourier_freq_factor(i, mseed);
+        }
+        uint o = out_base + uint(i * s);
         particle_brains[o + 0u] = f.x;
         particle_brains[o + 1u] = f.y;
         particle_brains[o + 2u] = f.z;
@@ -117,6 +145,10 @@ void fourier_write(uint base, uint out_base) {
         particle_brains[o + 5u] = a.y;
         particle_brains[o + 6u] = a.z;
         particle_brains[o + 7u] = a.w;
+        for (int k = 0; k < BRAIN_AUDIO_IN; k++) {
+            particle_brains[o + 8u + uint(k)] =
+                brain_params[base + uint(i * s) + 8u + uint(k)] * ff;
+        }
     }
 }
 
@@ -124,12 +156,18 @@ void fourier_write(uint base, uint out_base) {
 // The readable definition of what fourier_write() emits in bulk; the mutation
 // tests assert against this one, and the Brain Inspector reads single floats.
 float fourier_param_at(uint base, int i) {
-    int c = i / 8;
-    int k = i - c * 8;
+    int s = fourier_stride();
+    int c = i / s;
+    int k = i - c * s;
     vec4 f, a;
     fourier_load(base, c, f, a);
+    float ff = 1.0;
     if (g_brain_mut != 0.0) {
-        fourier_mutate(f, a, c, fourier_mut_seed(base, BRAIN_SHAPE.x));
+        float mseed = fourier_mut_seed(base, BRAIN_SHAPE.x);
+        fourier_mutate(f, a, c, mseed);
+        ff = fourier_freq_factor(c, mseed);
     }
-    return (k < 4) ? f[k] : a[k - 4];
+    if (k < 4) return f[k];
+    if (k < 8) return a[k - 4];
+    return brain_params[base + uint(i)] * ff;
 }
