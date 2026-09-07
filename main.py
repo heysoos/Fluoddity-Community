@@ -1953,5 +1953,11 @@ class App:
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    # The map's UMAP fit runs in a child process; in a frozen build that
+    # child is this executable again, and this is what stops it opening a
+    # second window.
+    multiprocessing.freeze_support()
     app = App()
     app.run()

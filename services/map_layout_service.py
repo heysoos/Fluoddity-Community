@@ -1,10 +1,11 @@
 """Owns the map's layout: which engine, when it refits, and the cache.
 
-The UMAP fit is seconds, so it runs on a worker thread and the map keeps
-drawing the layout it already has until the new one lands - the pattern
-AutoTournamentService uses for driver.precompute. The worker is handed a COPY
-of the embeddings and fits a SEPARATE layout object, which is what keeps it off
-the one the frame loop is reading.
+The UMAP fit is seconds, so it runs in a worker PROCESS and the map keeps
+drawing the layout it already has until the new one lands. A process, not a
+thread: numba's JIT holds the GIL, so a thread stalled the frame loop for the
+whole fit (see CLAUDE.md). The worker is handed a COPY of the embeddings and
+fits a SEPARATE layout object, which is what keeps it off the one the frame
+loop is reading.
 
 Both the layout factory and the executor are injected, so the decision rules
 are testable without paying for a real fit.
@@ -24,6 +25,21 @@ from services.map_layout import (
 
 # PCA is cheap and inline, and refits on the rule it always had.
 PCA_REFIT_GROWTH = 500
+
+
+def fit_layout(make, engine: str, x, keys, prev):
+    """Fit a fresh `engine` layout to `x`, seeded from `prev`. -> it, or None.
+
+    Module-level so it pickles by reference into the worker process. The seed
+    positions are computed here too, off the frame loop.
+    """
+    init = None
+    if prev is not None and getattr(prev, "fitted", False):
+        init = np.array(prev.transform(x, keys), dtype=np.float32)
+    fresh = make(engine)
+    if not fresh.fit(x, keys, init_pos=init):
+        return None
+    return fresh
 
 
 class MapLayoutService:
@@ -46,9 +62,11 @@ class MapLayoutService:
     @property
     def executor(self):
         if self._pool is None:
-            from concurrent.futures import ThreadPoolExecutor
-            self._pool = ThreadPoolExecutor(max_workers=1,
-                                            thread_name_prefix="maplayout")
+            from utilities.process_executor import ProcessExecutor
+
+            # `ui` first: services imports it back, and the child unpickles
+            # fit_layout by module path.
+            self._pool = ProcessExecutor(prime=("ui",))
         return self._pool
 
     def shutdown(self) -> None:
@@ -203,19 +221,10 @@ class MapLayoutService:
     def _start(self, archive) -> None:
         x = np.array(archive.embeddings, dtype=np.float32, copy=True)
         keys = self._keys(archive)
-        init = None
         umap = self.layout
-        if umap.fitted:
-            init = np.array(umap.transform(x, keys), dtype=np.float32)
-        make = self._make
-
-        def work():
-            fresh = make("umap")
-            if not fresh.fit(x, keys, init_pos=init):
-                return None
-            return fresh
-
-        self._future = self.executor.submit(work)
+        prev = umap if umap.fitted else None
+        self._future = self.executor.submit(
+            fit_layout, self._make, "umap", x, keys, prev)
 
     def _collect(self) -> None:
         fut = self._future
