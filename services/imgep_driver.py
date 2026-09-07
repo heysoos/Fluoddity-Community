@@ -85,6 +85,10 @@ class ImgepDriver:
         self.liveness_min = 0.002    # see CLAUDE.md
         self.n_views = 3             # see VisionScorer.embed_mean
         self.refresh_sweep_gens = 10
+        # This generation's refresh, planned on the main thread before the
+        # CLIP pass is submitted and scored beside it on the worker.
+        self._refresh_plan = None
+        self._refresh_ready = None
         self.flush_every = 200
 
         # expedition settings (spec 7.4)
@@ -682,15 +686,25 @@ class ImgepDriver:
 
     # ---- rollout -------------------------------------------------------
 
+    def precompute_plan(self) -> None:
+        """Main thread, before precompute() is submitted: take the rows this
+        generation's refresh sweep visits and a copy of the vectors."""
+        self._refresh_plan = self.archive.refresh_plan(self._refresh_count())
+
     def precompute(self, snapshots: list[np.ndarray]):
-        """CLIP, and nothing else. Runs OFF the main thread - see CLAUDE.md.
+        """CLIP and the refresh kNN, nothing else. Runs OFF the main thread -
+        see CLAUDE.md.
 
         Split here rather than running the whole of tell() on the worker,
         because everything after this point mutates the archive, which the UI
-        reads every frame. This half touches only its own arguments and the
-        scorer, so it needs no locking.
+        reads every frame. This half touches only its own arguments, the
+        scorer and the plan's own copy of the vectors, so it needs no locking.
         """
-        return [np.asarray(self._embed(c), dtype=np.float32) for c in snapshots]
+        out = [np.asarray(self._embed(c), dtype=np.float32) for c in snapshots]
+        plan, self._refresh_plan = self._refresh_plan, None
+        if plan is not None:
+            self._refresh_ready = (plan, self.archive.refresh_score(plan))
+        return out
 
     def tell(self, z: np.ndarray, snapshots: list[np.ndarray],
              pre=None) -> np.ndarray:
@@ -811,7 +825,11 @@ class ImgepDriver:
         self.gen += 1
         if source == "bootstrap":
             self._bootstrap_gens += 1
-        self.archive.refresh(self._refresh_count())
+        ready, self._refresh_ready = self._refresh_ready, None
+        if ready is not None:
+            self.archive.refresh_apply(*ready)
+        else:
+            self.archive.refresh(self._refresh_count())
         # AFTER refresh, so eviction ranks on the freshest novelty available,
         # and once per generation rather than per admission - the whole point
         # of admitting generously is that the ranking happens on the batch.

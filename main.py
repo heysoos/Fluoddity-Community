@@ -1221,12 +1221,7 @@ class App:
                 self.auto_service.driver = self.imgep_driver
                 self.auto_service.abort_generation()
         elif not expl.enabled and self._explore_was_enabled:
-            if self.auto_service is not None and self.prompt_driver is not None:
-                self.auto_service.pause()
-                self.auto_service.driver = self.prompt_driver
-            if self.archive is not None:
-                self.archive.maybe_flush(force=True, closing=True)
-            self._undo_auto_overrides(ui_state)
+            self._leave_explore(ui_state)
         self._explore_was_enabled = expl.enabled
 
         # The encoder readout follows the archive, never the other way round.
@@ -1711,6 +1706,17 @@ class App:
         # Motion blur averages several renders into the texture _capture_tiles
         # grabs, smearing away the fine structure that distinguishes genomes.
         prefs.motion_blur = False
+
+    def _leave_explore(self, ui_state):
+        """Explore ticked off. The archive stays open, so the flush is NOT a
+        closing one: a closing flush rescores every entry on the frame loop,
+        which is seconds at ten thousand entries. See CLAUDE.md."""
+        if self.auto_service is not None and self.prompt_driver is not None:
+            self.auto_service.pause()
+            self.auto_service.driver = self.prompt_driver
+        if self.archive is not None:
+            self.archive.maybe_flush(force=True)
+        self._undo_auto_overrides(ui_state)
 
     def _undo_auto_overrides(self, ui_state):
         put_back_auto_overrides(

@@ -383,6 +383,10 @@ class AutoTournamentService:
         if fn is None or not self.async_scoring:
             return None
         if self._pre_future is None:
+            # The driver's chance to snapshot main-thread state for the worker.
+            plan = getattr(self.driver, "precompute_plan", None)
+            if plan is not None:
+                plan()
             self._pre_future = self._score_pool().submit(fn, list(self._buffer))
             return _PENDING
         if not self._pre_future.done():

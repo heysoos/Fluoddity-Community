@@ -58,6 +58,16 @@ class Candidate:
 
 
 @dataclass
+class RefreshPlan:
+    """One refresh() step, split so the kNN can run on a worker."""
+    idx: np.ndarray
+    ids: np.ndarray
+    layouts: list
+    embeddings: np.ndarray
+    k: int
+
+
+@dataclass
 class ArchiveEntry:
     id: int
     novelty: float
@@ -310,6 +320,52 @@ class Archive:
         self._refresh_cursor = int((start + n) % self._n)
         self.revision += 1
         return n
+
+    def refresh_plan(self, n: int):
+        """The rows the next refresh() would visit, with a COPY of the vectors
+        to score them against, so the kNN can run off the frame loop.
+
+        Advances the cursor now: the plan IS this generation's sweep step.
+        -> RefreshPlan, or None when there is nothing to do.
+        """
+        if n <= 0 or self._n == 0:
+            return None
+        n = int(min(n, self._n))
+        start = self._refresh_cursor % self._n
+        idx = (np.arange(start, start + n) % self._n).astype(np.int64)
+        self._refresh_cursor = int((start + n) % self._n)
+        return RefreshPlan(
+            idx=idx,
+            ids=np.array([self.entries[int(i)].id for i in idx], dtype=np.int64),
+            layouts=[self.layout_at(int(i)) for i in idx],
+            embeddings=np.array(self.embeddings, dtype=np.float32, copy=True),
+            k=int(self.k))
+
+    @staticmethod
+    def refresh_score(plan) -> np.ndarray:
+        """The worker's half of a refresh: pure over the plan's own copy."""
+        return knn_novelty(plan.embeddings[plan.idx], plan.embeddings,
+                           k=plan.k, exclude_self=True)
+
+    def refresh_apply(self, plan, nov) -> int:
+        """Write a scored plan back. -> how many rows took it.
+
+        A row that no longer holds the entry it was scored for - a removal
+        moved another into it - is left alone for the next sweep.
+        """
+        done = 0
+        for j, i in enumerate(plan.idx):
+            i = int(i)
+            if i >= self._n:
+                continue
+            e = self.entries[i]
+            if e.id != int(plan.ids[j]) or self.layout_at(i) != plan.layouts[j]:
+                continue
+            e.novelty = float(nov[j])
+            done += 1
+        if done:
+            self.revision += 1
+        return done
 
     def rescore_all(self) -> int:
         """Re-score EVERY entry against the whole archive. -> how many.
