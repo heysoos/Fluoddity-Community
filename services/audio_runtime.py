@@ -39,6 +39,15 @@ def muted_targets(ast, prefix: str = "") -> set[str]:
     return out
 
 
+def _loudest(arr, row: int, n_cohorts: int) -> float:
+    """A channel's value on the cohort it drives hardest; 0.0 for silence."""
+    if arr is None or row >= arr.shape[0]:
+        return 0.0
+    n = min(arr.shape[1], max(1, int(n_cohorts)))
+    v = arr[row, :n]
+    return float(v[int(np.argmax(np.abs(v)))])
+
+
 class AudioRuntime:
     def __init__(self) -> None:
         self.capture = AudioCapture()
@@ -124,6 +133,7 @@ class AudioRuntime:
         # sim with whatever the last frame computed.
         self.cohort_audio = None
         self.audio_inputs = None
+        self._channel_targets = []
         # Nothing tells the runtime a row was deleted, so the table is cut back
         # to the rig every frame.
         self._prune_states(ast)
@@ -170,45 +180,50 @@ class AudioRuntime:
         return sim_out, brain_out
 
     def _channel_inputs(self, ui_state, ast, signals, dt, layout, held):
-        """The brain's channel array, or None for silence."""
+        """The brain's channel array, or None for silence.
+
+        Computed whenever the brain has channels, Feed or not, so the drawer
+        shows a row's shaper while nothing is fed; Feed gates the upload.
+        """
         self._channel_targets = []
-        if layout is None or not ast.feed:
+        if layout is None:
             return None
         targets = channel_targets(layout, ast.channels)
         if not targets:
             return None
         self._channel_targets = targets
-        return channel_values(
+        arr = channel_values(
             ast.channel_mappings, targets, signals, self._states,
             ast.strengths, ast.global_strength, dt, muted_targets(ast),
-            ui_state.sim.num_cohorts, held=held, rate_scale=ast.rate_scale)
+            ui_state.sim.num_cohorts, held=held, rate_scale=ast.rate_scale,
+            shaped=ast.shaped)
+        return arr if ast.feed else None
 
     def _channel_overlays(self, ui_state) -> dict:
-        """Per-channel drawing data: cohort 0's live value, and where a
-        full-scale signal would land."""
+        """Per-channel drawing data: what the brain is fed, read on the
+        cohort the channel drives hardest, and where full scale would land."""
         ast = ui_state.audio
-        arr = self.audio_inputs
         targets = getattr(self, "_channel_targets", None) or []
-        if arr is None or not targets:
+        if not targets:
             return {}
         from ui.audio_reactive_window import SIGNAL_COLORS
 
         deaf = muted_targets(ast)
-        signals = {n: 1.0 for n in SIGNAL_COLORS}
+        n = ui_state.sim.num_cohorts
+        full_scale = {name: 1.0 for name in SIGNAL_COLORS}
         full = channel_values(
-            ast.channel_mappings, targets, signals, {}, ast.strengths,
-            ast.global_strength, 1 / 60.0, deaf, ui_state.sim.num_cohorts,
-            apply_shapers=False)
+            ast.channel_mappings, targets, full_scale, {}, ast.strengths,
+            ast.global_strength, 1 / 60.0, deaf, n, apply_shapers=False)
         out = {}
         for row, t in enumerate(targets):
             bound = [m for m in ast.channel_mappings
                      if m.target == t.key and m.enabled and t.key not in deaf]
-            if not bound or row >= arr.shape[0]:
+            if not bound:
                 continue
             out[t.key] = {
                 "lo": t.lo, "hi": t.hi, "base": 0.0,
-                "live": float(arr[row, 0]),
-                "reach": float(full[row, 0]) if full is not None else 0.0,
+                "live": _loudest(self.audio_inputs, row, n),
+                "reach": _loudest(full, row, n),
                 "color": SIGNAL_COLORS[bound[0].signal],
             }
         return out

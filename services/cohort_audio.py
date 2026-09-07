@@ -160,7 +160,7 @@ def read_mask(mask: np.ndarray, raw) -> None:
 def channel_values(mappings, targets, signals, states, strengths,
                    global_strength: float, dt: float, deaf, n_cohorts: int,
                    held=(), rate_scale: float = 1.0,
-                   apply_shapers: bool = True):
+                   apply_shapers: bool = True, shaped: dict | None = None):
     """The brain's audio channels, one value per (channel, cohort), or None.
 
     The same chain as build_arrays over a base of ZERO, so a channel is a
@@ -171,7 +171,9 @@ def channel_values(mappings, targets, signals, states, strengths,
     with A the summed add/subtract terms and M the product of the multiply
     terms. `targets` is channel_targets(); its `hi` is the range. Indexed
     [channel, COHORT], as the shader reads it. None whenever no row is live,
-    which the caller uploads as silence.
+    which the caller uploads as silence. When `shaped` is given, each live
+    row's post-shaper signal is recorded in it under `m.uid`, as modulate()
+    does for the drawer.
     """
     from services.audio_shapers import ShaperState
 
@@ -187,13 +189,15 @@ def channel_values(mappings, targets, signals, states, strengths,
     n = min(MASK_SLOTS, max(1, int(n_cohorts)))
     slots = np.minimum(MASK_SLOTS - 1,
                        ((np.arange(n) + 0.5) / n * MASK_SLOTS).astype(np.int64))
-    shaped: dict[int, float] = {}
+    post: dict[int, float] = {}
     for m in live:
         s = min(1.0, max(0.0, signals[m.signal] * m.gain))
         if apply_shapers:
             s = states.setdefault(m.uid, ShaperState()).apply(
                 s, dt, m.shaper, m.signal not in held, rate_scale)
-        shaped[m.uid] = s
+        post[m.uid] = s
+        if shaped is not None:
+            shaped[m.uid] = s
 
     arr = np.zeros((len(targets), MASK_SLOTS), dtype=np.float32)
     for row, t in enumerate(targets):
@@ -205,7 +209,7 @@ def channel_values(mappings, targets, signals, states, strengths,
         mul = np.ones(n, dtype=np.float64)
         for m in bound:
             covered = m.cohorts[slots]
-            s = shaped[m.uid]
+            s = post[m.uid]
             if m.mode == "multiply":
                 mul[covered] *= 1.0 + s * m.depth
             else:

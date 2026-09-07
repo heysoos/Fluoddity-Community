@@ -1669,6 +1669,27 @@ design; these are the rules it rests on.
   every frame lost the request on the first frame, and the drawer's nested
   bar needs a third frame in a render test.
 
+- **A Fourier brain is PRESENTED as `(N, 8 + K)`, and the tournament reseeds
+  through `present()` on EVERY layout change.** `genome_spec.present` and
+  `gl_helpers.readback_rule` both reshape by centre and both hard-coded 8, so
+  adding one channel to any Fourier preset died in
+  `TournamentService.set_layout` — which `_apply_brain_layout` reaches whether
+  or not a grid is open — and that is 138 of the 175 shipped presets. Both ask
+  `unit_floats(layout)` for the stride. The `(10, 8)` zero rules stay the
+  "no brain" marker, because `apply_rule` measures width. Guarded by the
+  presentation tests in `tests/test_brain_audio_inputs.py`.
+
+- **A channel row's shaper output is recorded by `channel_values`, and the
+  channel trace reads the cohort the row drives HARDEST.** The band tab draws
+  `ast.shaped`, which only `modulate()` filled, so a channel's shaper showed
+  nothing; and the row trace read cohort 0, which a masked row need not
+  cover, so it sat flat while the brain was being driven. `_channel_inputs`
+  computes the array whether or not Feed is on — Feed gates the UPLOAD — so
+  the drawer keeps showing the rows while nothing is fed, and the trace is
+  what the brain is given: zero with Feed off, drawn against a midline
+  because the value is signed. The midline is a second `plot_lines`, since
+  the render suite bans `add_line` in that file.
+
 ### Perform mode
 
 - **The projector RENDERS ITS OWN FRAME at a fixed viewpoint; it cannot

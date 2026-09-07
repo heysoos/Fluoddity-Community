@@ -484,14 +484,28 @@ class AudioReactiveWindowMixin(CohortStripMixin):
         return changed, v
 
     def _audio_trace(self, ident, values, colour, width, height,
-                     lo=0.0, hi=1.0):
-        """One plot_lines call with the band's colour pushed around it."""
+                     lo=0.0, hi=1.0, zero=None):
+        """One plot_lines call with the band's colour pushed around it;
+        `zero` draws a faint baseline at that value."""
         pixels = width if width > 0 else imgui.get_content_region_avail().x
         imgui.push_style_color(imgui.Col_.plot_lines, imgui.ImVec4(*colour))
         imgui.plot_lines(ident, visible_samples(values, pixels),
                          scale_min=lo, scale_max=hi,
                          graph_size=imgui.ImVec2(width, height))
         imgui.pop_style_color()
+        if zero is not None and hi > lo:
+            # A second plot over the same rect, as the Total tab stacks its
+            # series - never a draw-list line.
+            imgui.set_cursor_screen_pos(imgui.get_item_rect_min())
+            imgui.push_style_color(imgui.Col_.frame_bg,
+                                   imgui.ImVec4(0, 0, 0, 0))
+            imgui.push_style_color(imgui.Col_.plot_lines,
+                                   imgui.ImVec4(1.0, 1.0, 1.0, 0.25))
+            imgui.plot_lines(f"{ident}_zero",
+                             np.full(2, zero, dtype=np.float32),
+                             scale_min=lo, scale_max=hi,
+                             graph_size=imgui.ImVec2(width, height))
+            imgui.pop_style_color(2)
 
     # --- the matrix -----------------------------------------------------
 
@@ -707,7 +721,8 @@ class AudioReactiveWindowMixin(CohortStripMixin):
             ring = self._audio_target_rings().get(target.key)
             self._audio_trace(f"##rowtrace", ring.values if ring else
                               np.zeros(2, dtype=np.float32),
-                              SIGNAL_COLORS[bound[0].signal], 56, 16)
+                              SIGNAL_COLORS[bound[0].signal], 56, 16,
+                              zero=0.5 if group == "channel" else None)
         else:
             imgui.dummy(imgui.ImVec2(56, 16))
 
@@ -790,9 +805,9 @@ class AudioReactiveWindowMixin(CohortStripMixin):
             return
         colour = SIGNAL_COLORS[bound[0].signal] if bound else (1, 1, 1, 1)
         self._audio_trace("##channel_trace", tring.values, colour,
-                          imgui.get_content_region_avail().x, 44)
-        imgui.text_disabled("Zero whenever its rows are, and the moment Feed "
-                            "or capture is off.")
+                          imgui.get_content_region_avail().x, 44, zero=0.5)
+        imgui.text_disabled("What the brain reads, on the cohort the rows "
+                            "drive hardest; zero is the midline.")
 
     def _render_audio_band_tab(self, m):
         imgui.text_colored(imgui.ImVec4(*SIGNAL_COLORS[m.signal]), m.signal)

@@ -266,3 +266,44 @@ def test_the_audio_seed_is_saved_with_the_config_and_defaults_when_absent():
 
     old = PhysicsConfig.from_dict({"simulation": {}, "physics": {}})
     assert old.audio_seed == SimState().audio_seed
+
+
+# ---- what the drawer draws ------------------------------------------------
+
+def test_a_channel_rows_shaper_output_reaches_the_drawer():
+    """The band tab draws ast.shaped, so a channel row records there the way
+    a physics row does."""
+    rt, st = _runtime(bass=1.0), _rig()
+    rt.update(st, 1 / 60, _layout(), None)
+    m = st.audio.channel_mappings[0]
+    assert m.uid in st.audio.shaped
+    assert st.audio.shaped[m.uid] == pytest.approx(1.0)
+
+
+def test_the_shaper_output_is_shown_with_feed_off():
+    """Feed gates what the brain is given, not what the drawer shows."""
+    rt, st = _runtime(bass=1.0), _rig()
+    st.audio.feed = False
+    rt.update(st, 1 / 60, _layout(), None)
+    assert rt.audio_inputs is None
+    assert st.audio.channel_mappings[0].uid in st.audio.shaped
+
+
+def test_the_channel_trace_reads_the_cohort_the_row_drives():
+    """Cohort 0 need not be one of them."""
+    rt, st = _runtime(bass=1.0), _rig()
+    m = st.audio.channel_mappings[0]
+    m.cohorts[:] = False
+    m.cohorts[ca.MASK_SLOTS // 2:] = True
+    rt.update(st, 1 / 60, _layout(), None)
+    ov = rt.overlays(st, st.sim)[channel_key(0)]
+    assert ov["live"] == pytest.approx(0.5)
+
+
+def test_feed_off_draws_the_channel_at_zero_rather_than_not_at_all():
+    rt, st = _runtime(bass=1.0), _rig()
+    st.audio.feed = False
+    rt.update(st, 1 / 60, _layout(), None)
+    ov = rt.overlays(st, st.sim)[channel_key(0)]
+    assert ov["live"] == 0.0
+    assert ov["reach"] == pytest.approx(0.5)
