@@ -1939,6 +1939,85 @@ design; these are the rules it rests on.
   on either side would put that one upside down silently. Guarded by
   `tests/test_video_recording.py::test_the_screenshot_path_agrees_with_the_recorder_on_which_way_is_up`.
 
+### The frame loop
+
+Measured 2026-09-07 by driving the real app with injected mouse events, every
+frame under cProfile, against the 11514-entry `debug17-multibrain3` archive.
+`python -m tools.drive_frame_stalls` is the harness; `Help > Performance`
+lists the slow frames of the running session and `Documents/Fluoddity/perf.log`
+keeps them, each with the phase that took the time.
+
+- **A worker THREAD does not keep numba off the frame loop, so the map's UMAP
+  fit runs in a child PROCESS.** The JIT compile is Python holding the GIL:
+  one forced refit on the thread stalled **233 frames over 45 seconds**, with a
+  1.06 s freeze at `import umap` and a 1.39 s File > Load open that costs 90 ms
+  on a quiet frame. The same refit through `utilities.process_executor` cost
+  the frame loop two frames (174 ms at submit, one of 68 ms), and the layout
+  landed after 35.6 s. Standalone the numbers are: import 7.4 s, first fit
+  25.5 s, second fit 7.0 s at 11514 entries - the child is kept alive so the
+  JIT is paid once per session, and `MapLayoutService.shutdown()` terminates
+  it. Four traps. `fit_layout` is module-level because a closure cannot cross
+  the pipe; the child primes `ui` before it unpickles, or `services` imports
+  `ui` back and dies on a circular import; `submit` sends on a helper thread,
+  because a pipe send waits for the child to READ and a fresh child is still
+  importing; and `spawn` re-imports the launching script, so every driver
+  that boots the app needs a `__main__` guard and `main.py` calls
+  `multiprocessing.freeze_support()` for the frozen build. Guarded by
+  `tests/test_process_executor.py`.
+
+- **Everything `tell()` does on the main thread is a per-generation hitch, and
+  the refresh sweep was the largest.** At 11514 entries and `refresh_sweep_gens`
+  10 it was **178 ms every generation**. It is now planned on the main thread
+  (`Archive.refresh_plan` takes the rows and a COPY of the vectors), scored
+  on the CLIP worker inside `precompute()`, and written back in `tell()` by
+  `refresh_apply`, which skips a row that no longer holds the entry it scored.
+  The plan is taken BEFORE the future is submitted - `precompute_plan` is the
+  service's hook for exactly that - so the worker never reads the live arrays.
+  Still inline, in order of cost at that size: the periodic `vectors.npz`
+  rewrite (106 ms per 200 admissions, 25 files), the PCA refit (now ~20 ms per
+  500 admissions, was 113), admission's thumbnail writes, and the record book.
+  Guarded by `tests/test_refresh_off_thread.py`.
+
+- **`rescore_all` is O(n^2) - 1.8 s at 11514 entries, 4.3 s at capacity - and
+  ticking Explore OFF used to pay it on the frame loop.** The archive stays open
+  when Explore stops, so `_leave_explore` flushes without `closing`; quitting
+  and switching archive still rescore, which is where the next open's free
+  trust of the column comes from. Guarded by `tests/test_explore_off_flush.py`.
+
+- **The PCA asks for its top components, never the whole spectrum.** A dense
+  `eigh` of the 512x512 covariance was 58 ms of a 113 ms refit; scipy's Lanczos
+  (`top_eigenpairs`) returns the same vectors to machine precision in 2 ms and
+  falls back to `eigh` without scipy or when `k` leaves it no room. The
+  `scipy.sparse.linalg` import is 313 ms, so `App.__init__` warms it (and
+  PIL) on a daemon thread rather than letting the first refit pay it. Guarded
+  by `tests/test_projection_solver.py`.
+
+- **Opening File > Load parses only the configs whose mtime moved.** Every open
+  used to parse the whole library - 182 files, 70-90 ms - and under a busy
+  worker that one frame stretched to 1.4 s. `_cache_all_configs` keeps a stamp
+  per file and `App.__init__` primes it, so an open is a stat per file
+  (~15 ms). The Load click still empties `cached_configs`; the stamps survive
+  it. Guarded by `tests/test_config_cache.py`.
+
+- **What is still slow, and where it lands.** Opening the archive browser on
+  this archive is **855 ms** in one frame: `list_archives` 226 ms (every
+  archive's `vectors.npz` opened to count rows, plus a walk of its thumbnails
+  for a size), `load_from_store` 309 ms (25 layouts), `migrate_archive`,
+  and the first audio-window render's PortAudio device enumeration 183 ms,
+  which is cached afterwards. The frame after it fits the PCA and adopts the
+  UMAP cache. Enabling Explore or Auto builds the ONNX sessions, ~1.2 s, once.
+  These are open-and-enable costs, not mid-session ones, and are documented
+  rather than fixed. A cold disk is NOT a cause on this machine: 182 untouched
+  files read in 53 ms. Neither is the garbage collector: a full collection with
+  the archive loaded is 13 ms, and the 100 ms gen-2 pauses seen during a fit
+  were numba's heap, which the child process now owns.
+
+- **What the hover path costs, so nobody re-measures it.** A Load-menu hover
+  over a preset of another brain borrows its layout, and the first hover of a
+  new MLP scratch bucket compiles an entity-update program - measured under
+  20 ms, and never seen again that session. A preview frame is 17-50 ms all
+  in; no hover in 182 exceeded 100 ms cold.
+
 ### UI and platform
 
 - **There is ONE save dialog, and every Save button in the app opens it.**

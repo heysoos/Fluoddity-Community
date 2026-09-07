@@ -1,5 +1,6 @@
 import glfw
 import moderngl
+import threading
 import time
 import numpy as np
 from camera import Camera
@@ -64,6 +65,15 @@ def clamp_auto_hue(ui_state):
         ui_state.sim.hue_sensitivity, AUTO_HUE_MAX)
 
 
+def _warm_imports() -> None:
+    """Optional, so a missing package is silence here and a fallback later."""
+    for name in ("scipy.sparse.linalg", "PIL.Image"):
+        try:
+            __import__(name)
+        except Exception:               # noqa: BLE001
+            pass
+
+
 class App:
     """Main application orchestrator.
 
@@ -108,6 +118,18 @@ class App:
         self._restore_open_windows(loaded_prefs)
         self.ui._last_applied_world_size = loaded_prefs.world_size
         self.ui._last_applied_particle_density = loaded_prefs.particle_density
+        # The Load menu's first open parses the whole library; pay it here.
+        self.ui._cache_all_configs()
+        # Slow frames, with where the time went. See services/frame_watch.py.
+        from services.frame_watch import FrameWatch
+        from utilities.paths import get_user_data_dir
+
+        self.frame_watch = FrameWatch(path=get_user_data_dir() / "perf.log")
+        self.ui.frame_watch = self.frame_watch
+        # Imports the archive pays on first use, moved to boot: scipy is a
+        # third of a second, and it used to land in the first PCA refit.
+        threading.Thread(target=_warm_imports, name="warm-imports",
+                         daemon=True).start()
 
         # Create services (Orchestrator owns these)
         self.rule_manager = RuleManager()
@@ -1185,8 +1207,11 @@ class App:
     def orchestrate_frame(self):
         """Main orchestration logic - reads UI state, coordinates components."""
 
+        fw = self.frame_watch
+        fw.begin()
         # 1. Get current UI state
         ui_state = self.ui.get_state()
+        fw.mark("state")
         tiling_mode = (ui_state.sim.current_view_option == view_modes.CAMERA_TILED)
 
         # 1.5. Auto-mode enable edge. MUST run before process_commands, which
@@ -1251,7 +1276,9 @@ class App:
                                      ui_state.preferences.record_audio_delay)
 
         # 2. Process one-shot commands
+        fw.mark("pre")
         result = self.command_handler.process_commands(ui_state, tiling_mode)
+        fw.mark("commands")
         if result == 'screenshot_pending' and not self.screenshot_pending and not self.screenshot_in_progress:
             self.screenshot_pending = True
 
@@ -1475,6 +1502,7 @@ class App:
         self.prev_view_option = ui_state.sim.current_view_option
 
         # 6. Run simulation if going
+        fw.mark("apply")
         if ui_state.sim.going:
             self.sim_runner.run_simulation_frame(
                 ui_state, sweep_mode, sweep_reticle_pos, sweep_reticle_visible,
@@ -1482,6 +1510,7 @@ class App:
                 tiling_mode=tiling_mode,
                 screenshot_in_progress=self.screenshot_in_progress
             )
+        fw.mark("sim")
 
         # 6.5. Screenshot save and settings restoration
         if self.screenshot_in_progress:
@@ -1523,6 +1552,7 @@ class App:
             )
 
         # 8. Update UI display info and render
+        fw.mark("view")
         self.ui.update_display_info({
             'time': self.sim.time,
             'frame_count': self.sim.frame_count,
@@ -1532,6 +1562,24 @@ class App:
             'video_scheduled_start_frame': cmd.video_scheduled_start_frame,
         })
         self.ui.render()
+        fw.mark("ui")
+        fw.end(self._frame_flags(ui_state))
+
+    def _frame_flags(self, ui_state) -> str:
+        """What else was going on in a slow frame, for the stall log."""
+        flags = []
+        if ui_state.archive.enabled:
+            flags.append("explore")
+        if ui_state.auto_tournament.enabled:
+            flags.append("auto")
+        if self.video_service.is_active():
+            flags.append("recording")
+        svc = self.map_layout_service
+        if svc is not None and svc.fitting:
+            flags.append("map-fit")
+        if self.command_handler.preview_active:
+            flags.append("preview")
+        return ",".join(flags)
 
     def _drive_perform_window(self, ui_state) -> None:
         """Open, close or move the perform window to follow the UI.

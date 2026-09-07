@@ -12,6 +12,35 @@ from __future__ import annotations
 import numpy as np
 
 
+def top_eigenpairs(cov: np.ndarray, k: int):
+    """The k largest eigenpairs of a symmetric matrix, descending.
+
+    -> (values (k,), vectors (k, d)). Lanczos through scipy when it is there
+    and k leaves room for it; a dense eigh otherwise. Symmetric input is the
+    caller's promise, which is what makes both paths return real orthonormal
+    vectors.
+    """
+    d = cov.shape[0]
+    k = int(k)
+    if k < d - 1:
+        try:
+            from scipy.sparse.linalg import eigsh
+        except Exception:               # noqa: BLE001 - optional dependency
+            eigsh = None
+        if eigsh is not None:
+            try:
+                # A fixed start vector keeps the fit deterministic.
+                v0 = np.linspace(0.5, 1.5, d)
+                vals, vecs = eigsh(cov, k=k, which="LA", v0=v0)
+                order = np.argsort(vals)[::-1]
+                return vals[order], vecs[:, order].T
+            except Exception:           # noqa: BLE001 - fall through to dense
+                pass
+    vals, vecs = np.linalg.eigh(cov)
+    order = np.argsort(vals)[::-1][:k]
+    return vals[order], vecs[:, order].T
+
+
 class Projection:
     def __init__(self, n_components: int = 2):
         self.n_components = int(n_components)
@@ -41,11 +70,8 @@ class Projection:
         mean = x.mean(axis=0)
         centred = x - mean
         cov = (centred.T @ centred) / max(1, x.shape[0] - 1)
-        # eigh, not eig: the covariance is symmetric, so this is both faster and
-        # guaranteed to return real orthonormal vectors.
-        vals, vecs = np.linalg.eigh(cov.astype(np.float64))
-        order = np.argsort(vals)[::-1][: self.n_components]
-        comp = np.ascontiguousarray(vecs[:, order].T, dtype=np.float32)
+        top, comp = top_eigenpairs(cov.astype(np.float64), self.n_components)
+        comp = np.ascontiguousarray(comp, dtype=np.float32)
 
         # Eigenvectors have arbitrary sign. Aligning each new component to the
         # previous one is what stops the map mirroring itself on every refit.
@@ -58,7 +84,7 @@ class Projection:
         self.mean = mean.astype(np.float32)
         # Clamped at 0: eigh can return a tiny negative for a near-zero
         # eigenvalue, and a negative variance becomes a NaN standard deviation.
-        self.variances = np.maximum(vals[order], 0.0).astype(np.float32)
+        self.variances = np.maximum(top, 0.0).astype(np.float32)
         self._prev = comp.copy()
         self.version += 1
         return True

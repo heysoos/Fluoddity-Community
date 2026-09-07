@@ -163,6 +163,14 @@ Press **V** to recompile without restarting. A shader that fails to build shows 
 
 The stack is saved with a preset. Field injection is switched off while a tournament grid is running, because one field shared across isolated tiles would be scored instead of the creature.
 
+## Slow Frames
+
+`Help > Performance` lists the frames that took longer than 60 ms in this session,
+each with the phase that took the time (commands, sim, UI...) and what was going
+on (explore, recording, a map refit). The same lines are appended to
+`Documents/Fluoddity/perf.log`, so a hang seen during a set can be read back
+afterwards.
+
 ## Design
 Particles in Fluoddity have no direct interactions with each-other. Instead, they leave trails as they move. These trails decay and diffuse over time. Particles respond to the density and direction of trails around them.
 There is no fixed rule that determines how particles respond to their senses. Instead, each particle has a simple neural-net like brain with only a few dozen parameters — 80 for the default Fourier brain, and see [Brain Modality](#brain-modality) for the others. These parameters are randomized on startup, and then mutated as the user selects which lineages to explore.

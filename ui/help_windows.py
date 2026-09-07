@@ -230,6 +230,19 @@ class HelpWindowsMixin:
                 "These run well on my 5060 ."
             )
 
+            imgui.spacing()
+            imgui.separator()
+            imgui.text("Slow frames")
+            fw = getattr(self, "frame_watch", None)
+            if fw is None or not fw.recent:
+                imgui.text_disabled("None yet.")
+            else:
+                imgui.text_disabled(
+                    f"{fw.stalls} of {fw.frames} frames over "
+                    f"{fw.threshold_ms:.0f} ms; also in {fw.path}")
+                for stall in reversed(fw.recent):
+                    imgui.bullet_text(stall.line())
+
         imgui.end()
 
     def render_video_recording_window(self):

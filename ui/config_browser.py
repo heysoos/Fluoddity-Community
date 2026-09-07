@@ -40,30 +40,36 @@ class ConfigBrowserMixin:
                 self.config_files.append(f.stem)  # Maintain backward compat list
 
     def _cache_all_configs(self):
-        """Load and cache all config files for preview."""
+        """Load and cache all config files for preview.
+
+        A file is re-read only when its mtime moved, so reopening the menu
+        costs a stat per file rather than a parse.
+        """
         self._refresh_config_files()
-        self.cached_configs = {}
-
-        # Load Core configs from app directory
-        for filename in self.config_files_by_category["Core"]:
-            filepath = self.app_configs_dir / "Core" / f"{filename}.json"
-            config = self.config_saver.load_from_file(filepath)
-            if config:
-                self.cached_configs[f"Core/{filename}"] = config
-
-        # Load Custom configs from user directory
-        for filename in self.config_files_by_category["Custom"]:
-            filepath = self.user_configs_dir / f"{filename}.json"
-            config = self.config_saver.load_from_file(filepath)
-            if config:
-                self.cached_configs[f"Custom/{filename}"] = config
-
-        # Load Advanced configs from app directory
-        for filename in self.config_files_by_category["Advanced"]:
-            filepath = self.app_configs_dir / "Advanced" / f"{filename}.json"
-            config = self.config_saver.load_from_file(filepath)
-            if config:
-                self.cached_configs[f"Advanced/{filename}"] = config
+        stamps = getattr(self, "_config_stamps", None)
+        if stamps is None:
+            stamps = self._config_stamps = {}
+        fresh = {}
+        for category, files in self.config_files_by_category.items():
+            for filename in files:
+                key = f"{category}/{filename}"
+                filepath = self._get_config_path(filename, category)
+                try:
+                    stamp = filepath.stat().st_mtime_ns
+                except OSError:
+                    continue
+                held = stamps.get(key)
+                if held is not None and held[0] == stamp:
+                    fresh[key] = held[1]
+                    continue
+                config = self.config_saver.load_from_file(filepath)
+                if config:
+                    fresh[key] = config
+                    stamps[key] = (stamp, config)
+        for key in list(stamps):
+            if key not in fresh:
+                del stamps[key]
+        self.cached_configs = fresh
 
     def _get_config_path(self, filename: str, category: str = ""):
         """Get the full path to a config file.
