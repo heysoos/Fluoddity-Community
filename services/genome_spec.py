@@ -34,13 +34,14 @@ def _active(layout: BrainLayout | None):
 def present(flat, layout: BrainLayout) -> np.ndarray:
     """The shape callers expect a brain of this modality to arrive in.
 
-    Shape (N, 8) is preserved for Fourier so legacy callers that reshape or
-    index by centre are unaffected. Other modalities have no such 2D structure
-    and stay flat.
+    Fourier keeps one row per centre - 8 floats plus one per audio input - so
+    legacy callers that reshape or index by centre are unaffected. Other
+    modalities have no such 2D structure and stay flat.
     """
     flat = np.asarray(flat, dtype=np.float32).reshape(-1)
     if layout.modality == "fourier":
-        return flat.reshape(layout.shape[0], 8)
+        return flat.reshape(layout.shape[0],
+                            get("fourier").unit_floats(layout))
     return flat
 
 

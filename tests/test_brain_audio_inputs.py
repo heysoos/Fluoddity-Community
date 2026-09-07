@@ -263,3 +263,51 @@ def test_the_layout_search_never_proposes_a_change_of_k(m):
     assert moves, "a widened layout must still have its ordinary moves"
     for mv in moves:
         assert mv.child.audio_inputs == K, mv.operator
+
+
+# ---- the (N, stride) presentation ------------------------------------------
+
+def _wide_fourier(k):
+    from services.brains.layout_moves import grow_inputs
+    return grow_inputs(REGISTRY["fourier"].layout_from_settings({}), k)
+
+
+def test_a_wide_fourier_brain_presents_as_n_by_stride():
+    """A Fourier centre is 8 + K floats, and every caller that reshapes by
+    centre has to agree - the tournament reseeds through present()."""
+    from services.genome_spec import present, random_genome_for
+
+    wide = _wide_fourier(1)
+    g = random_genome_for(np.random.default_rng(0), wide)
+    assert g.shape == (wide.shape[0], 9)
+    assert g.size == wide.length
+    z = present(np.zeros(wide.length, np.float32), wide)
+    assert z.shape == (wide.shape[0], 9)
+
+
+def test_the_tournament_survives_adding_an_input_to_a_fourier_brain():
+    from services.tournament_service import TournamentService
+
+    base = REGISTRY["fourier"].layout_from_settings({})
+    svc = TournamentService(grid=2, layout=base)
+    svc.init_population()
+    wide = _wide_fourier(1)
+    svc.set_layout(wide)
+    assert all(np.asarray(g).size == wide.length for g in svc.population)
+
+
+def test_readback_of_a_wide_fourier_brain_keeps_its_centres():
+    from utilities.gl_helpers import readback_rule
+
+    class _Buf:
+        def __init__(self, data):
+            self._d = data.tobytes()
+
+        def read(self, size, offset=0):
+            return self._d[offset:offset + size]
+
+    wide = _wide_fourier(2)
+    rule = np.arange(wide.length, dtype=np.float32)
+    out = readback_rule(_Buf(rule), wide)
+    assert out.shape == (wide.shape[0], 10)
+    assert np.array_equal(out.reshape(-1), rule)

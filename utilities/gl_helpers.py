@@ -62,10 +62,10 @@ def readback_rule(rule_buffer, layout=None):
     Reads ONE brain of `layout.length` floats from offset 0. That is the whole
     of the per-particle readback buffer - click-to-adopt writes the one particle
     it was asked for and nothing else reads it - and slot 0 of the flat brain
-    buffer. Fourier brains keep their (N, 8) shape so click-to-adopt hands the
+    buffer. Fourier brains keep one row per centre so click-to-adopt hands the
     rest of the app what it has always expected.
     """
-    from services.brains import default_layout
+    from services.brains import default_layout, get
 
     layout = layout or default_layout()
     stride_bytes = layout.length * 4
@@ -73,7 +73,8 @@ def readback_rule(rule_buffer, layout=None):
     data = np.frombuffer(
         rule_buffer.read(size=stride_bytes, offset=0), dtype=np.float32)
     if layout.modality == "fourier":
-        return data.reshape(layout.shape[0], 8)
+        return data.reshape(layout.shape[0],
+                            get("fourier").unit_floats(layout))
     return data.copy()
 
 
