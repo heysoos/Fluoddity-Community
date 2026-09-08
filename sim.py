@@ -67,6 +67,9 @@ class Sim:
         # Tournament mode
         self._tournament_enabled = False
         self._tournament_grid = 4
+        # Cohort boxing: each cohort confined to its own box of the canvas.
+        self._cohort_boxes = False
+        self._cohort_box_count = 64
         self._tournament_mutation = 0.0
         self._tournament_plain_colour = False
         self._tournament_physics = False
@@ -414,9 +417,9 @@ class Sim:
         tryset(self.entity_update_program, 'AUDIO_IN_ACTIVE', _ai is not None)
         if _ai is not None:
             self.audio_input_buffer.write(np.ascontiguousarray(_ai, dtype='f4'))
-        # Tournament tiling uniforms
+        # Tiling uniforms
+        self._set_tile_uniforms(self.entity_update_program)
         tryset(self.entity_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
-        tryset(self.entity_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
         if self._tournament_enabled:
             # Per-particle mutation is owned by tournament mode. Zeroing
             # slider_value alone is NOT enough: calculate_setting() returns
@@ -453,10 +456,9 @@ class Sim:
         # Pass frame count to shader for initialization
         tryset(self.brush_update_program, 'frame_count', self.frame_count)
 
-        # Tournament: clip deposits to each particle's own tile
-        tryset(self.brush_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
-        tryset(self.brush_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
-        tryset(self.brush_update_program, 'TOURNAMENT_ACTIVE', float(self.entity_count))
+        # Boxed: clip deposits to each particle's own box
+        self._set_tile_uniforms(self.brush_update_program)
+        tryset(self.brush_update_program, 'TILE_ACTIVE', float(self.entity_count))
 
         # ONE, ONE: the weight the old SRC_ALPHA factor supplied is now in the
         # fragment, which is why brush.frag squares the kernel explicitly.
@@ -583,9 +585,8 @@ class Sim:
             tryset(self.canvas_update_program, 'draw_size', draw_size)
             tryset(self.canvas_update_program, 'draw_power', draw_power)
 
-        # Tournament tiling uniforms (trail isolation)
-        tryset(self.canvas_update_program, 'TOURNAMENT_MODE', 1 if self._tournament_enabled else 0)
-        tryset(self.canvas_update_program, 'TOURNAMENT_GRID', self._tournament_grid)
+        # Tiling uniforms (trail isolation)
+        self._set_tile_uniforms(self.canvas_update_program)
 
         # The framebuffer is already bound by update(), and the swap belongs to
         # it too: the brush pass deposits into this same target afterwards, so
@@ -1155,6 +1156,43 @@ class Sim:
         the canvas holds several different behaviours at once.
         """
         return bool(getattr(self, "_brain_per_cohort", False))
+
+    def tile_state(self) -> tuple[int, tuple[int, int]]:
+        """(mode, (boxes across, boxes up)) - who owns the boxes, decided once.
+
+        Mode 1 slices the particle numbering into a square tournament grid,
+        mode 2 gives each cohort a box of its own, 0 leaves the canvas as one
+        world. A tournament outranks cohort boxes: its tiles are already spoken
+        for, and they carry the brains.
+        """
+        if self._tournament_enabled:
+            g = int(self._tournament_grid)
+            return 1, (g, g)
+        if self._cohort_boxes:
+            # Imported here, not at module scope: a `from services...` at the
+            # top of sim.py re-triggers the ui/services circular import.
+            from services.cohort_tiling import box_grid
+            return 2, box_grid(self._cohort_box_count)
+        return 0, (1, 1)
+
+    def _set_tile_uniforms(self, program) -> None:
+        """Push the boxing to one program. Every stage that enforces a seam -
+        the particles, their deposits and the trail diffusion - reads these,
+        and they have to agree to the last bit."""
+        mode, grid = self.tile_state()
+        tryset(program, 'TILE_MODE', mode)
+        tryset(program, 'TILE_GRID', grid)
+        tryset(program, 'TILE_COHORTS', int(self._cohort_box_count))
+
+    def apply_cohort_boxes(self, enabled: bool, cohorts: int) -> None:
+        """Give each cohort its own box of the canvas for the next update.
+
+        `cohorts` is the GLOBAL cohort count: brush.vert cannot see a
+        multi-load config, and both stages must slice the numbering the same
+        way or a particle deposits outside the box it senses from.
+        """
+        self._cohort_boxes = bool(enabled)
+        self._cohort_box_count = max(1, int(cohorts))
 
     def apply_tournament(self, enabled: bool, grid: int = 4,
                          mutation: float = 0.0, plain_colour: bool = False,

@@ -120,11 +120,34 @@ mechanics these caveats assume.
   every slice into the bottom of the range, so at density 0.5 the top half of
   the tournament grid renders empty.
 
-- **A tournament tile is a SMALL WORLD under the world's own
+- **`TILE_MODE` decides who owns the boxes, and exactly one thing may.** 0 is
+  the whole canvas as one world, 1 slices the particle numbering into a square
+  tournament grid, 2 gives each cohort a box of its own. `Sim.tile_state()` is
+  the one place that resolves it, and a tournament outranks cohort boxing: its
+  tiles carry the brains and the per-tile physics. `TOURNAMENT_MODE` survives
+  alongside it because it says something else - that tiles own brain slots and
+  their own `configs[]` entry - which cohort boxing does not do. Cohort boxing
+  is also off under multi-load per-config cohort counts: `brush.vert` cannot
+  tell which config a particle belongs to, so the two stages could not agree
+  on its box. Guarded by `tests/test_cohort_boxes.py`.
+
+- **`TILE_GRID` is a RECTANGLE, and the box index IS the cohort index.**
+  `box_grid()` lays a cohort count out as near square as it goes - 12 cohorts
+  is 4x3, 13 is 4x4 with three cells left blank - so no count has to be
+  snapped to a square and no cohort is ever split across a seam. A blank cell
+  is the price. Every seam rule below holds unchanged on a rectangle, because
+  `tile_lo_texel()` was always per axis; what changes is that a shader reading
+  one count for both axes now puts the seams in the wrong place along one of
+  them. Guarded by `tests/test_tile_isolation_gl.py`.
+
+- **A tile is a SMALL WORLD under the world's own
   `BOUNDARY_CONDITIONS_MODE`, not a box with walls.** Under wrap it is a TORUS,
   with no edge for anything to pile against. Three places enforce the tile edge
   and must agree: the particle boundary block and the sensor confinement in
-  `entity_update.glsl`, and `getBlur` in `canvas.frag`. The diffusion's guard
+  `entity_update.glsl`, and `getBlur` in `canvas.frag`. A fourth agrees on
+  which box a particle is in: `brush.vert` cannot call into
+  `entity_update.glsl`, so its copy of the cohort slice is held to being
+  character-identical, the same discipline as `tile_lo_texel()`. The diffusion's guard
   must be the tile's own BOX, never an index recovered by clamping — a clamped
   probe re-enters the same tile, skips the zero-flux substitution and falls
   through to a `repeat`-wrapped sampler, which returns the far side of the

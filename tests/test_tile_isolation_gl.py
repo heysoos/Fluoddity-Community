@@ -66,16 +66,17 @@ void main(){ can_out = getBlur(texcoord, can_tex, K_TEST); }
 class Diffuser:
     """Ping-pong the real getBlur over a canvas, exactly as canvas.frag does."""
 
-    def __init__(self, ctx, boundary, tournament=1, grid=GRID, res=RES):
+    def __init__(self, ctx, boundary, tile_mode=1, grid=GRID, res=RES):
         self.ctx = ctx
         self.res = res
+        gx, gy = (grid, grid) if isinstance(grid, int) else grid
         self.prog = ctx.program(
             vertex_shader=QUAD_VERT,
             fragment_shader=_cut_main(read_shader("shaders/canvas.frag"))
                             + BLUR_MAIN)
         for name, value in (("BOUNDARY_CONDITIONS_MODE", boundary),
-                            ("TOURNAMENT_MODE", tournament),
-                            ("TOURNAMENT_GRID", grid),
+                            ("TILE_MODE", tile_mode),
+                            ("TILE_GRID", (gx, gy)),
                             ("canvas_resolution", (res, res)),
                             # 4/(5^d - 1) at d=1, i.e. the strongest the slider
                             # reaches: one step moves half the mass.
@@ -202,7 +203,7 @@ def test_tournament_off_leaves_the_canvas_alone(ctx):
     domain and wrap wraps it, so a blob at x=0 reaches x=RES-1."""
     field = np.zeros((RES, RES), dtype=np.float32)
     field[:, 0:2] = 1.0
-    d = Diffuser(ctx, WRAP, tournament=0)
+    d = Diffuser(ctx, WRAP, tile_mode=0)
     try:
         out = d.run(field, steps=60)
     finally:
@@ -300,8 +301,9 @@ def test_tiles_partition_the_texels_exactly(ctx, res, grid):
 PARTICLE_SRC = """#version 430
 layout(local_size_x = 64) in;
 uniform vec2 canvas_resolution;
-uniform int TOURNAMENT_MODE;
-uniform int TOURNAMENT_GRID;
+uniform int TILE_MODE;
+uniform ivec2 TILE_GRID;
+uniform int TILE_COHORTS;
 uniform float ACTIVE_COUNT_F;
 uniform int MODE;
 layout(std430, binding = 0) buffer In  { vec2 pts[]; };
@@ -321,10 +323,10 @@ void main(){
 
 
 def _particle_helpers() -> str:
-    """The real tournament_home_tile / tournament_tile_box /
+    """The real index_home_tile / cohort_home_tile / tile_box /
     particle_world_box / confine_sample block, lifted from entity_update."""
     src = read_shader("shaders/entity_update.glsl")
-    start = src.index("int tournament_home_tile(uint index){")
+    start = src.index("int tile_count(){")
     end = src.index("//Entities with index > ACTIVE_COUNT", start)
     return src[start:end]
 
@@ -333,8 +335,9 @@ def _particle_helpers() -> str:
 def confine(ctx):
     prog = ctx.compute_shader(PARTICLE_SRC + _particle_helpers() + PARTICLE_MAIN)
     prog["canvas_resolution"].value = (RES, RES)
-    prog["TOURNAMENT_MODE"].value = 1
-    prog["TOURNAMENT_GRID"].value = GRID
+    prog["TILE_MODE"].value = 1
+    prog["TILE_GRID"].value = (GRID, GRID)
+    prog["TILE_COHORTS"].value = GRID * GRID
     prog["ACTIVE_COUNT_F"].value = 1600.0
 
     def run(points, indices, mode):
@@ -359,7 +362,7 @@ def confine(ctx):
 
 def _tile_of(i):
     """Buffer index that lands squarely in tile i, matching
-    tournament_home_tile at ACTIVE_COUNT=1600, GRID=4."""
+    index_home_tile at ACTIVE_COUNT=1600, GRID=4."""
     return int((i + 0.5) * 1600 / (GRID * GRID))
 
 
@@ -372,8 +375,9 @@ def test_the_particle_box_is_the_same_box_the_trails_use(ctx, res, grid):
     prog = ctx.compute_shader(PARTICLE_SRC + _particle_helpers() + PARTICLE_MAIN)
     active = 1600.0
     prog["canvas_resolution"].value = (res, res)
-    prog["TOURNAMENT_MODE"].value = 1
-    prog["TOURNAMENT_GRID"].value = grid
+    prog["TILE_MODE"].value = 1
+    prog["TILE_GRID"].value = (grid, grid)
+    prog["TILE_COHORTS"].value = grid * grid
     prog["ACTIVE_COUNT_F"].value = active
     prog["MODE"].value = WRAP
     n = grid * grid
@@ -481,3 +485,111 @@ def test_a_sensor_never_leaves_its_tile(confine, mode):
     half_texel = 1.0 / RES
     assert np.all(out >= los + half_texel - 1e-5)
     assert np.all(out <= los + span - half_texel + 1e-5)
+
+
+# ---- rectangular grids and cohort-owned boxes ---------------------------
+#
+# Cohort boxing gives every cohort a box of its own, and a count that is not a
+# product of two close factors needs a rectangle: 12 cohorts is 4x3. Nothing
+# about a seam changes, so the isolation statements have to hold there too.
+
+from services.cohort_tiling import box_grid as _box_grid  # noqa: E402
+
+
+def _axis_slices(res, g):
+    return [slice(_lo_texel(k, g, res), _lo_texel(k + 1, g, res))
+            for k in range(g)]
+
+
+@pytest.mark.parametrize("res,gx,gy", [(647, 4, 3), (647, 5, 3), (128, 3, 2)])
+def test_a_rectangular_grid_isolates_just_as_well(ctx, res, gx, gy):
+    """Every box is still a torus that keeps its own trail. The x and y grids
+    differ here, so a shader reading one count for both axes puts the seams in
+    the wrong place along one of them."""
+    cols, rows = _axis_slices(res, gx), _axis_slices(res, gy)
+    field = np.zeros((res, res), dtype=np.float32)
+    values = {}
+    for bx in range(gx):
+        for by in range(gy):
+            v = float(bx + by * gx + 1)
+            values[(bx, by)] = v
+            field[rows[by], cols[bx].start:cols[bx].start + 2] = v
+    before = {k: float(field[rows[k[1]], cols[k[0]]].sum()) for k in values}
+
+    d = Diffuser(ctx, WRAP, grid=(gx, gy), res=res)
+    try:
+        out = d.run(field, steps=150)
+    finally:
+        d.release()
+
+    for (bx, by), v in values.items():
+        own = out[rows[by], cols[bx]]
+        assert float(own[:, -1].mean()) > 1e-4 * v, (
+            f"box ({bx},{by}) has a wall: its far edge never lit")
+        assert float(own.max()) <= v + 1e-4, (
+            f"box ({bx},{by}) peaks above its own {v} - a brighter box bled in")
+        assert float(own.sum()) == pytest.approx(before[(bx, by)], rel=2e-4), (
+            f"box ({bx},{by}) did not conserve its trail")
+
+
+def _cohort_boxes(ctx, res, cohorts, active=1600.0):
+    """-> the (lo_x, lo_y) each cohort's box starts at, straight off the real
+    particle_world_box in cohort mode."""
+    gx, gy = _box_grid(cohorts)
+    prog = ctx.compute_shader(PARTICLE_SRC + _particle_helpers() + PARTICLE_MAIN)
+    prog["canvas_resolution"].value = (res, res)
+    prog["TILE_MODE"].value = 2
+    prog["TILE_GRID"].value = (gx, gy)
+    prog["TILE_COHORTS"].value = cohorts
+    prog["ACTIVE_COUNT_F"].value = active
+    prog["MODE"].value = WRAP
+    ids = np.array([int((c + 0.5) * active / cohorts) for c in range(cohorts)],
+                   dtype=np.uint32)
+    pts = np.zeros((cohorts, 2), dtype=np.float32)
+    bufs = [ctx.buffer(pts.tobytes()), ctx.buffer(reserve=cohorts * 16),
+            ctx.buffer(ids.tobytes())]
+    for i, b in enumerate(bufs):
+        b.bind_to_storage_buffer(i)
+    prog.run(group_x=(cohorts + 63) // 64)
+    los = np.frombuffer(bufs[1].read(), dtype=np.float32).reshape(-1, 4)[:, 2:]
+    for b in bufs:
+        b.release()
+    prog.release()
+    return los.copy(), (gx, gy)
+
+
+@pytest.mark.parametrize("cohorts", [4, 12, 13, 64])
+def test_each_cohort_gets_its_own_box(ctx, cohorts):
+    """The box index IS the cohort index, laid out across then up. Two cohorts
+    sharing a box is the monoculture this feature exists to avoid; one cohort
+    spanning two boxes is a wall through the middle of a creature."""
+    res = 647
+    los, (gx, gy) = _cohort_boxes(ctx, res, cohorts)
+    assert len({tuple(np.round(p, 6)) for p in los}) == cohorts, (
+        "two cohorts landed in the same box")
+    for c in range(cohorts):
+        kx, ky = c % gx, c // gx
+        want = (2.0 * _lo_texel(kx, gx, res) / res - 1.0,
+                2.0 * _lo_texel(ky, gy, res) / res - 1.0)
+        assert np.allclose(los[c], want, atol=1e-5), (
+            f"cohort {c} is not in cell ({kx},{ky})")
+
+
+def test_a_cohort_box_lands_on_the_same_texel_edges_the_trails_use(ctx):
+    """13 cohorts is a 4x4 grid with three cells left blank - the seams are
+    still the diffusion's, so a particle never deposits across one."""
+    res = 647
+    los, (gx, gy) = _cohort_boxes(ctx, res, 13)
+    edges = {round(2.0 * _lo_texel(k, gx, res) / res - 1.0, 6)
+             for k in range(gx)}
+    assert {round(float(v), 6) for v in los[:, 0]} <= edges
+
+
+def test_the_two_stages_slice_the_cohorts_the_same_way():
+    """brush.vert cannot call into entity_update, so its copy of the cohort
+    slice is checked against the original character by character - the same
+    discipline tile_lo_texel is held to."""
+    ent = read_shader("shaders/entity_update.glsl")
+    vert = read_shader("shaders/brush.vert")
+    assert "float(TILE_COHORTS) * float(index) / float(ACTIVE_COUNT)" in ent
+    assert "float(TILE_COHORTS) * float(instance_id) / TILE_ACTIVE" in vert

@@ -18,10 +18,11 @@ layout(std430, binding = 0) buffer EntityBuffer {
     Entity entities[];
 };
 
-// Tournament tiling: deposits must not spill into a neighbouring tile.
-uniform int TOURNAMENT_MODE;      // 0 = off, 1 = on
-uniform int TOURNAMENT_GRID;      // grid side length
-uniform float TOURNAMENT_ACTIVE;  // active particle count (matches ACTIVE_COUNT)
+// Boxing: deposits must not spill into a neighbouring box.
+uniform int TILE_MODE;            // 0 = off, 1 = by particle index, 2 = by cohort
+uniform ivec2 TILE_GRID;          // boxes across, boxes up
+uniform int TILE_COHORTS;         // cohort count the boxes were laid out for
+uniform float TILE_ACTIVE;        // active particle count (matches ACTIVE_COUNT)
 
 // First texel of tile k along one axis. SYNCHRONIZED with entity_update.glsl
 // and canvas.frag - see the note there for why this is integer arithmetic.
@@ -74,14 +75,19 @@ void main() {
     view_col = vec4(entities[instance_id].hue,
                     entities[instance_id].sat, 1.0, 0.045);
 
-    // Home tile box, matching tournament_home_tile()/tournament_tile_box() in
-    // entity_update.glsl. The fragment stage clips deposits to this box.
+    // Home box, matching particle_home_tile()/tile_box() in entity_update.glsl.
+    // The fragment stage clips deposits to this box.
     frag_world = vertex_pos;
     tile_lo = vec2(-1e9);
     tile_hi = vec2(1e9);
-    if (TOURNAMENT_MODE == 1) {
-        int n = TOURNAMENT_GRID * TOURNAMENT_GRID;
-        int tile = clamp(int(floor(float(instance_id) / TOURNAMENT_ACTIVE * float(n))), 0, n - 1);
+    if (TILE_MODE != 0) {
+        int n = TILE_GRID.x * TILE_GRID.y;
+        // SYNCHRONIZED with index_home_tile()/cohort_home_tile() in
+        // entity_update.glsl: a particle must deposit into the box it senses
+        // from, so both stages slice the particle numbering the same way.
+        int tile = TILE_MODE == 2
+            ? clamp(int(floor(float(TILE_COHORTS) * float(instance_id) / TILE_ACTIVE)), 0, n - 1)
+            : clamp(int(floor(float(instance_id) / TILE_ACTIVE * float(n))), 0, n - 1);
         vec2 half_extent = vec2(sqrt(ca), 1.0 / sqrt(ca));
         // Seams on texel edges, in integer arithmetic, matching
         // tile_lo_texel() in entity_update.glsl and canvas.frag. An even
@@ -89,11 +95,11 @@ void main() {
         // divide by the grid, and at the default world size it is 647 texels
         // across against a grid of up to 8.
         ivec2 res = ivec2(canvas_resolution);
-        ivec2 k = ivec2(tile % TOURNAMENT_GRID, tile / TOURNAMENT_GRID);
-        vec2 lo_uv = vec2(tile_lo_texel(k.x, TOURNAMENT_GRID, res.x),
-                          tile_lo_texel(k.y, TOURNAMENT_GRID, res.y)) / canvas_resolution;
-        vec2 hi_uv = vec2(tile_lo_texel(k.x + 1, TOURNAMENT_GRID, res.x),
-                          tile_lo_texel(k.y + 1, TOURNAMENT_GRID, res.y)) / canvas_resolution;
+        ivec2 k = ivec2(tile % TILE_GRID.x, tile / TILE_GRID.x);
+        vec2 lo_uv = vec2(tile_lo_texel(k.x, TILE_GRID.x, res.x),
+                          tile_lo_texel(k.y, TILE_GRID.y, res.y)) / canvas_resolution;
+        vec2 hi_uv = vec2(tile_lo_texel(k.x + 1, TILE_GRID.x, res.x),
+                          tile_lo_texel(k.y + 1, TILE_GRID.y, res.y)) / canvas_resolution;
         tile_lo = (2.0 * lo_uv - 1.0) * half_extent;
         tile_hi = (2.0 * hi_uv - 1.0) * half_extent;
     }

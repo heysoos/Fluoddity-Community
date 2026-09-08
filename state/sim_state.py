@@ -39,6 +39,10 @@ class SimState:
     boundary_conditions: int = 2  # 0=Bounce, 1=Reset, 2=Wrap (default: Wrap)
     initial_conditions: int = 0   # 0=Grid, 1=Random, 2=Ring (default: Grid)
     num_cohorts: int = 64         # Number of cohorts (1-144, default: 64)
+    # Box each cohort off into its own cell of the canvas, so a cohort is a
+    # self-contained little world you can look at on its own. Ignored while a
+    # tournament grid is up - that grid already owns the boxes.
+    box_cohorts: bool = False
     rule_seed: float = 0.42       # Seed for procedural rule generation (fixed default for reproducibility)
 
     # Appearance settings (saved with physics config)

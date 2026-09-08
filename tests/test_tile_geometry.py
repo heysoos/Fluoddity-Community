@@ -21,7 +21,7 @@ def test_crops_are_unique_and_non_overlapping(grid):
 
 @pytest.mark.parametrize("grid", [2, 4, 8])
 def test_tile_zero_is_bottom_left(grid):
-    """tournament_home_tile() numbers tile 0 as bottom-left, but a top-down
+    """index_home_tile() numbers tile 0 as bottom-left, but a top-down
     image has row 0 at the top. Getting this backwards has already caused one
     user-visible bug."""
     r0, _, c0, _ = crop_bounds(0, grid)

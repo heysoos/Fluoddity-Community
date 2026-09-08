@@ -15,7 +15,7 @@ TILE_PX = 224
 def crop_bounds(tile: int, grid: int, tile_px: int = TILE_PX):
     """(row0, row1, col0, col1) into a TOP-DOWN image.
 
-    tournament_home_tile() numbers tile 0 as bottom-left, so ty is measured from
+    index_home_tile() numbers tile 0 as bottom-left, so ty is measured from
     the bottom and the row is inverted here. Keeping the inversion in exactly
     one place is what stops it being applied twice or cancelled out.
     """

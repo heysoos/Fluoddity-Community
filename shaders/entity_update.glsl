@@ -66,9 +66,16 @@ uniform float RULE_SEED;
 uniform bool WRITE_RULES; // Set true for one frame when rule buffer readback is needed
 uniform int WRITE_RULES_INDEX; // Which particle to write; the buffer holds one
 
-// Tournament mode: partition the canvas into a TOURNAMENT_GRID x TOURNAMENT_GRID grid
+// Boxing: the canvas is partitioned into TILE_GRID.x x TILE_GRID.y boxes, and
+// each box is a SMALL WORLD under the world's own boundary condition. Who owns
+// the boxes is TILE_MODE; the geometry below does not care which.
+uniform int TILE_MODE;         // 0 = off, 1 = by particle index, 2 = by cohort
+uniform ivec2 TILE_GRID;       // boxes across, boxes up
+uniform int TILE_COHORTS;      // cohort count the boxes were laid out for
+// A tournament is running: tiles own brain slots and per-tile physics. Implies
+// TILE_MODE 1, but is not the same statement - cohort boxing tiles the canvas
+// with no tournament anywhere.
 uniform int TOURNAMENT_MODE;   // 0 = off, 1 = on
-uniform int TOURNAMENT_GRID;   // grid side length (4 => 16 tiles)
 // Reshuffles initial conditions between generations so a genome is not scored
 // on one lucky starting layout. 0.0 = the original deterministic reset.
 uniform float RESET_SEED;
@@ -131,14 +138,14 @@ layout(std430, binding = 3) buffer MultiLoadConfigBuffer {
 #define ACTIVE_COUNT float(ENTITY_COUNT)
 #define SQRT_WORLD_SIZE (sqrt(WORLD_SIZE))
 // Multi-load helper: Calculate which config index this particle should use
-int tournament_home_tile(uint index);   // defined below
+int index_home_tile(uint index);   // defined below
 
 int get_particle_config_index() {
     // Auto tournament with physics in the search space: every tile reads its
     // own PhysicsSetting block, reusing the multi-load config SSBO. Checked
     // before MULTILOAD_COUNT because tournament mode does not load configs.
     if (TOURNAMENT_MODE == 1 && TOURNAMENT_PHYSICS == 1) {
-        return tournament_home_tile(gl_GlobalInvocationID.x);
+        return index_home_tile(gl_GlobalInvocationID.x);
     }
     if (MULTILOAD_COUNT == 0) return -1; // Not in multi-load mode
 
@@ -162,10 +169,28 @@ int get_particle_config_index() {
 
 // Tournament: a particle's stable "home tile" is derived from its buffer index,
 // so a particle never migrates between tiles even if it drifts spatially.
-int tournament_home_tile(uint index){
-    int n = TOURNAMENT_GRID * TOURNAMENT_GRID;
+int tile_count(){ return TILE_GRID.x * TILE_GRID.y; }
+
+int index_home_tile(uint index){
+    int n = tile_count();
     int tile = int(floor(float(index) / float(ACTIVE_COUNT) * float(n)));
     return clamp(tile, 0, n - 1);
+}
+// Box by cohort: the box index IS the cohort index, so a cohort is never split
+// across two boxes and a box never holds two cohorts. A count that is not a
+// product of two close factors leaves the last few cells empty.
+//
+// SYNCHRONIZED with brush.vert. TILE_COHORTS rather than get_particle_cohorts()
+// because brush.vert cannot see a multi-load config, and the two stages must
+// agree on which box a particle deposits into to the last bit.
+int cohort_home_tile(uint index){
+    int c = int(floor(float(TILE_COHORTS) * float(index) / float(ACTIVE_COUNT)));
+    return clamp(c, 0, tile_count() - 1);
+}
+// The box this particle lives in. Both modes are slices of the SAME particle
+// numbering, so a particle never migrates between boxes as it drifts.
+int particle_home_tile(uint index){
+    return TILE_MODE == 2 ? cohort_home_tile(index) : index_home_tile(index);
 }
 // First texel of tile k along one axis, in INTEGER arithmetic: the smallest t
 // with (2t+1)*g >= 2*k*res, i.e. the first texel whose centre is past the seam.
@@ -191,18 +216,18 @@ int tile_lo_texel(int k, int g, int res){
     return (2 * k * res - g + b - 1) / b;        // ceil division, exact
 }
 // Entity-space bounding box [lo, hi] of a tile index.
-void tournament_tile_box(int tile, out vec2 lo, out vec2 hi){
+void tile_box(int tile, out vec2 lo, out vec2 hi){
     float ca = canvas_resolution.x / canvas_resolution.y;
     vec2 half_extent = vec2(sqrt(ca), 1.0 / sqrt(ca));
     ivec2 res = ivec2(canvas_resolution);
-    int g = TOURNAMENT_GRID;
-    ivec2 k = ivec2(tile % g, tile / g);
+    ivec2 g = TILE_GRID;
+    ivec2 k = ivec2(tile % g.x, tile / g.x);
     // get_can() maps entity space to uv as p/(2*half_extent) + 0.5; this is
     // that inverted, so the box edge is the texel edge the diffusion uses.
-    vec2 lo_uv = vec2(tile_lo_texel(k.x, g, res.x),
-                      tile_lo_texel(k.y, g, res.y)) / canvas_resolution;
-    vec2 hi_uv = vec2(tile_lo_texel(k.x + 1, g, res.x),
-                      tile_lo_texel(k.y + 1, g, res.y)) / canvas_resolution;
+    vec2 lo_uv = vec2(tile_lo_texel(k.x, g.x, res.x),
+                      tile_lo_texel(k.y, g.y, res.y)) / canvas_resolution;
+    vec2 hi_uv = vec2(tile_lo_texel(k.x + 1, g.x, res.x),
+                      tile_lo_texel(k.y + 1, g.y, res.y)) / canvas_resolution;
     lo = (2.0 * lo_uv - 1.0) * half_extent;
     hi = (2.0 * hi_uv - 1.0) * half_extent;
 }
@@ -210,8 +235,8 @@ void tournament_tile_box(int tile, out vec2 lo, out vec2 hi){
 // canvas. A TILE IS A SMALL WORLD - it gets the world's own boundary
 // condition, rather than a wall bolted on after the fact.
 void particle_world_box(uint index, out vec2 lo, out vec2 hi){
-    if(TOURNAMENT_MODE == 1){
-        tournament_tile_box(tournament_home_tile(index), lo, hi);
+    if(TILE_MODE != 0){
+        tile_box(particle_home_tile(index), lo, hi);
         return;
     }
     float ca = canvas_resolution.x / canvas_resolution.y;
@@ -415,7 +440,7 @@ uint get_particle_brain_base(float cohort) {
     int idx = get_particle_config_index();
     if (idx >= 0) return uint(idx) * uint(MAX_BRAIN_FLOATS);
     if (TOURNAMENT_MODE == 1) {
-        return uint(tournament_home_tile(gl_GlobalInvocationID.x))
+        return uint(index_home_tile(gl_GlobalInvocationID.x))
              * uint(MAX_BRAIN_FLOATS);
     }
     if (BRAIN_PER_COHORT == 1) {
@@ -544,10 +569,10 @@ void reset(uint index){
     }
 
     
-    //Tournament: place the particle uniformly inside its home tile (with a small margin).
-    if(TOURNAMENT_MODE == 1){
-        int htile = tournament_home_tile(index);
-        vec2 lo, hi; tournament_tile_box(htile, lo, hi);
+    //Boxed: place the particle uniformly inside its own box (with a small margin).
+    if(TILE_MODE != 0){
+        int htile = particle_home_tile(index);
+        vec2 lo, hi; tile_box(htile, lo, hi);
         vec2 margin = (hi - lo) * 0.04;
         lo += margin; hi -= margin;
         vec2 r = vec2(hash(vec2(cohort_val + RESET_SEED, float(index)+0.1)),
@@ -687,10 +712,10 @@ void main() {
     pR(left_sensor_offset,cohort_audio(calculate_setting(get_particle_sensor_angle(),e.pos,cohort),CA_SENSOR_ANGLE,cohort)*PI);//rotate them opposite directions
     pR(right_sensor_offset,-cohort_audio(calculate_setting(get_particle_sensor_angle(),e.pos,cohort),CA_SENSOR_ANGLE,cohort)*PI);
 
-    //read the trails from canvas (tournament: keep sample points inside the home tile)
+    //read the trails from canvas (boxed: keep sample points inside the home box)
     vec2 lsample = e.pos + left_sensor_offset;
     vec2 rsample = e.pos + right_sensor_offset;
-    if(TOURNAMENT_MODE == 1){
+    if(TILE_MODE != 0){
         vec2 tlo, thi; particle_world_box(index, tlo, thi);
         int smode = get_particle_boundary_conditions();
         lsample = confine_sample(lsample, tlo, thi, smode);

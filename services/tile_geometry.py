@@ -31,7 +31,7 @@ def tile_uv_box(tx: int, ty: int, grid: int, res: tuple[int, int]):
     """-> ((u0, v0), (u1, v1)) for tile (tx, ty), on texel edges.
 
     v increases upward, matching the GL texture coordinate: tile 0 is
-    bottom-left, as tournament_home_tile() has it.
+    bottom-left, as index_home_tile() has it.
     """
     w, h = int(res[0]), int(res[1])
     lo = (lo_texel(tx, grid, w) / w, lo_texel(ty, grid, h) / h)

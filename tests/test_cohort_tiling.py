@@ -51,3 +51,56 @@ def test_tile_of_covers_every_tile_and_stays_in_range():
         assert got == set(range(tiles))
     assert tile_of(ACTIVE - 1, ACTIVE, 4) == 15
     assert tile_of(ACTIVE, ACTIVE, 4) == 15, "must clamp, matching the shader"
+
+
+# ---- boxing each cohort into its own cell --------------------------------
+
+from services.cohort_tiling import box_grid  # noqa: E402
+
+
+@pytest.mark.parametrize("cohorts", range(1, MAX_COHORTS + 1))
+def test_every_cohort_gets_a_box(cohorts):
+    gx, gy = box_grid(cohorts)
+    assert gx * gy >= cohorts
+
+
+@pytest.mark.parametrize("cohorts", range(1, MAX_COHORTS + 1))
+def test_the_grid_is_as_square_as_it_can_be(cohorts):
+    """A near-square layout, never a strip: 13 cohorts is 4x4 with three blank
+    cells rather than 13x1."""
+    gx, gy = box_grid(cohorts)
+    assert 0 <= gx - gy <= 1
+
+
+@pytest.mark.parametrize("cohorts,expected", [
+    (1, (1, 1)), (2, (2, 1)), (4, (2, 2)), (6, (3, 2)), (12, (4, 3)),
+    (13, (4, 4)), (64, (8, 8)), (144, (12, 12)),
+])
+def test_known_layouts(cohorts, expected):
+    assert box_grid(cohorts) == expected
+
+
+def test_no_box_is_wasted_beyond_one_row():
+    """The blank cells never amount to a whole row - otherwise the grid could
+    have been shorter."""
+    for n in range(1, MAX_COHORTS + 1):
+        gx, gy = box_grid(n)
+        assert gx * (gy - 1) < n
+
+
+def test_a_count_below_one_still_yields_a_box():
+    assert box_grid(0) == (1, 1)
+    assert box_grid(-5) == (1, 1)
+
+
+@pytest.mark.parametrize("cohorts", [1, 2, 6, 12, 13, 64, 144])
+def test_a_cohort_lands_in_exactly_one_box(cohorts):
+    """Mirrors the shader: the box index IS the cohort index, so no cohort is
+    split across two boxes and no box holds two cohorts."""
+    gx, gy = box_grid(cohorts)
+    boxes = {}
+    for i in range(0, ACTIVE, 3):
+        c = cohort_of(i, ACTIVE, cohorts)
+        assert 0 <= c < gx * gy
+        boxes.setdefault(c, set()).add(c)
+    assert len(boxes) == cohorts

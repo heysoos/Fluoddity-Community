@@ -117,4 +117,5 @@ def test_what_does_not_come_through_apply_state_is_never_cached(rig):
     _, _, counts, frame = rig
     frame(5)
     assert counts["RESET_SEED"] == 5
-    assert counts["TOURNAMENT_MODE"] == 15       # entity, brush and canvas programs
+    assert counts["TILE_MODE"] == 15             # entity, brush and canvas programs
+    assert counts["TOURNAMENT_MODE"] == 5        # entity only: brains and per-tile physics

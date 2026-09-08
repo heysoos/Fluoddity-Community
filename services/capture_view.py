@@ -82,7 +82,7 @@ class CaptureView:
             self._ensure_tile_target(tile_px)
 
         for tile in range(grid * grid):
-            # Tile 0 is bottom-left, matching tournament_home_tile(), and both
+            # Tile 0 is bottom-left, matching index_home_tile(), and both
             # the source UVs and the destination viewport are bottom-up here.
             # crop_bounds() applies the one flip, on readback.
             tx, ty = tile % grid, tile // grid

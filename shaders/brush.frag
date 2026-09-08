@@ -9,7 +9,7 @@ flat in vec2 tile_hi;
 out vec4 brush_out;
 
 uniform int frame_count;
-uniform int TOURNAMENT_MODE;
+uniform int TILE_MODE;
 
 vec3 hsv2rgb(vec3 c) {
   vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
@@ -107,10 +107,10 @@ void main() {
     // nothing to add on top of it.
     if (frame_count == 0) { discard; }
 
-    // Tournament: a particle sprite has ~1px extent, so without this clip a
-    // particle near a seam deposits trail into the neighbouring tile, which that
-    // tile's sensors then read. Keeps tiles genuinely independent.
-    if (TOURNAMENT_MODE == 1) {
+    // Boxed: a particle sprite has ~1px extent, so without this clip a particle
+    // near a seam deposits trail into the neighbouring box, which that box's
+    // sensors then read. Keeps boxes genuinely independent.
+    if (TILE_MODE != 0) {
         if (any(lessThan(frag_world, tile_lo)) || any(greaterThan(frag_world, tile_hi))) {
             discard;
         }

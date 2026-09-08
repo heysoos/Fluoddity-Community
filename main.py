@@ -1473,6 +1473,15 @@ class App:
                      and _auto_svc.physics_enabled
                      and len(_auto_svc.tile_physics) >= self.tournament_service.tiles),
         )
+        # Cohort boxing. Ignored under a tournament grid, which owns the boxes;
+        # and under per-config cohort counts, where brush.vert cannot tell which
+        # config a particle belongs to and so cannot agree on its box.
+        self.sim.apply_cohort_boxes(
+            enabled=(ui_state.sim.box_cohorts
+                     and not ui_state.tournament.enabled
+                     and not ui_state.multi_load.per_config_cohorts),
+            cohorts=ui_state.sim.num_cohorts,
+        )
         if _auto_svc is not None and _auto_on:
             # z=0 must mean "the preset as loaded", not the midpoint of every
             # slider - the midpoint has no axial force and no drag.

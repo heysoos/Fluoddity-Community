@@ -27,9 +27,10 @@ uniform int BOUNDARY_CONDITIONS_MODE; //0-1-2 == BOUNCE-RESET-WRAP
 // Tiling mode
 uniform bool tiling_mode;
 
-// Tournament isolation
-uniform int TOURNAMENT_MODE;   // 0 = off, 1 = on
-uniform int TOURNAMENT_GRID;   // grid side length
+// Boxing: each box is a small world, and the trail may not cross a seam.
+// Who owns the boxes is the host's business; this pass needs only the grid.
+uniform int TILE_MODE;         // 0 = off, otherwise boxed
+uniform ivec2 TILE_GRID;       // boxes across, boxes up
 
 // Canvas dimensions for aspect correction
 uniform vec2 canvas_resolution;
@@ -169,11 +170,11 @@ int tile_lo_texel(int k, int g, int res){
     int b = 2 * g;
     return (2 * k * res - g + b - 1) / b;        // ceil division, exact
 }
-void tournament_tile_texel_box(ivec2 t, ivec2 res, out ivec2 lo, out ivec2 hi){
-    int g = TOURNAMENT_GRID;
-    ivec2 k = ivec2(tile_of_texel(t.x, g, res.x), tile_of_texel(t.y, g, res.y));
-    lo = ivec2(tile_lo_texel(k.x,     g, res.x), tile_lo_texel(k.y,     g, res.y));
-    hi = ivec2(tile_lo_texel(k.x + 1, g, res.x), tile_lo_texel(k.y + 1, g, res.y));
+void tile_texel_box(ivec2 t, ivec2 res, out ivec2 lo, out ivec2 hi){
+    ivec2 g = TILE_GRID;
+    ivec2 k = ivec2(tile_of_texel(t.x, g.x, res.x), tile_of_texel(t.y, g.y, res.y));
+    lo = ivec2(tile_lo_texel(k.x,     g.x, res.x), tile_lo_texel(k.y,     g.y, res.y));
+    hi = ivec2(tile_lo_texel(k.x + 1, g.x, res.x), tile_lo_texel(k.y + 1, g.y, res.y));
 }
 
 // One diffusion tap, kept inside the tile the centre sample belongs to.
@@ -206,14 +207,14 @@ vec4 getBlur(vec2 pos, sampler2D sam,float diffusion_constant) {
     vec3 off = vec3(1. / vec2(imsz), 0);
     vec4 cc = getCan(pos, sam);
     vec4 nc, sc, wc, ec;
-    if(TOURNAMENT_MODE == 1){
-        // The tile's own texel box decides what is out of bounds, never a tile
+    if(TILE_MODE != 0){
+        // The box's own texel box decides what is out of bounds, never a tile
         // index derived from clamp(uv). A probe that walked off the canvas
         // clamped back into the same tile, so the comparison silently passed
         // and the tap fell through to the sampler - which has repeat_x/y set,
         // and duly returned the OPPOSITE EDGE OF THE CANVAS.
         ivec2 t = ivec2(pos * vec2(imsz));
-        ivec2 tlo, thi; tournament_tile_texel_box(t, imsz, tlo, thi);
+        ivec2 tlo, thi; tile_texel_box(t, imsz, tlo, thi);
         nc = tile_tap(t + ivec2(0, 1), tlo, thi, cc, sam);
         sc = tile_tap(t - ivec2(0, 1), tlo, thi, cc, sam);
         wc = tile_tap(t - ivec2(1, 0), tlo, thi, cc, sam);

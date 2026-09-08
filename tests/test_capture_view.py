@@ -282,7 +282,7 @@ def test_the_source_rect_of_each_tile_is_its_own_quarter():
 
 
 def test_tile_zero_is_bottom_left_to_match_the_shader():
-    """tournament_home_tile() numbers tile 0 bottom-left; getting this backwards
+    """index_home_tile() numbers tile 0 bottom-left; getting this backwards
     would score every genome against a different tile's picture."""
     cv, ui = grid_view()
     blit, grid_tex = _Blit(), _Tex((448, 448))

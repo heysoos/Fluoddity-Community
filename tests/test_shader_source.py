@@ -7,12 +7,21 @@ def read(p):
     return (ROOT / p).read_text()
 
 
-def test_entity_update_has_tournament_hooks():
+def test_entity_update_has_tiling_hooks():
+    src = read("shaders/entity_update.glsl")
+    assert "uniform int TILE_MODE;" in src
+    assert "uniform ivec2 TILE_GRID;" in src
+    assert "index_home_tile" in src
+    assert "cohort_home_tile" in src
+    assert "particle_home_tile" in src
+    assert "tile_box" in src
+
+
+def test_a_tournament_is_still_told_apart_from_the_boxes():
+    """TOURNAMENT_MODE means tiles own brain slots and per-tile physics, which
+    cohort boxing does not - so it cannot be folded into TILE_MODE."""
     src = read("shaders/entity_update.glsl")
     assert "uniform int TOURNAMENT_MODE;" in src
-    assert "uniform int TOURNAMENT_GRID;" in src
-    assert "tournament_home_tile" in src
-    assert "tournament_tile_box" in src
 
 
 def test_brush_clips_deposits_to_home_tile():
@@ -21,11 +30,11 @@ def test_brush_clips_deposits_to_home_tile():
     energy spike at the seam before this clip was added)."""
     vert = read("shaders/brush.vert")
     frag = read("shaders/brush.frag")
-    assert "TOURNAMENT_MODE" in vert and "tile_lo" in vert and "tile_hi" in vert
+    assert "TILE_MODE" in vert and "tile_lo" in vert and "tile_hi" in vert
     assert "frag_world" in vert
-    assert "TOURNAMENT_MODE" in frag
-    i = frag.index("TOURNAMENT_MODE == 1")
-    assert "discard" in frag[i:i + 300], "deposits are not clipped to the home tile"
+    assert "TILE_MODE" in frag
+    i = frag.index("TILE_MODE != 0")
+    assert "discard" in frag[i:i + 300], "deposits are not clipped to the home box"
 
 
 def test_sensors_are_confined_by_the_boundary_condition():
@@ -58,8 +67,8 @@ def test_the_tile_is_the_particles_whole_world():
 
 def test_canvas_frag_has_tournament_isolation():
     src = read("shaders/canvas.frag")
-    assert "uniform int TOURNAMENT_MODE;" in src
-    assert "uniform int TOURNAMENT_GRID;" in src
+    assert "uniform int TILE_MODE;" in src
+    assert "uniform ivec2 TILE_GRID;" in src
 
 
 def test_diffusion_taps_are_bounded_by_the_tile_box():
@@ -68,7 +77,7 @@ def test_diffusion_taps_are_bounded_by_the_tile_box():
     with repeat set. Measured, a lit tile put 64% of its brightness into the
     tile on the opposite side of the canvas."""
     src = read("shaders/canvas.frag")
-    assert "void tournament_tile_texel_box(" in src
+    assert "void tile_texel_box(" in src
     assert "tile_tap(" in src
     assert "tournament_tile_uv(np)" not in src, "the index comparison is back"
 

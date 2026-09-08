@@ -1,6 +1,6 @@
 """Tile and cohort indexing, mirroring entity_update.glsl exactly.
 
-Both `tournament_home_tile(index)` and `get_cohort(index)` are slices of the
+Both `index_home_tile(index)` and `get_cohort(index)` are slices of the
 same particle numbering, so they nest: with COHORTS = k * tiles, each tile
 contains exactly k cohorts, and each cohort gets its own deterministic tweak of
 that tile's genome.
@@ -18,7 +18,7 @@ MAX_COHORTS = 144
 
 
 def tile_of(index: int, active: int, grid: int) -> int:
-    """Mirrors tournament_home_tile() in entity_update.glsl."""
+    """Mirrors index_home_tile() in entity_update.glsl."""
     n = grid * grid
     tile = int(math.floor(float(index) / float(active) * float(n)))
     return max(0, min(tile, n - 1))
@@ -37,3 +37,16 @@ def max_variants(grid: int) -> int:
 def cohorts_for(grid: int, variants: int) -> int:
     """Cohort count that gives exactly `variants` distinct cohorts per tile."""
     return variants * grid * grid
+
+
+def box_grid(cohorts: int) -> tuple[int, int]:
+    """(boxes across, boxes up) for one box per cohort.
+
+    As near square as the count allows, so a count that is not a product of
+    two close factors gets blank cells rather than a strip: 13 cohorts is 4x4
+    with three blanks, never 13x1.
+    """
+    n = max(1, int(cohorts))
+    gx = math.ceil(math.sqrt(n))
+    gy = -(-n // gx)                              # ceil division
+    return gx, gy

@@ -102,6 +102,8 @@ class PhysicsConfig:
     boundary_conditions: int = 0  # 0=Bounce, 1=Reset, 2=Wrap
     initial_conditions: int = 0   # 0=Grid, 1=Random, 2=Ring
     num_cohorts: int = 64
+    # A preset written before boxing existed loads unboxed.
+    box_cohorts: bool = False
     rule_seed: float = DEFAULT_RULE_SEED
 
     # Appearance settings
@@ -173,6 +175,7 @@ class PhysicsConfig:
                 'boundary_conditions': self.boundary_conditions,
                 'initial_conditions': self.initial_conditions,
                 'num_cohorts': self.num_cohorts,
+                'box_cohorts': self.box_cohorts,
                 'rule_seed': self.rule_seed,
             },
             'appearance': {
@@ -261,6 +264,7 @@ class PhysicsConfig:
             boundary_conditions=settings.get('boundary_conditions', 0),
             initial_conditions=settings.get('initial_conditions', 0),
             num_cohorts=settings.get('num_cohorts', 64),
+            box_cohorts=settings.get('box_cohorts', False),
             rule_seed=settings.get('rule_seed', DEFAULT_RULE_SEED),
             ink_weight=appearance.get('ink_weight', 1.0),
             hue_sensitivity=appearance.get('hue_sensitivity', 0.5),
@@ -334,6 +338,7 @@ class ConfigSaver:
             boundary_conditions=sim_state.boundary_conditions,
             initial_conditions=sim_state.initial_conditions,
             num_cohorts=sim_state.num_cohorts,
+            box_cohorts=sim_state.box_cohorts,
             rule_seed=sim_state.rule_seed,
             ink_weight=sim_state.ink_weight,
             hue_sensitivity=sim_state.hue_sensitivity,
@@ -399,6 +404,7 @@ class ConfigSaver:
         sim_state.boundary_conditions = config.boundary_conditions
         sim_state.initial_conditions = config.initial_conditions
         sim_state.num_cohorts = config.num_cohorts
+        sim_state.box_cohorts = config.box_cohorts
         sim_state.rule_seed = config.rule_seed
 
         # Appearance settings

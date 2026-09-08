@@ -155,6 +155,20 @@ class PhysicsWindowMixin:
                 pls.pop_locked_style(nc_lock_colors)
             hints.tip("Each particle is assigned to a cohort. Each cohort shares behavior:\neach cohort has a distinct mutation.")
 
+            # Box Cohorts: a tournament grid already owns the boxes, so the
+            # toggle is dead while one is up rather than silently ignored. A
+            # disabled widget withholds its hover, so the reason is plain text.
+            _boxed_by_tournament = self.state.tournament.enabled
+            imgui.begin_disabled(_boxed_by_tournament)
+            changed_bc, new_bc = imgui.checkbox(
+                "Box Cohorts", self.state.sim.box_cohorts)
+            if changed_bc:
+                self.state.sim.box_cohorts = new_bc
+            hints.tip("Give each cohort its own walled box of the canvas.")
+            imgui.end_disabled()
+            if _boxed_by_tournament:
+                imgui.text_disabled("The tournament grid owns the boxes.")
+
             imgui.separator()
 
             # Disable Symmetry
