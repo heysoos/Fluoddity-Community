@@ -27,7 +27,7 @@ import numpy as np                                    # noqa: E402
 
 from camera import DisplayFrame                       # noqa: E402
 from services.perform_window import (                 # noqa: E402
-    PerformWindow, choose_monitor, fit_rect, list_monitors)
+    PerformWindow, choose_monitor, corner_rect, fit_rect, list_monitors)
 
 MAIN_SIZE = (640, 480)
 
@@ -85,6 +85,30 @@ def _inspect(img, expect_src_aspect, fb_size, drawn_rect) -> str:
         if bar.size and bar.any():
             return "a letterbox bar is not black"
     return ""
+
+
+def _warp_checker(quad, out):
+    """An on_drawn hook for a corner-pinned frame.
+
+    The picture must land inside the quad's bounding box and nothing may fall
+    outside it. Run with the guides OFF: the corner markers sit ON that
+    boundary and spill past it by design.
+    """
+
+    def check(ctx, _drawn_rect):
+        fb_w, fb_h = ctx.screen.size
+        raw = ctx.screen.read(components=3, dtype='f1')
+        img = np.frombuffer(raw, dtype=np.uint8).reshape(fb_h, fb_w, 3)
+        x, y, w, h = corner_rect(quad, (fb_w, fb_h))
+        if not img[y:y + h, x:x + w].any():
+            out.append(f"nothing drawn inside the warped quad {(x, y, w, h)}")
+            return
+        outside = img.copy()
+        outside[y:y + h, x:x + w] = 0
+        if outside.any():
+            out.append("the warp painted outside its own corners")
+
+    return check
 
 
 def main(argv=None) -> int:
@@ -181,6 +205,36 @@ def main(argv=None) -> int:
         failures.extend(f"after reopen: {p}" for p in found)
         if not found:
             print("  reopened and drew again")
+
+        # Phase 4: the corner pin itself. A skewed quad, then the guides,
+        # then a folded one - which must keep the last good matrix rather
+        # than putting NaN on a wall.
+        skew = ((0.12, 0.94), (0.86, 0.80), (0.93, 0.14), (0.06, 0.07))
+        found = []
+        for i in range(30):
+            glfw.poll_events()
+            glfw.swap_buffers(main_window)
+            hook = _warp_checker(skew, found) if i == 29 else None
+            pw.draw(frame, corners=skew, on_drawn=hook)
+        failures.extend(f"warp: {p}" for p in found)
+        if not found:
+            print("  warped picture landed inside its own corners")
+        if not pw.warp_ok:
+            failures.append("warp: an ordinary quad was refused")
+
+        deadline = time.time() + args.seconds
+        while time.time() < deadline:
+            glfw.poll_events()
+            glfw.swap_buffers(main_window)
+            pw.draw(frame, corners=skew, guides=True, held_corner=0)
+        print("  guides drawn (grid warps with the picture, TL highlighted)")
+
+        folded = (skew[0], skew[1], skew[3], skew[2])
+        pw.draw(frame, corners=folded)
+        if pw.warp_ok:
+            failures.append("warp: a folded quad was accepted")
+        else:
+            print("  a folded quad was refused, last good shape kept")
 
         # A closed window must be a no-op, not a crash.
         pw.close()
