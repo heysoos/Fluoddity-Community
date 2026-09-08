@@ -57,10 +57,13 @@ class _App:
     """
 
     _drive_perform_window = App._drive_perform_window
+    _load_calibration = App._load_calibration
+    _sync_calibration = App._sync_calibration
 
     def __init__(self, fail=False):
         self.perform_window = _FakeWindow(fail=fail)
         self._perform_requested = None
+        self._perform_device = ""
         self.perform_view = None
         self.installed = []          # projector sizes handed to the renderer
         self.released = 0
@@ -195,3 +198,109 @@ def test_a_fallback_never_overwrites_the_remembered_display(displays):
     state.preferences.perform_monitor = PROJECTOR.key
     app._drive_perform_window(state)
     assert state.preferences.perform_monitor == PROJECTOR.key
+
+
+# ---- the corner calibration follows the DISPLAY -------------------------
+
+SKEW = ((0.10, 0.95), (0.90, 0.80), (0.97, 0.12), (0.05, 0.05))
+STORED = [[c[0], c[1]] for c in SKEW]
+
+
+def _running(state, monitor=PROJECTOR):
+    state.perform.enabled = True
+    state.preferences.perform_monitor = monitor.key
+    return state
+
+
+def test_opening_adopts_the_calibration_that_display_was_left_with(displays):
+    app, state = _App(), _running(UIState())
+    state.preferences.perform_calibrations[PROJECTOR.device_key] = STORED
+    app._drive_perform_window(state)
+    assert state.perform.corners == SKEW
+
+
+def test_a_projector_nobody_calibrated_starts_on_the_letterbox(displays):
+    app, state = _App(), _running(UIState())
+    state.preferences.perform_calibrations[LAPTOP.device_key] = STORED
+    app._drive_perform_window(state)
+    assert state.perform.corners is None, "it adopted another display's wall"
+
+
+def test_a_corrupt_stored_calibration_reads_as_uncalibrated(displays):
+    """preferences.config is a file a user can edit."""
+    app, state = _App(), _running(UIState())
+    state.preferences.perform_calibrations[PROJECTOR.device_key] = "rubbish"
+    app._drive_perform_window(state)
+    assert state.perform.corners is None
+
+
+def test_dragging_a_corner_is_written_back_under_the_device_key(displays):
+    app, state = _App(), _running(UIState())
+    app._drive_perform_window(state)
+    state.perform.corners = SKEW
+    app._drive_perform_window(state)
+    assert state.preferences.perform_calibrations == {
+        PROJECTOR.device_key: STORED}
+
+
+def test_moving_the_display_in_windows_keeps_its_calibration(displays):
+    """device_key drops the POSITION, so rearranging monitors is not a new wall."""
+    moved = _mon("Projector", x=0, phys=(508, 286))
+    assert moved.key != PROJECTOR.key
+    displays[:] = [LAPTOP, moved]
+
+    app, state = _App(), _running(UIState())
+    state.preferences.perform_calibrations[PROJECTOR.device_key] = STORED
+    app._drive_perform_window(state)
+    assert state.perform.corners == SKEW
+
+
+def test_reset_drops_the_entry_rather_than_storing_the_letterbox(displays):
+    """An uncalibrated display and a display reset to square are one thing."""
+    app, state = _App(), _running(UIState())
+    state.preferences.perform_calibrations[PROJECTOR.device_key] = STORED
+    app._drive_perform_window(state)
+
+    state.perform.reset_corners_requested = True
+    app._drive_perform_window(state)
+
+    assert state.perform.corners is None
+    assert state.perform.reset_corners_requested is False
+    assert PROJECTOR.device_key not in state.preferences.perform_calibrations
+
+
+def test_stopping_clears_the_live_corners_but_not_the_stored_ones(displays):
+    app, state = _App(), _running(UIState())
+    app._drive_perform_window(state)
+    state.perform.corners = SKEW
+    state.perform.calibrating = True
+    app._drive_perform_window(state)
+
+    state.perform.enabled = False
+    app._drive_perform_window(state)
+
+    assert state.perform.corners is None
+    assert state.perform.calibrating is False
+    assert state.perform.held_corner == -1
+    assert state.preferences.perform_calibrations[PROJECTOR.device_key] == STORED
+
+
+def test_reopening_restores_what_the_last_session_dragged(displays):
+    app, state = _App(), _running(UIState())
+    app._drive_perform_window(state)
+    state.perform.corners = SKEW
+    app._drive_perform_window(state)
+
+    state.perform.enabled = False
+    app._drive_perform_window(state)
+    state.perform.enabled = True
+    app._drive_perform_window(state)
+
+    assert state.perform.corners == SKEW
+
+
+def test_nothing_is_written_for_a_display_left_alone(displays):
+    app, state = _App(), _running(UIState())
+    for _ in range(5):
+        app._drive_perform_window(state)
+    assert state.preferences.perform_calibrations == {}

@@ -204,6 +204,10 @@ class App:
         # What was ASKED for when the window opened, which is not what it
         # landed on when that display was absent. See _drive_perform_window.
         self._perform_requested = None
+        # The device_key the live corner calibration belongs to, "" when
+        # closed. A calibration is about a projector and a wall, so it is
+        # keyed by the display rather than by the session.
+        self._perform_device = ""
         self.config_saver = ConfigSaver()
         self.arrow_debug_service = ArrowDebugService(self.ctx)
         self.multi_load_service = MultiLoadService()
@@ -1230,8 +1234,14 @@ class App:
             return
         frame = (self.perform_view.frame if self.perform_view is not None
                  else None)
+        perform = self.ui.state.perform
         try:
-            self.perform_window.draw(frame)
+            self.perform_window.draw(frame, corners=perform.corners,
+                                     guides=perform.calibrating,
+                                     held_corner=perform.held_corner)
+            if not self.perform_window.warp_ok and not perform.notice:
+                perform.notice = ("Those corners cannot be projected - "
+                                  "keeping the last shape that could.")
         except Exception as exc:
             print(f"[perform] stopped: {exc}")
             try:
@@ -1691,6 +1701,7 @@ class App:
                     self._perform_requested = prefs.perform_monitor
                     perform.notice = notice
                     self._install_perform_view(monitor)
+                    self._load_calibration(perform, prefs, monitor)
                     # Remember only a display the user picked, never a
                     # fallback: re-plugging theirs must resume on it.
                     if not prefs.perform_monitor:
@@ -1699,9 +1710,52 @@ class App:
         elif not want and self.perform_window.is_open:
             self.perform_window.close()
             self._perform_requested = None
+            self._perform_device = ""
+            perform.corners = None
+            perform.calibrating = False
+            perform.held_corner = -1
             self._release_perform_view()
 
         perform.active_monitor = self.perform_window.monitor_label
+        if self.perform_window.is_open:
+            self._sync_calibration(perform, prefs)
+
+    def _load_calibration(self, perform, prefs, monitor) -> None:
+        """Adopt the corners this display was last calibrated with.
+
+        Keyed by device_key - the identity that survives rearranging
+        displays - so re-plugging a projector restores its alignment and a
+        different one starts on the letterbox. A stored entry that cannot be
+        used reads as None, which IS the letterbox.
+        """
+        from services.corner_pin import corners_from_json
+
+        self._perform_device = monitor.device_key
+        perform.corners = corners_from_json(
+            prefs.perform_calibrations.get(monitor.device_key))
+
+    def _sync_calibration(self, perform, prefs) -> None:
+        """Carry the dragged corners back to preferences.
+
+        Reset DROPS the entry rather than storing the letterbox: a display
+        with no entry is uncalibrated, and those must stay the same thing or
+        a projector nobody touched acquires a calibration.
+        """
+        from services.corner_pin import corners_to_json
+
+        key = self._perform_device
+        if not key:
+            return
+        if perform.reset_corners_requested:
+            perform.reset_corners_requested = False
+            perform.corners = None
+            prefs.perform_calibrations.pop(key, None)
+            return
+        if perform.corners is None:
+            return
+        stored = corners_to_json(perform.corners)
+        if prefs.perform_calibrations.get(key) != stored:
+            prefs.perform_calibrations[key] = stored
 
     def _install_perform_view(self, monitor) -> None:
         """The projector renders its OWN frame, at a fixed viewpoint.
