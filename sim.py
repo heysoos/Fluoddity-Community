@@ -21,6 +21,15 @@ SIZE_OF_RULE_STRUCT = 4*4*20  # 4 bytes per float32. 4 floats per vec4. 20 vec4s
 # physics rather than as an error.
 MULTI_LOAD_CONFIG_SIZE = 11*7*4 + 6*4 + 3*4
 
+
+def _differs_only_in(a, b, key: str) -> bool:
+    """Do two layouts of one width differ in the scale `key` and nothing else?"""
+    da, db = dict(a.scales), dict(b.scales)
+    if set(da) != set(db) or da.get(key) == db.get(key):
+        return False
+    return all(da[k] == db[k] for k in da if k != key)
+
+
 class Sim:
     def __init__(self, ctx: moderngl.Context, world_size: float = 1.0, canvas_aspect_ratio: str = "1:1",
                  particle_density: float = 1.0):
@@ -1056,7 +1065,34 @@ class Sim:
         # A new rule arrives DECODED; its search vector is unknown until a scale
         # change needs one. See set_brain_scales.
         self._slot0_z = None
+        self._note_slot0_ears(layout)
         self.multi_load_rule_buffer.write(pack_brains([params], layout))
+
+    def _note_slot0_ears(self, layout) -> None:
+        """Remember slot 0's audio weights at unit Audio Scale, or None when
+        the scale is zero and there is nothing to remember."""
+        from services.brains import audio_weight_index
+
+        scale = float(layout.scale("audio_scale", 1.0))
+        self._slot0_ears = None
+        if layout.audio_inputs and scale > 0.0:
+            ears = self._slot0[audio_weight_index(layout)]
+            self._slot0_ears = (ears / np.float32(scale)).astype(np.float32)
+
+    def _rescale_ears(self, layout) -> np.ndarray:
+        """Slot 0 under a new Audio Scale: every deaf float verbatim, the
+        audio weights multiplied - or drawn from the rig's seed when the
+        brain arrived deaf by scale and there is nothing to multiply."""
+        from services.brains import audio_weight_index
+        from services.brains.layout_moves import transfer_audio_inputs
+
+        out = self._slot0.copy()
+        scale = np.float32(layout.scale("audio_scale", 1.0))
+        if self._slot0_ears is not None:
+            out[audio_weight_index(layout)] = self._slot0_ears * scale
+            return out
+        seed = float(getattr(self, "_audio_seed", None) or 0.0)
+        return transfer_audio_inputs(out, layout, layout, seed)
 
     def _write_cohort_brains(self, layout) -> np.ndarray:
         """Fill the cohort slots with independent brains. -> cohort 0's.
@@ -1299,6 +1335,15 @@ class Sim:
         params = getattr(self, "_slot0", None)
         if params is None:
             return
+        if layout.audio_inputs and _differs_only_in(old, layout, "audio_scale"):
+            # A round trip through encode() clips every deaf float past its
+            # rail, and this scale's zero promises the deaf brain bit for bit.
+            self._slot0 = self._rescale_ears(layout)
+            self._slot0_z = None
+            if self._slot0_ears is None:
+                self._note_slot0_ears(layout)
+            self.multi_load_rule_buffer.write(pack_brains([self._slot0], layout))
+            return
         m = get(layout.modality)
         try:
             if getattr(self, "_slot0_z", None) is None:
@@ -1309,6 +1354,7 @@ class Sim:
             print(f"[brain] could not rescale the live rule ({exc})")
             return
         self._slot0 = decoded
+        self._note_slot0_ears(layout)
         self.multi_load_rule_buffer.write(pack_brains([decoded], layout))
 
     def realloc_brain_buffers(self, layout) -> None:

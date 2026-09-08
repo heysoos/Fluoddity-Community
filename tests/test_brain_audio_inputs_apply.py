@@ -254,3 +254,69 @@ def test_the_inspector_is_handed_the_live_channels():
     src = (Path(main.__file__)).read_text(encoding="utf-8")
     assert "audio=bst.audio_live" in src
     assert "audio_live" in UIState().brain.__dataclass_fields__
+
+
+# ---- a same-brain preset under the rig's count ---------------------------
+
+def _menu_handler(layout, rule):
+    """CommandHandler wired to the REAL _apply_brain_layout of a stub App, so
+    the frame runs the way the app runs it: load, then _handle_brain_layout."""
+    from tests.test_menu_cross_brain_load import _MenuUI, _Saver
+
+    app = _App(layout, rule)
+    h = object.__new__(CommandHandler)
+    for a in ("field_handler", "param_lock_service", "archive", "archive_store",
+              "auto_service", "imgep_driver", "multi_load_service"):
+        setattr(h, a, None)
+    h.sim = app.sim
+    h.rule_manager = app.rule_manager
+    h.ui = _MenuUI({})
+    h.config_saver = _Saver(h.ui)
+    h._pending_brain_rule = None
+    h._borrow = None
+    h.preview_rule_active = False
+    h._preview_rule_was_pushed = False
+    app.command_handler = h
+    h.apply_brain_layout = app.apply
+    return app, h
+
+
+class _DeafConfig:
+    rule_seed = 0.0
+
+    def __init__(self, layout, rule):
+        self.rule = rule
+        self.brain_layout = layout.signature()
+        self.brain_settings = {}
+
+
+@pytest.mark.parametrize("hover", [False, True], ids=["click", "hover+click"])
+def test_a_same_brain_deaf_preset_loads_widened_under_the_rig(hover):
+    """The sim is already on the rig's wide layout of the SAME brain, so no
+    switch happens - and the preset's creature has to land anyway, widened
+    from the rig's seed. With a hover first, what the click shows must be
+    the creature the hover showed, plus its ears."""
+    from services.brains.layout_moves import transfer_audio_inputs
+    from tests.test_menu_cross_brain_load import _click, _hover
+
+    base = default_layout()
+    wide = grow_inputs(base, 2)
+    old = _rule(wide, seed=1)
+    app, h = _menu_handler(wide, old)
+    sim = app.sim
+    ui_state = _ui()
+    ui_state.audio.audio_inputs = 2
+    ui_state.audio.audio_seed = 0.3
+    ui_state.brain.settings = {"audio_inputs": 2}
+
+    preset = _rule(base, seed=7)
+    h.ui.configs["p"] = _DeafConfig(base, preset)
+    if hover:
+        _hover(h, ui_state, "p")
+    _click(h, ui_state, "p")
+    h._handle_brain_layout(ui_state)
+
+    want = transfer_audio_inputs(preset, base, wide, 0.3)
+    np.testing.assert_array_equal(app.applied[-1], want)
+    np.testing.assert_array_equal(h.rule_manager.get_current_rule(), want)
+    assert sim.brain_layout == wide

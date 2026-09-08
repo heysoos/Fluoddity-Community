@@ -139,3 +139,74 @@ def test_slot0_params_tracks_what_was_written(sim):
     sim.apply_rule(p)
     assert np.allclose(sim.slot0_params, p.reshape(-1), atol=1e-6)
     assert np.allclose(sim.slot0_params, _slot0(sim), atol=1e-6)
+
+
+# ---- the audio scale ------------------------------------------------------
+#
+# Audio Scale is the one scale a rig drags with the music on, and its zero is
+# a promise: the deaf ancestor, bit for bit. Re-encoding the whole brain to
+# get there clips every deaf float past its rail.
+
+def _wide(name, scale):
+    return REGISTRY[name].layout_from_settings(
+        {"audio_inputs": 1, "audio_scale": scale})
+
+
+def _split(layout, rule):
+    from services.brains import audio_weight_index
+
+    audio = audio_weight_index(layout)
+    keep = np.setdiff1d(np.arange(layout.length), audio)
+    return rule[keep], rule[audio]
+
+
+@pytest.mark.parametrize("name", ["fourier", "gabor", "lenia", "mlp"])
+def test_the_audio_scale_never_touches_a_deaf_float(sim, name):
+    m = REGISTRY[name]
+    one = _wide(name, 1.0)
+    sim.realloc_brain_buffers(one)
+    # Past the rails on purpose: a layer Scale or an old preset puts a brain
+    # there, and a round trip through encode() would clip it.
+    rule = np.asarray(m.random(np.random.default_rng(3), one),
+                      np.float32).reshape(-1) * 3.0
+    sim.apply_rule(rule)
+    deaf0, ears0 = _split(one, _slot0(sim))
+    np.testing.assert_array_equal(deaf0, _split(one, rule)[0])
+
+    sim.set_brain_scales(_wide(name, 0.0))
+    deaf, ears = _split(one, _slot0(sim))
+    np.testing.assert_array_equal(deaf, deaf0)
+    assert not ears.any(), "at zero the ears must be exactly zero"
+
+    sim.set_brain_scales(_wide(name, 0.5))
+    deaf, ears = _split(one, _slot0(sim))
+    np.testing.assert_array_equal(deaf, deaf0)
+    assert np.allclose(ears, ears0 * 0.5, atol=1e-6)
+
+    sim.set_brain_scales(one)
+    deaf, ears = _split(one, _slot0(sim))
+    np.testing.assert_array_equal(deaf, deaf0)
+    assert np.allclose(ears, ears0, atol=1e-6)
+
+
+@pytest.mark.parametrize("name", ["fourier", "gabor", "lenia", "mlp"])
+def test_a_brain_that_arrived_deaf_by_scale_hears_the_seed_when_raised(sim, name):
+    """At scale zero there are no weights to scale up, so raising it draws
+    the rig's - the same weights a transfer at that scale gives."""
+    from services.brains.layout_moves import transfer_audio_inputs
+
+    m = REGISTRY[name]
+    zero, half = _wide(name, 0.0), _wide(name, 0.5)
+    sim.realloc_brain_buffers(zero)
+    sim.set_audio_seed(0.31)
+    rule = np.asarray(m.random(np.random.default_rng(4), zero),
+                      np.float32).reshape(-1)
+    assert not _split(zero, rule)[1].any()
+    sim.apply_rule(rule)
+
+    sim.set_brain_scales(half)
+    deaf, ears = _split(half, _slot0(sim))
+    np.testing.assert_array_equal(deaf, _split(zero, rule)[0])
+    want = transfer_audio_inputs(rule, zero, half, 0.31)
+    assert np.allclose(ears, _split(half, want)[1], atol=1e-6)
+    assert ears.any()

@@ -1683,13 +1683,42 @@ design; these are the rules it rests on.
   change cannot take the rows away, and a config that named the deaf layout
   lands widened in the same frame via `take_pending_brain_rule_any`. The
   Brain window does not draw the count. `transfer_audio_inputs` takes a SEED
-  and draws column k from `channel_rng(seed, k)` as the audio column of a
-  ONE-input brain, so one step to K equals K steps of one and adding a
-  channel never moves the ones before it. The seed left `SimState` and
+  and fills column k from `audio_weights(channel_rng(seed, k), one-input
+  layout)`, where unit u's weight is the u-th draw of that stream - so a
+  weight is a function of (seed, channel, unit) and nothing else: one step to
+  K equals K steps of one, adding a channel never moves the ones before it,
+  and a preset one unit larger gains ONE weight per channel and keeps the
+  rest. Drawing the ears through `random()` put the deaf draw first, which
+  made every weight depend on the unit count. Fourier keeps its own prior
+  through `random_audio`; the others decode a normal z. The seed left `SimState` and
   `PhysicsConfig`: a preset saved wide carries its weights in its rule. A
   loaded rig requests a redraw so it reproduces its weights on any brain, and
   `Sim.set_audio_seed` redraws the generated cohort brains for the same
   reason.
+
+- **Audio Scale is the one scale that never goes through `encode()`, because
+  its zero is a PROMISE.** `set_brain_scales` re-decodes the live rule from a
+  stored z and `encode` clips at the rails, so a rule with any float past
+  them - a layer Scale, an old preset - came back changed the moment Audio
+  Scale moved; Reroll put it right only until the next drag, because Reroll
+  transfers from the rule stack's unclipped copy. A change of `audio_scale`
+  ALONE (`_differs_only_in`) copies every deaf float verbatim and multiplies
+  the audio weights from `_slot0_ears`, the weights at unit scale noted when
+  the rule arrived. A rule that arrived at scale zero has none to multiply,
+  so raising it draws the rig's seed. Guarded by
+  `tests/test_brain_rescale_gpu.py` on the real buffer.
+
+- **A same-brain preset under the rig's count has NO switch to land in, and
+  `_take_pending_for(widen_only=True)` is where it lands.** The rig
+  re-imposes K in the frame a preset arrives, so the sim is already on the
+  wide layout of the preset's own brain: `_switch_will_apply` skipped the
+  push, no switch ran, and `_handle_brain_layout` cleared the stash - the
+  click loaded nothing, after a hover that had shown the deaf creature under
+  a borrowed layout, which reads as hover and click disagreeing. The
+  same-layout branch of `_apply_brain_layout` takes a pending rule naming the
+  DEAF signature and widens it; one naming the wide layout itself was already
+  pushed and applied by the load. Guarded by
+  `tests/test_brain_audio_inputs_apply.py`, hover and click alike.
 
 - **`channel_status` says WHY the channels are silent, and the readout reads
   the cohort a channel drives hardest.** A preview borrow, a running search,

@@ -74,21 +74,29 @@ def _warm_imports() -> None:
             pass
 
 
-def _take_pending_for(app, layout, ui_state):
+def _take_pending_for(app, layout, ui_state, widen_only: bool = False):
     """The rule a just-loaded config carried, widened to `layout` when the
     config named the DEAF version of it.
 
     The rig's count is re-imposed in the frame a preset arrives, so the switch
     lands on the wide layout while the config named the deaf one - and the
-    preset's creature has to be what lands. A function rather than a method so
-    the stub apps that borrow _apply_brain_layout need not borrow it.
+    preset's creature has to be what lands. `widen_only` is for the frame
+    with NO switch: the brain already running is the rig's wide one, so a
+    same-brain preset's deaf rule reaches the sim nowhere else, while one
+    naming the wide layout itself was pushed and applied by the load. A
+    function rather than a method so the stub apps that borrow
+    _apply_brain_layout need not borrow it.
     """
     from services.brains import with_audio_inputs
     from services.brains.layout_moves import transfer_audio_inputs
 
     deaf = with_audio_inputs(layout, 0)
-    hit = app.command_handler.take_pending_brain_rule_any(
-        (layout.signature(), deaf.signature()))
+    if deaf == layout:
+        return None if widen_only else \
+            app.command_handler.take_pending_brain_rule(layout.signature())
+    wanted = (deaf.signature(),) if widen_only else (layout.signature(),
+                                                     deaf.signature())
+    hit = app.command_handler.take_pending_brain_rule_any(wanted)
     if hit is None:
         return None
     rule, sig = hit
@@ -815,6 +823,11 @@ class App:
         """
         current = self.sim.brain_layout
         if layout == current:
+            if self.command_handler is not None:
+                pending = _take_pending_for(self, layout, ui_state,
+                                            widen_only=True)
+                if pending is not None:
+                    self.sim.apply_rule(pending)
             if tuple(layout.scales) == tuple(current.scales):
                 return False
             # SCALES ONLY. What a z means changed, but not how wide it is, so

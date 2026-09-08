@@ -317,6 +317,25 @@ def with_audio_inputs(layout: BrainLayout, k: int) -> BrainLayout:
         {**settings_of(layout), "audio_inputs": k})
 
 
+def audio_weights(rng, layout: BrainLayout) -> np.ndarray:
+    """The DECODED audio weights of `layout`, unit-major, drawn from `rng`
+    alone.
+
+    Unit u's weights are the u-th draws, so a brain one unit larger has one
+    more weight per channel and every other one unchanged. A modality with
+    its own prior supplies `random_audio`; the rest decode a normal z.
+    """
+    m = get(layout.modality)
+    fn = getattr(m, "random_audio", None)
+    if fn is not None:
+        return np.asarray(fn(rng, layout), dtype=np.float32).reshape(-1)
+    audio = audio_z_index(layout)
+    z = np.zeros(layout.length, dtype=np.float32)
+    z[audio] = rng.normal(0.0, 0.5, audio.size).astype(np.float32)
+    out = np.asarray(m.decode(z, layout), dtype=np.float32).reshape(-1)
+    return out[audio_weight_index(layout)]
+
+
 def channel_rng(seed: float, k: int) -> np.random.Generator:
     """The generator channel k's audio weights are drawn from.
 

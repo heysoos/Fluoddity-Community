@@ -135,6 +135,15 @@ class FourierModality:
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))
         return z.reshape(-1).astype(np.float32), n_clamped
 
+    def random_audio(self, rng, layout: BrainLayout) -> np.ndarray:
+        """The audio weights alone, the same prior as random(), drawn PER
+        UNIT so a larger brain keeps a smaller one's."""
+        n, k = layout.shape[0], layout.audio_inputs
+        r = rng.random((n * k, 2))
+        a_scale = 1.0 + 2.0 * r[:, 0] ** 2
+        return ((r[:, 1] * 2.0 - 1.0) * a_scale
+                * layout.scale("audio_scale", 1.0)).astype(np.float32)
+
     def random(self, rng, layout: BrainLayout) -> np.ndarray:
         """Mirrors services.genome.random_genome, which biases frequencies low
         'for smoother base behaviors'. The audio weights are drawn the same

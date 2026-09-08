@@ -365,3 +365,40 @@ def test_every_generated_cohort_brain_is_its_deaf_self_with_ears(m):
     assert all(np.array_equal(e, ears[0]) for e in ears)
     other = generated_brains(wide, 0.37, 1, audio_seed=0.6)[0]
     assert not np.array_equal(other[audio_weight_index(wide)], ears[0])
+
+
+def _one_more_unit(m, base):
+    """`base` with one more unit, whatever the modality calls a unit."""
+    from services.brains import settings_of
+
+    s = dict(settings_of(base))
+    if m.name == "mlp":
+        layers = [list(x) for x in s["layers"]]
+        layers[0][0] += 1
+        s["layers"] = layers
+    else:
+        from services.brains.layout_moves import _structural_int
+
+        key = _structural_int(m).key
+        s[key] = int(s[key]) + 1
+    return m.layout_from_settings(s)
+
+
+@pytest.mark.parametrize("m", ALL, ids=lambda m: m.name)
+def test_a_units_weight_for_a_channel_does_not_depend_on_the_unit_count(m):
+    """The seed names a weight for (channel, unit): a brain one unit larger
+    gains ONE new weight per channel and keeps every other, so a rig moved
+    between two presets of nearly the same size hears nearly the same."""
+    base = _one_more_unit(m, m.layout_from_settings({}))
+    small, big = m.layout_from_settings({}), base
+    n = int(small.shape[0])
+    assert int(big.shape[0]) == n + 1
+    s_wide, b_wide = grow_inputs(small, 2), grow_inputs(big, 2)
+    s = transfer_audio_inputs(np.zeros(small.length, np.float32), small,
+                              s_wide, 0.42)
+    b = transfer_audio_inputs(np.zeros(big.length, np.float32), big,
+                              b_wide, 0.42)
+    s_cols = s[audio_weight_index(s_wide)].reshape(n, 2)
+    b_cols = b[audio_weight_index(b_wide)].reshape(n + 1, 2)
+    np.testing.assert_array_equal(b_cols[:n], s_cols)
+    assert b_cols[n].any()

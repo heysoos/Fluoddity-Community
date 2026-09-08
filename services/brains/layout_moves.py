@@ -19,7 +19,7 @@ import numpy as np
 from services.brains import (MAX_AUDIO_INPUTS, MAX_BRAIN_FLOATS, REGISTRY,
                              STRUCTURAL_KINDS, BrainLayout, audio_weight_index,
                              get, positional_structure, settings_of)
-from services.brains import channel_rng, with_audio_inputs
+from services.brains import audio_weights, channel_rng, with_audio_inputs
 
 
 @dataclass(frozen=True)
@@ -279,12 +279,10 @@ def transfer_audio_inputs(params, parent: BrainLayout, child: BrainLayout,
     k = child.audio_inputs
     if k:
         # Each column is the audio column of a ONE-input brain drawn for that
-        # channel, so it cannot depend on how many other channels there are.
+        # channel, so it cannot depend on how many other channels there are,
+        # nor on anything but the seed, the channel and the unit.
         one = with_audio_inputs(child, 1)
-        take = audio_weight_index(one)
         cols = audio_weight_index(child).reshape(-1, k)
         for c in range(k):
-            draw = np.asarray(m.random(channel_rng(seed, c), one),
-                              dtype=np.float32).reshape(-1)
-            out[cols[:, c]] = draw[take]
+            out[cols[:, c]] = audio_weights(channel_rng(seed, c), one)
     return out
