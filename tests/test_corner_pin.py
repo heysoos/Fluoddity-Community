@@ -126,6 +126,33 @@ def test_the_inverse_of_the_full_quad_is_the_identity():
     assert inverse_homography(FULL) == pytest.approx(np.eye(3), abs=1e-9)
 
 
+def test_the_inverse_gives_the_quad_a_positive_w():
+    """The shader rejects a fragment by the SIGN of w, so the sign is fixed.
+
+    A projective map has a vanishing line, and display points beyond it map
+    back into the unit square with w negated - a ghost of the picture. The
+    shader can only tell the ghost from the picture if the quad itself is
+    known to be positive.
+    """
+    for quad in (FULL, SKEW, ((0.02, 0.99), (0.98, 0.60),
+                              (0.99, 0.40), (0.01, 0.02))):
+        inv = inverse_homography(quad)
+        centre = np.mean(np.asarray(quad, dtype=float), axis=0)
+        w = inv[2] @ np.array([centre[0], centre[1], 1.0])
+        assert w > 0.0, f"{quad} inverted to a negative w"
+
+
+def test_a_ghost_beyond_the_vanishing_line_has_a_negative_w():
+    """What the sign test actually buys, on a quad skewed hard enough."""
+    quad = ((0.30, 0.95), (0.70, 0.95), (0.99, 0.05), (0.01, 0.05))
+    inv = inverse_homography(quad)
+
+    # Walk away from the quad until w changes sign; the source point there
+    # would otherwise land back inside the unit square and draw a ghost.
+    ws = [inv[2] @ np.array([0.5, y, 1.0]) for y in np.linspace(0.5, 40.0, 400)]
+    assert min(ws) < 0.0, "this quad has no reachable vanishing line"
+
+
 # --- degenerate quads -----------------------------------------------------
 
 def test_a_bowtie_is_refused():
