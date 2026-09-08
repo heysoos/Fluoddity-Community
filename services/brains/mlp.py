@@ -485,11 +485,15 @@ class MLPModality:
         A starting point, not a limit: the search and any later edit can take a
         layer anywhere inside the rails.
         """
-        z = rng.normal(0.0, 0.5, layout.length).astype(np.float32)
-        hidden, _out_w, _out_b, _n = layer_spans(layout.shape,
-                                                 layout.audio_inputs)
-        for w_off, b_off, fan_in, _w in hidden[1:]:
-            z[w_off:b_off] *= np.sqrt(IN_DIM / float(fan_in))
+        from services.brains import audio_aware_normal
+
+        def normalise(z0):
+            hidden, _out_w, _out_b, _n = layer_spans(layout.shape, 0)
+            for w_off, b_off, fan_in, _w in hidden[1:]:
+                z0[w_off:b_off] *= np.sqrt(IN_DIM / float(fan_in))
+            return z0
+
+        z = audio_aware_normal(rng, layout, 0.5, normalise)
         return self.decode(z, layout)
 
 

@@ -112,8 +112,7 @@ def _pair(m, seed=0):
     wide = grow_inputs(base, K)
     parent = np.asarray(m.random(np.random.default_rng(seed), base),
                         dtype=np.float32).reshape(-1)
-    child = transfer_audio_inputs(parent, base, wide,
-                                  np.random.default_rng(seed + 100))
+    child = transfer_audio_inputs(parent, base, wide, 0.9)
     return base, parent, wide, child
 
 

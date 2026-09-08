@@ -74,6 +74,56 @@ def _warm_imports() -> None:
             pass
 
 
+def _take_pending_for(app, layout, ui_state):
+    """The rule a just-loaded config carried, widened to `layout` when the
+    config named the DEAF version of it.
+
+    The rig's count is re-imposed in the frame a preset arrives, so the switch
+    lands on the wide layout while the config named the deaf one - and the
+    preset's creature has to be what lands. A function rather than a method so
+    the stub apps that borrow _apply_brain_layout need not borrow it.
+    """
+    from services.brains import with_audio_inputs
+    from services.brains.layout_moves import transfer_audio_inputs
+
+    deaf = with_audio_inputs(layout, 0)
+    hit = app.command_handler.take_pending_brain_rule_any(
+        (layout.signature(), deaf.signature()))
+    if hit is None:
+        return None
+    rule, sig = hit
+    if sig == layout.signature():
+        return rule
+    arr = np.asarray(rule, dtype=np.float32).reshape(-1)
+    if arr.size != deaf.length:
+        return None
+    out = transfer_audio_inputs(arr, deaf, layout, ui_state.audio.audio_seed)
+    rm = getattr(app, "rule_manager", None)
+    if rm is not None:
+        rm.push_rule(out, ui_state.sim.rule_seed)
+    return out
+
+
+def _live_rule(app):
+    """The rule slot 0 is running, or None with no rule loaded.
+
+    The sim's own copy first: an adopted archive entry reaches slot 0 without
+    passing through the rule stack.
+    """
+    sim = app.sim
+    per_cohort = getattr(sim, "brain_per_cohort", False)
+    if callable(per_cohort):
+        per_cohort = per_cohort()
+    if per_cohort:
+        return None
+    get = getattr(sim, "slot0_params", None)
+    rule = get() if callable(get) else None
+    if rule is None:
+        rm = getattr(app, "rule_manager", None)
+        rule = rm.get_current_rule() if rm is not None else None
+    return rule
+
+
 class App:
     """Main application orchestrator.
 
@@ -810,8 +860,7 @@ class App:
         # means: one generated brain per cohort, for every modality alike.
         pending = None
         if self.command_handler is not None:
-            pending = self.command_handler.take_pending_brain_rule(
-                layout.signature())
+            pending = _take_pending_for(self, layout, ui_state)
         # A change of AUDIO INPUT COUNT alone is the one structural change
         # the rule survives: every other float keeps its meaning, so the
         # rule is carried across with its audio weights drawn from the seed.
@@ -838,16 +887,14 @@ class App:
         return True
 
     def _carry_rule_across_inputs(self, current, layout, ui_state):
-        """The loaded rule widened or narrowed to `layout`, pushed onto the
+        """The live rule widened or narrowed to `layout`, pushed onto the
         rule stack, when the two layouts differ ONLY in their audio input
         count. None otherwise, which is the old behaviour: the rule is dropped.
         """
-        from services.brains import brain_rng
-        from services.brains.layout_moves import (transfer_audio_inputs,
-                                                  with_audio_inputs)
+        from services.brains import with_audio_inputs
+        from services.brains.layout_moves import transfer_audio_inputs
 
-        rm = getattr(self, "rule_manager", None)
-        rule = rm.get_current_rule() if rm is not None else None
+        rule = _live_rule(self)
         if rule is None or current.audio_inputs == layout.audio_inputs:
             return None
         if with_audio_inputs(current, 0) != with_audio_inputs(layout, 0):
@@ -856,8 +903,10 @@ class App:
         if arr.size != current.length:
             return None
         out = transfer_audio_inputs(arr, current, layout,
-                                    brain_rng(ui_state.sim.audio_seed))
-        rm.push_rule(out, ui_state.sim.rule_seed)
+                                    ui_state.audio.audio_seed)
+        rm = getattr(self, "rule_manager", None)
+        if rm is not None:
+            rm.push_rule(out, ui_state.sim.rule_seed)
         return out
 
     def _apply_requested_layout(self, ui_state) -> bool:
@@ -1369,10 +1418,10 @@ class App:
         self.sim.apply_state(_audio_sim)
         self.sim.set_cohort_audio(self.audio_runtime.cohort_audio)
         self.sim.set_audio_inputs(self.audio_runtime.audio_inputs)
-        # Cohort 0's channels, for the Inspector and the panel's readout.
-        _ai = self.audio_runtime.audio_inputs
-        ui_state.brain.audio_live = (tuple(float(v) for v in _ai[:, 0])
-                                     if _ai is not None else ())
+        self.sim.set_audio_seed(ui_state.audio.audio_seed)
+        # Each channel on the cohort it drives hardest, for the Inspector and
+        # the panel's readout.
+        ui_state.brain.audio_live = self.audio_runtime.live_channels(ui_state)
         if _audio_brain is not None:
             self.sim.apply_rule(_audio_brain)
         # The panel draws the modulation inside each slider's own track.

@@ -130,6 +130,8 @@ def _ui():
     u.auto_tournament = AutoTournamentState()
     u.tournament = TournamentState()
     u.brain = BrainState()
+    from state.audio_in_state import AudioInState
+    u.audio = AudioInState()
     u.archive.live_preview = True
     return u
 

@@ -74,14 +74,14 @@ def test_growing_the_inputs_carries_the_rule_across():
     np.testing.assert_array_equal(app.rule_manager.get_current_rule(), got)
 
 
-def test_the_audio_weights_come_from_the_config_seed():
+def test_the_audio_weights_come_from_the_rigs_seed():
     base = default_layout()
     rule = _rule(base)
     wide = grow_inputs(base, 2)
     outs = []
     for seed in (0.25, 0.25, 0.75):
         app, ui_state = _App(base, rule), _ui()
-        ui_state.sim.audio_seed = seed
+        ui_state.audio.audio_seed = seed
         app.apply(wide, ui_state)
         outs.append(app.applied[-1])
     np.testing.assert_array_equal(outs[0], outs[1])
@@ -151,6 +151,8 @@ def _handler(sim, rule):
     h._borrow = None
     h.apply_brain_layout = None
     h.archive = None
+    h.auto_service = None
+    h.imgep_driver = None
     ui_state = UIState()
     ui_state.brain.modality = "fourier"
     ui_state.brain.settings = {"audio_inputs": sim.brain_layout.audio_inputs}
@@ -158,21 +160,23 @@ def _handler(sim, rule):
     return h, ui_state
 
 
-def test_reroll_redraws_only_the_audio_weights_and_moves_the_seed():
+def test_reroll_redraws_the_audio_weights_from_the_rigs_seed():
+    """The panel moves the seed; the handler only ever applies it, so typing
+    a seed back in gives the weights it gave before."""
+    from services.brains.layout_moves import transfer_audio_inputs
+
     wide = grow_inputs(default_layout(), 2)
     rule = _rule(wide)
     h, ui_state = _handler(_Sim(wide), rule)
-    before = ui_state.sim.audio_seed
+    ui_state.audio.audio_seed = 0.9
 
     ui_state.brain.reroll_audio_requested = True
     h._handle_brain_source(ui_state)
 
     assert ui_state.brain.reroll_audio_requested is False
-    assert ui_state.sim.audio_seed != before
     got = h.sim.applied[-1]
+    np.testing.assert_array_equal(got, transfer_audio_inputs(rule, wide, wide, 0.9))
     np.testing.assert_array_equal(got[_keep(wide)], rule[_keep(wide)])
-    assert not np.array_equal(got[audio_weight_index(wide)],
-                              rule[audio_weight_index(wide)])
     np.testing.assert_array_equal(h.rule_manager.get_current_rule(), got)
 
 
@@ -191,10 +195,56 @@ def test_reroll_is_refused_under_a_grid_and_during_a_borrow():
 def test_reroll_on_a_deaf_brain_does_nothing():
     base = default_layout()
     h, ui_state = _handler(_Sim(base), _rule(base))
-    seed = ui_state.sim.audio_seed
     ui_state.brain.reroll_audio_requested = True
     h._handle_brain_source(ui_state)
-    assert h.sim.applied == [] and ui_state.sim.audio_seed == seed
+    assert h.sim.applied == []
+
+
+# ---- the rig owns the count ------------------------------------------------
+
+def test_the_rig_owns_the_input_count():
+    """A preset or a brain change puts the count back to the rig's."""
+    base = default_layout()
+    h, ui_state = _handler(_Sim(base), _rule(base))
+    seen = []
+    h.apply_brain_layout = lambda layout, ui: seen.append(layout) or True
+    ui_state.audio.audio_inputs = 3
+    h._handle_brain_layout(ui_state)
+    assert ui_state.brain.settings["audio_inputs"] == 3
+    assert seen[-1].audio_inputs == 3
+    # Under a grid slot 0 is the tournament's, so the count is left alone.
+    ui_state.brain.settings["audio_inputs"] = 0
+    ui_state.tournament.enabled = True
+    h._handle_brain_layout(ui_state)
+    assert ui_state.brain.settings["audio_inputs"] == 0
+
+
+class _Pending:
+    """What a just-loaded config leaves for the layout switch."""
+    take_pending_brain_rule = CommandHandler.take_pending_brain_rule
+    take_pending_brain_rule_any = CommandHandler.take_pending_brain_rule_any
+
+    def __init__(self, rule, sig):
+        self._pending_brain_rule = (np.asarray(rule, np.float32).reshape(-1),
+                                    sig)
+
+
+def test_a_loaded_deaf_config_lands_widened_to_the_rigs_count():
+    """File > Load with the rig at K: the config's rule is carried into the
+    wide layout in the frame it arrives, so the creature is the preset's."""
+    from services.brains.layout_moves import transfer_audio_inputs
+
+    base = default_layout()
+    rule = _rule(base)
+    other = REGISTRY["gabor"].layout_from_settings({})
+    app, ui_state = _App(other, rule), _ui()
+    app.command_handler = _Pending(rule, base.signature())
+    ui_state.audio.audio_seed = 0.3
+    wide = grow_inputs(base, 2)
+    assert app.apply(wide, ui_state) is True
+    want = transfer_audio_inputs(rule, base, wide, 0.3)
+    np.testing.assert_array_equal(app.applied[-1], want)
+    np.testing.assert_array_equal(app.rule_manager.get_current_rule(), want)
 
 
 # ---- the Inspector hears the channels ------------------------------------

@@ -78,12 +78,23 @@ float brain_jit(int i) {
 // its own and exposes a <modality>_param_at() for the writeback. Fourier does:
 // one scalar scales a whole frequency VECTOR, so the four components are not
 // independent, and mutating them separately is a measurably different function.
+// Read float i, jittered under index j. A modality with audio inputs passes
+// the DEAF brain's index as j, so a wider stride leaves every non-audio
+// float's mutation where it was; its audio floats hash below zero.
+float brain_add_at(uint base, int i, int j) {
+    return brain_params[base + uint(i)] + brain_jit(j);
+}
+
+float brain_mul_at(uint base, int i, int j) {
+    return brain_params[base + uint(i)] * (1.0 + brain_jit(j));
+}
+
 float brain_add(uint base, int i) {   // offsets: amplitudes, biases, centres
-    return brain_params[base + uint(i)] + brain_jit(i);
+    return brain_add_at(base, i, i);
 }
 
 float brain_mul(uint base, int i) {   // scales: widths, frequencies
-    return brain_params[base + uint(i)] * (1.0 + brain_jit(i));
+    return brain_mul_at(base, i, i);
 }
 
 vec4 brain_add4(uint base, int i) {

@@ -57,8 +57,20 @@ float mlp_act(float v) {
 
 // Every weight and bias is an independent scalar, so they all OFFSET - the
 // standard weight perturbation. Nothing here is a width or a direction.
+// Where float i sits in the DEAF brain, for the mutation's hash: the first
+// layer's audio columns are skipped over, everything after them slides back.
+int mlp_deaf_index(int i) {
+    int fan = 4 + BRAIN_AUDIO_IN;
+    int h = mlp_width(0);
+    if (i < fan * h) {
+        int r = i / fan, c = i % fan;
+        return (c < 4) ? r * 4 + c : -(1 + r * BRAIN_AUDIO_IN + (c - 4));
+    }
+    return i - h * BRAIN_AUDIO_IN;
+}
+
 float mlp_param_at(uint base, int i) {
-    return brain_add(base, i);
+    return brain_add_at(base, i, mlp_deaf_index(i));
 }
 
 // ---- offsets --------------------------------------------------------------

@@ -19,6 +19,7 @@ import numpy as np
 from services.brains import (MAX_AUDIO_INPUTS, MAX_BRAIN_FLOATS, REGISTRY,
                              STRUCTURAL_KINDS, BrainLayout, audio_weight_index,
                              get, positional_structure, settings_of)
+from services.brains import channel_rng, with_audio_inputs
 
 
 @dataclass(frozen=True)
@@ -236,15 +237,6 @@ def transfer_genome(params, parent, child, rng) -> np.ndarray:
 
 # ---- audio inputs -----------------------------------------------------------
 
-def with_audio_inputs(layout: BrainLayout, k: int) -> BrainLayout:
-    """The same layout with `k` audio inputs. Scales and structure kept."""
-    k = int(k)
-    if not 0 <= k <= MAX_AUDIO_INPUTS:
-        raise ValueError(f"audio inputs {k} is outside 0..{MAX_AUDIO_INPUTS}")
-    return get(layout.modality).layout_from_settings(
-        {**settings_of(layout), "audio_inputs": k})
-
-
 def grow_inputs(layout: BrainLayout, k: int) -> BrainLayout:
     if int(k) <= layout.audio_inputs:
         raise ValueError(f"grow_inputs to {k} from {layout.audio_inputs}")
@@ -258,14 +250,16 @@ def shrink_inputs(layout: BrainLayout, k: int) -> BrainLayout:
 
 
 def transfer_audio_inputs(params, parent: BrainLayout, child: BrainLayout,
-                          rng) -> np.ndarray:
+                          seed: float) -> np.ndarray:
     """Carry a DECODED brain between layouts that differ ONLY in their audio
-    input count, or reroll one in place.
+    input count, or redraw its audio weights in place.
 
-    Every non-audio float is copied to its position in the child; the
-    child's audio weights are drawn fresh. So a widened brain is its parent
-    with ears it has not yet used, a narrowed one is its parent deaf, and a
-    reroll (parent is child) keeps the deaf brain underneath untouched.
+    Every non-audio float is copied to its position in the child; every
+    audio column is drawn from `seed` and its own channel number. So a
+    widened brain is its parent with ears it has not yet used, a narrowed one
+    is its parent deaf, and column k is the same whether it arrived first or
+    last - one step to K equals K steps of one, and a seed typed back in
+    gives the weights it gave before.
     The generic transfer copies by child stride, which is wrong the moment
     the stride changes, and MLP's own zeroes a widened fan-in, which is right
     for a grown layer and wrong for weights that are meant to hear.
@@ -278,8 +272,19 @@ def transfer_audio_inputs(params, parent: BrainLayout, child: BrainLayout,
     if p.size != parent.length:
         raise ValueError(f"{p.size} floats is not a {parent.signature()}")
     m = get(child.modality)
-    out = np.asarray(m.random(rng, child), dtype=np.float32).reshape(-1)
+    out = np.zeros(child.length, dtype=np.float32)
     p_keep = np.setdiff1d(np.arange(parent.length), audio_weight_index(parent))
     c_keep = np.setdiff1d(np.arange(child.length), audio_weight_index(child))
     out[c_keep] = p[p_keep]
-    return out.astype(np.float32)
+    k = child.audio_inputs
+    if k:
+        # Each column is the audio column of a ONE-input brain drawn for that
+        # channel, so it cannot depend on how many other channels there are.
+        one = with_audio_inputs(child, 1)
+        take = audio_weight_index(one)
+        cols = audio_weight_index(child).reshape(-1, k)
+        for c in range(k):
+            draw = np.asarray(m.random(channel_rng(seed, c), one),
+                              dtype=np.float32).reshape(-1)
+            out[cols[:, c]] = draw[take]
+    return out

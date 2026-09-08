@@ -1,7 +1,8 @@
 """Per-mapping shaping of a signal before the modulation maths.
 
-Every shaper takes a value in [0,1] and returns one in [0,1], and NONE of them
-moves on its own while the band is silent. That is not the same as answering
+Every shaper takes a value in [0,1] and returns one in [0,1] - a phase with
+Abs off returns [-1,1] - and NONE of them moves on its own while the band is
+silent. That is not the same as answering
 silence with zero: a stopped integrator, like a latched sample-and-hold, holds
 a perfectly good non-zero value. What no shaper may do is generate motion from
 nothing - which includes a signal that is merely being HELD, so `apply` takes
@@ -26,6 +27,7 @@ class ShaperParams:
     hold: float = 0.05          # seconds a gate stays open after falling below
     rate: float = 1.0           # phase cycles per second at a full-scale band
     wave: str = "sine"          # "sine" | "triangle" | "ramp"
+    abs: bool = True            # phase: the raised 0..1 wave; off swings -1..1
 
 
 def _coeff(seconds: float, dt: float) -> float:
@@ -35,14 +37,21 @@ def _coeff(seconds: float, dt: float) -> float:
     return 1.0 - math.exp(-dt / seconds)
 
 
-def _wave(phase: float, wave: str) -> float:
+def _wave(phase: float, wave: str, signed: bool = False) -> float:
     """Every shape starts at ZERO, so a rig that has heard nothing contributes
-    nothing."""
+    nothing. The signed shapes swing -1..1 around that zero."""
+    t = phase % 1.0
+    if signed:
+        if wave == "triangle":
+            return 4.0 * t if t < 0.25 else 2.0 - 4.0 * t if t < 0.75 else 4.0 * t - 4.0
+        if wave == "ramp":
+            return ((t + 0.5) % 1.0) * 2.0 - 1.0
+        return math.sin(2.0 * math.pi * t)
     if wave == "triangle":
-        return 1.0 - abs(2.0 * (phase % 1.0) - 1.0)
+        return 1.0 - abs(2.0 * t - 1.0)
     if wave == "ramp":
-        return phase % 1.0
-    return 0.5 - 0.5 * math.cos(2.0 * math.pi * phase)
+        return t
+    return 0.5 - 0.5 * math.cos(2.0 * math.pi * t)
 
 
 class ShaperState:
@@ -106,7 +115,8 @@ class ShaperState:
             # got to rather than dragging the parameter back.
             self._phase = (self._phase + (x if live else 0.0)
                            * p.rate * rate_scale * dt) % 1.0
-            return min(1.0, max(0.0, _wave(self._phase, p.wave)))
+            w = _wave(self._phase, p.wave, signed=not p.abs)
+            return min(1.0, max(0.0 if p.abs else -1.0, w))
 
         if kind == "sample_hold":
             crossed = x >= p.threshold and not self._above

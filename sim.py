@@ -685,6 +685,16 @@ class Sim:
         or None for silence."""
         self._audio_inputs = arr
 
+    def set_audio_seed(self, seed: float) -> None:
+        """The seed the generated cohort brains draw their audio weights from.
+        A change redraws them, since no rule stack holds those brains."""
+        seed = float(seed)
+        if seed == getattr(self, "_audio_seed", None):
+            return
+        self._audio_seed = seed
+        if self.brain_per_cohort and self._brain_layout.audio_inputs:
+            self.apply_rule(None)
+
     def apply_camera_state(self, camera_state) -> None:
         """Apply camera state from Orchestrator before update."""
         self._camera_state = camera_state
@@ -1061,7 +1071,8 @@ class Sim:
         seed = float(getattr(getattr(self, "_state", None), "rule_seed", 0.0) or 0.0)
         n = int(getattr(getattr(self, "_state", None), "num_cohorts", 0) or 0)
         n = max(1, min(n or MAX_COHORT_BRAINS, MAX_COHORT_BRAINS))
-        brains = generated_brains(layout, seed, n)
+        brains = generated_brains(layout, seed, n,
+                                  getattr(self, "_audio_seed", None))
         self.multi_load_rule_buffer.write(
             pack_brains(brains, layout),
             offset=COHORT_BRAIN_SLOT0 * MAX_BRAIN_FLOATS * 4)

@@ -155,3 +155,47 @@ def test_the_release_is_clamped_to_the_slider_range():
     assert st.release_seconds == pytest.approx(0.0)
     apply_dict(st, {"release_seconds": 99.0})
     assert st.release_seconds == pytest.approx(2.0)
+
+
+# ---- the brain inputs are the rig's ---------------------------------------
+
+def test_the_input_count_and_the_audio_seed_travel_with_the_rig():
+    st = AudioInState()
+    st.audio_inputs = 3
+    st.audio_seed = 0.123456
+    fresh = AudioInState()
+    apply_dict(fresh, to_dict(st))
+    assert fresh.audio_inputs == 3
+    assert fresh.audio_seed == pytest.approx(0.123456)
+    assert "audio_inputs" in PERSISTED_FIELDS
+    assert "audio_seed" in PERSISTED_FIELDS
+
+
+def test_a_rig_written_before_the_brain_had_ears_keeps_the_current_count():
+    st = AudioInState()
+    st.audio_inputs = 2
+    st.audio_seed = 0.9
+    apply_dict(st, {"mappings": []})
+    assert st.audio_inputs == 2 and st.audio_seed == pytest.approx(0.9)
+
+
+def test_a_stored_count_is_bounded():
+    st = AudioInState()
+    apply_dict(st, {"audio_inputs": 99})
+    assert st.audio_inputs == 8
+    apply_dict(st, {"audio_inputs": -1})
+    assert st.audio_inputs == 0
+
+
+def test_phase_abs_round_trips_and_an_old_rig_reads_as_abs():
+    st = AudioInState()
+    st.mappings.append(Mapping(signal="bass", target="SENSOR_GAIN",
+                               shaper=ShaperParams(kind="phase", abs=False)))
+    fresh = AudioInState()
+    apply_dict(fresh, to_dict(st))
+    assert fresh.mappings[0].shaper.abs is False
+    # Every rig tuned before the box existed was tuned on the raised wave.
+    old = AudioInState()
+    apply_dict(old, {"mappings": [{"signal": "bass", "target": "SENSOR_GAIN",
+                                   "shaper": {"kind": "phase", "rate": 2.0}}]})
+    assert old.mappings[0].shaper.abs is True

@@ -160,7 +160,9 @@ class GaborModality:
         """No hand-tuned prior in this iteration (see the spec). A plain
         Gaussian in z, decoded through the same squash the search uses, so a
         random brain and a searched one are drawn from the same family."""
-        z = rng.normal(0.0, 0.5, layout.length).astype(np.float32)
+        from services.brains import audio_aware_normal
+
+        z = audio_aware_normal(rng, layout, 0.5)
         return self.decode(z, layout)
 
 

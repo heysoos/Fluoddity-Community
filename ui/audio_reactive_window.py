@@ -50,7 +50,7 @@ SHAPER_FIELDS: dict[str, tuple[str, ...]] = {
     "smooth": ("attack", "release"),
     "gate": ("threshold", "hold"),
     "envelope": ("threshold", "release"),
-    "phase": ("rate", "wave"),
+    "phase": ("rate", "wave", "abs"),
     "sample_hold": ("threshold",),
 }
 
@@ -66,6 +66,9 @@ _FIELD_RANGE: dict[str, tuple[float, float, str]] = {
     "hold": (0.0, 1.0, "%.3f s"),
     "rate": (0.0, 20.0, "%.2f Hz"),
 }
+
+# Shaper fields that are a checkbox rather than a slider.
+_FIELD_BOOL: frozenset = frozenset({"abs"})
 
 # Which shaper fields need a logarithmic track.
 _FIELD_LOG: frozenset = frozenset({"attack", "release"})
@@ -210,7 +213,7 @@ class AudioReactiveWindowMixin(CohortStripMixin):
         srings = self._audio_shaped_rings()
         for key, value in shaped.items():
             srings.setdefault(key, TraceRing()).push(
-                min(1.0, max(0.0, float(value))))
+                min(1.0, max(-1.0, float(value))))
         for gone in [k for k in srings if k not in shaped]:
             del srings[gone]
 
@@ -554,18 +557,18 @@ class AudioReactiveWindowMixin(CohortStripMixin):
         return ""
 
     def _bump_audio_inputs(self, delta: int) -> bool:
-        """Move the Brain window's input count. A layout change, so it goes
-        through the same setting the Brain window writes. -> did it move?"""
+        """Move the RIG's input count; the orchestrator gives the brain that
+        many on its next layout pass. -> did it move?"""
         from services.brains import MAX_AUDIO_INPUTS
 
         if self._audio_inputs_locked():
             return False
-        bst = self.state.brain
-        k = int(bst.settings.get("audio_inputs", 0))
+        ast = self.state.audio
+        k = int(ast.audio_inputs)
         new = k + int(delta)
         if not 0 <= new <= MAX_AUDIO_INPUTS or new == k:
             return False
-        bst.settings = {**bst.settings, "audio_inputs": new}
+        ast.audio_inputs = new
         return True
 
     @staticmethod
@@ -607,14 +610,23 @@ class AudioReactiveWindowMixin(CohortStripMixin):
             ast.feed = on
         hints.tip("Feeds the channels to the brain; off is exactly silence.")
 
-        imgui.text_disabled(f"seed {self.state.sim.audio_seed:.3f}")
+        imgui.set_next_item_width(110)
+        changed, seed = imgui.input_float(
+            "Seed##audio_seed", float(ast.audio_seed), 0.0, 0.0, "%.6f",
+            imgui.InputTextFlags_.enter_returns_true)
+        if changed:
+            ast.audio_seed = float(seed)
+            bst.reroll_audio_requested = True
+        hints.tip("The seed the audio weights are drawn from; the same seed "
+                  "and brain give the same weights, and Enter applies it.")
         imgui.same_line()
         imgui.begin_disabled(bool(locked) or k == 0)
         if imgui.small_button("Reroll##audio_weights"):
+            ast.audio_seed = round(float(np.random.default_rng().random()), 6)
             bst.reroll_audio_requested = True
         imgui.end_disabled()
-        hints.tip("Redraws the audio weights from a fresh seed; the brain "
-                  "underneath is untouched.")
+        hints.tip("Draws a new seed and redraws the audio weights from it; "
+                  "the brain underneath is untouched.")
         cur = float(bst.settings.get("audio_scale",
                                      AUDIO_SCALE_SETTING.default))
         changed, v = imgui.slider_float("Audio Scale##audio_scale", cur,
@@ -629,10 +641,14 @@ class AudioReactiveWindowMixin(CohortStripMixin):
                                 "the brain ears.")
             return
         live = tuple(bst.audio_live)
-        imgui.text_disabled("  ".join(
-            f"A{i + 1} {live[i]:+.3f}" if i < len(live) else f"A{i + 1} 0.000"
-            for i in range(k)))
-        hints.tip("What cohort 0's brain reads on each channel right now.")
+        if ast.channel_status:
+            imgui.text_disabled(ast.channel_status)
+        else:
+            imgui.text_disabled("  ".join(
+                f"A{i + 1} {live[i]:+.3f}" if i < len(live)
+                else f"A{i + 1} 0.000" for i in range(k)))
+        hints.tip("What the brain reads on each channel, on the cohort it "
+                  "drives hardest.")
         imgui.separator()
 
         mappings = self._mapping_list(ast, "channel")
@@ -840,6 +856,14 @@ class AudioReactiveWindowMixin(CohortStripMixin):
         hints.tip("Reshapes the band before it drives anything.")
 
         for fname in SHAPER_FIELDS.get(m.shaper.kind, ()):
+            if fname == "abs":
+                changed, v = imgui.checkbox("Abs##shaper_abs",
+                                            bool(m.shaper.abs))
+                if changed:
+                    m.shaper.abs = v
+                hints.tip("Keeps the wave above zero; unticked it swings "
+                          "both ways around the base.")
+                continue
             if fname == "wave":
                 w = WAVE_KINDS.index(m.shaper.wave) if m.shaper.wave in WAVE_KINDS else 0
                 changed, widx = imgui.combo("Wave", w, list(WAVE_KINDS))
@@ -865,15 +889,20 @@ class AudioReactiveWindowMixin(CohortStripMixin):
         colour = SIGNAL_COLORS[m.signal]
         width = imgui.get_content_region_avail().x
         origin = imgui.get_cursor_screen_pos()
+        # A signed phase is drawn on a -1..1 track with its zero marked; the
+        # raw band shares the track so the two stay comparable.
+        signed = m.shaper.kind == "phase" and not m.shaper.abs
+        lo, hi = (-1.0, 1.0) if signed else (0.0, 1.0)
         if raw is not None:
             self._audio_trace(f"##band_{m.signal}", raw.values,
-                              (*colour[:3], 0.35), width, 42)
+                              (*colour[:3], 0.35), width, 42, lo, hi)
         if out is not None:
             if raw is not None:
                 imgui.set_cursor_screen_pos(origin)
                 imgui.push_style_color(imgui.Col_.frame_bg,
                                        imgui.ImVec4(0, 0, 0, 0))
-            self._audio_trace("##shaped", out.values, colour, width, 42)
+            self._audio_trace("##shaped", out.values, colour, width, 42,
+                              lo, hi, zero=0.0 if signed else None)
             if raw is not None:
                 imgui.pop_style_color()
         elif m.shaper.kind != "none":

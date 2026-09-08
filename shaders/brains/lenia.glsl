@@ -14,14 +14,22 @@
 // which extend the projection.
 int lenia_stride() { return 10 + BRAIN_AUDIO_IN; }
 
+// Where float i sits in the DEAF brain, for the mutation's hash.
+int lenia_deaf_index(int i) {
+    int s = lenia_stride();
+    int u = i / s, k = i % s;
+    return (k < 10) ? u * 10 + k : -(1 + u * BRAIN_AUDIO_IN + (k - 10));
+}
+
 float lenia_param_at(uint base, int i) {
     int k = i % lenia_stride();
+    int j = lenia_deaf_index(i);
     // The projection and the band width SCALE; amplitude and the band centre
     // OFFSET. mu is a LOCATION on the u axis, so an offset moves the band -
     // scaling it would pin a band centred near zero at zero forever. sigma is a
     // WIDTH, and the growth term divides by its square.
-    if (k < 4 || k == 9 || k >= 10) return brain_mul(base, i);
-    return brain_add(base, i);
+    if (k < 4 || k == 9 || k >= 10) return brain_mul_at(base, i, j);
+    return brain_add_at(base, i, j);
 }
 
 float lenia_audio(uint base, int o) {

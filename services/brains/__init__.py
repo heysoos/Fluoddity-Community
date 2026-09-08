@@ -308,6 +308,50 @@ def layout_defines(layout: BrainLayout) -> dict:
     return out
 
 
+def with_audio_inputs(layout: BrainLayout, k: int) -> BrainLayout:
+    """The same layout with `k` audio inputs. Scales and structure kept."""
+    k = int(k)
+    if not 0 <= k <= MAX_AUDIO_INPUTS:
+        raise ValueError(f"audio inputs {k} is outside 0..{MAX_AUDIO_INPUTS}")
+    return get(layout.modality).layout_from_settings(
+        {**settings_of(layout), "audio_inputs": k})
+
+
+def channel_rng(seed: float, k: int) -> np.random.Generator:
+    """The generator channel k's audio weights are drawn from.
+
+    Keyed by (seed, k) and nothing else, so a channel's weights are the same
+    whether it was the first added or the fifth, and typing a seed back in
+    gives the weights it gave before.
+    """
+    return np.random.default_rng(
+        [int(abs(float(seed)) * 1e9) % (2 ** 32), int(k)])
+
+
+def audio_aware_normal(rng, layout: BrainLayout, sigma: float,
+                       deaf_transform=None) -> np.ndarray:
+    """A normal z of `layout.length`: the DEAF layout's draw first, in its own
+    order, then the audio weights.
+
+    So the non-audio floats of a wide brain are exactly the deaf brain's from
+    the same generator, which is what keeps a "no rule loaded" creature
+    unchanged when the count moves. `deaf_transform` is applied to the deaf
+    draw before placement, for a modality that normalises part of it.
+    """
+    deaf = with_audio_inputs(layout, 0)
+    z0 = rng.normal(0.0, sigma, deaf.length).astype(np.float32)
+    if deaf_transform is not None:
+        z0 = deaf_transform(z0)
+    if not layout.audio_inputs:
+        return z0
+    z = np.empty(layout.length, dtype=np.float32)
+    audio = audio_z_index(layout)
+    keep = np.setdiff1d(np.arange(layout.length), audio)
+    z[keep] = z0
+    z[audio] = rng.normal(0.0, sigma, audio.size).astype(np.float32)
+    return z
+
+
 def brain_rng(seed: float) -> np.random.Generator:
     """The generator every "draw brains for this seed" path shares.
 
@@ -319,24 +363,27 @@ def brain_rng(seed: float) -> np.random.Generator:
     return np.random.default_rng(int(abs(float(seed)) * 1e9) % (2 ** 32))
 
 
-def generated_brains(layout: BrainLayout, seed: float, count: int):
+def generated_brains(layout: BrainLayout, seed: float, count: int,
+                     audio_seed: float | None = None):
     """`count` independent brains of `layout`, deterministic in `seed`.
 
-    What "no rule loaded" means, for EVERY modality. It used to mean two
-    different things: Fourier answered an all-zero buffer with a GPU-generated
-    rule per cohort, and the other three got one CPU brain shared by every
-    cohort. At the default MUTATION_SCALE of 0.0 that is the difference between
-    64 cohorts doing 64 different things and 64 cohorts doing one thing.
-
-    Fourier loses nothing by moving to the host: generate_random_centers() in
-    fourier4_4.glsl and FourierModality.random() are the same formula -
-    frequency scaled by 1+2h^2, amplitudes 2h-1 - so the family of rules is
-    identical and only the particular draws differ.
+    What "no rule loaded" means, for EVERY modality, via the registry. The
+    DEAF brains are drawn first from one stream, exactly as they always were;
+    the audio weights come after, from `audio_seed` (or `seed`) per channel,
+    the same on every cohort - so the count moving leaves every cohort's
+    creature where it was. See the brain caveats in CLAUDE.md.
     """
+    from services.brains.layout_moves import transfer_audio_inputs
+
     m = get(layout.modality)
+    deaf = with_audio_inputs(layout, 0)
     rng = np.random.default_rng(int(abs(float(seed)) * 1e9) % (2 ** 32))
-    return [np.asarray(m.random(rng, layout), dtype=np.float32).reshape(-1)
-            for _ in range(max(int(count), 1))]
+    brains = [np.asarray(m.random(rng, deaf), dtype=np.float32).reshape(-1)
+              for _ in range(max(int(count), 1))]
+    if not layout.audio_inputs:
+        return brains
+    aseed = seed if audio_seed is None else audio_seed
+    return [transfer_audio_inputs(b, deaf, layout, aseed) for b in brains]
 
 
 def unit_scale_mask(layout: BrainLayout, stride, scale_offsets) -> np.ndarray:

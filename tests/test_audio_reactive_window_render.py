@@ -240,10 +240,11 @@ def test_every_shaper_kind_has_a_field_list():
 
 
 def test_every_shaper_field_has_a_slider_range():
-    from ui.audio_reactive_window import _FIELD_RANGE, SHAPER_FIELDS
+    from ui.audio_reactive_window import (_FIELD_BOOL, _FIELD_RANGE,
+                                          SHAPER_FIELDS)
     for kind, fields in SHAPER_FIELDS.items():
         for f in fields:
-            if f == "wave":
+            if f == "wave" or f in _FIELD_BOOL:
                 continue
             assert f in _FIELD_RANGE, f"{kind}.{f} has no range"
 

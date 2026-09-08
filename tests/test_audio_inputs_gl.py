@@ -35,22 +35,24 @@ def _positions(sim):
     return wide[: sim.entity_count, :2].copy()
 
 
-def _pair():
-    base = REGISTRY["fourier"].layout_from_settings({})
+def _pair(name="fourier"):
+    m = REGISTRY[name]
+    base = m.layout_from_settings({})
     wide = grow_inputs(base, K)
-    deaf = np.asarray(REGISTRY["fourier"].random(np.random.default_rng(3), base),
+    deaf = np.asarray(m.random(np.random.default_rng(3), base),
                       np.float32).reshape(-1)
-    heard = transfer_audio_inputs(deaf, base, wide, np.random.default_rng(4))
+    heard = transfer_audio_inputs(deaf, base, wide, 0.4)
     return base, deaf, wide, heard
 
 
-def _run(ctx, layout, rule, audio, steps=12):
+def _run(ctx, layout, rule, audio, steps=12, mutation=0.0):
     from sim import Sim
     from state import SimState
 
     state = SimState()
     state.num_cohorts = N_COHORTS
     state.HAZARD_RATE = 0.0
+    state.MUTATION_SCALE = mutation
     sim = Sim(ctx, world_size=0.05, canvas_aspect_ratio="1:1")
     sim.apply_state(state)
     sim.realloc_brain_buffers(layout)
@@ -84,3 +86,25 @@ def test_a_channel_reaches_the_cohorts_it_is_written_for(ctx):
     lit, dark = float(travel[:half].mean()), float(travel[half:].mean())
     assert lit > 0.0
     assert dark == 0.0, dark
+
+
+MODALITIES = ("fourier", "gabor", "lenia", "mlp")
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_the_invariant_holds_under_mutation(ctx, name):
+    """Per-cohort mutation hashes a float's INDEX; a wider stride must not
+    move the hash of a float that did not move."""
+    base, deaf, wide, heard = _pair(name)
+    ancestor = _run(ctx, base, deaf, None, mutation=0.3)
+    assert np.array_equal(ancestor, _run(ctx, wide, heard, None, mutation=0.3))
+
+
+@pytest.mark.parametrize("name", MODALITIES)
+def test_a_brain_generated_per_cohort_moves_exactly_as_its_deaf_ancestor(
+        ctx, name):
+    """An all-zero rule is "no rule loaded", and every cohort then runs a
+    brain drawn from rule_seed under the live layout."""
+    base, _deaf, wide, _heard = _pair(name)
+    assert np.array_equal(_run(ctx, base, None, None),
+                          _run(ctx, wide, None, None))

@@ -1654,10 +1654,58 @@ design; these are the rules it rests on.
 - **Changing the count alone is the one structural change the rule
   SURVIVES.** `_apply_brain_layout` carries it across with
   `transfer_audio_inputs`, which copies every non-audio float and draws the
-  rest from `audio_seed`; every other structural change still drops the rule.
-  The generic `transfer_genome` copies by CHILD stride and MLP's own zeroes a
-  widened fan-in, so neither can be reused. Stub apps that borrow
-  `_apply_brain_layout` must borrow `_carry_rule_across_inputs` too.
+  rest from the RIG's seed; every other structural change still drops the
+  rule. The generic `transfer_genome` copies by CHILD stride and MLP's own
+  zeroes a widened fan-in, so neither can be reused. Stub apps that borrow
+  `_apply_brain_layout` must borrow `_carry_rule_across_inputs` too; the
+  helpers it calls are module functions for that reason. The rule carried is
+  the SIM's slot 0, not the rule stack's top: an adopted archive entry reaches
+  slot 0 without passing through the stack.
+
+- **A generated brain draws its DEAF self first, and the mutation jitter
+  hashes the DEAF index.** Two more roads round the zero invariant, both found
+  on a preset with an all-zero rule ("no rule loaded", so one generated brain
+  per cohort). Gabor, Lenia and MLP drew one flat normal of `layout.length`
+  and decoded it, so a wider layout shuffled which draw landed on which
+  weight; `audio_aware_normal` draws the deaf z and places the audio z after
+  it. And `generated_brains` draws ALL the deaf cohorts from one stream before
+  any ears, or cohort 1's brain moves when cohort 0 grows them. The generic
+  `brain_jit(i)` hashes a float's flat index, which a wider stride shifts for
+  every non-audio float after the first; `<modality>_param_at` now passes the
+  deaf brain's index (audio floats hash below zero). Fourier was immune to
+  both by construction. Guarded by `tests/test_audio_inputs_gl.py` with a
+  per-cohort case and a `MUTATION_SCALE` case per modality, bit for bit.
+
+- **The RIG owns the input count and the seed, and a channel's weights are a
+  function of (seed, channel, brain).** `AudioInState.audio_inputs` and
+  `audio_seed` are persisted with the rig; `_follow_rig_inputs` re-imposes
+  the count every frame (not under a grid), so a preset load or a brain
+  change cannot take the rows away, and a config that named the deaf layout
+  lands widened in the same frame via `take_pending_brain_rule_any`. The
+  Brain window does not draw the count. `transfer_audio_inputs` takes a SEED
+  and draws column k from `channel_rng(seed, k)` as the audio column of a
+  ONE-input brain, so one step to K equals K steps of one and adding a
+  channel never moves the ones before it. The seed left `SimState` and
+  `PhysicsConfig`: a preset saved wide carries its weights in its rule. A
+  loaded rig requests a redraw so it reproduces its weights on any brain, and
+  `Sim.set_audio_seed` redraws the generated cohort brains for the same
+  reason.
+
+- **`channel_status` says WHY the channels are silent, and the readout reads
+  the cohort a channel drives hardest.** A preview borrow, a running search,
+  capture off, Feed off and no live rows all read as "+0" with nothing to say
+  which; the runtime names the reason and the panel shows it instead of the
+  numbers. Cohort 0 was the wrong cohort to read, since a masked row need
+  not cover it.
+
+- **A phase shaper's `abs` defaults to TRUE, and a rig without the key reads
+  as true.** Every rig before the box existed was tuned on the raised 0..1
+  wave. Off, `_wave` returns the signed shapes, all of which still start at
+  zero so a rig that has heard nothing contributes nothing; the drawer draws
+  a signed shaper on a -1..1 track with its zero marked, and the shaped ring
+  clamps to [-1, 1]. Every consumer of the shaped value already takes a
+  negative one: add pulls below base, multiply runs `1 + s*depth` down to
+  `1 - depth`.
 
 - **`audio_scale` is a decode scale, so `test_brain_scales` builds its base
   at one audio input.** At K=0 the scale has no weight to act on and the

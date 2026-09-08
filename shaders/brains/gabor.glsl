@@ -15,13 +15,21 @@
 // audio weights, which extend the FREQUENCY and never the centre.
 int gabor_stride() { return 14 + BRAIN_AUDIO_IN; }
 
+// Where float i sits in the DEAF brain, for the mutation's hash.
+int gabor_deaf_index(int i) {
+    int s = gabor_stride();
+    int u = i / s, k = i % s;
+    return (k < 14) ? u * 14 + k : -(1 + u * BRAIN_AUDIO_IN + (k - 14));
+}
+
 float gabor_param_at(uint base, int i) {
     int k = i % gabor_stride();
+    int j = gabor_deaf_index(i);
     // Frequency, envelope width and audio SCALE; centre, amplitude and phase
     // OFFSET. Offsetting the width would let mutation walk it through zero,
     // and the envelope divides by its square.
-    if ((k >= 4 && k < 8) || k == 12 || k >= 14) return brain_mul(base, i);
-    return brain_add(base, i);
+    if ((k >= 4 && k < 8) || k == 12 || k >= 14) return brain_mul_at(base, i, j);
+    return brain_add_at(base, i, j);
 }
 
 float gabor_audio_phase(uint base, int o) {

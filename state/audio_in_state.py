@@ -22,7 +22,7 @@ PERSISTED_FIELDS: tuple[str, ...] = (
     "mappings", "brain_mappings", "strengths", "global_strength",
     "auto_gain", "device_name", "modulate", "muted", "bands",
     "release_seconds", "rate_scale",
-    "channels", "channel_mappings", "feed",
+    "channels", "channel_mappings", "feed", "audio_inputs", "audio_seed",
 )
 
 _STRENGTH_MAX = 2.0
@@ -50,6 +50,11 @@ class AudioInState:
     channels: list = field(default_factory=list)
     channel_mappings: list[Mapping] = field(default_factory=list)
     feed: bool = True
+    # How many inputs the brain is given, and the seed their weights are
+    # drawn from. The RIG's, not the preset's: a preset load or a brain change
+    # is given the count back, so the rows never vanish under a set.
+    audio_inputs: int = 0
+    audio_seed: float = 0.5
 
     strengths: dict[str, float] = field(default_factory=dict)
     global_strength: float = 1.0
@@ -106,6 +111,8 @@ class AudioInState:
     # Live view state, written by the orchestrator for the panel to draw.
     status: str = "idle"                # "idle" | "active" | "error" | "waiting"
     last_error: str = ""
+    # Why the brain's channels are silent right now, or "" while they flow.
+    channel_status: str = ""
     # The newest SignalSnapshot. The UI is passive and owns no service, so the
     # orchestrator hands it the frame's analysis rather than the panel reaching
     # into the capture thread.
@@ -128,7 +135,7 @@ def _mapping_to_dict(m: Mapping) -> dict:
             "kind": m.shaper.kind, "attack": m.shaper.attack,
             "release": m.shaper.release, "threshold": m.shaper.threshold,
             "hold": m.shaper.hold, "rate": m.shaper.rate,
-            "wave": m.shaper.wave,
+            "wave": m.shaper.wave, "abs": bool(m.shaper.abs),
         },
     }
     # Only when something is painted out, so an unmasked row adds nothing.
@@ -177,6 +184,10 @@ def _mapping_from_dict(d) -> Mapping | None:
         )
         if isinstance(sd.get("wave"), str):
             shaper.wave = sd["wave"]
+        # Missing means the raised wave, which every rig before the box was
+        # tuned on.
+        if isinstance(sd.get("abs"), bool):
+            shaper.abs = sd["abs"]
     try:
         m = Mapping(
             signal=signal, target=target, mode=mode,
@@ -213,6 +224,8 @@ def to_dict(state: AudioInState) -> dict:
         "channel_mappings": [_mapping_to_dict(m)
                              for m in state.channel_mappings],
         "feed": bool(state.feed),
+        "audio_inputs": int(state.audio_inputs),
+        "audio_seed": float(state.audio_seed),
         "brain_mappings": {k: [_mapping_to_dict(m) for m in v]
                            for k, v in state.brain_mappings.items()},
         "strengths": {k: float(v) for k, v in state.strengths.items()},
@@ -253,6 +266,15 @@ def apply_dict(state: AudioInState, data: dict) -> None:
             if m is not None]
     if isinstance(data.get("feed"), bool):
         state.feed = data["feed"]
+    if isinstance(data.get("audio_inputs"), (int, float)) \
+            and not isinstance(data.get("audio_inputs"), bool):
+        from services.brains import MAX_AUDIO_INPUTS
+
+        state.audio_inputs = max(0, min(MAX_AUDIO_INPUTS,
+                                        int(data["audio_inputs"])))
+    if isinstance(data.get("audio_seed"), (int, float)) \
+            and not isinstance(data.get("audio_seed"), bool):
+        state.audio_seed = float(data["audio_seed"])
 
     if isinstance(data.get("brain_mappings"), dict):
         state.brain_mappings = {

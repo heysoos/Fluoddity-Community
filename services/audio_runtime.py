@@ -141,16 +141,20 @@ class AudioRuntime:
         # Auto and Explore rank tiles against each other. Modulating physics
         # mid-comparison would move what is being compared.
         if ui_state.auto_tournament.enabled or ui_state.archive.enabled:
+            ast.channel_status = "silent: a search is running"
             return ui_state.sim, None
         if not ast.enabled:
+            ast.channel_status = "silent: capture is off"
             return ui_state.sim, None
         # The master bypass stops the modulation, NOT the capture: the panel
         # keeps drawing so you can see what turning it back on would do.
         if not ast.modulate:
+            ast.channel_status = "silent: bypassed"
             return ui_state.sim, None
 
         snap = ast.snapshot
         if snap is None:
+            ast.channel_status = "silent: waiting for sound"
             return ui_state.sim, None
         signals = snap.signals
         # Which of them are remembered rather than measured this block.
@@ -186,10 +190,12 @@ class AudioRuntime:
         shows a row's shaper while nothing is fed; Feed gates the upload.
         """
         self._channel_targets = []
-        if layout is None:
-            return None
-        targets = channel_targets(layout, ast.channels)
+        targets = channel_targets(layout, ast.channels) if layout else []
         if not targets:
+            ast.channel_status = (
+                "silent: previewing another brain"
+                if getattr(ui_state.brain, "borrow_active", False)
+                else "silent: this brain has no inputs")
             return None
         self._channel_targets = targets
         arr = channel_values(
@@ -197,7 +203,23 @@ class AudioRuntime:
             ast.strengths, ast.global_strength, dt, muted_targets(ast),
             ui_state.sim.num_cohorts, held=held, rate_scale=ast.rate_scale,
             shaped=ast.shaped)
-        return arr if ast.feed else None
+        if arr is None:
+            ast.channel_status = "silent: no rows are on"
+            return None
+        if not ast.feed:
+            ast.channel_status = "silent: Feed is off"
+            return None
+        ast.channel_status = ""
+        return arr
+
+    def live_channels(self, ui_state) -> tuple:
+        """Each channel as the brain is fed it, on the cohort it drives
+        hardest; () for silence."""
+        arr = self.audio_inputs
+        if arr is None:
+            return ()
+        n = ui_state.sim.num_cohorts
+        return tuple(_loudest(arr, row, n) for row in range(arr.shape[0]))
 
     def _channel_overlays(self, ui_state) -> dict:
         """Per-channel drawing data: what the brain is fed, read on the

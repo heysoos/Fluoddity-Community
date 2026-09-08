@@ -249,23 +249,35 @@ def test_channel_shaper_states_survive_pruning():
     assert st.audio.channel_mappings[0].uid in rt._states
 
 
-# ---- the seed travels with the config -------------------------------------
+# ---- why the channels are silent ------------------------------------------
 
-def test_the_audio_seed_is_saved_with_the_config_and_defaults_when_absent():
-    from services.config_saver import ConfigSaver, PhysicsConfig
-    from state.sim_state import SimState
+def test_the_runtime_names_why_the_channels_are_silent():
+    rt, st = _runtime(bass=1.0), _rig()
+    rt.update(st, 1 / 60, _layout(), None)
+    assert st.audio.channel_status == ""
+    st.audio.feed = False
+    rt.update(st, 1 / 60, _layout(), None)
+    assert "Feed" in st.audio.channel_status
+    st.audio.feed = True
+    rt.update(st, 1 / 60, _layout(0), None)
+    assert "no inputs" in st.audio.channel_status
+    st.archive.enabled = True
+    rt.update(st, 1 / 60, _layout(), None)
+    assert "search" in st.audio.channel_status
+    st.archive.enabled = False
+    st.audio.enabled = False
+    rt.update(st, 1 / 60, _layout(), None)
+    assert "capture" in st.audio.channel_status
 
-    st = SimState()
-    st.audio_seed = 0.777
-    cfg = ConfigSaver().create_config(st, None)
-    back = PhysicsConfig.from_dict(cfg.to_dict())
-    assert back.audio_seed == pytest.approx(0.777)
-    fresh = SimState()
-    ConfigSaver().apply_config(back, fresh)
-    assert fresh.audio_seed == pytest.approx(0.777)
 
-    old = PhysicsConfig.from_dict({"simulation": {}, "physics": {}})
-    assert old.audio_seed == SimState().audio_seed
+def test_the_live_readout_reads_the_cohort_each_channel_drives_hardest():
+    rt, st = _runtime(bass=1.0), _rig()
+    m = st.audio.channel_mappings[0]
+    m.cohorts[:] = False
+    m.cohorts[ca.MASK_SLOTS // 2:] = True
+    rt.update(st, 1 / 60, _layout(), None)
+    live = rt.live_channels(st)
+    assert live[0] == pytest.approx(0.5) and live[1] == 0.0
 
 
 # ---- what the drawer draws ------------------------------------------------

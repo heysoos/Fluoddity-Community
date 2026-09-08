@@ -200,7 +200,7 @@ def test_transfer_keeps_every_non_audio_float_and_fills_the_rest(m):
     wide = grow_inputs(base, K)
     rng = np.random.default_rng(11)
     parent = np.asarray(m.random(rng, base), dtype=np.float32).reshape(-1)
-    child = transfer_audio_inputs(parent, base, wide, np.random.default_rng(1))
+    child = transfer_audio_inputs(parent, base, wide, 0.1)
     assert child.shape == (wide.length,)
     audio = audio_weight_index(wide)
     keep = np.setdiff1d(np.arange(wide.length), audio)
@@ -214,9 +214,9 @@ def test_transfer_is_seeded(m):
     base = m.layout_from_settings({})
     wide = grow_inputs(base, K)
     parent = np.asarray(m.random(np.random.default_rng(0), base)).reshape(-1)
-    a = transfer_audio_inputs(parent, base, wide, np.random.default_rng(7))
-    b = transfer_audio_inputs(parent, base, wide, np.random.default_rng(7))
-    c = transfer_audio_inputs(parent, base, wide, np.random.default_rng(8))
+    a = transfer_audio_inputs(parent, base, wide, 0.7)
+    b = transfer_audio_inputs(parent, base, wide, 0.7)
+    c = transfer_audio_inputs(parent, base, wide, 0.8)
     np.testing.assert_array_equal(a, b)
     assert not np.array_equal(a, c)
 
@@ -226,7 +226,7 @@ def test_shrinking_drops_the_audio_weights_and_nothing_else(m):
     base = m.layout_from_settings({})
     wide = grow_inputs(base, K)
     parent = np.asarray(m.random(np.random.default_rng(4), wide)).reshape(-1)
-    back = transfer_audio_inputs(parent, wide, base, np.random.default_rng(0))
+    back = transfer_audio_inputs(parent, wide, base, 0.5)
     keep = np.setdiff1d(np.arange(wide.length), audio_weight_index(wide))
     np.testing.assert_array_equal(back, parent[keep])
 
@@ -237,8 +237,7 @@ def test_rerolling_from_a_wide_brain_keeps_its_deaf_half(m):
     underneath never moves."""
     wide = grow_inputs(m.layout_from_settings({}), K)
     current = np.asarray(m.random(np.random.default_rng(4), wide)).reshape(-1)
-    rerolled = transfer_audio_inputs(current, wide, wide,
-                                     np.random.default_rng(5))
+    rerolled = transfer_audio_inputs(current, wide, wide, 0.55)
     audio = audio_weight_index(wide)
     keep = np.setdiff1d(np.arange(wide.length), audio)
     np.testing.assert_array_equal(rerolled[keep], current[keep])
@@ -250,8 +249,7 @@ def test_transfer_refuses_a_layout_that_differs_in_more_than_k():
     a = m.layout_from_settings({"centers": 10})
     b = m.layout_from_settings({"centers": 12, "audio_inputs": K})
     with pytest.raises(ValueError):
-        transfer_audio_inputs(np.zeros(a.length, np.float32), a, b,
-                              np.random.default_rng(0))
+        transfer_audio_inputs(np.zeros(a.length, np.float32), a, b, 0.0)
 
 
 # ---- the search leaves K alone -------------------------------------------
@@ -311,3 +309,59 @@ def test_readback_of_a_wide_fourier_brain_keeps_its_centres():
     out = readback_rule(_Buf(rule), wide)
     assert out.shape == (wide.shape[0], 10)
     assert np.array_equal(out.reshape(-1), rule)
+
+
+# ---- the draw itself keeps the invariant -----------------------------------
+
+@pytest.mark.parametrize("m", ALL, ids=lambda m: m.name)
+def test_a_generated_wide_brain_is_the_deaf_draw_with_ears(m):
+    """"No rule loaded" draws one brain per cohort from rule_seed under the
+    LIVE layout, so the draw has to keep the deaf brain's floats where the
+    deaf layout would have put them."""
+    from services.brains import brain_rng
+
+    base = m.layout_from_settings({})
+    wide = grow_inputs(base, 3)
+    deaf = np.asarray(m.random(brain_rng(0.3), base), np.float32).reshape(-1)
+    heard = np.asarray(m.random(brain_rng(0.3), wide), np.float32).reshape(-1)
+    keep = np.setdiff1d(np.arange(wide.length), audio_weight_index(wide))
+    np.testing.assert_array_equal(heard[keep], deaf)
+
+
+@pytest.mark.parametrize("m", ALL, ids=lambda m: m.name)
+def test_each_channels_weights_come_from_the_seed_and_its_own_number(m):
+    """Column k is a function of (seed, k, brain): adding a channel never
+    moves the ones before it, and one step to K equals K steps of one."""
+    base = m.layout_from_settings({})
+    deaf = np.asarray(m.random(np.random.default_rng(2), base),
+                      np.float32).reshape(-1)
+    one_l, two_l, three_l = (grow_inputs(base, k) for k in (1, 2, 3))
+    one = transfer_audio_inputs(deaf, base, one_l, 0.42)
+    two_step = transfer_audio_inputs(one, one_l, two_l, 0.42)
+    two = transfer_audio_inputs(deaf, base, two_l, 0.42)
+    np.testing.assert_array_equal(two_step, two)
+    three = transfer_audio_inputs(deaf, base, three_l, 0.42)
+    c2 = two[audio_weight_index(two_l)].reshape(-1, 2)
+    c3 = three[audio_weight_index(three_l)].reshape(-1, 3)
+    np.testing.assert_array_equal(c3[:, :2], c2)
+    assert not np.array_equal(c3[:, 2], c3[:, 1])
+
+
+@pytest.mark.parametrize("m", ALL, ids=lambda m: m.name)
+def test_every_generated_cohort_brain_is_its_deaf_self_with_ears(m):
+    """One stream draws all the cohorts, so the ears must come AFTER every
+    deaf draw or cohort 1's brain moves when cohort 0 grows ears."""
+    from services.brains import generated_brains
+
+    base = m.layout_from_settings({})
+    wide = grow_inputs(base, 2)
+    deaf = generated_brains(base, 0.37, 5)
+    heard = generated_brains(wide, 0.37, 5, audio_seed=0.5)
+    keep = np.setdiff1d(np.arange(wide.length), audio_weight_index(wide))
+    for d, h in zip(deaf, heard):
+        np.testing.assert_array_equal(h[keep], d)
+    # The ears are the rig's: the same on every cohort, and the seed's.
+    ears = [h[audio_weight_index(wide)] for h in heard]
+    assert all(np.array_equal(e, ears[0]) for e in ears)
+    other = generated_brains(wide, 0.37, 1, audio_seed=0.6)[0]
+    assert not np.array_equal(other[audio_weight_index(wide)], ears[0])

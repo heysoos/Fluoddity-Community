@@ -17,6 +17,7 @@ def _channel_host(k=2, tab="channels"):
     ast.enabled = True
     ast.tab = tab
     host.state.brain.settings = {"audio_inputs": k}
+    host.state.audio.audio_inputs = k
     return imgui, host
 
 
@@ -95,21 +96,22 @@ def test_the_drawer_of_a_channel_row_has_a_channel_tab(monkeypatch):
 
 # ---- the stepper is a layout change ---------------------------------------
 
-def test_bumping_writes_the_brain_windows_setting():
+def test_bumping_writes_the_rigs_count():
+    """The count is the rig's, so a preset cannot take the channels away."""
     imgui, host = _channel_host(k=2)
     assert host._bump_audio_inputs(+1) is True
-    assert host.state.brain.settings["audio_inputs"] == 3
+    assert host.state.audio.audio_inputs == 3
     assert host._bump_audio_inputs(-2) is True
-    assert host.state.brain.settings["audio_inputs"] == 1
+    assert host.state.audio.audio_inputs == 1
 
 
 def test_bumping_is_clamped():
     imgui, host = _channel_host(k=0)
     assert host._bump_audio_inputs(-1) is False
-    assert host.state.brain.settings["audio_inputs"] == 0
-    host.state.brain.settings["audio_inputs"] = MAX_AUDIO_INPUTS
+    assert host.state.audio.audio_inputs == 0
+    host.state.audio.audio_inputs = MAX_AUDIO_INPUTS
     assert host._bump_audio_inputs(+1) is False
-    assert host.state.brain.settings["audio_inputs"] == MAX_AUDIO_INPUTS
+    assert host.state.audio.audio_inputs == MAX_AUDIO_INPUTS
 
 
 def test_bumping_is_refused_while_the_grid_or_a_borrow_owns_slot_zero():
@@ -121,7 +123,7 @@ def test_bumping_is_refused_while_the_grid_or_a_borrow_owns_slot_zero():
     host.state.brain.borrow_active = True
     assert host._audio_inputs_locked()
     assert host._bump_audio_inputs(+1) is False
-    assert host.state.brain.settings["audio_inputs"] == 2
+    assert host.state.audio.audio_inputs == 2
 
 
 def test_editing_a_channel_pads_the_list_to_its_index():

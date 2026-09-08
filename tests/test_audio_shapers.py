@@ -237,3 +237,19 @@ def test_reset_clears_carried_state():
         s.apply(1.0, DT, p)
     s.reset()
     assert s.apply(1.0, DT, p) < 0.5
+
+
+def test_abs_is_on_by_default_and_keeps_the_raised_wave():
+    """Every rig tuned before the box existed was tuned on 0..1."""
+    assert ShaperParams().abs is True
+    out = drive(ShaperState(), ShaperParams(kind="phase", rate=3.0), [0.7] * 90)
+    assert min(out) >= 0.0 and max(out) <= 1.0 and max(out) > 0.9
+
+
+@pytest.mark.parametrize("wave", ("sine", "triangle", "ramp"))
+def test_a_signed_phase_swings_both_ways_and_still_starts_at_zero(wave):
+    p = ShaperParams(kind="phase", rate=3.0, wave=wave, abs=False)
+    assert drive(ShaperState(), p, [0.0] * 30) == [0.0] * 30
+    out = drive(ShaperState(), p, [0.8] * 240)
+    assert min(out) < -0.9 and max(out) > 0.9
+    assert all(-1.0 <= v <= 1.0 for v in out)

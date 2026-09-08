@@ -135,7 +135,9 @@ class LeniaModality:
         return z.reshape(-1).astype(np.float32), n_clamped
 
     def random(self, rng, layout: BrainLayout) -> np.ndarray:
-        z = rng.normal(0.0, 0.5, layout.length).astype(np.float32)
+        from services.brains import audio_aware_normal
+
+        z = audio_aware_normal(rng, layout, 0.5)
         return self.decode(z, layout)
 
 

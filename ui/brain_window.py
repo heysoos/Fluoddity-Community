@@ -102,6 +102,9 @@ class BrainWindowMixin:
         modality = get(state.modality)
         settings = dict(state.settings)
         for s in modality.settings_schema():
+            if s.key == "audio_inputs":
+                # The rig's control: Audio Reactive > Brain Inputs.
+                continue
             if s.kind == "layers":
                 self._render_layer_rows(state, settings, s)
                 continue

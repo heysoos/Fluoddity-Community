@@ -372,6 +372,7 @@ class CommandHandler:
             # reads the user's own, so applying it here would switch archive
             # and reset the optimizer to undo the hover - every frame.
             return
+        self._follow_rig_inputs(ui_state)
         # Called every frame, not only on the flag: a count slider commits on
         # release and a scale slider immediately, and both have to reach the
         # decode. _apply_brain_layout early-returns when nothing differs and
@@ -380,6 +381,19 @@ class CommandHandler:
         # One frame only. A same-brain load needs no switch, so nothing consumed
         # it, and a rule left here would be applied by the next unrelated one.
         self._pending_brain_rule = None
+
+    def _follow_rig_inputs(self, ui_state) -> None:
+        """The rig owns the input count, so a preset or a brain change that
+        arrived without it is given it back here.
+
+        Not under a grid: slot 0 is the tournament's there, and the panel's
+        stepper is locked for the same reason.
+        """
+        if getattr(ui_state.tournament, "enabled", False):
+            return
+        bst, want = ui_state.brain, int(ui_state.audio.audio_inputs)
+        if int(bst.settings.get("audio_inputs", 0)) != want:
+            bst.settings = {**bst.settings, "audio_inputs": want}
 
     def _handle_brain_source(self, ui_state) -> None:
         """The Adopt button and the per-layer operations menu.
@@ -421,10 +435,10 @@ class CommandHandler:
         self._apply_layer_op(ui_state, sim, kind, i, op)
 
     def _reroll_audio_weights(self, ui_state, sim, kind: str, i: int) -> None:
-        """Fresh audio weights under the brain that is running, from a fresh
-        seed. The deaf half is untouched: the transfer copies every non-audio
-        float and redraws only the rest."""
-        from services.brains import brain_rng
+        """The audio weights redrawn from the RIG's seed under the brain that
+        is running. The panel moves the seed; this only applies it, so the
+        deaf half is untouched and a seed typed back in gives the weights it
+        gave before."""
         from services.brains.layout_moves import transfer_audio_inputs
 
         layout = sim.brain_layout
@@ -433,9 +447,8 @@ class CommandHandler:
         current = self._current_brain(sim, kind, i)
         if current is None:
             return
-        seed = float(np.random.default_rng().random())
-        ui_state.sim.audio_seed = seed
-        out = transfer_audio_inputs(current, layout, layout, brain_rng(seed))
+        out = transfer_audio_inputs(current, layout, layout,
+                                    ui_state.audio.audio_seed)
         self._put_brain(ui_state, sim, kind, i, out, push=True)
 
     def _brain_source_count(self, ui_state, sim, kind: str) -> int:
@@ -834,6 +847,15 @@ class CommandHandler:
             return None
         rule, sig = pending
         return rule if sig == signature else None
+
+    def take_pending_brain_rule_any(self, signatures):
+        """-> (rule, signature) when the pending rule is one of `signatures`,
+        else None. Consumed either way, like take_pending_brain_rule."""
+        pending, self._pending_brain_rule = self._pending_brain_rule, None
+        if pending is None:
+            return None
+        rule, sig = pending
+        return (rule, sig) if sig in tuple(signatures) else None
 
     def _save_tournament_selection(self, ui_state, filename):
         """Save each selected genome under the chosen name (tiles get suffixed
@@ -1912,6 +1934,9 @@ class CommandHandler:
             return
         if load_rig(ast, preset_path(name)):
             ast.notice = f"Rig loaded from {name}"
+            # The rig's seed names its audio weights, so a loaded rig is
+            # given them back; the count follows on the next layout pass.
+            ui_state.brain.reroll_audio_requested = True
         else:
             ast.warning = f"Could not read the rig '{name}'"
 
