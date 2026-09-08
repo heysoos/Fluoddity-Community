@@ -111,3 +111,30 @@ def nearest_corner(point, corners) -> int:
     pts = np.asarray(corners, dtype=float)
     d = np.sum((pts - np.asarray(point, dtype=float)) ** 2, axis=1)
     return int(np.argmin(d))
+
+
+def corners_to_json(corners) -> list:
+    """Four corners as preferences stores them."""
+    return [[float(c[0]), float(c[1])] for c in corners]
+
+
+def corners_from_json(value):
+    """A stored calibration, or None when it cannot be used.
+
+    `preferences.config` is a file a user can edit and a file an older build
+    can write, so every shape reaching this is untrusted. None means "no
+    calibration for this display", which is the letterbox - never a crash and
+    never a fold.
+    """
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    out = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            return None
+        try:
+            out.append((float(item[0]), float(item[1])))
+        except (TypeError, ValueError):
+            return None
+    quad = tuple(out)
+    return quad if is_convex(quad) else None

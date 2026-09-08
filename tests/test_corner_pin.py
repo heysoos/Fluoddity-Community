@@ -191,3 +191,31 @@ def test_the_nearest_corner_is_the_one_the_pointer_is_on():
 
 def test_a_pointer_between_corners_names_the_closest_one():
     assert nearest_corner((0.80, 0.70), SKEW) == 1      # TR
+
+
+# --- what goes to disk ----------------------------------------------------
+
+def test_corners_round_trip_through_json_shapes():
+    from services.corner_pin import corners_from_json, corners_to_json
+
+    stored = corners_to_json(SKEW)
+    assert stored == [[c[0], c[1]] for c in SKEW]
+    assert corners_from_json(stored) == pytest.approx(np.array(SKEW))
+
+
+def test_a_corrupt_stored_calibration_reads_as_none():
+    """preferences.config is a file a user can edit. It must not crash."""
+    from services.corner_pin import corners_from_json
+
+    for bad in (None, [], "nonsense", [[0, 0]] * 3, [[0, 0]] * 5,
+                [[0, 0, 0]] * 4, [["a", "b"]] * 4, {"tl": [0, 0]},
+                [[0.0, 0.0]] * 4,                       # collapsed
+                [[float("nan"), 0.0], [1, 0], [1, 1], [0, 1]]):
+        assert corners_from_json(bad) is None, bad
+
+
+def test_a_stored_calibration_survives_being_a_list_of_lists():
+    from services.corner_pin import corners_from_json
+
+    got = corners_from_json([[0.1, 0.9], [0.9, 0.9], [0.9, 0.1], [0.1, 0.1]])
+    assert got == ((0.1, 0.9), (0.9, 0.9), (0.9, 0.1), (0.1, 0.1))

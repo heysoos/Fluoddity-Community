@@ -1,4 +1,4 @@
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 import json
 from utilities.paths import get_user_preferences_path
@@ -98,6 +98,8 @@ class PreferencesState:
     # Perform mode. `enabled` is deliberately NOT here: opening the app must
     # not light up a projector.
     perform_monitor: str = ""  # Which display perform mode last used
+    # Corner-pin calibration per display, keyed by MonitorInfo.device_key.
+    perform_calibrations: dict = field(default_factory=dict)
     show_perform_window: bool = False  # Whether the Perform Mode panel is visible
 
     # Exploration archive
@@ -119,6 +121,7 @@ NOT_UNDOABLE: dict[str, str] = {
     "record_notice": "the last take's message, shown once and dismissed",
     "archive_name": "names an external archive; switching it reloads the store",
     "perform_monitor": "names an external display, not the look of the simulation",
+    "perform_calibrations": "the physical alignment of an external display, not the look of the simulation",
 }
 
 UNDOABLE_FIELDS: tuple[str, ...] = tuple(

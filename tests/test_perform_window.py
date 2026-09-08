@@ -161,3 +161,27 @@ def test_choosing_never_rewrites_what_was_remembered():
     before = remembered
     choose_monitor(mons, remembered)
     assert remembered == before
+
+
+# --- corner_rect ----------------------------------------------------------
+
+def test_the_default_corners_report_the_letterbox_rect():
+    """What tools/drive_perform.py checks an uncalibrated projector against.
+
+    corner_rect and fit_rect must agree, or the tool starts reporting a
+    mismatch on a projector that is drawing correctly.
+    """
+    from services.corner_pin import default_corners
+    from services.perform_window import corner_rect
+
+    for src in (0.5, 1.0, 1.7778, 2.35):
+        for fb in ((1920, 1080), (1024, 768), (1080, 1920), (800, 800)):
+            expected = fit_rect(src, fb)
+            assert corner_rect(default_corners(src, fb), fb) == expected
+
+
+def test_a_warped_quad_reports_its_bounding_box():
+    from services.perform_window import corner_rect
+
+    quad = ((0.1, 0.9), (0.8, 1.0), (0.9, 0.2), (0.0, 0.1))
+    assert corner_rect(quad, (1000, 1000)) == (0, 100, 900, 900)

@@ -188,3 +188,132 @@ def test_closing_the_panel_clears_its_preference(gui, two_displays, monkeypatch)
     monkeypatch.setattr(imgui, "end", lambda: None)
     h.render_perform_window()
     assert h.state.preferences.show_perform_window is False
+
+
+# ---- the calibration canvas, driven with a real pointer ------------------
+
+def _step(draw, mouse=None, down=None):
+    """One frame, with optional pointer events queued ahead of it."""
+    io = imgui.get_io()
+    if mouse is not None:
+        io.add_mouse_pos_event(mouse[0], mouse[1])
+    if down is not None:
+        io.add_mouse_button_event(0, down)
+    imgui.new_frame()
+    imgui.set_next_window_pos(imgui.ImVec2(0, 0))
+    imgui.set_next_window_size(imgui.ImVec2(1200, 4000))
+    imgui.begin("host", True)
+    draw()
+    imgui.end()
+    imgui.render()
+
+
+@pytest.fixture
+def canvas(monkeypatch):
+    """Where the proxy canvas landed. Predicting it from outside is guesswork."""
+    box = {}
+    real = imgui.invisible_button
+
+    def wrapper(str_id, size, *a, **kw):
+        if str_id == "##perform_calib":
+            pos = imgui.get_cursor_screen_pos()
+            box["origin"] = (pos.x, pos.y)
+            box["size"] = (size.x, size.y)
+        return real(str_id, size, *a, **kw)
+
+    monkeypatch.setattr(imgui, "invisible_button", wrapper)
+    return box
+
+
+def _performing():
+    h = Harness()
+    h.state.perform.enabled = True
+    h.state.perform.active_monitor = "Projector"
+    return h
+
+
+def test_the_calibrate_checkbox_is_drawn(gui, monkeypatch, two_displays):
+    h = _performing()
+    labels = _labels(monkeypatch, h.render_perform_window)
+    assert any(l.startswith("Calibrate") for l in labels)
+
+
+def test_the_reset_button_appears_only_while_performing(
+        gui, monkeypatch, two_displays):
+    stopped = _labels(monkeypatch, Harness().render_perform_window)
+    assert not any(l.startswith("Reset Corners") for l in stopped)
+
+    running = _labels(monkeypatch, _performing().render_perform_window)
+    assert any(l.startswith("Reset Corners") for l in running)
+
+
+def test_the_canvas_is_not_drawn_until_performing(gui, two_displays, canvas):
+    _step(Harness().render_perform_window)
+    assert canvas == {}
+
+
+def test_dragging_a_handle_moves_that_corner_with_v_flipped(
+        gui, two_displays, canvas):
+    """The widget owns the flip. Dragging DOWN the screen must LOWER v."""
+    h = _performing()
+    draw = h.render_perform_window
+
+    _step(draw)                                  # lay out; learn the geometry
+    ox, oy = canvas["origin"]
+    w, ht = canvas["size"]
+
+    top_left = (ox + 1.0, oy + 1.0)              # the TL handle, uncalibrated
+    _step(draw, mouse=top_left)
+    _step(draw, mouse=top_left, down=True)
+
+    target = (ox + 0.25 * w, oy + 0.20 * ht)
+    _step(draw, mouse=target)
+    _step(draw, mouse=target)
+
+    corners = h.state.perform.corners
+    assert corners is not None, "the drag never reached the state"
+    assert corners[0][0] == pytest.approx(0.25, abs=0.03)
+    assert corners[0][1] == pytest.approx(0.80, abs=0.03)
+    # Only the grabbed corner moved.
+    assert corners[2] == pytest.approx((1.0, 0.0), abs=1e-6)
+
+    _step(draw, mouse=target, down=False)
+    assert h.state.perform.held_corner == -1
+
+
+def test_a_click_far_from_every_handle_grabs_nothing(
+        gui, two_displays, canvas):
+    """Otherwise the nearest corner teleports to wherever you clicked."""
+    h = _performing()
+    draw = h.render_perform_window
+
+    _step(draw)
+    ox, oy = canvas["origin"]
+    w, ht = canvas["size"]
+
+    middle = (ox + 0.5 * w, oy + 0.5 * ht)
+    _step(draw, mouse=middle)
+    _step(draw, mouse=middle, down=True)
+    _step(draw, mouse=(ox + 0.6 * w, oy + 0.6 * ht))
+    _step(draw, mouse=(ox + 0.6 * w, oy + 0.6 * ht), down=False)
+
+    assert h.state.perform.corners is None, "an empty click calibrated it"
+
+
+def test_reset_asks_the_orchestrator_rather_than_clearing_it_here(
+        gui, monkeypatch, two_displays):
+    """The UI is passive: it raises a one-shot, main.py drops the prefs entry."""
+    h = _performing()
+    h.state.perform.corners = ((0.1, 0.9), (0.9, 0.9), (0.9, 0.1), (0.1, 0.1))
+
+    real = imgui.button
+
+    def wrapper(label, *a, **kw):
+        real(label, *a, **kw)
+        return label.startswith("Reset Corners")
+
+    monkeypatch.setattr(imgui, "button", wrapper)
+    _step(h.render_perform_window)
+
+    assert h.state.perform.reset_corners_requested is True
+    assert h.state.perform.corners is not None

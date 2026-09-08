@@ -168,6 +168,21 @@ def fit_rect(src_aspect: float, dst_size: tuple[int, int]) -> tuple[int, int, in
     return ((dst_w - w) // 2, (dst_h - h) // 2, w, h)
 
 
+def corner_rect(corners, fb_size) -> tuple:
+    """The pixel bounding box of a corner quad, as (x, y, w, h).
+
+    Reproduces `fit_rect` exactly for the corners `default_corners` derives
+    from it, which is what lets tools/drive_perform.py keep checking an
+    uncalibrated projector against the letterbox it should still be drawing.
+    """
+    fb_w, fb_h = fb_size
+    xs = [c[0] * fb_w for c in corners]
+    ys = [c[1] * fb_h for c in corners]
+    x0, x1 = round(min(xs)), round(max(xs))
+    y0, y1 = round(min(ys)), round(max(ys))
+    return (x0, y0, x1 - x0, y1 - y0)
+
+
 class PerformWindow:
     """The second window. Closed until opened; a no-op while closed."""
 
@@ -181,6 +196,12 @@ class PerformWindow:
         self._ibo = None
         self._external = None
         self._external_key = None
+        # The warp, cached on (corners, framebuffer size). A degenerate quad
+        # keeps the last good matrix rather than putting NaN on a wall.
+        self._inv_key = None
+        self._inv_corners = None
+        self._inv_h = None
+        self.warp_ok = True
         self.monitor_key = ""
         self.monitor_label = ""
 
@@ -234,25 +255,28 @@ class PerformWindow:
         glfw.swap_interval(0)              # the laptop runs free; see draw()
 
     def _build_program(self) -> None:
-        """A recompile of the camera's own display shader in this context."""
+        """The projector's own display shader, compiled in this context.
+
+        Not the camera's: this one covers the whole framebuffer and samples
+        through a homography, so a skewed projector can be squared to a wall.
+        """
         import numpy as np
 
         self._program = self._ctx.program(
-            vertex_shader=read_shader('shaders/camera.vert'),
-            fragment_shader=read_shader('shaders/camera.frag'),
+            vertex_shader=read_shader('shaders/perform.vert'),
+            fragment_shader=read_shader('shaders/perform.frag'),
         )
         vertices = np.array([
-            -1.0, -1.0, 0.0, 0.0,
-             1.0, -1.0, 1.0, 0.0,
-             1.0,  1.0, 1.0, 1.0,
-            -1.0,  1.0, 0.0, 1.0,
+            -1.0, -1.0,
+             1.0, -1.0,
+             1.0,  1.0,
+            -1.0,  1.0,
         ], dtype=np.float32)
         indices = np.array([0, 1, 2, 2, 3, 0], dtype=np.uint32)
         self._vbo = self._ctx.buffer(vertices.tobytes())
         self._ibo = self._ctx.buffer(indices.tobytes())
         self._vao = self._ctx.vertex_array(
-            self._program, [(self._vbo, '2f 2f', 'in_position', 'in_texcoord')],
-            self._ibo)
+            self._program, [(self._vbo, '2f', 'in_position')], self._ibo)
 
     def _wrap(self, texture) -> moderngl.Texture:
         """External wrapper for a texture owned by the main context.
@@ -269,8 +293,50 @@ class PerformWindow:
             self._external_key = key
         return self._external
 
-    def draw(self, frame, on_drawn=None) -> None:
-        """Mirror `frame`, letterboxed. A no-op while closed or before a frame.
+    def resolve_corners(self, corners, src_aspect, fb_size):
+        """The corners to draw with, and the display-to-source matrix.
+
+        `corners` of None means the letterbox - `fit_rect` is still the one
+        authority on where an uncalibrated picture lands, and this only
+        normalises it into the same four points a calibrated one uses.
+
+        A folded or collapsed quad keeps the LAST GOOD matrix rather than
+        putting NaN on a wall, and says so through `warp_ok`. Cached on the
+        corners and the framebuffer size, so a static calibration costs one
+        dict comparison a frame rather than an 8x8 solve.
+        """
+        from services import corner_pin
+
+        default = corner_pin.default_corners(src_aspect, fb_size)
+        wanted = default if corners is None else tuple(
+            (float(c[0]), float(c[1])) for c in corners)
+
+        key = (wanted, tuple(fb_size))
+        if key == self._inv_key:
+            self.warp_ok = True
+            return self._inv_corners, self._inv_h
+
+        inv = corner_pin.inverse_homography(wanted)
+        if inv is None:
+            self.warp_ok = False
+            if self._inv_h is not None:
+                return self._inv_corners, self._inv_h
+            wanted = default
+            inv = corner_pin.inverse_homography(default)
+            key = (wanted, tuple(fb_size))
+        else:
+            self.warp_ok = True
+
+        self._inv_key, self._inv_corners, self._inv_h = key, wanted, inv
+        return wanted, inv
+
+    def draw(self, frame, corners=None, guides: bool = False,
+             held_corner: int = -1, on_drawn=None) -> None:
+        """Warp `frame` onto the projector. A no-op while closed.
+
+        `corners` are four points in display space, TL TR BR BL, v = 1 at the
+        top; None is the letterbox. `guides` draws the calibration grid and
+        the corner markers, `held_corner` highlights one of them.
 
         Call this AFTER the main window's swap: SwapBuffers performs an
         implicit flush, which is what makes a texture written in the main
@@ -278,8 +344,8 @@ class PerformWindow:
 
         `on_drawn(ctx, rect)` runs after the render and BEFORE the swap, which
         is the only moment what was drawn is readable - after a swap the back
-        buffer holds the other frame. tools/drive_perform.py is its only
-        caller; the app passes nothing.
+        buffer holds the other frame. `rect` is where the PICTURE landed, not
+        the viewport, which is now always the whole framebuffer.
         """
         if self._window is None or frame is None or frame.texture is None:
             return
@@ -293,31 +359,43 @@ class PerformWindow:
                 return
             src_w, src_h = frame.window_size
             src_aspect = (src_w / src_h) if src_h > 0 else 1.0
-            x, y, w, h = fit_rect(src_aspect, (fb_w, fb_h))
+            quad, inv = self.resolve_corners(corners, src_aspect, (fb_w, fb_h))
+            if inv is None:
+                return
 
             self._ctx.screen.use()
             self._ctx.viewport = (0, 0, fb_w, fb_h)
             self._ctx.clear(0.0, 0.0, 0.0, 1.0)
-            if w <= 0 or h <= 0:
-                return
-            self._ctx.viewport = (x, y, w, h)
 
             tex = self._wrap(frame.texture)
-            # The main framebuffer's size, not this window's: the shader must
-            # compose the identical image the laptop composed, and the only
-            # thing this window contributes is where it lands.
-            tryset(self._program, 'cam_pos', frame.cam_pos)
-            tryset(self._program, 'cam_zoom', frame.cam_zoom)
-            tryset(self._program, 'tex_size', frame.tex_size)
-            tryset(self._program, 'window_size', frame.window_size)
             tex.use(location=0)
             tryset(self._program, 'view_tex', 0)
+            self._write_matrix(inv)
+            self._write_corners(quad)
+            tryset(self._program, 'fb_size', (float(fb_w), float(fb_h)))
+            tryset(self._program, 'show_guides', 1 if guides else 0)
+            tryset(self._program, 'held_corner', int(held_corner))
             self._vao.render()
             if on_drawn is not None:
-                on_drawn(self._ctx, (x, y, w, h))
+                on_drawn(self._ctx, corner_rect(quad, (fb_w, fb_h)))
             glfw.swap_buffers(self._window)
         finally:
             glfw.make_context_current(self._main_window)
+
+    def _write_matrix(self, inv) -> None:
+        """GLSL reads a mat3 COLUMN-major; the solve is row-major."""
+        import numpy as np
+
+        uniform = self._program.get('inv_h', None)
+        if uniform is not None:
+            uniform.write(np.ascontiguousarray(inv.T, dtype='f4').tobytes())
+
+    def _write_corners(self, quad) -> None:
+        import numpy as np
+
+        uniform = self._program.get('corners', None)
+        if uniform is not None:
+            uniform.write(np.ascontiguousarray(quad, dtype='f4').tobytes())
 
     def close(self) -> None:
         """Idempotent. Restores vsync on the main window."""
@@ -335,6 +413,8 @@ class PerformWindow:
                 pass
         self._vao = self._vbo = self._ibo = self._external = self._program = None
         self._external_key = None
+        self._inv_key = self._inv_corners = self._inv_h = None
+        self.warp_ok = True
         self._ctx = None
         glfw.make_context_current(self._main_window)
         glfw.destroy_window(window)

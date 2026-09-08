@@ -149,8 +149,14 @@ default corners; nothing is written for a projector nobody calibrated.
 
 **The new field must be classified `NOT_UNDOABLE`** — it is the physical
 alignment of an external display, not the look of the simulation, the same
-reasoning `perform_monitor` carries. `tests/test_undo_fields.py` derives its
-cases from `__dataclass_fields__`, so an unclassified field fails the suite.
+reasoning `perform_monitor` carries. Undo would otherwise revert a projector
+alignment.
+
+**No test forces this, and that is worth knowing.**
+`PreferencesState.UNDOABLE_FIELDS` is derived as every field NOT excluded, so
+an unclassified field silently becomes undoable and `tests/test_undo_fields.py`
+stays green. The classification has to be made by hand, at the moment the field
+is added.
 
 ## 6. Controls
 
