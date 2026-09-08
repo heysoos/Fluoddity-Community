@@ -114,6 +114,20 @@ That costs one extra particle pass per motion-blur sample — the same work the 
 
 It accepts no mouse or keyboard of its own and never takes focus, so **F11** always reaches this window even if the display is unplugged and Windows drops the leftover window on top of you.
 
+### Squaring it to the wall
+
+A projector that is off to one side, or tilted up from a table, throws a trapezoid rather than a rectangle. **Corner Calibration** in the same panel pulls it back into shape.
+
+Tick **Calibrate**. The projector puts a grid over the picture and marks the four corners; the panel shows a small rectangle standing for the display, with a handle at each corner. Drag a handle and that corner of the projected image follows it — the corner you are holding lights up on the wall so you can tell which is which.
+
+**Line the grid up with the wall, not with the picture.** The grid bends exactly as the image does, so when its lines look straight and square to you, the projection is correct. Untick **Calibrate** when you are done and the grid disappears; the shape stays.
+
+**Reset Corners** puts it back to a plain rectangle.
+
+Each display remembers its own corners, so a projector you have calibrated once comes back aligned next time you plug it in — and moving your monitors around in Windows does not lose it. A display you have never calibrated is left exactly square.
+
+This handles any **flat** surface at any angle. A curved or folded surface needs more than four corners and is not something this can fix.
+
 ## Inject Texture
 
 **Extras > Inject Texture** injects texture into the fields the particles move through — procedural noise, an image, your own GLSL, or the simulation's own canvas fed back into itself.

@@ -1918,6 +1918,75 @@ design; these are the rules it rests on.
   actions IN MEMORY at load; nothing is written back, because the user's own
   choices are theirs.
 
+- **The CORNERS are the authority and `fit_rect` is only their DEFAULT.** The
+  projector draws one full-framebuffer pass through an inverse homography, so
+  a skewed projector comes out square on a wall - `services/corner_pin.py`
+  solves the 8x8, `shaders/perform.{vert,frag}` sample through it. There is
+  ONE code path: an uncalibrated display is `default_corners`, which is
+  `fit_rect` normalised, so it renders what it always rendered. Chosen over
+  moving the quad's vertices with a `q` divide because the solve is then a
+  pure function testable with no GL context, and "outside the quad is black"
+  falls out of a bounds check rather than a stencil. The full-screen pass
+  costs ~2M single-tap fragments at 1080p against a particle pass the
+  projector already redoes per motion-blur sample; do not re-litigate that
+  without measuring both.
+
+- **A corner is a GL coordinate, v = 1 at the TOP, and the ImGui proxy canvas
+  owns the flip.** Ordered TL, TR, BR, BL - a claim about the WALL, not about
+  which end of the range they sit at, so TL is `(0, 1)`. ImGui draws top-down
+  and is the only place `v` is flipped; a stored calibration is always GL-side
+  up. The flip CANCELS on a symmetric quad, so every test quad is asymmetric -
+  the same trap the capture-crop tests avoid by panning the camera. Guarded by
+  `tests/test_corner_pin.py`, and by a render test that drives a real pointer
+  through the canvas, which fails when the flip is removed.
+
+- **A fragment is rejected by the SIGN of w, not by the bounds alone.** A
+  projective map has a vanishing line, and display points beyond it map back
+  INTO the unit square with `w` negated - a mirrored ghost of the picture. The
+  sign is fixed rather than lucky: `homography` pins `h33 = 1` and `w` cannot
+  change sign across a convex quad, so `w` at the quad is positive by
+  construction. Two pure tests pin that, because an SVD solve or a Frobenius
+  normalisation would flip it and nothing else would notice.
+
+- **A folded quad keeps the LAST GOOD matrix and never reaches the shader.**
+  `inverse_homography` returns None for a non-convex, collapsed or
+  ill-conditioned quad; `PerformWindow.resolve_corners` holds the previous one
+  and reports through `warp_ok`. The drag is separately guarded on
+  `is_convex`, so the refusal is the backstop rather than the normal path. The
+  matrix is cached on `(corners, framebuffer size)`, so a static calibration
+  costs a comparison per frame rather than an 8x8 solve.
+
+- **The calibration grid is drawn in SOURCE space and warped with the
+  picture.** A line straight in the source arrives on the wall bent exactly as
+  the image is, so a grid that looks straight against the wall IS the
+  alignment. Drawn in display space it would stay straight whatever the warp
+  did and could report nothing. Corner markers are the exception and sit in
+  display space, so a corner dragged off the picture can still be found.
+
+- **A calibration belongs to the DISPLAY, keyed by `device_key`, and Reset
+  DROPS the entry.** `device_key` omits the position, so rearranging monitors
+  in Windows does not lose a wall; keying by name would give a laptop panel
+  and a projector one entry between them, which is the defect `MonitorInfo.key`
+  exists to prevent. A display with no entry and a display reset to square
+  must stay the same thing, or every projector acquires a calibration by being
+  looked at. `corners_from_json` refuses every malformed shape - a stored
+  calibration is a file a user can edit - and None means the letterbox.
+
+- **`perform_calibrations` is classified `NOT_UNDOABLE` BY HAND, and no test
+  would have said so.** `PreferencesState.UNDOABLE_FIELDS` is derived as every
+  field NOT excluded, so an unclassified field silently becomes undoable and
+  `tests/test_undo_fields.py` stays green - the opposite of the `SimState`
+  reading of that rule. Left undoable, Ctrl+Z reverts a projector alignment.
+
+- **`python -m tools.drive_perform` is what verifies this.** A render test
+  drives a bare mixin and a GL test drives the shader into a standalone
+  framebuffer; neither runs the two-context path, where a stale external
+  wrapper or a viewport left on the wrong rect passes the whole suite and
+  shows up only on a projector. The shader's own GL test CAN assert exactly,
+  unlike `tests/test_perform_view_gl.py`: it feeds a synthetic
+  coordinate-encoding texture rather than the particle pass, so there is no
+  additive splat race and every pixel is checkable against the inverse map.
+
 ### Recording
 
 - **`generate_view_texture()` returns two different things, and the recorder
