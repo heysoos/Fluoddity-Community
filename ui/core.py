@@ -733,7 +733,11 @@ class UI(
         if self.state.preferences.show_undo_window:
             self.render_undo_window()
 
-        if self.state.preferences.show_perform_window:
+        # Gated by the sidebar like every other control panel: hiding the
+        # windows to go on stage must clear this one too. Perform mode itself
+        # keeps running - `enabled` is not a preference.
+        if (self.state.preferences.show_sidebar
+                and self.state.preferences.show_perform_window):
             self.render_perform_window()
 
         # Render Advanced Drawing window if enabled (hidden when windows toggled off)
