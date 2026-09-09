@@ -3,7 +3,7 @@ from imgui_bundle import imgui
 
 from services import corner_pin
 from services.perform_window import list_monitors
-from . import layout, notices
+from . import hints, layout, notices
 
 CANVAS_MAX_W = 280.0      # the proxy display, in points
 GRAB_PX = 14.0            # how close the pointer must be to pick a handle
@@ -88,6 +88,14 @@ class PerformWindowMixin:
             imgui.text_colored(imgui.ImVec4(*notices.WARN), "Starting...")
         else:
             imgui.text_disabled("Not performing.")
+
+        imgui.separator()
+        changed, want = imgui.checkbox("Preview on hover##perform",
+                                       prefs.load_preview_on_hover)
+        if changed:
+            prefs.load_preview_on_hover = want
+        hints.tip("Whether File > Load applies a preset as the pointer passes "
+                  "it, or waits for the click.")
 
         self._render_calibration(perform, selected)
 

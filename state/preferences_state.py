@@ -101,6 +101,8 @@ class PreferencesState:
     # Corner-pin calibration per display, keyed by MonitorInfo.device_key.
     perform_calibrations: dict = field(default_factory=dict)
     show_perform_window: bool = False  # Whether the Perform Mode panel is visible
+    # Whether File > Load applies a preset as the pointer passes it.
+    load_preview_on_hover: bool = True
 
     # Exploration archive
     archive_name: str = "default"  # which Documents/Fluoddity/archives/<name> Explore mode loads
@@ -122,6 +124,7 @@ NOT_UNDOABLE: dict[str, str] = {
     "archive_name": "names an external archive; switching it reloads the store",
     "perform_monitor": "names an external display, not the look of the simulation",
     "perform_calibrations": "the physical alignment of an external display, not the look of the simulation",
+    "load_preview_on_hover": "how the Load menu behaves, not a change to the creature",
 }
 
 UNDOABLE_FIELDS: tuple[str, ...] = tuple(

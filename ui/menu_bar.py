@@ -25,6 +25,76 @@ class MenuBarMixin:
         if pls:
             pls.restore_locked(self.state.sim, self.state.preferences, snapshot)
 
+    def _restore_cached_config(self, watercolor_override=None):
+        """Put back the state the Load menu was opened on top of.
+
+        The field strengths ride alongside the config rather than inside it,
+        so they are restored here too - one place, because the right-click,
+        the un-hover and the suppressed hover all need the same undo.
+        """
+        if not self.cached_config:
+            return
+        self._load_from_string_locked(self.cached_config,
+                                      watercolor_override=watercolor_override)
+        if self._cached_field_strengths is not None:
+            prefs = self.state.preferences
+            prefs.force_field_strength = self._cached_field_strengths[0]
+            prefs.strafe_field_strength = self._cached_field_strengths[1]
+
+    def _handle_load_hover(self, hovered, menu_watercolor):
+        """Preview whatever the pointer is over in File > Load.
+
+        `hovered` is (filename, category) or None. Preview on hover is a
+        setting: off, the menu is scrolled without the picture moving and
+        nothing is applied until the click, which is what performing to an
+        audience needs.
+        """
+        hovered_filename = hovered[0] if hovered else None
+        hovered_category = hovered[1] if hovered else None
+        current_preview = (self.currently_previewing,
+                           self.currently_previewing_category)
+
+        if not self.state.preferences.load_preview_on_hover:
+            # Skipped outright rather than applied and undone. A preview left
+            # standing by a toggle mid-menu is handed back once.
+            if self.currently_previewing:
+                self._request_clear_preview = True
+                self._restore_cached_config(menu_watercolor)
+                self.currently_previewing = None
+                self.currently_previewing_category = None
+            return
+
+        if hovered == current_preview:
+            return
+
+        # First, clear any existing preview
+        if self.currently_previewing:
+            self._request_clear_preview = True
+
+        if hovered_filename and hovered_category:
+            cache_key = f"{hovered_category}/{hovered_filename}"
+            if cache_key in self.cached_configs:
+                # Apply preview config with watercolor override
+                config = self.cached_configs[cache_key]
+                self._apply_config_locked(config,
+                                          watercolor_override=menu_watercolor)
+                # Apply field strengths from config if present (respect locks)
+                if config.force_field_strength is not None:
+                    pls = self.param_lock_service
+                    if not (pls and pls.is_locked('force_field_strength')):
+                        self.state.preferences.force_field_strength = config.force_field_strength
+                    if not (pls and pls.is_locked('strafe_field_strength')):
+                        self.state.preferences.strafe_field_strength = config.strafe_field_strength
+                self._request_preview_config = True
+                self._preview_filename = hovered_filename
+                self._preview_category = hovered_category
+                self.currently_previewing = hovered_filename
+                self.currently_previewing_category = hovered_category
+        elif hovered is None and self.cached_config:
+            self._restore_cached_config(menu_watercolor)
+            self.currently_previewing = None
+            self.currently_previewing_category = None
+
     def render_main_menu_bar(self):
         """Render the main application menu bar at the top of the window."""
         load_submenu_open = False
@@ -120,15 +190,8 @@ class MenuBarMixin:
                                         self.state.preferences.force_field_strength = config.force_field_strength
                                     if not (pls and pls.is_locked('strafe_field_strength')):
                                         self.state.preferences.strafe_field_strength = config.strafe_field_strength
-                        elif self.cached_config:
-                            # Restore from cache with watercolor override
-                            self._load_from_string_locked(
-                                self.cached_config,
-                                watercolor_override=current_menu_watercolor)
-                            # Restore cached field strengths
-                            if self._cached_field_strengths is not None:
-                                self.state.preferences.force_field_strength = self._cached_field_strengths[0]
-                                self.state.preferences.strafe_field_strength = self._cached_field_strengths[1]
+                        else:
+                            self._restore_cached_config(current_menu_watercolor)
 
                     # Lock watercolor mode to menu's mode
                     self.state.sim.watercolor_mode = current_menu_watercolor
@@ -136,46 +199,8 @@ class MenuBarMixin:
                     hovered_this_frame = self._render_load_submenu_content(current_menu_watercolor)
 
                     # Handle preview on hover (works in both normal and multi-load modes)
-                    # hovered_this_frame is now a tuple (filename, category) or None
-                    hovered_filename = hovered_this_frame[0] if hovered_this_frame else None
-                    hovered_category = hovered_this_frame[1] if hovered_this_frame else None
-                    current_preview = (self.currently_previewing, self.currently_previewing_category)
-
-                    if hovered_this_frame != current_preview:
-                        # First, clear any existing preview
-                        if self.currently_previewing:
-                            self._request_clear_preview = True
-
-                        if hovered_filename and hovered_category:
-                            cache_key = f"{hovered_category}/{hovered_filename}"
-                            if cache_key in self.cached_configs:
-                                # Apply preview config with watercolor override
-                                config = self.cached_configs[cache_key]
-                                self._apply_config_locked(config,
-                                                         watercolor_override=current_menu_watercolor)
-                                # Apply field strengths from config if present (respect locks)
-                                if config.force_field_strength is not None:
-                                    pls = self.param_lock_service
-                                    if not (pls and pls.is_locked('force_field_strength')):
-                                        self.state.preferences.force_field_strength = config.force_field_strength
-                                    if not (pls and pls.is_locked('strafe_field_strength')):
-                                        self.state.preferences.strafe_field_strength = config.strafe_field_strength
-                                self._request_preview_config = True
-                                self._preview_filename = hovered_filename
-                                self._preview_category = hovered_category
-                                self.currently_previewing = hovered_filename
-                                self.currently_previewing_category = hovered_category
-                        elif hovered_this_frame is None and self.cached_config:
-                            # Revert to cached state with watercolor override
-                            self._load_from_string_locked(
-                                self.cached_config,
-                                watercolor_override=current_menu_watercolor)
-                            # Restore cached field strengths
-                            if self._cached_field_strengths is not None:
-                                self.state.preferences.force_field_strength = self._cached_field_strengths[0]
-                                self.state.preferences.strafe_field_strength = self._cached_field_strengths[1]
-                            self.currently_previewing = None
-                            self.currently_previewing_category = None
+                    self._handle_load_hover(hovered_this_frame,
+                                            current_menu_watercolor)
 
                     imgui.end_menu()
 

@@ -317,3 +317,12 @@ def test_reset_asks_the_orchestrator_rather_than_clearing_it_here(
 
     assert h.state.perform.reset_corners_requested is True
     assert h.state.perform.corners is not None
+
+
+def test_the_hover_preview_switch_is_reachable_without_performing(
+        gui, monkeypatch, two_displays):
+    """It is what someone reaches for BEFORE going on stage, so it must not
+    sit behind Start the way the calibration does."""
+    h = Harness()
+    labels = _labels(monkeypatch, h.render_perform_window)
+    assert any(l.startswith("Preview on hover") for l in labels)
