@@ -283,6 +283,11 @@ class FieldStackWindowMixin:
         # Immediately after Source, because it is the question Source asks.
         changed_any |= self._draw_file_picker(layer, collect)
         changed_any |= self._draw_layer_params(layer, collect)
+
+        changed, layer.flip_x = imgui.checkbox(
+            self._tag(f"Flip X##fx{uid}", collect), layer.flip_x)
+        hints.tip("Mirrors the picture left to right before it is read.")
+        changed_any |= changed
         return changed_any
 
     def _section_shape(self, layer, collect) -> bool:

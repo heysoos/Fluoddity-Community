@@ -167,6 +167,7 @@ class FieldBus:
         tryset(prog, "src_channels",
                1 if layer.params.get("_channels") == "zw" else 0)
         tryset(prog, "aspect_ratio", self._aspect_ratio(src_tex))
+        tryset(prog, "flip_x", bool(layer.flip_x))
 
         # The mask is set BEFORE use(): moderngl applies a framebuffer's stored
         # state when it is bound, so a mask set afterwards misses this pass.

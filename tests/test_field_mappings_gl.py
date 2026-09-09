@@ -157,3 +157,34 @@ def test_edge_strength_does_not_run_away(ctx, bus):
     """Normalised direction times a clamped magnitude: never past 1."""
     v = _render(bus, _bar(ctx), "edge")
     assert float(np.hypot(v[..., 0], v[..., 1]).max()) <= 1.0 + 1e-4
+
+
+def _step(ctx):
+    """Black on the left, white on the right: an asymmetric picture, so a
+    mirror that did nothing cannot pass."""
+    img = np.zeros((RES, RES, 3), dtype=np.float32)
+    img[:, RES // 2:, :] = 1.0
+    return _texture(ctx, img)
+
+
+def test_flip_x_mirrors_the_picture(ctx, bus):
+    out = _render(bus, _step(ctx), "luminance")
+    flipped = _render(bus, _step(ctx), "luminance", flip_x=True)
+    assert not np.allclose(out, flipped), "the flip did nothing"
+    assert np.allclose(out[..., 0], flipped[:, ::-1, 0], atol=1e-5)
+
+
+def test_flip_x_mirrors_a_directly_read_vector(ctx, bus):
+    """A derivative mapping picks the mirror up from its sample offsets; a
+    direct read has to be turned round explicitly."""
+    v = _render(bus, _flat(ctx, 0.9, 0.6), "rg_signed", flip_x=True)
+    plain = _render(bus, _flat(ctx, 0.9, 0.6), "rg_signed")
+    assert np.allclose(v[..., 0], -plain[..., 0], atol=1e-5)
+    assert np.allclose(v[..., 1], plain[..., 1], atol=1e-5)
+
+
+def test_flip_x_reverses_a_gradient(ctx, bus):
+    out = _render(bus, _step(ctx), "gradient")
+    flipped = _render(bus, _step(ctx), "gradient", flip_x=True)
+    assert np.allclose(out[..., 0], -flipped[:, ::-1, 0], atol=1e-5)
+    assert np.allclose(out[..., 1], flipped[:, ::-1, 1], atol=1e-5)

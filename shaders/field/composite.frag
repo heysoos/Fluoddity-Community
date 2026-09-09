@@ -23,8 +23,11 @@ uniform int   src_channels; // 0 = read .xy / .rgb, 1 = read .zw
 // Source aspect over destination aspect. A source shaped differently from the
 // bus is scaled to COVER and centre-cropped, never squeezed to fit.
 uniform float aspect_ratio;
+// Mirrors the picture left to right, before anything reads it.
+uniform bool  flip_x;
 
 vec2 cover(vec2 uv){
+    if (flip_x) uv.x = 1.0 - uv.x;
     if (aspect_ratio == 1.0) return uv;
     vec2 scale = (aspect_ratio > 1.0) ? vec2(1.0 / aspect_ratio, 1.0)
                                       : vec2(1.0, aspect_ratio);
@@ -93,6 +96,10 @@ void main(){
         v = (mapping == 2) ? g : vec2(-g.y, g.x);
         v *= sign_mul;
     }
+
+    // A mirrored picture holds mirrored vectors. The derivative mappings get
+    // that from the flipped sample offsets; the direct reads do not.
+    if (flip_x && (mapping == 0 || mapping == 1 || mapping == 5)) v.x = -v.x;
 
     v *= strength;
     if (scalar_out) v = vec2(length(v), 0.0);

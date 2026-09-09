@@ -38,6 +38,7 @@ class FieldLayer:
     strength: float = 1.0
     blur: float = 0.0
     sign: float = 1.0
+    flip_x: bool = False
     # Runtime only. Never serialized: a layer whose shader failed last session
     # must not open pre-broken.
     error: str | None = None
@@ -68,6 +69,7 @@ def stack_to_dict(stack: FieldStack) -> dict:
             "strength": l.strength,
             "blur": l.blur,
             "sign": l.sign,
+            "flip_x": l.flip_x,
         }
         for l in stack.layers
     ]}
@@ -93,6 +95,7 @@ def stack_from_dict(d: dict) -> FieldStack:
             strength=float(raw.get("strength", 1.0)),
             blur=float(raw.get("blur", 0.0)),
             sign=float(raw.get("sign", 1.0)),
+            flip_x=bool(raw.get("flip_x", False)),
         ))
     return FieldStack(layers=out,
                       enabled=bool(d.get("enabled", True)),

@@ -22,7 +22,7 @@ def test_a_new_layer_gets_a_uid():
 def test_round_trip_preserves_every_field():
     stack = FieldStack(layers=[
         FieldLayer(source="noise", mapping="curl", destination="force",
-                   blend="add", strength=0.8, blur=2.0, sign=-1.0,
+                   blend="add", strength=0.8, blur=2.0, sign=-1.0, flip_x=True,
                    params={"speed": 1.5, "octaves": 3}),
         FieldLayer(source="brush", mapping="rg_direct", destination="strafe",
                    blend="replace", strength=1.0, enabled=False),
@@ -41,6 +41,7 @@ def test_round_trip_preserves_every_field():
         assert after.strength == before.strength
         assert after.blur == before.blur
         assert after.sign == before.sign
+        assert after.flip_x == before.flip_x
 
 
 def test_error_is_not_serialized():
