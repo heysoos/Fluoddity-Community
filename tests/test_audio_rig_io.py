@@ -58,3 +58,30 @@ def test_saving_into_a_missing_directory_creates_it(tmp_path):
     path = tmp_path / "deep" / "deeper" / "audio_rig.json"
     assert save_rig(AudioInState(), path) is True
     assert path.exists()
+
+
+def test_the_last_used_rig_still_restores_the_device(tmp_path):
+    """Coming back on the microphone you were on is the whole point of the
+    startup restore, so the default must not hold the device."""
+    path = tmp_path / "audio_rig.json"
+    st = AudioInState()
+    st.device_name = "Microphone (K66)"
+    assert save_rig(st, path) is True
+
+    fresh = AudioInState()
+    assert load_rig(fresh, path) is True
+    assert fresh.device_name == "Microphone (K66)"
+
+
+def test_keep_device_holds_the_one_already_chosen(tmp_path):
+    path = tmp_path / "rig.json"
+    st = AudioInState()
+    st.device_name = "Some Other Machine's Mic"
+    st.global_strength = 1.25
+    assert save_rig(st, path) is True
+
+    live = AudioInState()
+    live.device_name = "Microphone (K66)"
+    assert load_rig(live, path, keep_device=True) is True
+    assert live.device_name == "Microphone (K66)"
+    assert live.global_strength == pytest.approx(1.25), "the rest still lands"

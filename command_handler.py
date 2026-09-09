@@ -1932,7 +1932,9 @@ class CommandHandler:
         name = ast.preset_name
         if not name:
             return
-        if load_rig(ast, preset_path(name)):
+        # keep_device: the input device belongs to the machine, not to the
+        # rig, and a rig built elsewhere names one that is not here.
+        if load_rig(ast, preset_path(name), keep_device=True):
             ast.notice = f"Rig loaded from {name}"
             # The rig's seed names its audio weights, so a loaded rig is
             # given them back; the count follows on the next layout pass.

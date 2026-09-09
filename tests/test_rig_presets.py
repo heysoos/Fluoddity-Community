@@ -107,6 +107,28 @@ def test_loading_a_preset_applies_it_and_clears_the_request(data_dir):
     assert st.request_load_preset is False
 
 
+def test_loading_a_preset_leaves_the_input_device_alone(data_dir):
+    """The device belongs to the machine, not to the rig.
+
+    A named rig still records the device it was built on - it is written by
+    the one serialiser the last-used rig uses - but nothing reads it back
+    here, so loading one cannot move the input.
+    """
+    source = AudioInState()
+    source.device_name = "Some Other Machine's Mic"
+    source.mappings.append(Mapping(signal="mid", target="SENSOR_DISTANCE"))
+    rig_io.save_rig(source, rig_io.preset_path("reef"))
+
+    st = AudioInState()
+    st.device_name = "Microphone (K66)"
+    st.preset_name = "reef"
+    st.request_load_preset = True
+    CommandHandler._handle_audio_preset(None, _ui_state(st))
+
+    assert st.device_name == "Microphone (K66)"
+    assert [m.target for m in st.mappings] == ["SENSOR_DISTANCE"]
+
+
 def test_a_preset_that_will_not_read_reports_rather_than_retrying(data_dir):
     st = AudioInState()
     st.preset_name = "gone"

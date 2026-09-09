@@ -55,8 +55,14 @@ def save_rig(state, path: Path | None = None) -> bool:
         return False
 
 
-def load_rig(state, path: Path | None = None) -> bool:
-    """False for a missing or unreadable rig, leaving `state` as it was."""
+def load_rig(state, path: Path | None = None,
+             keep_device: bool = False) -> bool:
+    """False for a missing or unreadable rig, leaving `state` as it was.
+
+    `keep_device` holds the input device the app is already on. The device is
+    a property of the machine rather than of the rig, so a named rig loaded
+    over a running setup must not move it.
+    """
     target = Path(path) if path is not None else rig_path()
     try:
         data = json.loads(target.read_text(encoding="utf-8"))
@@ -64,5 +70,7 @@ def load_rig(state, path: Path | None = None) -> bool:
         return False
     if not isinstance(data, dict):
         return False
+    if keep_device:
+        data = {k: v for k, v in data.items() if k != "device_name"}
     apply_dict(state, data)
     return True
