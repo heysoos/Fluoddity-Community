@@ -25,6 +25,25 @@ def shader_prepend(shader_source, content_to_insert):
     return shader_source[:first_newline+1] + content_to_insert + shader_source[first_newline+1:]
 
 MUTED_TRYSET_WARNINGS={}
+def restore_target(previous) -> None:
+    """Put back whatever framebuffer was bound before an offscreen pass.
+
+    Everything downstream - the sim's own passes, and imgui - inherits the
+    target the last pass left. A pass that leaves its own bound sends the whole
+    UI into an offscreen buffer, which reads as every window vanishing at once,
+    or as the panels appearing on a projector. Restoring what was there beats
+    binding the screen, which a standalone context does not have.
+    """
+    # A released framebuffer keeps its wrapper and swaps its `mglo` for an
+    # InvalidObject, so the wrapper's own type says nothing. Binding one
+    # raises; having nothing to put back is not an error.
+    if previous is None:
+        return
+    if isinstance(getattr(previous, "mglo", None), moderngl.InvalidObject):
+        return
+    previous.use()
+
+
 def tryset(program:moderngl.Program,uniform,value):
     """
     Gracefully handle a uniform that doesn't appear in program.

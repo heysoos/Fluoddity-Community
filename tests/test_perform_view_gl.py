@@ -221,3 +221,37 @@ def test_accumulating_publishes_only_on_the_final_sample(rig):
     assert view.frame is None
     view.render(st, _kwargs(camera, sim), PROJECTOR, 3, 2)
     assert view.frame is not None
+
+
+def test_it_puts_back_the_target_it_found(rig):
+    """Paused, this is the last pass before imgui - so a target left bound is
+    the one the UI draws into, and that buffer is what the projector shows:
+    the panels leave the laptop and appear on the wall.
+
+    A scratch framebuffer stands in for the screen, which a hidden window has
+    but a standalone context does not.
+    """
+    ctx, sim, camera, view = rig
+    scratch = ctx.framebuffer(color_attachments=[ctx.texture((64, 64), 4)])
+    try:
+        scratch.use()
+        view.render(_state(), _kwargs(camera, sim), PROJECTOR, 1, 0)
+        assert ctx.fbo is scratch, "the projector's own buffer was left bound"
+    finally:
+        scratch.release()
+
+
+def test_it_puts_the_target_back_in_the_other_view_modes(rig):
+    """The canvas views take an early return out of the particle pass, so they
+    reach the assembler by another road and leak a different buffer."""
+    ctx, sim, camera, view = rig
+    scratch = ctx.framebuffer(color_attachments=[ctx.texture((64, 64), 4)])
+    was = camera.cam_brush_mode
+    try:
+        scratch.use()
+        camera.cam_brush_mode = False
+        view.render(_state(), _kwargs(camera, sim), PROJECTOR, 1, 0)
+        assert ctx.fbo is scratch, "the projector's own buffer was left bound"
+    finally:
+        camera.cam_brush_mode = was
+        scratch.release()

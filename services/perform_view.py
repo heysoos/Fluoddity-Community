@@ -19,7 +19,7 @@ from __future__ import annotations
 import moderngl
 
 from camera import DisplayFrame, tiling_scale, tiling_view_bounds
-from utilities.gl_helpers import tryset
+from utilities.gl_helpers import restore_target, tryset
 
 
 class PerformView:
@@ -66,7 +66,22 @@ class PerformView:
         sample counts, so the projector gets the identical motion blur. A
         projector rendered once per frame would be the screen with the worse
         picture, which is backwards.
+
+        The target this found is put back on the way out. While the sim runs
+        the camera pass below rebinds the screen anyway; PAUSED, this is the
+        last pass before imgui, so its own buffer would take the whole UI - and
+        that buffer is what the projector displays, so the panels leave the
+        laptop and appear on the wall.
         """
+        entry_target = self.ctx.fbo
+        try:
+            self._render(ui_state, assemble_kwargs, size,
+                         total_samples, sample_index)
+        finally:
+            restore_target(entry_target)
+
+    def _render(self, ui_state, assemble_kwargs, size,
+                total_samples: int, sample_index: int) -> None:
         self.resize(size)
         src = self._render_particles(ui_state)
         assembled = self._assembler.assemble_frame(

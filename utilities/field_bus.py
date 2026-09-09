@@ -10,7 +10,7 @@ import moderngl
 
 from services import field_sources
 from state.field_stack import MAPPINGS
-from utilities.gl_helpers import read_shader, tryset
+from utilities.gl_helpers import read_shader, restore_target, tryset
 
 BLEND_STATE = {
     "replace":  None,
@@ -370,23 +370,8 @@ class FieldBus:
         return True
 
     def _restore_target(self, previous) -> None:
-        """Put back whatever was bound before we started.
-
-        Everything downstream - the sim's own passes, and imgui - inherits the
-        target the last pass left. A rebuild that leaves its own bound sends
-        the whole UI into an offscreen buffer, which reads as every window
-        vanishing at once with the close button unable to bring them back.
-        Restoring what was there beats binding the screen, which a standalone
-        context does not have.
-        """
-        # A released framebuffer keeps its wrapper and swaps its `mglo` for an
-        # InvalidObject, so the wrapper's own type says nothing. Binding one
-        # raises; having nothing to put back is not an error.
-        if previous is None:
-            return
-        if isinstance(getattr(previous, "mglo", None), moderngl.InvalidObject):
-            return
-        previous.use()
+        """Put back whatever was bound before we started."""
+        restore_target(previous)
 
     # -- previews --------------------------------------------------------
 
