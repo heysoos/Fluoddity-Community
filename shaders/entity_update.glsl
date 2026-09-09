@@ -545,14 +545,18 @@ void reset(uint index){
     int reset_mode = get_particle_reset_mode();
     int cohorts = get_particle_cohorts();
     if(reset_mode == 0) {
-        //GRID: position different cohorts at different places in a grid
-        float spots=float(cohorts);
-        float spot_rows=ceil(aspect*sqrt(spots));
-        vec2 gridcell=vec2(int(cohort_val)%int(spot_rows),(int(cohort_val))/int(spot_rows));
-        //pR(pos,floor(cohort_val)*3.1415*2*spots);
-        //this aspect transform is good enough, but not perfect
-        pos+=1.8*((gridcell)/spot_rows)*vec2(aspect);
-        pos+= 1.8*(1/2.*(1./vec2(spot_rows,spots/spot_rows)-1))*vec2(aspect,1/aspect);
+        //GRID: one cell per cohort, the block centred on the canvas.
+        //Columns are clamped to the COUNT: ceil(aspect*sqrt(1)) is 2 on a wide
+        //canvas, which puts a lone cohort in the left cell of a two-wide grid.
+        int cols=max(1,int(min(ceil(aspect*sqrt(float(cohorts))),float(cohorts))));
+        //ceil, never cohorts/cols - an unrounded row count centres the block
+        //on a fraction of a row whenever the last row is partial.
+        int rows=(cohorts+cols-1)/cols;
+        //The world is 2*aspect wide and 2/aspect tall, so the step carries the
+        //aspect and the offset below is in the step's own units.
+        vec2 cell_step=1.8*vec2(aspect/float(cols),1.0/(aspect*float(rows)));
+        vec2 cell=vec2(int(cohort_val)%cols,int(cohort_val)/cols);
+        pos+=(cell-0.5*vec2(float(cols-1),float(rows-1)))*cell_step;
     }
     else if(reset_mode == 1) {
         //RANDOM: scatter cohorts randomly across the canvas, homogenous start
