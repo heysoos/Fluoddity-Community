@@ -388,6 +388,13 @@ class _BrushSource:
         self._fbo = None
 
     def ensure(self, width: int, height: int):
+        # Never zero-sized, the same guard FieldBus.ensure carries. A stroke is
+        # aimed at the bus's resolution, and (0, 0) is that bus's resting state
+        # - what __init__ sets and what _release_target puts back - so an empty
+        # or disabled stack reaches here with it and a 0x0 texture is refused as
+        # a colour attachment.
+        width = max(1, int(width))
+        height = max(1, int(height))
         if self._tex is not None and self._tex.size == (width, height):
             return self._tex
         self.release()
