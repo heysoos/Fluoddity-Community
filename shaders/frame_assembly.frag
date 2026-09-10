@@ -316,7 +316,22 @@ void main() {
     if (is_first_frame) {
         vec3 previous_frame = texture(accumulation_buffer, uv).rgb;
         float previous_len = length(previous_frame);
-        previous_frame=safenorm(previous_frame)*sinh(previous_len*TONEMAP_SOFTNESS)/TONEMAP_SOFTNESS;
+        // This sinh UNDOES last frame's asinh so exposure can blend in linear
+        // space, and it is the one unbounded step in a loop that feeds its own
+        // output back: sinh overflows float32 at an argument of 89.4, then
+        // safenorm divides inf by inf and mints NaN, which the canvas-side
+        // scrub never sees because this buffer is not the canvas. The slider
+        // reaches TONEMAP_SOFTNESS 5, so an accumulated length of ~18 is
+        // enough.
+        //
+        // The bound is on the QUOTIENT, not on the argument: the divide by
+        // TONEMAP_SOFTNESS comes after, so a softness below 1 multiplies the
+        // result and an argument that is safe on its own overflows anyway -
+        // at 0.1 a clamped sinh(88) is still ten times too large.
+        const float SAFE_MAX = 3.0e38;
+        float stretched = min(sinh(min(previous_len*TONEMAP_SOFTNESS, 88.0))
+                              / TONEMAP_SOFTNESS, SAFE_MAX);
+        previous_frame=safenorm(previous_frame)*stretched;
         previous_frame/=BRIGHTNESS_CONSTANT;
         fragColor = vec4(mix(current_color,previous_frame,EXPOSURE-.0001), 1.0);
     } else {
