@@ -10,6 +10,7 @@ from services import RuleManager, EntityPicker, VideoRecorderService, ConfigSave
 from services.thumb_cache import file_loader
 from services.field_handler import FieldHandler
 from services.parameter_lock_service import ParameterLockService
+from services.tiled_wrap import wrap_camera_position
 from utilities.paths import initialize_user_data, get_user_physics_configs_dir, get_app_physics_configs_dir, get_screenshots_dir
 from state import load_preferences, save_preferences, SimState
 from state.audio_in_state import to_dict as rig_to_dict
@@ -1581,11 +1582,12 @@ class App:
         sweep_mode = ui_state.sim.parameter_sweeps_enabled
         sweep_reticle_pos = (sweep_reticle_x, sweep_reticle_y)
 
-        # Reposition camera when leaving tiling mode
+        # Reposition camera when leaving tiling mode. The wrap is the IDENTITY
+        # inside one canvas period - see services/tiled_wrap.
         if (self.prev_view_option == view_modes.CAMERA_TILED
                 and ui_state.sim.current_view_option != view_modes.CAMERA_TILED):
-            ui_state.camera.position[0] = np.fmod(ui_state.camera.position[0] + 100.0, 2.0) - 1.0
-            ui_state.camera.position[1] = np.fmod(ui_state.camera.position[1] + 100.0, 2.0) - 1.0
+            ui_state.camera.position[0] = wrap_camera_position(ui_state.camera.position[0])
+            ui_state.camera.position[1] = wrap_camera_position(ui_state.camera.position[1])
         self.prev_view_option = ui_state.sim.current_view_option
 
         # 6. Run simulation if going
