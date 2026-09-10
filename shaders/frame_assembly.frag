@@ -74,6 +74,28 @@ vec2 screen_to_canvas_uv(vec2 screen_uv) {
     return (world_pos/2.+.5);
 }
 
+// The inverse for a frame RASTERISED by cam_brush.vert, which is a different
+// transform from the one above. There are two families of view: 0/3/4 hand a
+// canvas-sized texture to camera.vert, which applies the camera at DISPLAY
+// time, and screen_to_canvas_uv inverts that; 1/2/5 bake the camera into the
+// particle raster, mapping entity space by entity_to_ndc = (1/sqrt(ca),
+// sqrt(ca)) and then by the letterbox fit. Inverting one with the other's
+// formula stretches the result by the ratio between them - which is exactly
+// zero on a square canvas, and is why this only shows up at other aspects.
+//
+// tiling_scale IS entity_to_ndc * letterbox, already computed on the host by
+// camera.py::tiling_scale and uploaded every frame, so no new uniform is
+// needed and the two cannot drift apart.
+vec2 particle_screen_to_canvas_uv(vec2 screen_uv) {
+    vec2 ndc = screen_uv * 2.0 - 1.0;
+    vec2 world_pos = ndc * camera_zoom + camera_position * vec2(1, -1);
+    world_pos *= tiling_scale;
+    // Entity space to canvas UV: undo entity_to_ndc, then map [-1,1] to [0,1].
+    float ca = canvas_resolution.x / canvas_resolution.y;
+    world_pos *= vec2(1.0 / sqrt(ca), sqrt(ca));
+    return world_pos * 0.5 + 0.5;
+}
+
 // Convert canvas texture coordinates to screen UV coordinates
 // Inverse of screen_to_canvas_uv
 vec2 canvas_uv_to_screen(vec2 canvas_uv) {
@@ -271,7 +293,7 @@ void main() {
     // persistent trail field sampled through the same camera transform, colored the
     // way the Canvas view colors it (hue = flow direction, value = flow magnitude).
     if (view_mode == 5 && TRAIL_OVERLAY_STRENGTH > 0.0) {
-        vec2 trail_uv = screen_to_canvas_uv(uv);
+        vec2 trail_uv = particle_screen_to_canvas_uv(uv);
         if (clamp(trail_uv, vec2(0.0), vec2(1.0)) == trail_uv) {
             vec4 t = texture(trail_tex, trail_uv);
             vec3 trail_col = 8.0 * hsv2rgb(vec3(atan(t.y, t.x) / 2.0 / 3.1415,
