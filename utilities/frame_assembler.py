@@ -179,8 +179,11 @@ class FrameAssembler:
         tryset(self.resources['shader'], 'strafe_field_checked', strafe_field_checked)
         tryset(self.resources['shader'], 'draw_target_overlay_opacity', draw_target_overlay_opacity)
 
-        # Render to accumulation buffer
+        # Render to accumulation buffer. The pass REPLACES the target, so it owns
+        # its blend state: the sim's trail deposit leaves additive blending on,
+        # and inheriting it adds every frame onto the last.
         self.resources['accumulation_fbo'].use()
+        self.ctx.disable(moderngl.BLEND)
         #no need to clear the buffer, it's handled in frame_assembly.frag (is_first_frame)
         #if is_first_frame:
         #    self.resources['accumulation_fbo'].clear()
