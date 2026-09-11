@@ -13,7 +13,7 @@ from services.brains import REGISTRY, BrainLayout, default_layout
 from services.brains.layout_moves import (LayoutBounds, candidate_moves,
                                           propose_layout_move)
 
-FOURIER = default_layout()                      # fourier-n10
+FOURIER = default_layout()                      # fourier-n10+c2
 GABOR = REGISTRY["gabor"].layout_from_settings({})
 LENIA = REGISTRY["lenia"].layout_from_settings({})
 
@@ -39,14 +39,14 @@ def test_one_integer_of_structure_moves_by_one():
     integer, so +-1 on it is the whole operator set."""
     assert _ops(FOURIER) == ["grow", "shrink"]
     grow = _by_op(FOURIER, "grow")
-    assert grow.child.signature() == "fourier-n11"
-    assert grow.child.length == 8 * 11
+    assert grow.child.signature() == "fourier-n11+c2"
+    assert grow.child.length == 10 * 11
     shrink = _by_op(FOURIER, "shrink")
-    assert shrink.child.signature() == "fourier-n9"
+    assert shrink.child.signature() == "fourier-n9+c2"
 
 
 def test_every_unit_modality_moves():
-    for lay, grown in ((GABOR, "gabor-n13"), (LENIA, "lenia-n13")):
+    for lay, grown in ((GABOR, "gabor-n13+c2"), (LENIA, "lenia-n13+c2")):
         assert _by_op(lay, "grow").child.signature() == grown
 
 
@@ -78,21 +78,22 @@ def test_the_users_width_bound_narrows_it_further():
 def test_the_float_budget_is_checked_before_a_layout_is_built():
     """BrainLayout.__post_init__ RAISES past MAX_BRAIN_FLOATS, so a proposal
     that would cross it must never reach the constructor."""
-    bounds = LayoutBounds(max_floats=8 * 10)      # exactly the parent's size
+    bounds = LayoutBounds(max_floats=FOURIER.length)  # exactly the parent's size
     assert _ops(FOURIER, bounds) == ["shrink"]
 
 
 def test_a_banned_pair_is_skipped():
-    banned = {("fourier-n10", "fourier-n11")}
+    banned = {("fourier-n10+c2", "fourier-n11+c2")}
     got = {propose_layout_move(FOURIER, LayoutBounds(), _rng(), banned)
            .child.signature() for _ in range(20)}
-    assert got == {"fourier-n9"}
+    assert got == {"fourier-n9+c2"}
 
 
 def test_when_every_move_is_banned_it_returns_nothing():
     """The caller runs an ordinary expedition instead. It must not fall back
     to a worse move and it must not raise."""
-    banned = {("fourier-n10", "fourier-n11"), ("fourier-n10", "fourier-n9")}
+    banned = {("fourier-n10+c2", "fourier-n11+c2"),
+             ("fourier-n10+c2", "fourier-n9+c2")}
     assert propose_layout_move(FOURIER, LayoutBounds(), _rng(), banned) is None
 
 

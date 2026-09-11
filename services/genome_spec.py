@@ -17,13 +17,13 @@ from dataclasses import dataclass
 import numpy as np
 
 from services.brains import BrainLayout, default_layout, get
-from services.genome import N_CENTERS
 
 FREQ_SCALE = 3.0
 AMP_SCALE = 1.0
 EPS = 1e-4
 
-DIM = N_CENTERS * 8  # 80
+# The default layout's width, which the fixed specs below are built at.
+DIM = default_layout().length
 
 
 def _active(layout: BrainLayout | None):

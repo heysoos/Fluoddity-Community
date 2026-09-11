@@ -51,6 +51,6 @@ def test_zero_physics_genes_reproduce_the_current_origin_exactly():
 
 def test_a_brain_spec_entry_is_shorter_than_a_brain_physics_entry():
     """The signature difference is what tells the driver to pad with zeros."""
-    assert BRAIN_SPEC.signature() == "brain:80"
-    assert BRAIN_PHYSICS_SPEC.signature() == "brain:80,physics:8"
+    assert BRAIN_SPEC.signature() == "brain:100"
+    assert BRAIN_PHYSICS_SPEC.signature() == "brain:100,physics:8"
     assert BRAIN_PHYSICS_SPEC.dim == BRAIN_SPEC.dim + len(PHYSICS_PARAMS)

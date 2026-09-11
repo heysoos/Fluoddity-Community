@@ -97,7 +97,7 @@ def test_swapping_the_program_re_uploads_without_a_new_frame(rig):
     assert counts[ENTITY_ONLY] == 1
     before = s.entity_update_program
 
-    s.realloc_brain_buffers(layout_from_signature("mlp-n16.16-a0.0"))
+    s.realloc_brain_buffers(layout_from_signature("mlp-n16.16-a0.0+c2"))
     assert s.entity_update_program is not before, (
         "this test is vacuous unless the program really changed")
 

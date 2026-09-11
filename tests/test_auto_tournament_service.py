@@ -346,7 +346,10 @@ def test_population_is_written_into_the_tournament_service():
     svc.start("coral")
     svc.update()
     assert len(ts.population) == 4
-    assert all(g.shape == (10, 8) for g in ts.population)
+    from services.brains import default_layout, get
+    lay = default_layout()
+    row = get("fourier").unit_floats(lay)
+    assert all(g.shape == (lay.shape[0], row) for g in ts.population)
     assert ts.is_dirty()
 
 
@@ -375,7 +378,8 @@ def test_checkpoint_state_roundtrip():
     assert st["generation"] == 1
     assert st["prompt"] == "coral"
     assert st["settings"]["grid"] == 2
-    assert st["genome_spec_signature"] == "brain:80"
+    from services.brains import default_layout
+    assert st["genome_spec_signature"] == f"brain:{default_layout().length}"
 
     svc2, _ = make()
     svc2.restore(st)

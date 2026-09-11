@@ -24,14 +24,15 @@ from services.brains import REGISTRY, crossover, get, mutate
 MODALITIES = sorted(REGISTRY)
 
 # Which floats of ONE unit are SCALES, read off each modality's *_param_at.
-#   fourier.glsl  frequency(4), amplitude(4)          -> k < 4
-#   gabor.glsl    centre(4), freq(4), amp(4), sg, ph  -> 4 <= k < 8 or k == 12
-#   lenia.glsl    projection(4), amp(4), mu, sigma    -> k < 4 or k == 9
-#   mlp.glsl      every weight and bias is a scalar   -> none
+#   fourier.glsl  frequency(4), amplitude(4), colour(2)          -> k < 4
+#   gabor.glsl    centre(4), freq(4), amp(4), sg, ph, colour(2)  -> 4 <= k < 8 or k == 12
+#   lenia.glsl    projection(4), amp(4), mu, sigma, colour(2)    -> k < 4 or k == 9
+#   mlp.glsl      every weight and bias is a scalar              -> none
+# Colour amplitudes OFFSET, like the amplitudes beside them.
 EXPECTED_SCALES = {
-    "fourier": (8, {0, 1, 2, 3}),
-    "gabor": (14, {4, 5, 6, 7, 12}),
-    "lenia": (10, {0, 1, 2, 3, 9}),
+    "fourier": (10, {0, 1, 2, 3}),
+    "gabor": (16, {4, 5, 6, 7, 12}),
+    "lenia": (12, {0, 1, 2, 3, 9}),
     "mlp": (None, set()),
 }
 
@@ -163,10 +164,12 @@ def test_mlp_crosses_over_per_gene():
 
 
 def test_fourier_keeps_its_presentation():
-    """genome_spec.decode hands Fourier back as (N, 8) and callers index it by
-    centre, so these operators must not flatten it underneath them."""
+    """genome_spec.decode hands Fourier back as one row per centre and callers
+    index it by centre, so these operators must not flatten it underneath
+    them."""
     lay = layout("fourier")
     rng = np.random.default_rng(6)
-    g = np.zeros((lay.shape[0], 8), np.float32)
-    assert mutate(g, 0.2, rng, lay).shape == (lay.shape[0], 8)
-    assert crossover(g, g, rng, lay).shape == (lay.shape[0], 8)
+    row = get("fourier").unit_floats(lay)
+    g = np.zeros((lay.shape[0], row), np.float32)
+    assert mutate(g, 0.2, rng, lay).shape == (lay.shape[0], row)
+    assert crossover(g, g, rng, lay).shape == (lay.shape[0], row)

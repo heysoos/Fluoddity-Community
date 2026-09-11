@@ -29,10 +29,10 @@ K = 4
 # The lengths and signatures every archive on disk was written under. A
 # change here is a change to what those files mean.
 HISTORICAL = {
-    "fourier": ("fourier-n10", 80),
-    "gabor": ("gabor-n12", 168),
-    "lenia": ("lenia-n12", 120),
-    "mlp": ("mlp-n16-a0", 148),
+    "fourier": ("fourier-n10+c2", 100),
+    "gabor": ("gabor-n12+c2", 192),
+    "lenia": ("lenia-n12+c2", 144),
+    "mlp": ("mlp-n16-a0+c2", 182),
 }
 
 
@@ -271,16 +271,18 @@ def _wide_fourier(k):
 
 
 def test_a_wide_fourier_brain_presents_as_n_by_stride():
-    """A Fourier centre is 8 + K floats, and every caller that reshapes by
+    """A Fourier centre is 8 + 2 + K floats, and every caller that reshapes by
     centre has to agree - the tournament reseeds through present()."""
     from services.genome_spec import present, random_genome_for
 
     wide = _wide_fourier(1)
+    row = REGISTRY["fourier"].unit_floats(wide)
+    assert row == 8 + 2 + 1
     g = random_genome_for(np.random.default_rng(0), wide)
-    assert g.shape == (wide.shape[0], 9)
+    assert g.shape == (wide.shape[0], row)
     assert g.size == wide.length
     z = present(np.zeros(wide.length, np.float32), wide)
-    assert z.shape == (wide.shape[0], 9)
+    assert z.shape == (wide.shape[0], row)
 
 
 def test_the_tournament_survives_adding_an_input_to_a_fourier_brain():
@@ -307,7 +309,7 @@ def test_readback_of_a_wide_fourier_brain_keeps_its_centres():
     wide = _wide_fourier(2)
     rule = np.arange(wide.length, dtype=np.float32)
     out = readback_rule(_Buf(rule), wide)
-    assert out.shape == (wide.shape[0], 10)
+    assert out.shape == (wide.shape[0], REGISTRY["fourier"].unit_floats(wide))
     assert np.array_equal(out.reshape(-1), rule)
 
 

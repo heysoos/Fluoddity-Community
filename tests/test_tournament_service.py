@@ -1,6 +1,12 @@
 import numpy as np
+from services.brains import default_layout, get
 from services.tournament_service import TournamentService
-from services.genome import GENOME_SHAPE
+
+# The default layout's presentation, now (10, unit_floats) with the colour
+# outputs folded in - services.genome.GENOME_SHAPE is the legacy (10, 8).
+_DEFAULT_LAYOUT = default_layout()
+GENOME_SHAPE = (_DEFAULT_LAYOUT.shape[0],
+               get(_DEFAULT_LAYOUT.modality).unit_floats(_DEFAULT_LAYOUT))
 
 
 def make_service(seed=0):
@@ -96,8 +102,8 @@ def test_undo_restores_previous_population():
 def test_pack_rule_bytes_layout():
     svc = make_service()
     data = svc.pack_rule_bytes()
-    assert len(data) == 16 * 320   # 16 genomes * 80 floats * 4 bytes
-    arr = np.frombuffer(data, dtype=np.float32).reshape(16, 10, 8)
+    assert len(data) == 16 * svc.layout.length * 4
+    arr = np.frombuffer(data, dtype=np.float32).reshape(16, *GENOME_SHAPE)
     assert np.array_equal(arr[7], svc.population[7])
 
 

@@ -16,18 +16,25 @@ numbers DO NOT transfer and must not be copied in. What transfers is scale-free:
 Lenia growth bands are consistently narrow, roughly sigma/mu ~ 0.1, which is what
 SIGMA_MAX encodes relative to MU_SCALE.
 
-Layout, 10 floats per bump: projection(4), amplitude(4), mu, sigma.
+Layout per bump: projection(4), amplitude(4), mu, sigma, colour(2), then the
+audio weights.
 """
 from __future__ import annotations
 
 import numpy as np
 
 from services.brains import (AUDIO_INPUTS_SETTING, AUDIO_SCALE_SETTING,
-                             BrainLayout, Setting, audio_inputs_of, register,
+                             COLOUR_GAIN, BrainLayout, Setting,
+                             audio_inputs_of, colour_outputs_of, register,
                              unit_scale_mask)
 
-# Before any audio weights, which extend the projection.
+# Before the colour amplitudes and any audio weights, which extend the
+# projection.
 FLOATS_PER_BUMP = 10
+
+
+def _stride(layout: BrainLayout) -> int:
+    return FLOATS_PER_BUMP + layout.colour_outputs + layout.audio_inputs
 W_SCALE = 3.0
 AMP_SCALE = 1.0
 MU_SCALE = 2.0
@@ -68,36 +75,45 @@ class LeniaModality:
     def layout_from_settings(self, s: dict) -> BrainLayout:
         n = int(s.get("bumps", 12))
         k = audio_inputs_of(s)
-        return BrainLayout("lenia", (n,), (FLOATS_PER_BUMP + k) * n, scales=(
+        c = colour_outputs_of(s)
+        return BrainLayout("lenia", (n,), (FLOATS_PER_BUMP + c + k) * n, scales=(
             ("mu_scale", float(s.get("mu_scale", MU_SCALE))),
             ("sigma_max", float(s.get("sigma_max", SIGMA_MAX))),
             ("w_scale", float(s.get("w_scale", W_SCALE))),
             ("audio_scale", float(s.get("audio_scale",
                                         AUDIO_SCALE_SETTING.default))),
-        ), audio_inputs=k)
+        ), audio_inputs=k, colour_outputs=c)
 
-    # One bump is 10 floats: projection(4), amplitude(4), mu, sigma, then the
-    # audio weights. The projection, sigma and audio SCALE - see lenia.glsl's
-    # lenia_param_at. mu does NOT: it is a LOCATION on the u axis, and scaling
-    # would pin a band centred near zero at zero forever.
+    # One bump is projection(4), amplitude(4), mu, sigma, then the colour
+    # amplitudes, then the audio weights. The projection, sigma and audio
+    # SCALE - see lenia.glsl's lenia_param_at. mu does NOT: it is a LOCATION
+    # on the u axis, and scaling would pin a band centred near zero at zero
+    # forever.
     UNIT_FLOATS = FLOATS_PER_BUMP
     SCALE_OFFSETS = frozenset({0, 1, 2, 3, 9})
     # The OUTGOING half - see fourier.py. projection(4) comes first.
     AMPLITUDE_SLICE = (4, 8)
 
     def unit_floats(self, layout: BrainLayout):
-        return FLOATS_PER_BUMP + layout.audio_inputs
+        return _stride(layout)
 
     def scale_mask(self, layout: BrainLayout):
-        stride = self.unit_floats(layout)
+        stride = _stride(layout)
+        first_audio = FLOATS_PER_BUMP + layout.colour_outputs
         return unit_scale_mask(layout, stride, self.SCALE_OFFSETS
-                               | set(range(FLOATS_PER_BUMP, stride)))
+                               | set(range(first_audio, stride)))
 
     def audio_weight_index(self, layout: BrainLayout) -> np.ndarray:
         n, k = layout.shape[0], layout.audio_inputs
-        stride = FLOATS_PER_BUMP + k
-        return (np.arange(n)[:, None] * stride + FLOATS_PER_BUMP
-                + np.arange(k)[None, :]).reshape(-1)
+        return (np.arange(n)[:, None] * _stride(layout) + FLOATS_PER_BUMP
+                + layout.colour_outputs + np.arange(k)[None, :]).reshape(-1)
+
+    def colour_index(self, layout: BrainLayout):
+        at = np.arange(layout.shape[0]) * _stride(layout) + FLOATS_PER_BUMP
+        return at, at + 1
+
+    def axial_index(self, layout: BrainLayout) -> np.ndarray:
+        return np.arange(layout.shape[0]) * _stride(layout) + 4
 
     @staticmethod
     def _scales(layout: BrainLayout):
@@ -115,7 +131,9 @@ class LeniaModality:
         out[:, 8] = mus * np.tanh(z[:, 8])
         half = 0.5 * (s_hi - SIGMA_MIN)
         out[:, 9] = SIGMA_MIN + half * (1.0 + np.tanh(z[:, 9]))
-        out[:, 10:] = ws * layout.scale("audio_scale", 1.0) * np.tanh(z[:, 10:])
+        a0 = FLOATS_PER_BUMP + layout.colour_outputs
+        out[:, 10:a0] = COLOUR_GAIN * AMP_SCALE * np.tanh(z[:, 10:a0])
+        out[:, a0:] = ws * layout.scale("audio_scale", 1.0) * np.tanh(z[:, a0:])
         return out.reshape(-1).astype(np.float32)
 
     def encode(self, params: np.ndarray, layout: BrainLayout):
@@ -128,7 +146,9 @@ class LeniaModality:
         raw[:, 8] = p[:, 8] / mus
         half = 0.5 * (s_hi - SIGMA_MIN)
         raw[:, 9] = (p[:, 9] - SIGMA_MIN) / half - 1.0
-        raw[:, 10:] = p[:, 10:] / (ws * max(layout.scale("audio_scale", 1.0),
+        a0 = FLOATS_PER_BUMP + layout.colour_outputs
+        raw[:, 10:a0] = p[:, 10:a0] / (COLOUR_GAIN * AMP_SCALE)
+        raw[:, a0:] = p[:, a0:] / (ws * max(layout.scale("audio_scale", 1.0),
                                             EPS))
         n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))

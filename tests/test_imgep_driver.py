@@ -220,7 +220,7 @@ def test_entries_record_their_generation_tile_and_spec():
     d.tell(d.ask(4), moving(4))
     assert {e.tile for e in arc.entries} == {0, 1, 2, 3}
     assert all(e.gen == 7 for e in arc.entries)
-    assert all(e.spec == "brain:80" for e in arc.entries)
+    assert all(e.spec == BRAIN_SPEC.signature() for e in arc.entries)
 
 
 def test_refresh_runs_every_generation():
@@ -274,7 +274,7 @@ def test_physics_genes_are_stored_as_absolute_values():
     stored = arc.physics[[e.tile for e in arc.entries].index(0)]
     for j, (n, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
         assert stored[j] == pytest.approx(expected[n], abs=1e-4)
-    assert all(e.spec == "brain:80,physics:8" for e in arc.entries)
+    assert all(e.spec == BRAIN_PHYSICS_SPEC.signature() for e in arc.entries)
 
 
 def test_a_brain_only_parent_gets_zero_physics_genes_in_a_physics_run():
@@ -434,15 +434,20 @@ def test_an_expedition_builds_a_fresh_optimizer_per_goal():
 def test_an_expedition_seeds_near_the_archive_entry_matching_the_goal():
     """Sampled with p proportional to fit^alpha rather than argmaxed, so this is
     a statement about the mode, not about one draw. The goal here IS entry 2's
-    own descriptor, so entry 2 should dominate."""
+    own descriptor, so the entries carrying it should dominate - the fixture
+    admits an exact duplicate of it, and the two split the picks by chance."""
     d, arc, _ = seeded(expansion_between=0)
     goal = arc.embeddings[2].copy()
+    matching = {i for i in range(len(arc))
+                if np.allclose(arc.embeddings[i], goal, atol=1e-4)}
+    assert 2 in matching
     picks = []
     for _ in range(200):
         d.start_expedition_with(goal, kind="chase", text="")
         picks.append(d._x0_index)
-    assert max(set(picks), key=picks.count) == 2
-    assert picks.count(2) > 100, f"entry 2 must dominate, got {picks.count(2)}/200"
+    assert max(set(picks), key=picks.count) in matching
+    hits = sum(p in matching for p in picks)
+    assert hits > 100, f"the goal's own entries must dominate, got {hits}/200"
 
 
 def test_expedition_fitness_ranks_the_tile_that_matches_the_goal_first():

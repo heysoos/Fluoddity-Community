@@ -240,7 +240,7 @@ def test_a_legacy_mlp_config_shows_as_one_row(gui):
     assert ui.state.brain.settings == {"hidden": 24, "activation": 2}
     from ui.brain_window import layout_for
 
-    assert layout_for("mlp", ui.state.brain.settings).signature() == "mlp-n24-a2"
+    assert layout_for("mlp", ui.state.brain.settings).signature() == "mlp-n24-a2+c2"
 
 
 def test_a_held_layer_width_commits_on_release(gui):

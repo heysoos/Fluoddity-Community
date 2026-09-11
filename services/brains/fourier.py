@@ -12,15 +12,20 @@ from __future__ import annotations
 import numpy as np
 
 from services.brains import (AUDIO_INPUTS_SETTING, AUDIO_SCALE_SETTING,
-                             BrainLayout, Setting, audio_inputs_of, register,
+                             COLOUR_GAIN, BrainLayout, Setting,
+                             audio_inputs_of, colour_outputs_of, register,
                              unit_scale_mask)
 
 FREQ_SCALE = 3.0
 AMP_SCALE = 1.0
 EPS = 1e-4
-# One centre: frequency(4), amplitude(4), then its audio weights, which
-# extend the frequency vector and decode as frequencies do.
+# One centre: frequency(4), amplitude(4), then its colour amplitudes, then its
+# audio weights, which extend the frequency vector and decode as frequencies do.
 BASE_FLOATS = 8
+
+
+def _stride(layout: BrainLayout) -> int:
+    return BASE_FLOATS + layout.colour_outputs + layout.audio_inputs
 
 
 class FourierModality:
@@ -43,41 +48,56 @@ class FourierModality:
     def layout_from_settings(self, s: dict) -> BrainLayout:
         n = int(s.get("centers", 10))
         k = audio_inputs_of(s)
-        return BrainLayout("fourier", (n,), (BASE_FLOATS + k) * n, scales=(
+        c = colour_outputs_of(s)
+        return BrainLayout("fourier", (n,), (BASE_FLOATS + c + k) * n, scales=(
             ("freq_scale", float(s.get("freq_scale", FREQ_SCALE))),
             ("low_freq_bias", float(s.get("low_freq_bias", 0.0))),
             ("audio_scale", float(s.get("audio_scale",
                                         AUDIO_SCALE_SETTING.default))),
-        ), audio_inputs=k)
+        ), audio_inputs=k, colour_outputs=c)
 
-    # One centre is 8 floats: frequency(4) then amplitude(4), then the audio
-    # weights. Frequency and audio SCALE - see fourier.glsl's
-    # fourier_param_at, which is the same split per particle.
+    # One centre is frequency(4) then amplitude(4), then the colour
+    # amplitudes, then the audio weights. Frequency and audio SCALE - see
+    # fourier.glsl's fourier_param_at, which is the same split per particle.
     UNIT_FLOATS = BASE_FLOATS
     SCALE_OFFSETS = frozenset({0, 1, 2, 3})
     # The OUTGOING half: the evaluation is `out += amplitude * basis`, so a
     # centre with zero amplitude contributes nothing and a grown brain is
-    # bit-identical to its parent at birth.
+    # bit-identical to its parent at birth. The colour amplitudes are silenced
+    # beside it.
     AMPLITUDE_SLICE = (4, 8)
 
     def unit_floats(self, layout: BrainLayout):
-        return BASE_FLOATS + layout.audio_inputs
+        return _stride(layout)
 
     def scale_mask(self, layout: BrainLayout):
-        stride = self.unit_floats(layout)
+        stride = _stride(layout)
+        first_audio = BASE_FLOATS + layout.colour_outputs
         return unit_scale_mask(layout, stride, self.SCALE_OFFSETS
-                               | set(range(BASE_FLOATS, stride)))
+                               | set(range(first_audio, stride)))
 
     def audio_weight_index(self, layout: BrainLayout) -> np.ndarray:
         n, k = layout.shape[0], layout.audio_inputs
-        stride = BASE_FLOATS + k
-        return (np.arange(n)[:, None] * stride + BASE_FLOATS
-                + np.arange(k)[None, :]).reshape(-1)
+        return (np.arange(n)[:, None] * _stride(layout) + BASE_FLOATS
+                + layout.colour_outputs + np.arange(k)[None, :]).reshape(-1)
 
     def audio_z_index(self, layout: BrainLayout) -> np.ndarray:
-        """z is [all frequencies, all amplitudes, all audio weights]."""
+        """z is [all frequencies, all amplitudes, all audio weights, all
+        colour amplitudes]."""
         n, k = layout.shape[0], layout.audio_inputs
         return BASE_FLOATS * n + np.arange(n * k)
+
+    def colour_index(self, layout: BrainLayout):
+        """Hue multiplies the axial basis and saturation the lateral one."""
+        at = np.arange(layout.shape[0]) * _stride(layout) + BASE_FLOATS
+        return at, at + 1
+
+    def colour_z_index(self, layout: BrainLayout) -> np.ndarray:
+        n, k, c = layout.shape[0], layout.audio_inputs, layout.colour_outputs
+        return (BASE_FLOATS + k) * n + np.arange(n * c)
+
+    def axial_index(self, layout: BrainLayout) -> np.ndarray:
+        return np.arange(layout.shape[0]) * _stride(layout) + 4
 
     @staticmethod
     def _bias(t, b):
@@ -101,12 +121,13 @@ class FourierModality:
         return np.sign(y) * (root - (1.0 - b)) / (2.0 * b)
 
     def decode(self, z: np.ndarray, layout: BrainLayout) -> np.ndarray:
-        """(8N,) search vector -> (8N,) flat params in GPU order.
+        """Search vector -> flat params in GPU order.
 
-        z is ordered [all frequencies, all amplitudes]; the GPU wants them
-        interleaved per center. Preserved from genome_spec.decode.
+        z is ordered [all frequencies, all amplitudes, all audio weights, all
+        colour amplitudes]; the GPU wants them interleaved per centre as
+        frequency, amplitude, colour, audio.
         """
-        n, k = layout.shape[0], layout.audio_inputs
+        n, k, c = layout.shape[0], layout.audio_inputs, layout.colour_outputs
         z = np.asarray(z, dtype=np.float32).reshape(-1)
         zb = z[:BASE_FLOATS * n].reshape(n * 2, 4)
         b = float(np.clip(layout.scale("low_freq_bias", 0.0), 0.0, 1.0))
@@ -114,22 +135,28 @@ class FourierModality:
         freq = fs * self._bias(np.tanh(zb[:n]), b)
         amp = AMP_SCALE * np.tanh(zb[n:])
         parts = [freq, amp]
+        if c:
+            zc = z[(BASE_FLOATS + k) * n:(BASE_FLOATS + k + c) * n]
+            parts.append(COLOUR_GAIN * AMP_SCALE * np.tanh(zc.reshape(n, c)))
         if k:
-            za = z[BASE_FLOATS * n:].reshape(n, k)
+            za = z[BASE_FLOATS * n:(BASE_FLOATS + k) * n].reshape(n, k)
             parts.append(fs * layout.scale("audio_scale", 1.0)
                          * self._bias(np.tanh(za), b))
         return np.concatenate(parts, axis=1).astype(np.float32).reshape(-1)
 
     def encode(self, params: np.ndarray, layout: BrainLayout):
-        n, k = layout.shape[0], layout.audio_inputs
-        g = np.asarray(params, dtype=np.float32).reshape(n, BASE_FLOATS + k)
+        n, k, c = layout.shape[0], layout.audio_inputs, layout.colour_outputs
+        g = np.asarray(params, dtype=np.float32).reshape(n, _stride(layout))
         fs = layout.scale("freq_scale", FREQ_SCALE)
         b = float(np.clip(layout.scale("low_freq_bias", 0.0), 0.0, 1.0))
         parts = [self._unbias(g[:, :4] / fs, b), g[:, 4:8] / AMP_SCALE]
         if k:
             # Floored, because the scale legitimately reaches zero.
             a_s = max(layout.scale("audio_scale", 1.0), EPS)
-            parts.append(self._unbias(g[:, BASE_FLOATS:] / (fs * a_s), b))
+            parts.append(self._unbias(g[:, BASE_FLOATS + c:] / (fs * a_s), b))
+        if c:
+            parts.append(g[:, BASE_FLOATS:BASE_FLOATS + c]
+                         / (COLOUR_GAIN * AMP_SCALE))
         raw = np.concatenate([p.reshape(-1) for p in parts])
         n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))
@@ -144,16 +171,26 @@ class FourierModality:
         return ((r[:, 1] * 2.0 - 1.0) * a_scale
                 * layout.scale("audio_scale", 1.0)).astype(np.float32)
 
+    def random_colour(self, rng, layout: BrainLayout) -> np.ndarray:
+        """The colour amplitudes alone, drawn as the motion amplitudes are,
+        at the colour scale."""
+        n, c = layout.shape[0], layout.colour_outputs
+        return ((rng.random((n, c)) * 2.0 - 1.0) * COLOUR_GAIN * AMP_SCALE
+                ).astype(np.float32).reshape(-1)
+
     def random(self, rng, layout: BrainLayout) -> np.ndarray:
         """Mirrors services.genome.random_genome, which biases frequencies low
-        'for smoother base behaviors'. The audio weights are drawn the same
-        way AFTER the historical draws, so a K=0 brain is the one this
-        always produced."""
-        n, k = layout.shape[0], layout.audio_inputs
+        'for smoother base behaviors'. The colour amplitudes, then the audio
+        weights, are drawn AFTER the historical draws, so the motion of a brain
+        is the one this always produced and a wide brain is its deaf self with
+        ears."""
+        n, k, c = layout.shape[0], layout.audio_inputs, layout.colour_outputs
         freq_scale = 1.0 + 2.0 * rng.random((n, 4)) ** 2
         freq = (rng.random((n, 4)) * 2.0 - 1.0) * freq_scale
         amp = rng.random((n, 4)) * 2.0 - 1.0
         parts = [freq, amp]
+        if c:
+            parts.append(self.random_colour(rng, layout).reshape(n, c))
         if k:
             a_scale = 1.0 + 2.0 * rng.random((n, k)) ** 2
             parts.append((rng.random((n, k)) * 2.0 - 1.0) * a_scale

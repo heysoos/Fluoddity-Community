@@ -34,7 +34,7 @@ def _unpack(p, shape):
         layers.append((p[w_off:b_off].reshape(w, fan_in),
                        p[b_off:b_off + w].copy()))
     fan = hidden[-1][3] if hidden else 4
-    return layers, p[out_w:out_b].reshape(4, fan), p[out_b:].copy()
+    return layers, p[out_w:out_b].reshape(4, fan), p[out_b:out_b + 4].copy()
 
 
 def test_growing_the_only_layer_keeps_every_parent_weight():

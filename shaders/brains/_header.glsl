@@ -60,6 +60,21 @@ uniform bool AUDIO_IN_ACTIVE;
 float g_audio[MAX_AUDIO_INPUTS] = float[MAX_AUDIO_INPUTS](
     0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
+// Hue and saturation, beside the four motion outputs every brain_*() returns.
+// Invocation-local like g_audio, so no signature changes: a unit function
+// leaves its share in g_unit_colour, a brain_*() leaves the whole brain's in
+// g_brain_colour, and the caller reads it before evaluating anything else.
+// Mirrored in services/brains/__init__.py as COLOUR_OUTPUTS.
+#define COLOUR_OUTPUTS 2
+vec2 g_unit_colour = vec2(0.0);
+vec2 g_brain_colour = vec2(0.0);
+
+// The mutation hash index of colour float c of unit u: below every audio
+// index, so it moves no motion or audio float's jitter.
+int colour_hash_index(int u, int c) {
+    return -(1 + MAX_BRAIN_FLOATS + u * COLOUR_OUTPUTS + c);
+}
+
 // Per-cohort mutation jitter for one float index, in [-amount, +amount].
 // Deterministic in (cohort, index), so a cohort's variant is stable frame to
 // frame.

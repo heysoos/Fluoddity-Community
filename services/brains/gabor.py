@@ -9,20 +9,26 @@ rules rather than one global interference pattern. It also damps the frequency
 drift the Fourier runs show: a high frequency inside a narrow envelope makes a
 locally intricate response, not global chaos.
 
-Layout, 14 floats per filter: centre(4), frequency(4), amplitude(4), sigma, phase.
+Layout per filter: centre(4), frequency(4), amplitude(4), sigma, phase, colour(2),
+then the audio weights.
 """
 from __future__ import annotations
 
 import numpy as np
 
 from services.brains import (AUDIO_INPUTS_SETTING, AUDIO_SCALE_SETTING,
-                             BrainLayout, Setting, audio_inputs_of, register,
+                             COLOUR_GAIN, BrainLayout, Setting,
+                             audio_inputs_of, colour_outputs_of, register,
                              unit_scale_mask)
 
-# Before any audio weights, which extend the FREQUENCY and never the centre:
-# the envelope measures distance from the centre, and an audio centre would
-# make silence read as a distance.
+# Before the colour amplitudes and any audio weights, which extend the
+# FREQUENCY and never the centre: the envelope measures distance from the
+# centre, and an audio centre would make silence read as a distance.
 FLOATS_PER_FILTER = 14
+
+
+def _stride(layout: BrainLayout) -> int:
+    return FLOATS_PER_FILTER + layout.colour_outputs + layout.audio_inputs
 
 # INPUT SCALE - the typical magnitude of one sensor component, and the only
 # quantity in this modality that has units. Everything spatial is expressed as a
@@ -73,39 +79,47 @@ class GaborModality:
             AUDIO_SCALE_SETTING,
         ]
 
-    # One filter is 14 floats: centre(4), frequency(4), amplitude(4), sigma,
-    # phase, then the audio weights. Frequency, sigma and audio SCALE - see
-    # gabor.glsl's gabor_param_at.
+    # One filter is centre(4), frequency(4), amplitude(4), sigma, phase, then
+    # the colour amplitudes, then the audio weights. Frequency, sigma and
+    # audio SCALE - see gabor.glsl's gabor_param_at.
     UNIT_FLOATS = FLOATS_PER_FILTER
     SCALE_OFFSETS = frozenset({4, 5, 6, 7, 12})
     # The OUTGOING half - see fourier.py. centre(4), frequency(4) come first.
     AMPLITUDE_SLICE = (8, 12)
 
     def unit_floats(self, layout: BrainLayout):
-        return FLOATS_PER_FILTER + layout.audio_inputs
+        return _stride(layout)
 
     def scale_mask(self, layout: BrainLayout):
-        stride = self.unit_floats(layout)
+        stride = _stride(layout)
+        first_audio = FLOATS_PER_FILTER + layout.colour_outputs
         return unit_scale_mask(layout, stride, self.SCALE_OFFSETS
-                               | set(range(FLOATS_PER_FILTER, stride)))
+                               | set(range(first_audio, stride)))
 
     def audio_weight_index(self, layout: BrainLayout) -> np.ndarray:
         n, k = layout.shape[0], layout.audio_inputs
-        stride = FLOATS_PER_FILTER + k
-        return (np.arange(n)[:, None] * stride + FLOATS_PER_FILTER
-                + np.arange(k)[None, :]).reshape(-1)
+        return (np.arange(n)[:, None] * _stride(layout) + FLOATS_PER_FILTER
+                + layout.colour_outputs + np.arange(k)[None, :]).reshape(-1)
+
+    def colour_index(self, layout: BrainLayout):
+        at = np.arange(layout.shape[0]) * _stride(layout) + FLOATS_PER_FILTER
+        return at, at + 1
+
+    def axial_index(self, layout: BrainLayout) -> np.ndarray:
+        return np.arange(layout.shape[0]) * _stride(layout) + 8
 
     def layout_from_settings(self, s: dict) -> BrainLayout:
         n = int(s.get("filters", 12))
         k = audio_inputs_of(s)
-        return BrainLayout("gabor", (n,), (FLOATS_PER_FILTER + k) * n, scales=(
+        c = colour_outputs_of(s)
+        return BrainLayout("gabor", (n,), (FLOATS_PER_FILTER + c + k) * n, scales=(
             ("input_scale", float(s.get("input_scale", INPUT_SCALE))),
             ("freq_cycles", float(s.get("freq_cycles", FREQ_CYCLES))),
             ("envelope_width", float(s.get("envelope_width", 1.0))),
             ("phase_spread", float(s.get("phase_spread", np.pi))),
             ("audio_scale", float(s.get("audio_scale",
                                         AUDIO_SCALE_SETTING.default))),
-        ), audio_inputs=k)
+        ), audio_inputs=k, colour_outputs=c)
 
     @staticmethod
     def _scales(layout: BrainLayout):
@@ -136,7 +150,9 @@ class GaborModality:
         half = 0.5 * (s_hi - s_lo)
         out[:, 12] = s_lo + half * (1.0 + np.tanh(z[:, 12]))
         out[:, 13] = _squash(z[:, 13], ps)
-        out[:, 14:] = _squash(z[:, 14:], fs * layout.scale("audio_scale", 1.0))
+        a0 = FLOATS_PER_FILTER + layout.colour_outputs
+        out[:, 14:a0] = _squash(z[:, 14:a0], COLOUR_GAIN * AMP_SCALE)
+        out[:, a0:] = _squash(z[:, a0:], fs * layout.scale("audio_scale", 1.0))
         return out.reshape(-1).astype(np.float32)
 
     def encode(self, params: np.ndarray, layout: BrainLayout):
@@ -150,7 +166,9 @@ class GaborModality:
         half = 0.5 * (s_hi - s_lo)
         raw[:, 12] = (p[:, 12] - s_lo) / half - 1.0
         raw[:, 13] = p[:, 13] / ps
-        raw[:, 14:] = p[:, 14:] / (fs * max(layout.scale("audio_scale", 1.0),
+        a0 = FLOATS_PER_FILTER + layout.colour_outputs
+        raw[:, 14:a0] = p[:, 14:a0] / (COLOUR_GAIN * AMP_SCALE)
+        raw[:, a0:] = p[:, a0:] / (fs * max(layout.scale("audio_scale", 1.0),
                                             EPS))
         n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))

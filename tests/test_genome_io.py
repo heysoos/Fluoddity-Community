@@ -5,8 +5,11 @@ import pytest
 
 from services.config_saver import ConfigSaver
 from services.genome_io import META_KEY, export_genome, import_genome
+from services.brains import default_layout
 from services.genome_spec import decode
 from state import SimState
+
+WIDTH = default_layout().length
 
 
 @pytest.fixture
@@ -17,7 +20,7 @@ def sim_state():
 def test_exported_file_loads_with_the_normal_config_loader(tmp_path, sim_state):
     """The whole point: an evolved genome must open in the normal single-sim
     view at any resolution, with no new load path."""
-    z = np.random.default_rng(0).normal(0, 0.5, 80).astype(np.float32)
+    z = np.random.default_rng(0).normal(0, 0.5, WIDTH).astype(np.float32)
     p = tmp_path / "creature.json"
     export_genome(p, z, sim_state, {"generation": 42})
 
@@ -30,7 +33,7 @@ def test_exported_file_loads_with_the_normal_config_loader(tmp_path, sim_state):
 
 
 def test_export_records_provenance_metadata(tmp_path, sim_state):
-    z = np.zeros(80, dtype=np.float32)
+    z = np.zeros(WIDTH, dtype=np.float32)
     p = tmp_path / "c.json"
     export_genome(p, z, sim_state, {
         "generation": 7,
@@ -48,13 +51,13 @@ def test_export_records_provenance_metadata(tmp_path, sim_state):
 
 def test_metadata_does_not_break_the_normal_loader(tmp_path, sim_state):
     """from_dict uses .get(), so unknown top-level keys must be ignored."""
-    export_genome(tmp_path / "c.json", np.zeros(80, dtype=np.float32),
+    export_genome(tmp_path / "c.json", np.zeros(WIDTH, dtype=np.float32),
                   sim_state, {"generation": 1})
     assert ConfigSaver().load_from_file(tmp_path / "c.json") is not None
 
 
 def test_import_roundtrips_z(tmp_path, sim_state):
-    z = np.random.default_rng(1).normal(0, 0.6, 80).astype(np.float32)
+    z = np.random.default_rng(1).normal(0, 0.6, WIDTH).astype(np.float32)
     p = tmp_path / "c.json"
     export_genome(p, z, sim_state, {"generation": 3})
     z2, clamped, meta = import_genome(p)

@@ -141,6 +141,16 @@ class PhysicsConfig:
     # existed; a config with a companion _fields.png migrates to brush layers.
     field_stack: dict = field(default_factory=dict)
 
+    def __post_init__(self):
+        # Every way a config arrives - a file, the clipboard, a legacy string,
+        # create_config - lands here, so a rule saved before the colour
+        # outputs existed is widened in exactly one place.
+        from services.brains import upgrade_rule
+
+        rule, self.brain_layout = upgrade_rule(
+            self.rule, self.brain_layout, self.brain_settings)
+        self.rule = np.asarray(rule, dtype=np.float32)
+
     def to_dict(self) -> dict:
         """Convert config to JSON-serializable dict."""
         d = {

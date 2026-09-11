@@ -562,8 +562,9 @@ def migrate_archive(archive_dir) -> Path | None:
     Two directions, because the split has two halves:
 
     DOWN - a pre-modality archive held index.jsonl at the top level. Everything
-    written before brains were swappable is Fourier at 10 centres, so that is
-    the signature it lands under.
+    written before brains were swappable is Fourier at 10 centres with no
+    colour outputs, so that LEGACY signature is the one it lands under, for
+    services.colour_migration to widen.
 
     UP - goals, settings and each run's physics belong to the ARCHIVE, and an
     earlier build filed them beside the entries. One archive holds every brain,
@@ -575,14 +576,15 @@ def migrate_archive(archive_dir) -> Path | None:
     pre-multi-archive layout under archives/default; this one is the level
     below.
     """
-    from services.brains import default_layout
+    from services.brains import default_layout, with_colour_outputs
 
     base = Path(archive_dir)
     moved = None
     try:
         present = [m for m in _LAYOUT_MEMBERS if (base / m).exists()]
         if present:
-            target = base / default_layout().signature()
+            legacy = with_colour_outputs(default_layout(), 0)
+            target = base / legacy.signature()
             if target.exists():
                 # A restored backup sitting beside an already-migrated archive.
                 # Swallowing it into a directory that has contents would merge

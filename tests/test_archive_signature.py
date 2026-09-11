@@ -20,7 +20,7 @@ from services.brains import BrainLayout, default_layout
 
 def test_store_root_is_the_layout_signature(tmp_path):
     store = ArchiveStore(tmp_path, default_layout())
-    assert store.root.name == "fourier-n10"
+    assert store.root.name == default_layout().signature() == "fourier-n10+c2"
     assert store.root.parent == tmp_path
 
 
@@ -42,7 +42,7 @@ def test_archive_brain_column_is_flat_and_follows_the_layout(tmp_path):
 
 def test_default_layout_still_gives_the_fourier_width(tmp_path):
     arc = Archive(store=ArchiveStore(tmp_path, default_layout()))
-    assert arc._brain.shape[1:] == (80,)
+    assert arc._brain.shape[1:] == (default_layout().length,)
 
 
 # ---- migration -------------------------------------------------------------

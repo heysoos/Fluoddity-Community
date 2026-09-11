@@ -104,9 +104,14 @@ def test_a_config_naming_no_brain_is_read_as_the_fourier_it_is():
     another modality was live ran an 80-float genome under a wider layout,
     where apply_rule refuses it without a word. The GENOME is the evidence -
     all 138 unsigned presets in the library are exactly fourier-n10 - so it is
-    handed over under that signature like any other."""
+    handed over under that signature like any other. A real PhysicsConfig,
+    because loading one is what widens the legacy rule."""
+    from services.config_saver import PhysicsConfig
+
+    rule = np.random.default_rng(2).normal(0, 0.3, 80).astype(np.float32)
+    config = PhysicsConfig.from_dict({"rule": rule.tolist()})
     h = _handler()
-    h._restore_brain_settings(_Config(np.zeros(80, np.float32), ""), _UI())
+    h._restore_brain_settings(config, _UI())
     got = h.take_pending_brain_rule(default_layout().signature())
     assert got is not None, "an unsigned Fourier preset handed over nothing"
     assert len(got) == default_layout().length

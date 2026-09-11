@@ -166,7 +166,8 @@ def test_the_count_is_per_gene():
 
 def test_spec_dimension_grows_by_exactly_the_physics_block():
     assert BRAIN_PHYSICS_SPEC.dim == BRAIN_SPEC.dim + PHYSICS_DIM
-    assert BRAIN_PHYSICS_SPEC.signature() == f"brain:80,physics:{PHYSICS_DIM}"
+    assert BRAIN_PHYSICS_SPEC.signature() == \
+        f"brain:{BRAIN_SPEC.dim},physics:{PHYSICS_DIM}"
 
 
 # -- service integration -----------------------------------------------------
@@ -221,9 +222,12 @@ def test_tiles_actually_differ_in_physics():
 
 def test_brains_are_still_the_right_shape_with_physics_on():
     """The brain block must not absorb the physics genes."""
+    from services.brains import get
+
     svc, ts = make(True)
     svc.start("coral")
-    assert all(g.shape == (10, 8) for g in ts.population)
+    unit = get(ts.layout.modality).unit_floats(ts.layout)
+    assert all(g.shape == (10, unit) for g in ts.population)
     assert len(ts.population) == ts.tiles
 
 

@@ -10,11 +10,10 @@ Layout, packed by `layer_spans`:
 
     for each hidden layer l:  W_l (w_l rows of fan_in_l), then b_l (w_l)
     then W_out (4 rows of w_k), then b_out (4)
+    then W_col (2 rows of w_k), then b_col (2)      - hue, saturation
 
-At one hidden layer that is W1 (H rows of 4), b1 (H), W_out (4 rows of H),
-b_out (4) - 9H + 4 floats, byte for byte what this modality has always
-produced. Nothing about a depth-1 brain changes, which is what lets every
-existing genome, archive and config keep working with no migration.
+The colour block comes LAST, so every motion offset is the one a genome from
+before it existed used, and widening one is an append.
 
 W_out is stored OUTPUT-MAJOR (4 rows of w_k) rather than unit-major. The shader
 accumulates one final-layer unit at a time into a vec4, so it reads the four
@@ -26,8 +25,10 @@ from __future__ import annotations
 import numpy as np
 
 from services.brains import (AUDIO_INPUTS_SETTING, AUDIO_SCALE_SETTING,
-                             MAX_BRAIN_FLOATS, BrainLayout, Setting,
-                             audio_inputs_of, register, unit_scale_mask)
+                             COLOUR_GAIN, COLOUR_OUTPUTS, MAX_BRAIN_FLOATS,
+                             BrainLayout, Setting, audio_inputs_of,
+                             colour_outputs_of, colour_weight_index, register,
+                             unit_scale_mask)
 from services.brains import settings_of as registry_settings_of
 
 ACTIVATIONS = ("tanh", "sin", "gelu")
@@ -81,14 +82,16 @@ def scratch_width(shape, audio_inputs: int = 0) -> int:
     return SCRATCH_BUCKETS[-1]
 
 
-def layer_spans(shape, audio_inputs: int = 0):
+def layer_spans(shape, audio_inputs: int = 0,
+                colour_outputs: int = COLOUR_OUTPUTS):
     """-> (hidden, out_w, out_b, length) for an interleaved `shape`.
 
     `hidden` is one (w_off, b_off, fan_in, width) per hidden layer. The offsets
     are what mlp.glsl recomputes, so the two must agree - that is what
     tests/test_mlp_forward_gl.py compares, rather than a second reading of this
     comment. The first layer's fan-in is the four taps plus the audio
-    channels, whose columns come LAST in each row.
+    channels, whose columns come LAST in each row. `length` includes the
+    colour block, which colour_spans() locates.
     """
     off = 0
     hidden = []
@@ -105,16 +108,30 @@ def layer_spans(shape, audio_inputs: int = 0):
     off += OUT_DIM * fan_in
     out_b = off
     off += OUT_DIM
+    off += int(colour_outputs) * (fan_in + 1)
     return hidden, out_w, out_b, off
 
 
-def _weight_mask(shape, audio_inputs: int = 0) -> np.ndarray:
+def colour_spans(shape, audio_inputs: int = 0) -> tuple[int, int, int]:
+    """-> (col_w, col_b, fan): where the colour block's weights (COLOUR_OUTPUTS
+    rows of `fan`, output-major like W_out) and its biases start."""
+    hidden, _out_w, out_b, _n = layer_spans(shape, audio_inputs)
+    fan = hidden[-1][3] if hidden else IN_DIM + int(audio_inputs)
+    col_w = out_b + OUT_DIM
+    return col_w, col_w + COLOUR_OUTPUTS * fan, fan
+
+
+def _weight_mask(shape, audio_inputs: int = 0,
+                 colour_outputs: int = COLOUR_OUTPUTS) -> np.ndarray:
     """True where a float is a WEIGHT (W_SCALE), False where it is a bias."""
-    hidden, out_w, out_b, n = layer_spans(shape, audio_inputs)
+    hidden, out_w, out_b, n = layer_spans(shape, audio_inputs, colour_outputs)
     m = np.zeros(n, dtype=bool)
     for w_off, b_off, _fan_in, _w in hidden:
         m[w_off:b_off] = True
     m[out_w:out_b] = True
+    if colour_outputs:
+        col_w, col_b, _fan = colour_spans(shape, audio_inputs)
+        m[col_w:col_b] = True
     return m
 
 
@@ -129,7 +146,8 @@ def _audio_index(shape, audio_inputs: int) -> np.ndarray:
             + np.arange(k)[None, :]).reshape(-1)
 
 
-def _shape_from_layers(layers, audio_inputs: int = 0) -> tuple[int, ...]:
+def _shape_from_layers(layers, audio_inputs: int = 0,
+                       colour_outputs: int = COLOUR_OUTPUTS) -> tuple[int, ...]:
     """An interleaved shape from [[width, activation], ...], clamped.
 
     Clamps rather than raises, because the input may be a config written by a
@@ -158,7 +176,8 @@ def _shape_from_layers(layers, audio_inputs: int = 0) -> tuple[int, ...]:
                      for i, v in enumerate(shape))
 
     def fits(c):
-        return layer_spans(capped(c), audio_inputs)[3] <= MAX_BRAIN_FLOATS
+        return layer_spans(capped(c), audio_inputs,
+                           colour_outputs)[3] <= MAX_BRAIN_FLOATS
 
     if fits(MAX_WIDTH):
         return tuple(shape)
@@ -217,16 +236,30 @@ class MLPModality:
             # is the whole of the migration.
             layers = [[int(s.get("hidden", 16)), int(s.get("activation", 0))]]
         k = audio_inputs_of(s)
-        shape = _shape_from_layers(layers, k)
-        return BrainLayout("mlp", shape, layer_spans(shape, k)[3], scales=(
+        c = colour_outputs_of(s)
+        shape = _shape_from_layers(layers, k, c)
+        return BrainLayout("mlp", shape, layer_spans(shape, k, c)[3], scales=(
             ("w_scale", float(s.get("w_scale", W_SCALE))),
             ("b_scale", float(s.get("b_scale", B_SCALE))),
             ("audio_scale", float(s.get("audio_scale",
                                         AUDIO_SCALE_SETTING.default))),
-        ), audio_inputs=k)
+        ), audio_inputs=k, colour_outputs=c)
 
     def audio_weight_index(self, layout: BrainLayout) -> np.ndarray:
         return _audio_index(layout.shape, layout.audio_inputs)
+
+    def colour_index(self, layout: BrainLayout):
+        """Each row of W_col plus its bias: the same shape as axial_index."""
+        col_w, col_b, fan = colour_spans(layout.shape, layout.audio_inputs)
+        hue = np.concatenate([col_w + np.arange(fan), [col_b]])
+        sat = np.concatenate([col_w + fan + np.arange(fan), [col_b + 1]])
+        return hue, sat
+
+    def axial_index(self, layout: BrainLayout) -> np.ndarray:
+        """W_out's axial row, then its bias."""
+        _col_w, _col_b, fan = colour_spans(layout.shape, layout.audio_inputs)
+        _h, out_w, out_b, _n = layer_spans(layout.shape, layout.audio_inputs)
+        return np.concatenate([out_w + np.arange(fan), [out_b]])
 
     @staticmethod
     def _scales(layout: BrainLayout):
@@ -369,6 +402,15 @@ class MLPModality:
             dst[:, :cols] = src[:, :cols]
             dst[:, cols:] = 0.0
             out[c_ob:c_ob + OUT_DIM] = p[p_ob:p_ob + OUT_DIM]
+            # The colour block is read off the same last layer as W_out.
+            if parent.colour_outputs and child.colour_outputs:
+                pcw, pcb, _pf = colour_spans(parent.shape, parent.audio_inputs)
+                ccw, ccb, _cf = colour_spans(child.shape, child.audio_inputs)
+                csrc = p[pcw:pcb].reshape(COLOUR_OUTPUTS, p_fan)
+                cdst = out[ccw:ccb].reshape(COLOUR_OUTPUTS, c_fan)
+                cdst[:, :cols] = csrc[:, :cols]
+                cdst[:, cols:] = 0.0
+                out[ccb:ccb + COLOUR_OUTPUTS] = p[pcb:pcb + COLOUR_OUTPUTS]
         return out.astype(np.float32)
 
     def layout_uniforms(self, layout: BrainLayout) -> dict:
@@ -377,7 +419,10 @@ class MLPModality:
         already knows."""
         flat = [int(v) for v in layout.shape[: 2 * MAX_DEPTH]]
         flat += [0] * (2 * MAX_DEPTH - len(flat))
-        return {"BRAIN_DEPTH": len(layout.shape) // 2, "BRAIN_LAYERS": flat}
+        col_w = (colour_spans(layout.shape, layout.audio_inputs)[0]
+                 if layout.colour_outputs else layout.length)
+        return {"BRAIN_DEPTH": len(layout.shape) // 2, "BRAIN_LAYERS": flat,
+                "MLP_COLOUR_OFF": int(col_w)}
 
     def shader_defines(self, layout: BrainLayout) -> dict:
         """What mlp.glsl must be COMPILED with while `layout` runs, NOT uniforms.
@@ -456,18 +501,22 @@ class MLPModality:
         would not be a normalisation but a CAP - see random()."""
         z = np.asarray(z, dtype=np.float32).reshape(-1)
         w, b = self._scales(layout)
-        scale = np.where(_weight_mask(layout.shape, layout.audio_inputs), w, b)
+        scale = np.where(_weight_mask(layout.shape, layout.audio_inputs,
+                                      layout.colour_outputs), w, b)
         audio = _audio_index(layout.shape, layout.audio_inputs)
         scale[audio] *= layout.scale("audio_scale", 1.0)
+        scale[colour_weight_index(layout)] *= COLOUR_GAIN
         return (scale * np.tanh(z)).astype(np.float32)
 
     def encode(self, params: np.ndarray, layout: BrainLayout):
         p = np.asarray(params, dtype=np.float32).reshape(-1)
         w, b = self._scales(layout)
-        scale = np.where(_weight_mask(layout.shape, layout.audio_inputs),
+        scale = np.where(_weight_mask(layout.shape, layout.audio_inputs,
+                                      layout.colour_outputs),
                          w, max(b, EPS))
         audio = _audio_index(layout.shape, layout.audio_inputs)
         scale[audio] *= max(layout.scale("audio_scale", 1.0), EPS)
+        scale[colour_weight_index(layout)] *= COLOUR_GAIN
         raw = p / scale
         n_clamped = int(np.count_nonzero(np.abs(raw) >= 1.0 - EPS))
         z = np.arctanh(np.clip(raw, -1.0 + EPS, 1.0 - EPS))

@@ -41,8 +41,9 @@ def test_raising_freq_scale_scales_exactly_the_frequency_floats():
     base = mod.base_scales()
     out = mod.modulated({**base, "freq_scale": base["freq_scale"] * 2.0})
 
-    g_in = params.reshape(-1, 8)
-    g_out = np.asarray(out).reshape(-1, 8)
+    row = m.unit_floats(layout)
+    g_in = params.reshape(-1, row)
+    g_out = np.asarray(out).reshape(-1, row)
     assert np.allclose(g_out[:, :4], g_in[:, :4] * 2.0, atol=1e-2)
     assert np.allclose(g_out[:, 4:], g_in[:, 4:], atol=1e-3)
 

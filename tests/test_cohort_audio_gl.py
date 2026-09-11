@@ -147,7 +147,7 @@ def test_masking_survives_the_program_a_layout_change_swaps_in(ctx):
     only this one would catch is the deep variant alone losing it.
     """
     row = ca.COHORT_AUDIO_PARAMS.index("GLOBAL_FORCE_MULT")
-    deep = "mlp-n16.8-a0.0"
+    deep = "mlp-n16.8-a0.0+c2"  # a layout must carry colour outputs to reach the GPU
 
     off = _identity()
     on = _identity()

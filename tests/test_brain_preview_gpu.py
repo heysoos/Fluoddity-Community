@@ -155,8 +155,9 @@ void main(){
 
     if name == "mlp":
         # The output bias belongs to no hidden unit, so it is the difference.
+        # Only the four motion floats - the colour block trails it.
         h = layout.shape[0]
-        summed = summed + p[9 * h:]
+        summed = summed + p[9 * h:9 * h + 4]
     scale = max(float(np.abs(whole).mean()), 1e-6)
     err = float(np.abs(whole - summed).mean()) / scale
     assert err < 1e-4, f"{name}: units sum to {err:.3%} away from the whole"

@@ -134,7 +134,7 @@ def test_a_ban_already_in_the_archive_is_honoured():
     from tests.test_layout_expedition import a_driver
 
     d, arc, _ts = a_driver()
-    for child in ("fourier-n9", "fourier-n11"):
+    for child in ("fourier-n9+c2", "fourier-n11+c2"):
         arc.record_layout_move(default_layout().signature(), child,
                                "grow", 1, 0, False, 0)
     assert d.start_expedition() is True

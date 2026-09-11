@@ -41,7 +41,7 @@ def test_main_import_order_works():
         "from ui import UI; "
         "import command_handler; "
         "from services.brains import default_layout; "
-        "assert default_layout().signature() == 'fourier-n10'"
+        "assert default_layout().signature() == 'fourier-n10+c2'"
     )
     r = subprocess.run(
         [sys.executable, "-c", code], cwd=ROOT,

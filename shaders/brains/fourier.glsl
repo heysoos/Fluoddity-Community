@@ -1,7 +1,8 @@
 // Random-Fourier-features brain. Bit-exact with the original fourier_noise()
 // at 10 centers: same basis, same index-derived phase offsets.
 //
-// Layout, 8 floats per centre: frequency(4), amplitude(4).
+// Layout per centre: frequency(4), amplitude(4), colour(2). The hue amplitude
+// multiplies the axial basis and the saturation amplitude the lateral one.
 //
 // MUTATION LIVES HERE, not in the generic brain_add/brain_mul helpers, because
 // the original is STRUCTURED in ways a per-float helper cannot express:
@@ -23,8 +24,8 @@
 // The seed the original hashed: centers[4].frequency.xy + centers[7].amplitude.yx
 // + centers[1].frequency.zw, plus the cohort. The modulo keeps a short layout
 // (Centers < 8) in range; at the legacy 10 centres it is the identity.
-// One centre: frequency(4), amplitude(4), then its audio weights.
-int fourier_stride() { return 8 + BRAIN_AUDIO_IN; }
+// One centre: frequency(4), amplitude(4), colour(2), then its audio weights.
+int fourier_stride() { return 8 + COLOUR_OUTPUTS + BRAIN_AUDIO_IN; }
 
 // ONE scalar scales the whole frequency vector, audio components included.
 float fourier_freq_factor(int i, float mseed) {
@@ -46,17 +47,23 @@ float fourier_mut_seed(uint base, int n) {
 // One centre's mutation. Shared by the SSBO path and the writeback so the two
 // cannot drift apart - they must agree exactly or click-to-adopt copies a rule
 // the particle was never running.
-void fourier_mutate(inout vec4 freq, inout vec4 amp, int i, float mseed) {
+// The colour amplitudes draw their own hash, so the motion jitter is the one
+// a centre had before they existed.
+void fourier_mutate(inout vec4 freq, inout vec4 amp, inout vec2 colour,
+                    int i, float mseed) {
     amp += g_brain_mut * (-1.0 + 2.0 * hash4(-.5 + vec2(float(-i) + mseed, float(i))));
     freq *= fourier_freq_factor(i, mseed);
+    colour += g_brain_mut * (-1.0 + 2.0 * hash4(vec2(float(i) + mseed, float(-i) - 7.0)).xy);
 }
 
-void fourier_load(uint base, int i, out vec4 freq, out vec4 amp) {
+void fourier_load(uint base, int i, out vec4 freq, out vec4 amp,
+                  out vec2 colour) {
     uint o = base + uint(i * fourier_stride());
     freq = vec4(brain_params[o + 0u], brain_params[o + 1u],
                 brain_params[o + 2u], brain_params[o + 3u]);
     amp  = vec4(brain_params[o + 4u], brain_params[o + 5u],
                 brain_params[o + 6u], brain_params[o + 7u]);
+    colour = vec2(brain_params[o + 8u], brain_params[o + 9u]);
 }
 
 // The basis, over a centre held in registers rather than read from the buffer.
@@ -68,13 +75,13 @@ void fourier_load(uint base, int i, out vec4 freq, out vec4 amp) {
 // The audio half of a centre's phase, unmutated: the caller applies the
 // frequency factor, since it is the same scalar.
 float fourier_audio_phase(uint base, int i) {
-    uint o = base + uint(i * fourier_stride()) + 8u;
+    uint o = base + uint(i * fourier_stride()) + 8u + uint(COLOUR_OUTPUTS);
     float s = 0.0;
     for (int k = 0; k < BRAIN_AUDIO_IN; k++) s += g_audio[k] * brain_params[o + uint(k)];
     return s;
 }
 
-vec4 fourier_eval(vec4 f, vec4 a, int i, vec4 x, float fa) {
+vec4 fourier_eval(vec4 f, vec4 a, vec2 c, int i, vec4 x, float fa) {
     float phase = dot(x, f);
     if (BRAIN_AUDIO_IN > 0) phase += fa;
     float po = 2.0 * float(i) * 0.6283 + a.w * 3.14159;
@@ -84,18 +91,20 @@ vec4 fourier_eval(vec4 f, vec4 a, int i, vec4 x, float fa) {
         sin(phase * 2.0 + po * 1.3),
         cos(phase * 2.0 + po * 0.5)
     );
+    g_unit_colour = c * basis.xy;
     return a * basis;
 }
 
 vec4 fourier_unit_at(uint base, int i, vec4 x, float mseed) {
     vec4 f, a;
-    fourier_load(base, i, f, a);
+    vec2 c;
+    fourier_load(base, i, f, a, c);
     float fa = (BRAIN_AUDIO_IN > 0) ? fourier_audio_phase(base, i) : 0.0;
     if (g_brain_mut != 0.0) {
-        fourier_mutate(f, a, i, mseed);
+        fourier_mutate(f, a, c, i, mseed);
         fa *= fourier_freq_factor(i, mseed);
     }
-    return fourier_eval(f, a, i, x, fa);
+    return fourier_eval(f, a, c, i, x, fa);
 }
 
 // The same unit, for a caller with no seed to hand (the Brain Inspector).
@@ -110,9 +119,12 @@ vec4 brain_fourier(uint base, vec4 x) {
     // Computed once from the UNMUTATED rule, as the original did before its
     // loop - recomputing it per unit is six SSBO reads and a hash each time.
     float mseed = (g_brain_mut == 0.0) ? 0.0 : fourier_mut_seed(base, n);
+    vec2 colour = vec2(0.0);
     for (int i = 0; i < n; i++) {
         result += fourier_unit_at(base, i, x, mseed);
+        colour += g_unit_colour;
     }
+    g_brain_colour = colour;
     return result;
 }
 
@@ -130,10 +142,11 @@ void fourier_write(uint base, uint out_base) {
     for (int i = 0; i < n; i++) {
         if (i * s + s - 1 >= BRAIN_LEN) break;
         vec4 f, a;
-        fourier_load(base, i, f, a);
+        vec2 c;
+        fourier_load(base, i, f, a, c);
         float ff = 1.0;
         if (g_brain_mut != 0.0) {
-            fourier_mutate(f, a, i, mseed);
+            fourier_mutate(f, a, c, i, mseed);
             ff = fourier_freq_factor(i, mseed);
         }
         uint o = out_base + uint(i * s);
@@ -145,9 +158,12 @@ void fourier_write(uint base, uint out_base) {
         particle_brains[o + 5u] = a.y;
         particle_brains[o + 6u] = a.z;
         particle_brains[o + 7u] = a.w;
+        particle_brains[o + 8u] = c.x;
+        particle_brains[o + 9u] = c.y;
+        uint ao = 8u + uint(COLOUR_OUTPUTS);
         for (int k = 0; k < BRAIN_AUDIO_IN; k++) {
-            particle_brains[o + 8u + uint(k)] =
-                brain_params[base + uint(i * s) + 8u + uint(k)] * ff;
+            particle_brains[o + ao + uint(k)] =
+                brain_params[base + uint(i * s) + ao + uint(k)] * ff;
         }
     }
 }
@@ -160,14 +176,16 @@ float fourier_param_at(uint base, int i) {
     int c = i / s;
     int k = i - c * s;
     vec4 f, a;
-    fourier_load(base, c, f, a);
+    vec2 col;
+    fourier_load(base, c, f, a, col);
     float ff = 1.0;
     if (g_brain_mut != 0.0) {
         float mseed = fourier_mut_seed(base, BRAIN_SHAPE.x);
-        fourier_mutate(f, a, c, mseed);
+        fourier_mutate(f, a, col, c, mseed);
         ff = fourier_freq_factor(c, mseed);
     }
     if (k < 4) return f[k];
     if (k < 8) return a[k - 4];
+    if (k < 8 + COLOUR_OUTPUTS) return col[k - 8];
     return brain_params[base + uint(i)] * ff;
 }

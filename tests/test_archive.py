@@ -216,7 +216,9 @@ def test_pruning_keeps_arrays_and_entries_in_lockstep():
     a.prune_to_capacity()
     assert len(a) == 3
     assert a.embeddings.shape == (3, 4)
-    assert a.brains.shape == (3, 80)   # flat and layout-wide, not Fourier (10, 8)
+    # Flat and layout-wide, not Fourier (10, 8).
+    from services.brains import default_layout
+    assert a.brains.shape == (3, default_layout().length)
     assert a.physics.shape == (3, 8)
     assert len(a.entries) == 3
 

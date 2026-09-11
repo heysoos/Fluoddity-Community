@@ -14,7 +14,7 @@ that straddled the originals.
 import numpy as np
 
 from services.brains import (BrainLayout, brain_rng, crossover, default_layout,
-                             mutate)
+                             generated_brains, mutate)
 from services.genome_spec import random_genome_for
 
 
@@ -63,12 +63,13 @@ class TournamentService:
 
         Drawn afresh rather than from the instance generator so that a modality
         round trip returns to where it started instead of to wherever breeding
-        and resets had since carried the stream. Same formula and same seed
-        mapping as generated_brains, so a tile and a no-rule cohort brain are
-        the same draw.
+        and resets had since carried the stream. Drawn BY generated_brains, so
+        a tile and a no-rule cohort brain are the same draw.
         """
-        rng = brain_rng(self.seed)
-        return [random_genome_for(rng, self._layout) for _ in range(self.tiles)]
+        from services.genome_spec import present
+
+        return [present(b, self._layout)
+                for b in generated_brains(self._layout, self.seed, self.tiles)]
 
     def set_layout(self, layout) -> None:
         """Repopulate for a new brain layout.

@@ -116,6 +116,13 @@ def get_archives_root(user_dir=None) -> Path:
     return base / "archives"
 
 
+def get_legacy_archives_root(user_dir=None) -> Path:
+    """Where archives are copied before the colour-output migration touches
+    them. Beside archives/, so the app never lists it."""
+    base = Path(user_dir) if user_dir is not None else get_user_data_dir()
+    return base / "archives_legacy"
+
+
 def migrate_legacy_archive(user_dir=None) -> Path:
     """Move the legacy single archive under archives/default.
 
@@ -218,6 +225,12 @@ def initialize_user_data():
     get_screenshots_dir().mkdir(exist_ok=True)
     get_videos_dir().mkdir(exist_ok=True)
     migrate_legacy_archive()
+    try:
+        from services.colour_migration import migrate_colour_outputs
+
+        migrate_colour_outputs(get_archives_root(), get_legacy_archives_root())
+    except Exception as exc:  # noqa: BLE001 - launching matters more
+        print(f"[Fluoddity] colour-output archive migration failed ({exc})")
     # Deliberately not mkdir'd: an empty models/ here is indistinguishable
     # from a finished migration, and would stop the next launch adopting the
     # weights that are still beside the app.

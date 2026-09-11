@@ -6,12 +6,9 @@ struct Entity {
     vec2 pos;
     vec2 vel;
     float size;
-    float hue;         // The brain's axial term, scaled by HUE_SENSITIVITY
-    float sat;         // Stored ONLY because reset() draws a desaturated
-                       // particle where the update writes 0.8, and a hazard
-                       // respawns them continuously. Free: the vec2 members
-                       // force an 8-byte alignment, so this slot is padding
-                       // otherwise.
+    float hue;         // The brain's hue output, scaled by HUE_SENSITIVITY
+    float sat;         // The brain's saturation output, mapped into 0..1.
+                       // reset() draws a desaturated particle.
     float padding;
 };  // Total: 32 bytes (8 floats)
 // The brain buffer and its uniforms live in shaders/brains/_header.glsl,
@@ -642,6 +639,8 @@ void calculate_entity_behavior( vec2 L,vec2 R, vec2 axis, uint base, vec2 pos, f
 
     //calculate black box noise values
     vec4 baseterm= black_box(L,R,base);
+    //Colour reads the base evaluation alone; the mirror call overwrites it.
+    vec2 colour_out = g_brain_colour;
     vec4 mirrorterm=black_box(y_reflect(R),y_reflect(L),base);
     if(DISABLE_SYMMETRY){mirrorterm = vec4(0);}//disable symmetry by zeroing the mirror term
 
@@ -653,7 +652,7 @@ void calculate_entity_behavior( vec2 L,vec2 R, vec2 axis, uint base, vec2 pos, f
     force=forward*force.x*cohort_audio(calculate_setting(get_particle_axial_force(),pos,cohort),CA_AXIAL_FORCE,cohort)+left*force.y*cohort_audio(calculate_setting(get_particle_lateral_force(),pos,cohort),CA_LATERAL_FORCE,cohort);
     strafe = forward*strafe.x*cohort_audio(calculate_setting(get_particle_axial_force(),pos,cohort),CA_AXIAL_FORCE,cohort) + left * strafe.y * cohort_audio(calculate_setting(get_particle_lateral_force(),pos,cohort),CA_LATERAL_FORCE,cohort);
 
-    color = baseterm.xy+(mirrorterm.xy); //Just an arbitrary function of blackbox output. Reuses force terms.
+    color = colour_out; //the brain's (hue, saturation) outputs
     return;
 }
 
@@ -748,11 +747,8 @@ void main() {
     //The particle stores hue and saturation; the vertex shaders supply the
     //brightness and alpha, which were the same constants for every particle.
     e.hue = get_particle_hue_sensitivity()*col_params.x;//hue can be anything
-    //Hardcoding saturation for now.
-    //low saturation arises naturally due to a mix of hues from different particles.
-    //Use col_params.y for something else?
-    //e.sat = sin(col_params.y)/2.+.5;//saturation must be 0..1
-    e.sat = .8;
+    //A zero saturation output lands on 0.8 (0.693147 = atanh(0.6)).
+    e.sat = 0.5 + 0.5*tanh(clamp(col_params.y + 0.693147, -10.0, 10.0));
 
     if(get_particle_color_by_cohort()) {e.hue = hash(vec2(floor(cohort)));} //just assign a random hue to each cohort
 

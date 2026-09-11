@@ -102,9 +102,9 @@ def test_a_saved_file_actually_loads_from_disk(name, tmp_path):
 
 
 def test_two_brains_of_one_width_are_told_apart():
-    """The reason a width check alone is not enough. Fourier at 21 centres and
-    Gabor at 12 filters are both 168 floats."""
-    f, g = layout("fourier", centers=21), layout("gabor", filters=12)
+    """The reason a width check alone is not enough. Fourier at 8 centres and
+    Gabor at 5 filters are both 80 floats, unit strides 10 and 16 alike."""
+    f, g = layout("fourier", centers=8), layout("gabor", filters=5)
     assert f.length == g.length
     assert f.signature() != g.signature()
 
@@ -198,7 +198,7 @@ def test_a_deep_mlp_config_round_trips():
     back = PhysicsConfig.from_dict(json.loads(
         ConfigSaver().create_config(SimState(), genome, layout=lay).to_json()))
 
-    assert back.brain_layout == "mlp-n8.6.4-a0.1.2"
+    assert back.brain_layout == "mlp-n8.6.4-a0.1.2+c2"
     # The decode scales ride along with the structure: a saved rule is decoded,
     # and anything re-encoding it divides by them.
     assert back.brain_settings["layers"] == DEEP_LAYERS
@@ -209,7 +209,7 @@ def test_a_deep_mlp_config_round_trips():
 
 def test_a_config_written_before_the_stack_still_loads():
     """8 user configs are stamped mlp-n16-a0 with hidden/activation settings.
-    They must open as a one-layer stack with no migration step."""
+    They must open as a one-layer stack, widened to +c2 on load."""
     from command_handler import CommandHandler
     from state.ui_state import UIState
     from ui.brain_window import layout_for
@@ -226,7 +226,7 @@ def test_a_config_written_before_the_stack_still_loads():
 
     assert ui_state.brain.modality == "mlp"
     got = layout_for("mlp", ui_state.brain.settings)
-    assert got.signature() == "mlp-n16-a0" and got.length == 148
+    assert got.signature() == "mlp-n16-a0+c2" and got.length == 182
 
 
 @pytest.mark.parametrize("sig", ["mlp-n8.6.4-a0.1.2", "gabor-n7",
@@ -238,6 +238,7 @@ def test_the_signature_wins_when_the_settings_disagree(sig):
     refuses the genome on width. The signature is what the rule was decoded
     under, so it is what wins; the settings only carry the scales it omits."""
     from command_handler import CommandHandler
+    from services.brains import upgrade_signature
     from state.ui_state import UIState
     from ui.brain_window import layout_for
 
@@ -251,7 +252,8 @@ def test_the_signature_wins_when_the_settings_disagree(sig):
         CommandHandler.__new__(CommandHandler), cfg, ui_state)
 
     assert layout_for(ui_state.brain.modality,
-                      ui_state.brain.settings).signature() == sig
+                      ui_state.brain.settings).signature() == \
+        upgrade_signature(sig)
 
 
 def test_a_signature_this_build_cannot_rebuild_says_so(capsys):
@@ -274,10 +276,13 @@ def test_a_signature_this_build_cannot_rebuild_says_so(capsys):
 
 def test_a_legacy_file_with_no_signature_still_loads():
     """Every config written before brains were swappable is an 80-float
-    Fourier, and those must keep opening."""
+    Fourier, and those must keep opening - widened to fourier-n10+c2 with
+    its motion floats unchanged."""
     d = PhysicsConfig().to_dict()
     d["rule"] = [0.1] * 80
     del d["brain_layout"]
     back = PhysicsConfig.from_dict(d)
-    assert back.brain_layout == ""
-    assert np.asarray(back.rule).reshape(-1).size == 80
+    assert back.brain_layout == "fourier-n10+c2"
+    rule = np.asarray(back.rule).reshape(-1)
+    assert rule.size == 100
+    assert np.allclose(rule.reshape(10, 10)[:, :8], 0.1)

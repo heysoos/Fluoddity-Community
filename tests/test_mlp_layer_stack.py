@@ -13,11 +13,12 @@ fixed input grid. A trajectory diff cannot validate a shader change here.
 import numpy as np
 import pytest
 
-from services.brains import (MAX_BRAIN_FLOATS, layout_from_signature,
-                             settings_of, unit_count)
+from services.brains import (COLOUR_GAIN, COLOUR_OUTPUTS, MAX_BRAIN_FLOATS,
+                             layout_from_signature, settings_of, unit_count)
 from services.brains.mlp import (ACTIVATIONS, B_SCALE, MAX_DEPTH, MAX_WIDTH,
                                  SCRATCH_BUCKETS, W_SCALE, MLPModality,
-                                 _weight_mask, layer_spans, scratch_width)
+                                 _weight_mask, colour_spans, layer_spans,
+                                 scratch_width)
 
 M = MLPModality()
 
@@ -43,16 +44,19 @@ def layout(layers):
 @pytest.mark.parametrize("h", [4, 16, 32, 48])
 @pytest.mark.parametrize("act", range(len(ACTIVATIONS)))
 def test_depth_one_is_what_it_always_was(h, act):
-    """Length 9h+4, the same field offsets, and the same signature string."""
+    """The MOTION block is 9h+4 at the same offsets; the colour block is
+    appended after it, so the signature gains +c2."""
     lay = layout([[h, act]])
     assert lay.shape == (h, act)
-    assert lay.length == 9 * h + 4
-    assert lay.signature() == f"mlp-n{h}-a{act}"
+    assert lay.length == 9 * h + 4 + 2 * h + 2
+    assert lay.signature() == f"mlp-n{h}-a{act}+c2"
 
     hidden, out_w, out_b, n = layer_spans(lay.shape)
-    assert n == 9 * h + 4
+    assert n == 9 * h + 4 + 2 * h + 2
     assert hidden == [(0, 4 * h, 4, h)]     # W1 at 0, b1 at 4h, fan-in 4
     assert (out_w, out_b) == (5 * h, 9 * h)  # W_out at 5h, b_out at 9h
+    col_w, col_b, fan = colour_spans(lay.shape)
+    assert (col_w, col_b, fan) == (9 * h + 4, 11 * h + 4, h)
 
 
 @pytest.mark.parametrize("h", [4, 16, 48])
@@ -65,7 +69,10 @@ def test_depth_one_decodes_exactly_as_it_used_to(h):
     want[: 4 * h] = W_SCALE * np.tanh(z[: 4 * h])              # W1
     want[4 * h: 5 * h] = B_SCALE * np.tanh(z[4 * h: 5 * h])    # b1
     want[5 * h: 9 * h] = W_SCALE * np.tanh(z[5 * h: 9 * h])    # W_out
-    want[9 * h:] = B_SCALE * np.tanh(z[9 * h:])                # b_out
+    want[9 * h: 9 * h + 4] = B_SCALE * np.tanh(z[9 * h: 9 * h + 4])  # b_out
+    col_w, col_b, _fan = colour_spans(lay.shape)
+    want[col_w:col_b] = COLOUR_GAIN * W_SCALE * np.tanh(z[col_w:col_b])
+    want[col_b:] = COLOUR_GAIN * B_SCALE * np.tanh(z[col_b:])
     assert np.array_equal(M.decode(z, lay), want.astype(np.float32))
 
 
@@ -98,6 +105,7 @@ def test_the_length_is_the_sum_of_the_blocks(layers):
     for prev, w in zip(widths, widths[1:]):
         want += prev * w + w
     want += 4 * widths[-1] + 4
+    want += COLOUR_OUTPUTS * widths[-1] + COLOUR_OUTPUTS  # the colour block
     assert lay.length == want <= MAX_BRAIN_FLOATS
 
 
@@ -111,6 +119,7 @@ def test_the_signature_round_trips(layers):
     got = settings_of(lay)
     assert got.pop("layers") == layers
     assert got.pop("audio_inputs") == 0
+    assert got.pop("colour_outputs") == COLOUR_OUTPUTS
     assert got == {"w_scale": W_SCALE, "b_scale": B_SCALE, "audio_scale": 1.0}
 
 
@@ -145,16 +154,20 @@ def test_encode_inverts_decode(layers):
 
 @pytest.mark.parametrize("layers", STACKS, ids=ids)
 def test_the_rails_are_flat_across_every_layer(layers):
-    """decode is flat, so the full +/-W_SCALE range is reachable in EVERY layer.
-    A fan-in gain folded in here would be a cap, not a normalisation."""
+    """decode is flat, so the full +/-W_SCALE range is reachable in EVERY
+    motion layer. A fan-in gain folded in here would be a cap, not a
+    normalisation. The colour block shares the rail at COLOUR_GAIN times it."""
     lay = layout(layers)
     hidden, out_w, out_b, n = layer_spans(lay.shape)
+    col_w, col_b, _fan = colour_spans(lay.shape)
     p = M.decode(np.full(n, 12.0, np.float32), lay)     # tanh saturated
     for w_off, b_off, _fan, _w in hidden:
         assert np.allclose(p[w_off:b_off], W_SCALE, atol=1e-5)
         assert np.allclose(p[b_off:b_off + _w], B_SCALE, atol=1e-5)
     assert np.allclose(p[out_w:out_b], W_SCALE, atol=1e-5)
-    assert np.allclose(p[out_b:], B_SCALE, atol=1e-5)
+    assert np.allclose(p[out_b:col_w], B_SCALE, atol=1e-5)
+    assert np.allclose(p[col_w:col_b], COLOUR_GAIN * W_SCALE, atol=1e-5)
+    assert np.allclose(p[col_b:], COLOUR_GAIN * B_SCALE, atol=1e-5)
 
 
 @pytest.mark.parametrize("layers", STACKS, ids=ids)
@@ -212,6 +225,8 @@ def test_the_defaults_decode_exactly_as_the_constants_always_did():
     lay = M.layout_from_settings({"layers": [[16, 0]]})
     z = np.random.default_rng(3).normal(0.0, 0.5, lay.length).astype(np.float32)
     want = np.where(_weight_mask(lay.shape), W_SCALE, B_SCALE) * np.tanh(z)
+    col_w, col_b, _fan = colour_spans(lay.shape)
+    want[col_w:] *= COLOUR_GAIN                       # the colour block's rail
     assert np.allclose(M.decode(z, lay), want.astype(np.float32))
 
 

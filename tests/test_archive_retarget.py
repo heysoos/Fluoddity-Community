@@ -10,12 +10,12 @@ import numpy as np
 
 from services.archive import Archive, Candidate
 from services.archive_io import ArchiveStore
-from services.brains import BrainLayout, default_layout
+from services.brains import default_layout, get
 
 DIM = 8
 FOURIER = default_layout()
-GABOR = BrainLayout("gabor", (12,), 168)
-WIDE = BrainLayout("gabor", (25,), 350)
+GABOR = get("gabor").layout_from_settings({"filters": 12})
+WIDE = get("gabor").layout_from_settings({"filters": 25})
 
 
 def _cand(vec, brain_len):
@@ -166,10 +166,10 @@ def test_retargeting_to_a_layout_leaves_no_directory_until_it_admits(tmp_path):
                   layout=FOURIER)
 
     arc.retarget(GABOR)
-    assert "gabor-n12" in arc.stores, "the store itself is still opened"
-    assert not (base / "gabor-n12").exists(), (
+    assert GABOR.signature() in arc.stores, "the store itself is still opened"
+    assert not (base / GABOR.signature()).exists(), (
         "merely visiting a layout created its directory")
 
     arc.store.append_index({"id": 0, "novelty": 1.0})
-    assert (base / "gabor-n12").is_dir(), "an admission must create it"
+    assert (base / GABOR.signature()).is_dir(), "an admission must create it"
     arc.close()

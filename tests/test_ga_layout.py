@@ -156,9 +156,10 @@ def test_crossover_treats_z_as_unstructured():
     z[GAOptimizer.ELITES // 2: GAOptimizer.ELITES] = 5.0
     opt.tell(z, fit)
     kids = opt.ask(8)[GAOptimizer.ELITES:]
-    blocks = kids.reshape(len(kids), -1, 8)
+    stride = REGISTRY["fourier"].unit_floats(lay)
+    blocks = kids.reshape(len(kids), -1, stride)
     split = ((blocks > 0).any(axis=2) & (blocks < 0).any(axis=2))
-    assert split.any(), "every 8-float block came whole - still crossing rows"
+    assert split.any(), "every unit-wide block came whole - still crossing rows"
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))

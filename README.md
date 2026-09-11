@@ -86,7 +86,7 @@ Width is not free past one layer. A deep stack needs scratch space the shader is
 
 Whatever the modality, the size settings fix the search dimension printed under the stack. Creatures are **not** portable between layouts, so changing anything that alters the parameter count resets the search and switches to that layout's archive — a width drag applies once you release it, everything else immediately. Presets record the brain they were saved under, including the whole stack, and switch to it on load.
 
-The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space. For a deep MLP the tiles are the **last** hidden layer's units, the only ones that add up to the output. `Slice` chooses the plane and **Reseed plane** redraws the random one; `Output` chooses what is drawn, defaulting to a random projection of all four outputs into red, green and blue. The single-value views are blue for negative and orange for positive.
+The **Inspector** in the same window draws what the brain actually computes — one tile per unit, plus the whole brain — as a 2D slice through the 4D sensor space. For a deep MLP the tiles are the **last** hidden layer's units, the only ones that add up to the output. `Slice` chooses the plane and **Reseed plane** redraws the random one; `Output` chooses what is drawn, defaulting to a random projection of the four motion outputs into red, green and blue; **hue** and **saturation** draw the brain's two colour outputs, which set each particle's colour. The single-value views are blue for negative and orange for positive.
 
 ## Brain Inputs
 

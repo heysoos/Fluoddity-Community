@@ -22,7 +22,7 @@ _BRAINS = ("mlp", "lenia", "gabor", "fourier")
 
 CHANNELS = ("force axial", "force lateral", "strafe axial", "strafe lateral",
             "|force|", "|strafe|", "random projection",
-            "random projection (RGB)")
+            "random projection (RGB)", "hue", "saturation")
 # The two projection entries, which the shader handles by dotting the response
 # with PREVIEW_OUT / PREVIEW_RGB rather than by picking a component. Named
 # explicitly rather than derived from the length: `len(CHANNELS) - 1` was right

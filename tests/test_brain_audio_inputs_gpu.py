@@ -118,11 +118,12 @@ def _pair(m, seed=0):
 
 # ---- NumPy references of the widened formulas, from the spec's table ----
 
-def ref_fourier(p, x, a_in):
-    p = p.reshape(-1, 8 + len(a_in))
+def ref_fourier(p, x, a_in, c):
+    # per centre: freq(4) amp(4) colour(c) audio(K) - colour sits before audio.
+    p = p.reshape(-1, 8 + c + len(a_in))
     out = np.zeros((len(x), 4), np.float64)
     for i, row in enumerate(p):
-        f, a, fa = row[:4], row[4:8], row[8:]
+        f, a, fa = row[:4], row[4:8], row[8 + c:]
         ph = x @ f + a_in @ fa
         po = 2.0 * i * 0.6283 + a[3] * 3.14159
         basis = np.stack([np.sin(ph + po), np.cos(ph + po * 0.7),
@@ -132,24 +133,26 @@ def ref_fourier(p, x, a_in):
     return out
 
 
-def ref_gabor(p, x, a_in):
-    p = p.reshape(-1, 14 + len(a_in))
+def ref_gabor(p, x, a_in, c):
+    # per filter: centre(4) freq(4) amp(4) sigma phase colour(c) audio(K).
+    p = p.reshape(-1, 14 + c + len(a_in))
     out = np.zeros((len(x), 4), np.float64)
     for row in p:
-        c, f, a, sg, ph, fa = (row[:4], row[4:8], row[8:12], row[12], row[13],
-                               row[14:])
+        ctr, f, a, sg, ph, fa = (row[:4], row[4:8], row[8:12], row[12], row[13],
+                                 row[14 + c:])
         sg = max(abs(sg), 1e-3)
-        d = x - c                       # the centre stays 4-D
+        d = x - ctr                     # the centre stays 4-D
         env = np.exp(-np.einsum("ij,ij->i", d, d) / (2 * sg * sg))
         out += a * (env * np.cos(x @ f + a_in @ fa + ph))[:, None]
     return out
 
 
-def ref_lenia(p, x, a_in):
-    p = p.reshape(-1, 10 + len(a_in))
+def ref_lenia(p, x, a_in, c):
+    # per bump: projection(4) amp(4) mu sigma colour(c) audio(K).
+    p = p.reshape(-1, 10 + c + len(a_in))
     out = np.zeros((len(x), 4), np.float64)
     for row in p:
-        w, a, mu, sg, wa = row[:4], row[4:8], row[8], row[9], row[10:]
+        w, a, mu, sg, wa = row[:4], row[4:8], row[8], row[9], row[10 + c:]
         sg = max(abs(sg), 1e-3)
         u = x @ w + a_in @ wa - mu
         g = 2.0 * np.exp(-(u * u) / (2 * sg * sg)) - 1.0
@@ -158,23 +161,25 @@ def ref_lenia(p, x, a_in):
 
 
 def ref_mlp(p, x, a_in, h):
+    # motion output only: W_out(4,fan)/b_out(4) precede the colour block.
     fan = 4 + len(a_in)
     W1 = p[:fan * h].reshape(h, fan)
     b1 = p[fan * h:(fan + 1) * h]
     W2 = p[(fan + 1) * h:(fan + 5) * h].reshape(4, h)
-    b2 = p[(fan + 5) * h:]
+    b2 = p[(fan + 5) * h:(fan + 5) * h + 4]
     xa = np.concatenate([x, np.broadcast_to(a_in, (len(x), len(a_in)))], axis=1)
     return np.tanh(xa @ W1.T + b1) @ W2.T + b2
 
 
 def reference(m, params, layout, x, a_in):
     a_in = np.asarray(a_in, np.float64)
+    c = int(layout.colour_outputs)
     if m.name == "fourier":
-        return ref_fourier(params, x, a_in)
+        return ref_fourier(params, x, a_in, c)
     if m.name == "gabor":
-        return ref_gabor(params, x, a_in)
+        return ref_gabor(params, x, a_in, c)
     if m.name == "lenia":
-        return ref_lenia(params, x, a_in)
+        return ref_lenia(params, x, a_in, c)
     return ref_mlp(params, x, a_in, int(layout.shape[0]))
 
 
@@ -228,12 +233,14 @@ def test_gabor_audio_enters_the_phase_and_never_the_envelope(gl):
     at audio values with the same cosine must agree exactly."""
     m = REGISTRY["gabor"]
     base, parent, wide, child = _pair(m)
-    stride = 14 + K
+    c = wide.colour_outputs
+    stride = 14 + c + K
+    a0 = 14 + c                       # audio weights follow the colour block
     rows = child.reshape(-1, stride).copy()
     rows[:, 4:8] = 0.0                # no sensor frequency
     rows[:, 13] = 0.0                 # no phase
-    rows[:, 14:] = 0.0
-    rows[:, 14] = 1.0                 # phase = a_1 exactly
+    rows[:, a0:] = 0.0
+    rows[:, a0] = 1.0                 # phase = a_1 exactly
     xs = inputs(2)
     a = evaluate(gl, rows.reshape(-1), wide, xs, audio=(0.0, 0.0, 0.0, 0.0))
     b = evaluate(gl, rows.reshape(-1), wide, xs,

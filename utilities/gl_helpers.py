@@ -105,8 +105,11 @@ def set_brain_layout_uniforms(program, layout) -> None:
     sim.py on purpose: the preview never writes back and never reads a cohort
     slot, so GLSL drops those uniforms and setting them only prints a warning.
     """
-    from services.brains import get
+    from services.brains import COLOUR_OUTPUTS, get
 
+    if layout.colour_outputs != COLOUR_OUTPUTS:
+        raise ValueError(f"{layout.signature()} has no colour outputs; widen "
+                         "it before it reaches the GPU")
     shape = tuple(int(v) for v in layout.shape)
     tryset(program, 'BRAIN_SHAPE', (shape + (0, 0, 0, 0))[:4])
     tryset(program, 'BRAIN_AUDIO_IN', int(layout.audio_inputs))

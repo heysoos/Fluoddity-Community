@@ -19,7 +19,8 @@ import numpy as np
 from services.brains import (MAX_AUDIO_INPUTS, MAX_BRAIN_FLOATS, REGISTRY,
                              STRUCTURAL_KINDS, BrainLayout, audio_weight_index,
                              get, positional_structure, settings_of)
-from services.brains import audio_weights, channel_rng, with_audio_inputs
+from services.brains import (audio_weights, channel_rng, colour_weight_index,
+                             with_audio_inputs)
 
 
 @dataclass(frozen=True)
@@ -232,6 +233,8 @@ def transfer_genome(params, parent, child, rng) -> np.ndarray:
     lo, hi = getattr(m, "AMPLITUDE_SLICE", (0, 0))
     for start in range(keep, out.size, stride):
         out[start + lo:start + hi] = 0.0
+    colour = colour_weight_index(child)
+    out[colour[colour >= keep]] = 0.0
     return out.astype(np.float32)
 
 

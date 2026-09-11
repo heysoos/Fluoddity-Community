@@ -94,11 +94,13 @@ def inputs(seed=0):
 
 # ---- NumPy references, written from each modality's docstring ----
 
-def ref_fourier(p, x):
-    p = p.reshape(-1, 8)
+def ref_fourier(p, x, stride):
+    # Stride carries colour(2) and any audio weights after freq(4)/amp(4);
+    # motion reads only the first 8 columns.
+    p = p.reshape(-1, stride)
     out = np.zeros((len(x), 4), np.float64)
     for i, row in enumerate(p):
-        f, a = row[:4], row[4:]
+        f, a = row[:4], row[4:8]
         ph = x @ f
         po = 2.0 * i * 0.6283 + a[3] * 3.14159
         basis = np.stack([np.sin(ph + po), np.cos(ph + po * 0.7),
@@ -108,8 +110,8 @@ def ref_fourier(p, x):
     return out
 
 
-def ref_gabor(p, x):
-    p = p.reshape(-1, 14)
+def ref_gabor(p, x, stride):
+    p = p.reshape(-1, stride)
     out = np.zeros((len(x), 4), np.float64)
     for row in p:
         c, f, a, sg, ph = row[:4], row[4:8], row[8:12], row[12], row[13]
@@ -120,8 +122,8 @@ def ref_gabor(p, x):
     return out
 
 
-def ref_lenia(p, x):
-    p = p.reshape(-1, 10)
+def ref_lenia(p, x, stride):
+    p = p.reshape(-1, stride)
     out = np.zeros((len(x), 4), np.float64)
     for row in p:
         w, a, mu, sg = row[:4], row[4:8], row[8], row[9]
@@ -136,7 +138,7 @@ def ref_mlp(p, x, h, act):
     W1 = p[:4 * h].reshape(h, 4)
     b1 = p[4 * h:5 * h]
     W2 = p[5 * h:9 * h].reshape(4, h)
-    b2 = p[9 * h:]
+    b2 = p[9 * h:9 * h + 4]
     pre = x @ W1.T + b1
     if act == 0:
         a = np.tanh(pre)
@@ -177,7 +179,8 @@ def ref_mlp_stack(p, x, shape, unit=-1):
     if unit >= 0:
         # One unit's additive contribution: its activation times its column.
         return h[:, unit:unit + 1] * W_out[:, unit]
-    return h @ W_out.T + p[out_b:]
+    # Motion bias only - the colour block trails out_b for 4:.
+    return h @ W_out.T + p[out_b:out_b + 4]
 
 
 def check(got, want, tag):
@@ -202,11 +205,11 @@ def test_glsl_matches_the_python_layout(gl, name):
     x = inputs()
     got = evaluate(gl, p, layout, x)
     if name == "fourier":
-        want = ref_fourier(p, x)
+        want = ref_fourier(p, x, m.unit_floats(layout))
     elif name == "gabor":
-        want = ref_gabor(p, x)
+        want = ref_gabor(p, x, m.unit_floats(layout))
     elif name == "lenia":
-        want = ref_lenia(p, x)
+        want = ref_lenia(p, x, m.unit_floats(layout))
     else:
         want = ref_mlp(p, x, layout.shape[0], layout.shape[1])
     check(got, want, name)
@@ -273,7 +276,7 @@ def test_the_units_the_inspector_draws_sum_to_the_brain(gl, layers):
               f"{layout.signature()} unit {j}")
         total += got
     _h, _ow, out_b, _n = layer_spans(layout.shape)
-    check(total + p[out_b:], evaluate(gl, p, layout, x),
+    check(total + p[out_b:out_b + 4], evaluate(gl, p, layout, x),
           f"{layout.signature()} units do not sum to the brain")
 
 

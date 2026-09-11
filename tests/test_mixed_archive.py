@@ -14,11 +14,11 @@ import pytest
 
 from services.archive import Archive, Candidate
 from services.archive_io import ArchiveStore
-from services.brains import BrainLayout, default_layout
+from services.brains import default_layout, get
 
 DIM = 8
 FOURIER = default_layout()
-GABOR = BrainLayout("gabor", (12,), 168)
+GABOR = get("gabor").layout_from_settings({"filters": 12})
 
 
 def _cand(vec, brain_len=None, liveness=0.5):
@@ -333,7 +333,7 @@ def test_adopting_a_foreign_entry_hands_over_its_own_shape(tmp_path):
     from command_handler import CommandHandler
     from services.brains import layout_from_signature
 
-    gabor7 = layout_from_signature("gabor-n7")
+    gabor7 = layout_from_signature("gabor-n7+c2")
     root = tmp_path / "mixed"
     _fill(root, FOURIER, 1, start_axis=0)
     _fill(root, gabor7, 1, start_axis=4)
@@ -365,6 +365,6 @@ def test_adopting_a_foreign_entry_hands_over_its_own_shape(tmp_path):
     # The stash is matched on signature, so this is what proves it switched to
     # the entry's OWN shape rather than the modality's default.
     rule, sig = h._pending_brain_rule
-    assert sig == "gabor-n7"
+    assert sig == "gabor-n7+c2"
     assert rule.size == gabor7.length
     assert np.array_equal(rule, arc.brain_at(row))

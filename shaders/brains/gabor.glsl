@@ -2,7 +2,7 @@
 // its centre and is silent elsewhere, so a brain is a set of "when I see
 // roughly this, do that" rules rather than one global interference pattern.
 //
-// Layout, 14 floats: centre(4), frequency(4), amplitude(4), sigma, phase.
+// Layout: centre(4), frequency(4), amplitude(4), sigma, phase, colour(2).
 //
 // PURE: reads only brain_params (through the mutation helpers), base, x and
 // BRAIN_SHAPE. The Brain Inspector calls this from a fragment pass.
@@ -12,23 +12,27 @@
 // field mapping, because two copies of that mapping is precisely how the
 // Fourier writeback came to disagree with its own evaluation.
 // One filter: centre(4), frequency(4), amplitude(4), sigma, phase, then its
-// audio weights, which extend the FREQUENCY and never the centre.
-int gabor_stride() { return 14 + BRAIN_AUDIO_IN; }
+// colour amplitudes, then its audio weights, which extend the FREQUENCY and
+// never the centre.
+int gabor_stride() { return 14 + COLOUR_OUTPUTS + BRAIN_AUDIO_IN; }
 
-// Where float i sits in the DEAF brain, for the mutation's hash.
+// Where float i sits in the DEAF, COLOURLESS brain, for the mutation's hash.
 int gabor_deaf_index(int i) {
     int s = gabor_stride();
     int u = i / s, k = i % s;
-    return (k < 14) ? u * 14 + k : -(1 + u * BRAIN_AUDIO_IN + (k - 14));
+    if (k < 14) return u * 14 + k;
+    if (k < 14 + COLOUR_OUTPUTS) return colour_hash_index(u, k - 14);
+    return -(1 + u * BRAIN_AUDIO_IN + (k - 14 - COLOUR_OUTPUTS));
 }
 
 float gabor_param_at(uint base, int i) {
     int k = i % gabor_stride();
     int j = gabor_deaf_index(i);
-    // Frequency, envelope width and audio SCALE; centre, amplitude and phase
-    // OFFSET. Offsetting the width would let mutation walk it through zero,
-    // and the envelope divides by its square.
-    if ((k >= 4 && k < 8) || k == 12 || k >= 14) return brain_mul_at(base, i, j);
+    // Frequency, envelope width and audio SCALE; centre, amplitude, phase and
+    // colour OFFSET. Offsetting the width would let mutation walk it through
+    // zero, and the envelope divides by its square.
+    if ((k >= 4 && k < 8) || k == 12 || k >= 14 + COLOUR_OUTPUTS)
+        return brain_mul_at(base, i, j);
     return brain_add_at(base, i, j);
 }
 
@@ -58,15 +62,21 @@ vec4 gabor_unit(uint base, int i, vec4 x) {
     vec4 d = x - c;
     float env = exp(-dot(d, d) / (2.0 * sg * sg));
     float arg = dot(x, f);
-    if (BRAIN_AUDIO_IN > 0) arg += gabor_audio_phase(base, o + 14);
-    return a * (env * cos(arg + ph));
+    if (BRAIN_AUDIO_IN > 0) arg += gabor_audio_phase(base, o + 14 + COLOUR_OUTPUTS);
+    float g = env * cos(arg + ph);
+    g_unit_colour = vec2(gabor_param_at(base, o + 14),
+                         gabor_param_at(base, o + 15)) * g;
+    return a * g;
 }
 
 vec4 brain_gabor(uint base, vec4 x) {
     vec4 result = vec4(0.0);
+    vec2 colour = vec2(0.0);
     int n = BRAIN_SHAPE.x;
     for (int i = 0; i < n; i++) {
         result += gabor_unit(base, i, x);
+        colour += g_unit_colour;
     }
+    g_brain_colour = colour;
     return result;
 }

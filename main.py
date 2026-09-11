@@ -25,12 +25,8 @@ from services.perform_window import (
 from state import view_modes
 
 
-# The ceiling an automatic mode holds the hue gain to while it is scoring.
-AUTO_HUE_MAX = 0.12
-
-
 def put_back_auto_overrides(ui_state, prev_aspect, prev_speedmult,
-                            prev_motion_blur, prev_hue=None):
+                            prev_motion_blur):
     """Restore the preferences an automatic mode commandeers.
 
     Module-level so both the mode-off edge and the quit path can share it.
@@ -43,8 +39,6 @@ def put_back_auto_overrides(ui_state, prev_aspect, prev_speedmult,
         prefs.speedmult = prev_speedmult
     if prev_motion_blur is not None:
         prefs.motion_blur = prev_motion_blur
-    if prev_hue is not None:
-        ui_state.sim.hue_sensitivity = prev_hue
 
 
 def _release(cache):
@@ -52,18 +46,6 @@ def _release(cache):
     through this so the lookup can sit inside the guarded step."""
     if cache is not None:
         cache.release()
-
-
-def clamp_auto_hue(ui_state):
-    """Hold the hue gain at or below AUTO_HUE_MAX while a mode is scoring.
-
-    Called every frame rather than on the mode-enable edge: loading a preset
-    mid-run writes that preset's own gain into SimState. See CLAUDE.md.
-    """
-    if not (ui_state.auto_tournament.enabled or ui_state.archive.enabled):
-        return
-    ui_state.sim.hue_sensitivity = min(
-        ui_state.sim.hue_sensitivity, AUTO_HUE_MAX)
 
 
 def _warm_imports() -> None:
@@ -232,7 +214,6 @@ class App:
         self._auto_prev_aspect = None
         self._auto_prev_speedmult = None
         self._auto_prev_motion_blur = None
-        self._auto_prev_hue = None
         self._auto_was_enabled = False
         self._last_crops = None
         # Explore (IMGEP) mode, also lazy - it needs the same vision scorer.
@@ -662,10 +643,11 @@ class App:
         so: a plausible layout of the wrong width is worse than refusing.
         """
         from command_handler import CommandHandler
-        from services.brains import layout_from_signature
+        from services.brains import layout_from_signature, upgrade_signature
 
         ast = ui_state.archive
-        sig = str(ast.layout_signature or "")
+        # A legacy name is the same brain under its current name.
+        sig = upgrade_signature(str(ast.layout_signature or ""))
         live = getattr(getattr(self, "sim", None), "brain_layout", None)
         if not sig or live is None or sig == live.signature():
             return False
@@ -1444,9 +1426,6 @@ class App:
         if ui_state.request_camera_reset:
             ui_state.camera.position[:] = [0.0, 0.0]
             ui_state.camera.zoom = 1.0
-        # After process_commands, so a preset loaded this frame is capped in
-        # the same frame it arrives.
-        clamp_auto_hue(ui_state)
         # Audio modulates a COPY. ui_state.sim keeps what the user set, so the
         # sliders do not drift and Save writes slider values rather than
         # whatever the music was doing at that instant.
@@ -1876,7 +1855,6 @@ class App:
         self._auto_prev_aspect = prefs.canvas_aspect_ratio
         self._auto_prev_speedmult = prefs.speedmult
         self._auto_prev_motion_blur = prefs.motion_blur
-        self._auto_prev_hue = ui_state.sim.hue_sensitivity
 
         # Tiles inherit the canvas aspect ratio, and a 16:9 tile cannot be
         # squared for CLIP without distortion, padding or lost content.
@@ -1902,8 +1880,7 @@ class App:
     def _undo_auto_overrides(self, ui_state):
         put_back_auto_overrides(
             ui_state, self._auto_prev_aspect, self._auto_prev_speedmult,
-            self._auto_prev_motion_blur,
-            prev_hue=getattr(self, "_auto_prev_hue", None))
+            self._auto_prev_motion_blur)
 
     def _restore_auto_overrides(self, ui_state):
         """Undo the transient auto/explore overrides before anything is
@@ -1916,8 +1893,7 @@ class App:
             return
         put_back_auto_overrides(
             ui_state, self._auto_prev_aspect, self._auto_prev_speedmult,
-            self._auto_prev_motion_blur,
-            prev_hue=getattr(self, "_auto_prev_hue", None))
+            self._auto_prev_motion_blur)
 
     def _save_last_rig(self, ui_state):
         """Write the last-used rig, but only if this session changed it.

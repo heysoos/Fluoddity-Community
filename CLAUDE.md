@@ -452,43 +452,37 @@ mechanics these caveats assume.
   only one thread may call `session.run`. Never pin `device_id` — DirectML
   device 0 is the discrete GPU (0.90 ms/image); device 1 is the iGPU at 63.
 
-- **Hue IS the axial force term — colour is not an independent gene — and the
-  gain that maps it to a hue is a PRESET parameter, not a constant.**
-  `entity_update.glsl` forms `force = baseterm.xy + y_reflect(mirrorterm.xy)`
-  and `color = baseterm.xy + mirrorterm.xy`, and `y_reflect` flips only the
-  lateral component, so `color.x` and the axial force are the SAME expression,
-  read before `AXIAL_FORCE` scaling. This holds for every modality — it is the
-  black box's output, not a Fourier one. `e.color.x = HUE_SENSITIVITY *
-  col_params.x` then reads it as an HSV hue modulo 1, so the gain scales
-  `|dhue|` linearly and a large one slides the colour through whole revolutions
-  on a mutation far too small to change the pattern.
+- **Hue and saturation are the brain's OWN two outputs, and the gain that maps
+  hue is a PRESET parameter, not a constant.** Every brain returns its four
+  motion outputs as a `vec4` and its two colour outputs in `g_brain_colour`,
+  which `entity_update.glsl` reads off the BASE evaluation alone, before the
+  mirror call overwrites it - so a creature's colour may be asymmetric while
+  its motion stays mirror-symmetric. `e.hue = HUE_SENSITIVITY * colour.x`,
+  read as an HSV hue modulo 1; `e.sat = 0.5 + 0.5*tanh(colour.y +
+  atanh(0.6))`, so a zero output is the constant 0.8 every particle had
+  before. Colour is DISPLAY-ONLY: the canvas is RG32F velocity and the brain
+  senses `ltap.xy`, so colour reaches only `brush.vert` and `cam_brush.frag`,
+  and the colour floats reach colour and nothing else, even under mutation.
+  Guarded by `tests/test_colour_outputs_gpu.py`.
 
-  The cost is measured against the admission bar. At gain **0.5**, `|dhue|` is
-  74° at `expedition_sigma` and a hue-only rotation moves the CLIP embedding
-  **1.26x** as far as a genuinely different creature does, clearing
-  `min_separation` **95%** of the time. At **0.09** it is 14°, 0.22x, and
-  **10%**. **A better encoder does not fix this** — CLIP B/16, SigLIP 2 and
-  L/14 all score 1.26–1.38 at 74°, and SigLIP 2 is the most colour-sensitive of
-  the four. Re-measure with `python -m tools.hue_nuisance`.
+  The gain still scales `|dhue|` linearly, and CLIP reads a recolour as a new
+  creature. Measured while hue was still the axial force term: at gain
+  **0.5**, `|dhue|` is 74° at `expedition_sigma` and a hue-only rotation moves
+  the CLIP embedding **1.26x** as far as a genuinely different creature does,
+  clearing `min_separation` **95%** of the time; at **0.09** it is 14°, 0.22x
+  and **10%**. **A better encoder does not fix this** — CLIP B/16, SigLIP 2
+  and L/14 all score 1.26–1.38 at 74°. Roughly half the preset library ships
+  0.5. There is deliberately NO clamp: the archive decides whether a recolour
+  is novel. `hue_sensitivity` must NEVER join `PHYSICS_PARAMS` - it is a knob
+  for the user, not a gene. Re-measure with `python -m tools.hue_nuisance`.
 
-  Both defaults are already in the good range (`SimState` and `_Default.json`
-  are 0.09), but roughly half the preset library ships **0.5** — so without a
-  cap, how much of the archive is hue-duplicates depends on which preset seeded
-  the run. `AUTO_HUE_MAX` (0.12, `main.py`) holds the gain down for as long as
-  an automatic mode is scoring, re-applied every frame because a preset loaded
-  mid-run brings its own. Do not lower it much further: at 0.15 the spread
-  across genomes is 107° against 68.6° at 0.5, and it collapses again as the
-  gain approaches zero.
-
-  Clamping is safe because colour is DISPLAY-ONLY: the canvas is RG32F velocity
-  and the brain senses `ltap.xy`, so `e.color` reaches only `brush.vert` and
-  `cam_brush.frag`. It changes what CLIP sees, never how a particle moves. At
-  0.09 colour IS heritable, so a text goal naming one is no longer hopeless —
-  it was the 0.5 gain that made it so. `hue_sensitivity` is NOT in
-  `PHYSICS_PARAMS`, so the search cannot tune it itself. Note `color_by_cohort`
-  REPLACES the brain's hue with `hash(cohort)`; tournament mode forces it off,
-  so any colour experiment run outside tournament mode measures the wrong
-  thing. Guarded by `tests/test_auto_hue_clamp.py`.
+  **The saturation offset leans colour search toward vivid**: a small push
+  saturates, and a larger one is needed to grey out. It was chosen so legacy
+  archives look the same; if colour evolution sticks on vivid, see the Future
+  section of `docs/superpowers/specs/2026-09-10-brain-colour-outputs-design.md`.
+  `color_by_cohort` REPLACES the brain's hue with `hash(cohort)` and leaves
+  its saturation; tournament mode forces it off, so a colour experiment run
+  outside tournament mode measures the wrong thing.
 
 ### Field injection
 
@@ -1769,7 +1763,7 @@ design; these are the rules it rests on.
   every frame lost the request on the first frame, and the drawer's nested
   bar needs a third frame in a render test.
 
-- **A Fourier brain is PRESENTED as `(N, 8 + K)`, and the tournament reseeds
+- **A Fourier brain is PRESENTED as `(N, 8 + 2 + K)`, and the tournament reseeds
   through `present()` on EVERY layout change.** `genome_spec.present` and
   `gl_helpers.readback_rule` both reshape by centre and both hard-coded 8, so
   adding one channel to any Fourier preset died in
@@ -2763,7 +2757,9 @@ keeps them, each with the phase that took the time.
   `_config_signature` is the one place that is decided.** The field arrived
   after most of the library was written: 138 of the 175 shipped presets have
   none, and every one of them carries exactly an 80-float `fourier-n10` rule.
-  Reading that absence as "stay put" made the whole historical library load its
+  `PhysicsConfig.__post_init__` now names that rule `fourier-n10+c2` and widens
+  it as it loads, so `_config_signature` only meets an unsigned rule that is
+  NOT legacy Fourier. Reading that absence as "stay put" made the whole historical library load its
   physics under whatever brain was running — `apply_rule` refuses the genome on
   width and `_rule_fits` deliberately SUPPRESSES the line that would say so, to
   stop the Load menu printing one per config it passes over — so the preset
@@ -2978,6 +2974,35 @@ keeps them, each with the phase that took the time.
   layout with zero native entries would otherwise spend its whole budget on
   random genomes before expansion was reachable at all. It is opt-in for that
   reason: `LayoutBounds.modalities` empty means the running modality only.
+
+- **Every brain has SIX outputs, and a layout without `+c2` is a LEGACY one.**
+  Four motion (force.xy, strafe.xy) and two colour (hue, saturation). A unit's
+  colour floats sit after its motion floats and before its audio weights
+  (Fourier at 8, Gabor at 14, Lenia at 10); MLP appends `W_col` (2 rows of
+  w_k) and `b_col` after `b_out`, so every motion offset is a legacy genome's.
+  `BrainLayout.colour_outputs` is 0 or 2 and rides the signature as `+c2`,
+  before `+aK`. 0 is a genome from before the outputs existed, its signature
+  is its old name, and it may NEVER reach the GPU - `set_brain_layout_uniforms`
+  raises. Legacy enters through two doors and both widen it with
+  `widen_colour`: `PhysicsConfig.__post_init__` (presets, the clipboard, run
+  files) and `services/colour_migration.py` at launch (archives, each copied
+  once into `Documents/Fluoddity/archives_legacy/`, which the app never
+  lists). Hue takes `COLOUR_GAIN` (2) times the axial-force weights - the old
+  hue was base PLUS mirror, twice the base term for a symmetric creature - and
+  saturation takes zeros. Old Auto checkpoints are refused on the layout
+  mismatch, which `run_checkpoint` already did. A widened genome's motion is
+  bit-identical to the legacy shader for Fourier, Gabor and MLP, with and
+  without audio and mutation; Lenia differs in the last float bit (at most
+  1e-6), the compiler fusing its shared growth term differently - measured
+  against the old shaders out of `git show`. The colour floats hash below every
+  audio index (`colour_hash_index`), and generated brains draw every cohort's
+  colourless brain before any colour, so neither moves a cohort's motion.
+  **Colour belongs to the DEAF brain**: a random draw is motion, then colour,
+  then ears, so adding an audio input moves neither. Drawing colour after the
+  ears reshuffled every colour float the moment a brain grew one - caught by
+  `tests/test_brain_audio_inputs.py::test_a_generated_wide_brain_is_the_deaf_draw_with_ears`.
+  Guarded by `tests/test_colour_outputs_gpu.py` and
+  `tests/test_colour_migration.py`.
 
 ### The MLP layer stack
 

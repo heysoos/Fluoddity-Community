@@ -750,14 +750,21 @@ class Archive:
             print(f"[Archive] {self.encoder_mismatch}; nothing loaded")
             return 0, 0
         from services.archive_io import ArchiveStore, signature_dirs
+        from services.brains import is_legacy_signature
 
         self._n = 0
         self.entries = []
         loaded = dropped = 0
         claims: set[int] = set()
-        sigs = [self.signature] + [
-            p.name for p in signature_dirs(self.store.base)
-            if p.name != self.signature]
+        # A legacy directory is one the colour migration left alone because its
+        # new name was taken. Its genomes cannot run, so it is not loaded.
+        others = [p.name for p in signature_dirs(self.store.base)
+                  if p.name != self.signature]
+        legacy = [s for s in others if is_legacy_signature(s)]
+        if legacy:
+            print(f"[Archive] {self.store.base.name}: skipping legacy layouts "
+                  f"{', '.join(legacy)}")
+        sigs = [self.signature] + [s for s in others if s not in legacy]
         for sig in sigs:
             store = self._stores.get(sig)
             if store is None:

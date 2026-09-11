@@ -20,7 +20,8 @@ uniform int   PREVIEW_UNIT;     // -1 = the whole brain, >=0 = that unit alone
 uniform int   PREVIEW_BASE;
 uniform int   PREVIEW_CHANNEL;  // 0..3 = one output, 4 = |force|, 5 = |strafe|,
                                 // 6 = project onto PREVIEW_OUT,
-                                // 7 = project onto PREVIEW_RGB, one per colour
+                                // 7 = project onto PREVIEW_RGB, one per colour,
+                                // 8 = hue output, 9 = saturation output
 #define PREVIEW_CHANNEL_RGB 7
 
 // A random unit direction in the 4D OUTPUT space, for PREVIEW_CHANNEL 6. Same
@@ -70,6 +71,7 @@ void main() {
     uint base = uint(max(PREVIEW_BASE, 0));
     vec4 r = (PREVIEW_UNIT < 0) ? eval_brain(base, x)
                                 : eval_brain_unit(base, PREVIEW_UNIT, x);
+    vec2 colour = (PREVIEW_UNIT < 0) ? g_brain_colour : g_unit_colour;
 
     vec3 rgb;
     if (PREVIEW_CHANNEL == PREVIEW_CHANNEL_RGB) {
@@ -84,6 +86,8 @@ void main() {
         if (PREVIEW_CHANNEL == 4)      v = length(r.xy);   // force magnitude
         else if (PREVIEW_CHANNEL == 5) v = length(r.zw);   // strafe magnitude
         else if (PREVIEW_CHANNEL == 6) v = dot(r, PREVIEW_OUT);
+        else if (PREVIEW_CHANNEL == 8) v = colour.x;
+        else if (PREVIEW_CHANNEL == 9) v = colour.y;
         else                           v = r[PREVIEW_CHANNEL];
         rgb = diverging(v * PREVIEW_GAIN);
     }

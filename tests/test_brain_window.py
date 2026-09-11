@@ -143,12 +143,13 @@ def test_the_orchestrator_consumes_and_clears_the_flag():
 def test_the_layout_round_trips_through_the_state():
     s = BrainState(modality="mlp", settings={"hidden": 32, "activation": 2})
     layout = layout_for(s.modality, s.settings)
-    assert layout == BrainLayout("mlp", (32, 2), 9 * 32 + 4)
-    assert layout.signature() == "mlp-n32-a2"
+    assert layout == REGISTRY["mlp"].layout_from_settings(
+        {"layers": [[32, 2]]})
+    assert layout.signature() == "mlp-n32-a2+c2"
 
 
 def test_a_layer_stack_round_trips_through_the_state():
     s = BrainState(modality="mlp", settings={"layers": [[8, 0], [6, 1], [4, 2]]})
     layout = layout_for(s.modality, s.settings)
     assert layout.shape == (8, 0, 6, 1, 4, 2)
-    assert layout.signature() == "mlp-n8.6.4-a0.1.2"
+    assert layout.signature() == "mlp-n8.6.4-a0.1.2+c2"

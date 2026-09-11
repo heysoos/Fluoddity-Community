@@ -89,17 +89,19 @@ def test_a_count_setting_still_splits_the_archive():
 
 
 def test_the_default_layout_is_unchanged_by_all_of_this():
-    """Fourier at its defaults must still decode bit-exactly, or every existing
-    genome and archive shifts underneath the user."""
+    """Fourier's MOTION floats must still decode bit-exactly at the defaults,
+    or every existing genome and archive shifts underneath the user - the
+    colour block rides after them in z and does not touch this."""
     m = REGISTRY["fourier"]
     layout = m.layout_from_settings({})
     assert layout == default_layout()
-    z = np.random.default_rng(2).normal(0, 0.5, 80).astype(np.float32)
-    got = m.decode(z, layout)
+    z = np.random.default_rng(2).normal(0, 0.5, layout.length).astype(np.float32)
+    got = m.decode(z, layout).reshape(layout.shape[0], -1)
+    motion = z[:80].reshape(20, 4)
     want = np.concatenate(
-        [3.0 * np.tanh(z.reshape(20, 4)[:10]),
-         1.0 * np.tanh(z.reshape(20, 4)[10:])], axis=1).reshape(-1)
-    assert np.array_equal(got, want.astype(np.float32))
+        [3.0 * np.tanh(motion[:10]),
+         1.0 * np.tanh(motion[10:])], axis=1)
+    assert np.array_equal(got[:, :8], want.astype(np.float32))
 
 
 def test_widths_stay_positive_under_every_reachable_scale():
@@ -111,7 +113,7 @@ def test_widths_stay_positive_under_every_reachable_scale():
         for v in (s.lo, s.default, s.hi):
             layout = m.layout_from_settings({key: v})
             idx = 12 if name == "gabor" else 9
-            stride = 14 if name == "gabor" else 10
+            stride = 16 if name == "gabor" else 12
             for scale in (-50.0, 0.0, 50.0):
                 p = m.decode(np.full(layout.length, scale, np.float32), layout)
                 w = p.reshape(layout.shape[0], stride)[:, idx]

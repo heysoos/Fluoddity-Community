@@ -160,7 +160,9 @@ def test_a_scales_only_change_still_takes_the_light_path():
     log = _Log()
     app, ui = _App(log), _UI()
     scaled = BrainLayout(FOURIER.modality, FOURIER.shape, FOURIER.length,
-                         scales=(("freq_scale", 4.0),))
+                         scales=(("freq_scale", 4.0),),
+                         audio_inputs=FOURIER.audio_inputs,
+                         colour_outputs=FOURIER.colour_outputs)
     assert app._apply_brain_layout(scaled, ui) is True
     assert "set_brain_scales" in log
     assert "retarget" not in log

@@ -40,11 +40,18 @@ def _adopt(sim, ctx, entity_id=0):
 
 
 def test_adopting_a_loaded_brain_returns_it(sim, ctx):
+    from services.brains import REGISTRY, get, widen_colour
     from services.genome import random_genome
 
+    # random_genome is the legacy (10, 8) shape with no colour outputs; widen
+    # it to the layout the sim actually runs (10, 10) before applying it.
     genome = random_genome(np.random.default_rng(0))
-    sim.apply_rule(genome)
-    assert np.allclose(_adopt(sim, ctx), genome, atol=1e-5)
+    legacy = REGISTRY["fourier"].layout_from_settings({"colour_outputs": 0})
+    layout, widened = widen_colour(genome.reshape(-1), legacy)
+    assert layout.signature() == sim.brain_layout.signature()
+    sim.apply_rule(widened)
+    want = widened.reshape(layout.shape[0], get("fourier").unit_floats(layout))
+    assert np.allclose(_adopt(sim, ctx), want, atol=1e-5)
 
 
 def test_adopting_a_generated_cohort_rule_does_not_return_zeros(sim, ctx):
@@ -61,7 +68,9 @@ def test_adopting_a_generated_cohort_rule_does_not_return_zeros(sim, ctx):
     )
     assert np.all(np.isfinite(rule))
     assert np.abs(rule[:, :4]).max() <= 3.0 + 1e-4, "frequency out of range"
-    assert np.abs(rule[:, 4:]).max() <= 1.0 + 1e-4, "amplitude out of range"
+    assert np.abs(rule[:, 4:8]).max() <= 1.0 + 1e-4, "amplitude out of range"
+    # Colour amplitudes decode at COLOUR_GAIN (2x) the motion amplitude scale.
+    assert np.abs(rule[:, 8:10]).max() <= 2.0 + 1e-4, "colour out of range"
 
 
 def test_adopting_a_generated_rule_is_stable_under_reapply(sim, ctx):

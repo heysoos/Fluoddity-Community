@@ -62,7 +62,9 @@ class BrainModulator:
                 merged[k] = float(v)
         layout = BrainLayout(self._layout.modality, self._layout.shape,
                              self._layout.length,
-                             scales=tuple(merged.items()))
+                             scales=tuple(merged.items()),
+                             audio_inputs=self._layout.audio_inputs,
+                             colour_outputs=self._layout.colour_outputs)
         try:
             return self._modality.decode(self._z, layout)
         except Exception:

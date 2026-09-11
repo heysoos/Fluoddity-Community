@@ -50,9 +50,11 @@ def _ui(signature):
 
 
 def test_an_archive_recorded_under_another_brain_switches_to_it():
+    """A name recorded before the colour outputs is the same brain under its
+    current name."""
     app, ui = _App(), _ui("gabor-n12")
     assert app._restore_archive_layout(ui) is True
-    assert app.sim.brain_layout.signature() == "gabor-n12"
+    assert app.sim.brain_layout.signature() == "gabor-n12+c2"
 
 
 def test_the_brain_window_moves_too():

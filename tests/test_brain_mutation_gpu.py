@@ -16,7 +16,10 @@ import pytest
 moderngl = pytest.importorskip("moderngl")
 
 N_CENTERS = 10
-FLOATS = N_CENTERS * 8
+# fourier_stride() is 8 + COLOUR_OUTPUTS(2) + BRAIN_AUDIO_IN(0) in the shader,
+# always - COLOUR_OUTPUTS is a fixed #define, not a per-layout uniform.
+STRIDE = 10
+FLOATS = N_CENTERS * STRIDE
 
 SRC_HEAD = """#version 430
 layout(local_size_x = 1) in;
@@ -73,7 +76,7 @@ def mutated(ctx, prog, params, mut, cohort=3.0):
             prog[name].value = val
     prog.run()
     ctx.finish()
-    out = np.frombuffer(b_out.read(), dtype=np.float32).reshape(N_CENTERS, 8)
+    out = np.frombuffer(b_out.read(), dtype=np.float32).reshape(N_CENTERS, STRIDE)
     b_par.release()
     b_out.release()
     return out
@@ -81,10 +84,15 @@ def mutated(ctx, prog, params, mut, cohort=3.0):
 
 @pytest.fixture(scope="module")
 def genome():
+    """A widened (10, 10) genome: the legacy freq/amp columns plus colour."""
+    from services.brains import REGISTRY, widen_colour
     from services.genome import random_genome
 
-    return np.asarray(random_genome(np.random.default_rng(42)),
-                      dtype=np.float32).reshape(N_CENTERS, 8)
+    legacy_flat = np.asarray(random_genome(np.random.default_rng(42)),
+                             dtype=np.float32).reshape(-1)
+    legacy = REGISTRY["fourier"].layout_from_settings({"colour_outputs": 0})
+    _layout, widened = widen_colour(legacy_flat, legacy)
+    return widened.reshape(N_CENTERS, STRIDE)
 
 
 def test_zero_mutation_is_the_identity(ctx, prog, genome):
@@ -121,7 +129,7 @@ def test_the_frequency_scale_stays_in_the_legacy_band(ctx, prog, genome):
 def test_amplitudes_offset_within_the_requested_amount(ctx, prog, genome):
     amount = 0.25
     got = mutated(ctx, prog, genome, amount)
-    delta = got[:, 4:] - genome[:, 4:]
+    delta = got[:, 4:8] - genome[:, 4:8]
     assert np.abs(delta).max() <= amount + 1e-6, (
         f"amplitude offset exceeded the mutation amount: {np.abs(delta).max()}"
     )

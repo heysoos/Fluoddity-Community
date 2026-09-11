@@ -29,13 +29,17 @@ def test_spec_for_layout_sizes_the_brain_block():
     layout = default_layout()
     spec = spec_for(layout)
     assert spec.dim == layout.length
-    assert spec.signature() == "brain:80"
+    assert spec.signature() == f"brain:{layout.length}"
 
 
 def test_spec_decode_keeps_the_fourier_centre_shape():
-    """Fourier brains stay (N, 8) out of GenomeSpec.decode. Callers across the
-    app index them by centre; handing back a flat vector fails far from here."""
+    """Fourier brains stay (N, unit_floats) out of GenomeSpec.decode. Callers
+    across the app index them by centre; handing back a flat vector fails far
+    from here."""
+    from services.brains import get
+
     layout = default_layout()
     spec = spec_for(layout)
     parts = spec.decode(np.zeros(layout.length, dtype=np.float32))
-    assert parts["brain"].shape == (layout.shape[0], 8)
+    unit = get(layout.modality).unit_floats(layout)
+    assert parts["brain"].shape == (layout.shape[0], unit)

@@ -80,8 +80,8 @@ def test_modality_ids_and_names_are_unique(m):
 # --- width parameters must never reach zero: the GPU divides by them ---
 
 @pytest.mark.parametrize("mod_name,stride,idx", [
-    ("gabor", 14, 12),   # envelope sigma
-    ("lenia", 10, 9),    # band sigma
+    ("gabor", 16, 12),   # envelope sigma, stride widened by colour_outputs
+    ("lenia", 12, 9),    # band sigma, stride widened by colour_outputs
 ])
 def test_width_parameters_are_strictly_positive(mod_name, stride, idx):
     m = REGISTRY[mod_name]
@@ -92,10 +92,12 @@ def test_width_parameters_are_strictly_positive(mod_name, stride, idx):
         assert np.all(widths > 0.0), f"{mod_name} width hit {widths.min()}"
 
 
-def test_mlp_length_is_nine_h_plus_four():
+def test_mlp_length_is_eleven_h_plus_six():
+    """Depth-1 with colour outputs: 9h+4 motion floats, then the colour
+    block's 2*(h+1)."""
     m = REGISTRY["mlp"]
     for h in (4, 16, 48):
-        assert m.layout_from_settings({"hidden": h}).length == 9 * h + 4
+        assert m.layout_from_settings({"hidden": h}).length == 11 * h + 6
 
 
 def test_mlp_signature_includes_activation():

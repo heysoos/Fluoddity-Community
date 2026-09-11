@@ -15,11 +15,11 @@ import numpy as np
 
 from services.archive import Archive, Candidate
 from services.archive_io import ArchiveStore
-from services.brains import BrainLayout, default_layout
+from services.brains import default_layout, get
 
 DIM = 8
 FOURIER = default_layout()
-GABOR = BrainLayout("gabor", (12,), 168)
+GABOR = get("gabor").layout_from_settings({"filters": 12})
 
 
 def _cand(vec, brain_len):
