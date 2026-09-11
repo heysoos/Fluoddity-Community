@@ -316,6 +316,21 @@ void main() {
     if (is_first_frame) {
         vec3 previous_frame = texture(accumulation_buffer, uv).rgb;
         float previous_len = length(previous_frame);
+        // The un-tonemap below is only the inverse of what the final sample
+        // stored for the views whose stored value IS the tonemapped
+        // accumulation. Views 0/3/4 re-interpret through 8*hsv2rgb() first, so
+        // what sits in the buffer is a hue-mapped COLOUR that was never passed
+        // through asinh - and applying sinh to it inverts a function that was
+        // never applied. Measured: the stored magnitude climbs ~0.84/frame,
+        // which the sinh turns into x8.2 per frame in the value fed back, and
+        // float32 gives out at frame 20. Blend against the stored value
+        // directly there. Exposure 0 is unaffected either way: the weight on
+        // previous_frame is -0.0001.
+        // Named as the CAMERA views rather than the negation of the raw ones:
+        // that set has exactly two homes in this file and a third spelling is a
+        // third place for it to drift, which test_view_modes pins.
+        bool stored_is_tonemapped = (view_mode == 1 || view_mode == 2 || view_mode == 5);
+        if (stored_is_tonemapped) {
         // This sinh UNDOES last frame's asinh so exposure can blend in linear
         // space, and it is the one unbounded step in a loop that feeds its own
         // output back: sinh overflows float32 at an argument of 89.4, then
@@ -333,6 +348,7 @@ void main() {
                               / TONEMAP_SOFTNESS, SAFE_MAX);
         previous_frame=safenorm(previous_frame)*stretched;
         previous_frame/=BRIGHTNESS_CONSTANT;
+        }
         fragColor = vec4(mix(current_color,previous_frame,EXPOSURE-.0001), 1.0);
     } else {
         vec3 previous_accumulation = texture(accumulation_buffer, uv).rgb;
