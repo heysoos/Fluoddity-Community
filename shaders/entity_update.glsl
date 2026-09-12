@@ -7,6 +7,7 @@ struct Entity {
     vec2 vel;
     float size;
     float hue;         // The brain's hue output, scaled by HUE_SENSITIVITY
+                       // (its force terms instead, under LEGACY_COLOR)
     float sat;         // The brain's saturation output, mapped into 0..1.
                        // reset() draws a desaturated particle.
     float padding;
@@ -652,7 +653,9 @@ void calculate_entity_behavior( vec2 L,vec2 R, vec2 axis, uint base, vec2 pos, f
     force=forward*force.x*cohort_audio(calculate_setting(get_particle_axial_force(),pos,cohort),CA_AXIAL_FORCE,cohort)+left*force.y*cohort_audio(calculate_setting(get_particle_lateral_force(),pos,cohort),CA_LATERAL_FORCE,cohort);
     strafe = forward*strafe.x*cohort_audio(calculate_setting(get_particle_axial_force(),pos,cohort),CA_AXIAL_FORCE,cohort) + left * strafe.y * cohort_audio(calculate_setting(get_particle_lateral_force(),pos,cohort),CA_LATERAL_FORCE,cohort);
 
-    color = colour_out; //the brain's (hue, saturation) outputs
+    //The brain's (hue, saturation) outputs, or the force terms the colouring
+    //was read off before those outputs existed.
+    color = LEGACY_COLOR ? (baseterm.xy + mirrorterm.xy) : colour_out;
     return;
 }
 
@@ -747,8 +750,10 @@ void main() {
     //The particle stores hue and saturation; the vertex shaders supply the
     //brightness and alpha, which were the same constants for every particle.
     e.hue = get_particle_hue_sensitivity()*col_params.x;//hue can be anything
-    //A zero saturation output lands on 0.8 (0.693147 = atanh(0.6)).
-    e.sat = 0.5 + 0.5*tanh(clamp(col_params.y + 0.693147, -10.0, 10.0));
+    //A zero saturation output lands on 0.8 (0.693147 = atanh(0.6)), which is
+    //the flat saturation legacy colouring keeps.
+    e.sat = LEGACY_COLOR ? 0.8
+          : 0.5 + 0.5*tanh(clamp(col_params.y + 0.693147, -10.0, 10.0));
 
     if(get_particle_color_by_cohort()) {e.hue = hash(vec2(floor(cohort)));} //just assign a random hue to each cohort
 

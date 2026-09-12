@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from services.brains import colour_index, get
+from services.brains.mlp import layer_spans
 from state.sim_state import SimState
 
 pytestmark = pytest.mark.gpu
@@ -22,8 +23,14 @@ def _mapped_sat(x):
     return 0.5 + 0.5 * np.tanh(x + np.arctanh(0.6))
 
 
-def _stored_colour(hue_bias, sat_bias, sensitivity=0.25):
-    """-> (hue, sat) of every active particle after a few steps."""
+def _stored_colour(hue_bias, sat_bias, sensitivity=0.25, legacy=False,
+                   force_bias=None):
+    """-> (hue, sat) of every active particle after a few steps.
+
+    `force_bias` silences every weight and leaves one output BIAS standing, so
+    the brain's axial force is that constant for every particle - which is what
+    legacy colouring reads its hue off.
+    """
     moderngl = pytest.importorskip("moderngl")
     from sim import SIZE_OF_ENTITY_STRUCT, Sim
 
@@ -34,6 +41,11 @@ def _stored_colour(hue_bias, sat_bias, sensitivity=0.25):
 
     layout = get("mlp").layout_from_settings({})
     params = get("mlp").random(np.random.default_rng(0), layout)
+    if force_bias is not None:
+        _hidden, _out_w, out_b, _n = layer_spans(layout.shape,
+                                                 layout.audio_inputs)
+        params[:] = 0.0
+        params[out_b] = force_bias
     hue, sat = colour_index(layout)
     params[hue] = 0.0
     params[sat] = 0.0
@@ -45,6 +57,8 @@ def _stored_colour(hue_bias, sat_bias, sensitivity=0.25):
     state.color_by_cohort = False
     state.MUTATION_SCALE = 0.0
     state.HAZARD_RATE = 0.0
+    state.DISABLE_SYMMETRY = False
+    state.legacy_color = legacy
     sim = Sim(ctx, world_size=0.02, canvas_aspect_ratio="1:1")
     sim.realloc_brain_buffers(layout)
     sim.apply_state(state)
@@ -74,3 +88,22 @@ def test_the_outputs_reach_the_particle(hue_bias, sat_bias):
     hue, sat = _stored_colour(hue_bias, sat_bias, sensitivity=0.25)
     np.testing.assert_allclose(hue, 0.25 * hue_bias, atol=1e-5)
     np.testing.assert_allclose(sat, _mapped_sat(sat_bias), atol=1e-5)
+
+
+# Legacy colouring: the hue every particle had before the brains grew colour
+# outputs, read off the force terms, at one flat saturation. The mirror call
+# doubles a constant brain's axial output, which is why the factor is two.
+@pytest.mark.parametrize("hue_bias,sat_bias", [(0.0, 0.0), (0.3, 2.0)])
+def test_legacy_colouring_reads_the_force_term_and_ignores_the_outputs(
+        hue_bias, sat_bias):
+    hue, sat = _stored_colour(hue_bias, sat_bias, sensitivity=0.25,
+                              legacy=True, force_bias=0.4)
+    np.testing.assert_allclose(hue, 0.25 * 2.0 * 0.4, atol=1e-5)
+    np.testing.assert_allclose(sat, REST_SAT, atol=1e-6)
+
+
+def test_the_outputs_come_back_when_legacy_colouring_is_off():
+    """The same brain, the same everything, one checkbox apart."""
+    hue, sat = _stored_colour(0.3, 2.0, sensitivity=0.25, force_bias=0.4)
+    np.testing.assert_allclose(hue, 0.25 * 0.3, atol=1e-5)
+    np.testing.assert_allclose(sat, _mapped_sat(2.0), atol=1e-5)

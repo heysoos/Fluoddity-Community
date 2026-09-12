@@ -316,6 +316,21 @@ class PhysicsWindowMixin:
                         pls.pop_locked_style(hs_lock_colors)
                     hints.tip("Controls color variation based on particle velocity.")
 
+                lc_lock_colors = pls.push_locked_style('legacy_color') if pls else 0
+                lc_label = pls.get_display_label('legacy_color', "Legacy Coloring") if pls else "Legacy Coloring"
+                changed_lc, new_lc = imgui.checkbox(
+                    lc_label,
+                    self.state.sim.legacy_color
+                )
+                if pls and pls.handle_alt_click('legacy_color'):
+                    pass  # alt-click intercepted; discard value change
+                elif changed_lc:
+                    self.state.sim.legacy_color = new_lc
+                if pls:
+                    pls.pop_locked_style(lc_lock_colors)
+                hints.tip("Colors particles the way the app did before brains had "
+                          "color outputs: hue from the force terms, saturation flat.")
+
                 imgui.separator()
 
                 # Watercolor Mode checkbox (only available in camera views, not field views)
@@ -502,6 +517,7 @@ class PhysicsWindowMixin:
                 if not self.state.sim.color_by_cohort:
                     imgui.set_next_item_width(100)
                     _, self.state.sim.hue_sensitivity = imgui.slider_float("Hue Sensitivity", self.state.sim.hue_sensitivity, -1.0, 1.0)
+                _, self.state.sim.legacy_color = imgui.checkbox("Legacy Coloring", self.state.sim.legacy_color)
                 watercolor_disabled_adv = self.state.sim.current_view_option not in view_modes.WATERCOLOR_VIEWS
                 if watercolor_disabled_adv:
                     imgui.begin_disabled()

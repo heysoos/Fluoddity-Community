@@ -165,8 +165,9 @@ vec4 mlp_unit(uint base, int j, vec4 x) {
         }
         float a = mlp_act(s + mlp_param_at(base, f0 * h + j));
         int c = (f0 + 1) * h + j;
-        g_unit_colour = a * vec2(mlp_param_at(base, MLP_COLOUR_OFF + j),
-                                 mlp_param_at(base, MLP_COLOUR_OFF + h + j));
+        if (!LEGACY_COLOR)
+            g_unit_colour = a * vec2(mlp_param_at(base, MLP_COLOUR_OFF + j),
+                                     mlp_param_at(base, MLP_COLOUR_OFF + h + j));
         return a * vec4(mlp_param_at(base, c),
                         mlp_param_at(base, c + h),
                         mlp_param_at(base, c + 2 * h),
@@ -184,8 +185,9 @@ vec4 mlp_unit(uint base, int j, vec4 x) {
     }
     float a = mlp_act_v(mlp_act_of(k), s);
     int wk = mlp_width(k);
-    g_unit_colour = a * vec2(mlp_param_at(base, MLP_COLOUR_OFF + j),
-                             mlp_param_at(base, MLP_COLOUR_OFF + wk + j));
+    if (!LEGACY_COLOR)
+        g_unit_colour = a * vec2(mlp_param_at(base, MLP_COLOUR_OFF + j),
+                                 mlp_param_at(base, MLP_COLOUR_OFF + wk + j));
     return a * mlp_out_column(base, mlp_out_off(), j, wk);
 }
 
@@ -197,11 +199,13 @@ vec4 brain_mlp(uint base, vec4 x) {
         // the Inspector's per-unit tiles do not include it.
         vec4 result = vec4(mlp_param_at(base, b2),     mlp_param_at(base, b2 + 1),
                            mlp_param_at(base, b2 + 2), mlp_param_at(base, b2 + 3));
-        vec2 colour = vec2(mlp_param_at(base, MLP_COLOUR_OFF + 2 * h),
-                           mlp_param_at(base, MLP_COLOUR_OFF + 2 * h + 1));
+        vec2 colour = vec2(0.0);
+        if (!LEGACY_COLOR)
+            colour = vec2(mlp_param_at(base, MLP_COLOUR_OFF + 2 * h),
+                          mlp_param_at(base, MLP_COLOUR_OFF + 2 * h + 1));
         for (int j = 0; j < h; j++) {
             result += mlp_unit(base, j, x);
-            colour += g_unit_colour;
+            if (!LEGACY_COLOR) colour += g_unit_colour;
         }
         g_brain_colour = colour;
         return result;
@@ -210,12 +214,15 @@ vec4 brain_mlp(uint base, vec4 x) {
     int wk = mlp_hidden(base, x, BRAIN_DEPTH, cur);
     int out_off = mlp_out_off();
     vec4 result = mlp_out_bias(base, out_off, wk);
-    vec2 colour = vec2(mlp_param_at(base, MLP_COLOUR_OFF + 2 * wk),
-                       mlp_param_at(base, MLP_COLOUR_OFF + 2 * wk + 1));
+    vec2 colour = vec2(0.0);
+    if (!LEGACY_COLOR)
+        colour = vec2(mlp_param_at(base, MLP_COLOUR_OFF + 2 * wk),
+                      mlp_param_at(base, MLP_COLOUR_OFF + 2 * wk + 1));
     for (int j = 0; j < wk; j++) {
         result += cur[j] * mlp_out_column(base, out_off, j, wk);
-        colour += cur[j] * vec2(mlp_param_at(base, MLP_COLOUR_OFF + j),
-                                mlp_param_at(base, MLP_COLOUR_OFF + wk + j));
+        if (!LEGACY_COLOR)
+            colour += cur[j] * vec2(mlp_param_at(base, MLP_COLOUR_OFF + j),
+                                    mlp_param_at(base, MLP_COLOUR_OFF + wk + j));
     }
     g_brain_colour = colour;
     return result;

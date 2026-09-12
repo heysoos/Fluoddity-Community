@@ -395,6 +395,10 @@ class Sim:
             # Appearance settings from sim state (now part of physics config)
             tryset(self.entity_update_program, 'HUE_SENSITIVITY', self._state.hue_sensitivity)
             tryset(self.entity_update_program, 'COLOR_BY_COHORT', self._state.color_by_cohort)
+            # One uniform for the whole canvas, so every tournament tile is
+            # coloured the same way and what the optimizer scores is what the
+            # screen shows.
+            tryset(self.entity_update_program, 'LEGACY_COLOR', self._state.legacy_color)
             # The canvas gets the same number in canvas_update; the particles and
             # their trail must keep one clock.
             tryset(self.entity_update_program, 'TIME_SCALE', self._state.TIME_SCALE)

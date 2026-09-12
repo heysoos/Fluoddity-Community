@@ -484,6 +484,25 @@ mechanics these caveats assume.
   its saturation; tournament mode forces it off, so a colour experiment run
   outside tournament mode measures the wrong thing.
 
+- **`LEGACY_COLOR` is the OLD colouring AND the cheap one, and it had to be
+  both.** Appearance > Legacy Coloring puts hue back on
+  `baseterm.xy + mirrorterm.xy` and saturation back on a flat 0.8, and every
+  brain then SKIPS its colour weights - a look-only toggle would have gone on
+  paying for the outputs it turns off. FALSE is the new colouring, so a program
+  that never sets the uniform - the Brain Inspector, the GPU tests - computes
+  colour exactly as it did before the switch existed. It is a `PhysicsConfig`
+  field, so a preset and a run config both carry it, and it is deliberately NOT
+  suppressed under a tournament the way `color_by_cohort` is: a creature's
+  colour is its own genome rather than its slot, so what the optimizer scores
+  must be what the screen shows. **What it buys is small, and over a whole step
+  it is not measurable**: over the brain ALONE at 262k invocations, Lenia
+  2.00 -> 1.71 ms and Gabor 2.43 -> 2.29, with Fourier and MLP inside a ±7%
+  run-to-run floor; over `sim.update` at world size 0.40 every modality is
+  inside a ±5% floor, the step being trails and rasterisation. Time it against
+  a colour-vs-colour control block, or the laptop's clocks answer instead of
+  the shader. Guarded by `tests/test_colour_outputs_gpu.py` and
+  `tests/test_colour_saturation_gl.py`.
+
 ### Field injection
 
 - **The bus is STATELESS PER FRAME, and any source that needs memory owns its

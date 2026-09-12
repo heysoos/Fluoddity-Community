@@ -53,7 +53,8 @@ void fourier_mutate(inout vec4 freq, inout vec4 amp, inout vec2 colour,
                     int i, float mseed) {
     amp += g_brain_mut * (-1.0 + 2.0 * hash4(-.5 + vec2(float(-i) + mseed, float(i))));
     freq *= fourier_freq_factor(i, mseed);
-    colour += g_brain_mut * (-1.0 + 2.0 * hash4(vec2(float(i) + mseed, float(-i) - 7.0)).xy);
+    if (!LEGACY_COLOR)
+        colour += g_brain_mut * (-1.0 + 2.0 * hash4(vec2(float(i) + mseed, float(-i) - 7.0)).xy);
 }
 
 void fourier_load(uint base, int i, out vec4 freq, out vec4 amp,
@@ -63,7 +64,8 @@ void fourier_load(uint base, int i, out vec4 freq, out vec4 amp,
                 brain_params[o + 2u], brain_params[o + 3u]);
     amp  = vec4(brain_params[o + 4u], brain_params[o + 5u],
                 brain_params[o + 6u], brain_params[o + 7u]);
-    colour = vec2(brain_params[o + 8u], brain_params[o + 9u]);
+    colour = vec2(0.0);
+    if (!LEGACY_COLOR) colour = vec2(brain_params[o + 8u], brain_params[o + 9u]);
 }
 
 // The basis, over a centre held in registers rather than read from the buffer.
@@ -91,7 +93,7 @@ vec4 fourier_eval(vec4 f, vec4 a, vec2 c, int i, vec4 x, float fa) {
         sin(phase * 2.0 + po * 1.3),
         cos(phase * 2.0 + po * 0.5)
     );
-    g_unit_colour = c * basis.xy;
+    if (!LEGACY_COLOR) g_unit_colour = c * basis.xy;
     return a * basis;
 }
 
@@ -122,7 +124,7 @@ vec4 brain_fourier(uint base, vec4 x) {
     vec2 colour = vec2(0.0);
     for (int i = 0; i < n; i++) {
         result += fourier_unit_at(base, i, x, mseed);
-        colour += g_unit_colour;
+        if (!LEGACY_COLOR) colour += g_unit_colour;
     }
     g_brain_colour = colour;
     return result;

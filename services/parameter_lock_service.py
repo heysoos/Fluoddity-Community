@@ -20,7 +20,7 @@ LOCKABLE_SIM_PARAMS = [
     'rule_seed', 'boundary_conditions', 'initial_conditions', 'num_cohorts',
     'DISABLE_SYMMETRY', 'ABSOLUTE_ORIENTATION', 'ORIENTATION_MIX',
     # Appearance
-    'color_by_cohort', 'hue_sensitivity',
+    'color_by_cohort', 'hue_sensitivity', 'legacy_color',
 ]
 
 # Lockable PreferencesState parameter names

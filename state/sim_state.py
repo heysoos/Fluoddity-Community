@@ -53,6 +53,11 @@ class SimState:
     # default. Old saves are unaffected: a config missing the key falls back in
     # PhysicsConfig.from_dict(), which still answers True for them.
     color_by_cohort: bool = False
+    # Colour the particles the way the app did before brains had colour
+    # outputs: hue off the force terms, saturation flat at 0.8. The brains skip
+    # their colour weights under it, so it is the cheaper mode. A config
+    # missing the key keeps the brain's own colours.
+    legacy_color: bool = False
     watercolor_mode: bool = False
 
     # User notes (saved with physics config)

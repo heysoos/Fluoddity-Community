@@ -69,6 +69,14 @@ float g_audio[MAX_AUDIO_INPUTS] = float[MAX_AUDIO_INPUTS](
 vec2 g_unit_colour = vec2(0.0);
 vec2 g_brain_colour = vec2(0.0);
 
+// The colouring a preset saved before the outputs existed asks for: hue off the
+// force terms, one flat saturation. Every brain SKIPS its colour weights under
+// it, so it is also the cheaper mode. Declared here rather than in
+// entity_update.glsl because the brains read it too, and FALSE is the new
+// colouring - a program that never sets it (the Inspector, the GPU tests)
+// computes colour exactly as before this flag existed.
+uniform bool LEGACY_COLOR;
+
 // The mutation hash index of colour float c of unit u: below every audio
 // index, so it moves no motion or audio float's jitter.
 int colour_hash_index(int u, int c) {

@@ -110,6 +110,9 @@ class PhysicsConfig:
     ink_weight: float = 1.0
     hue_sensitivity: float = 0.5
     color_by_cohort: bool = True
+    # Missing from every preset written before the brains had colour outputs,
+    # and those load with the colours their widened genome now produces.
+    legacy_color: bool = False
     watercolor_mode: bool = False
 
     # Rule data (10 centers * 8 floats = 80 floats)
@@ -192,6 +195,7 @@ class PhysicsConfig:
                 'ink_weight': self.ink_weight,
                 'hue_sensitivity': self.hue_sensitivity,
                 'color_by_cohort': self.color_by_cohort,
+                'legacy_color': self.legacy_color,
                 'watercolor_mode': self.watercolor_mode,
             },
             'rule': self.rule.flatten().tolist(),
@@ -279,6 +283,7 @@ class PhysicsConfig:
             ink_weight=appearance.get('ink_weight', 1.0),
             hue_sensitivity=appearance.get('hue_sensitivity', 0.5),
             color_by_cohort=appearance.get('color_by_cohort', True),
+            legacy_color=appearance.get('legacy_color', False),
             watercolor_mode=appearance.get('watercolor_mode', False),
             rule=rule,
             notes=notes,
@@ -353,6 +358,7 @@ class ConfigSaver:
             ink_weight=sim_state.ink_weight,
             hue_sensitivity=sim_state.hue_sensitivity,
             color_by_cohort=sim_state.color_by_cohort,
+            legacy_color=sim_state.legacy_color,
             watercolor_mode=sim_state.watercolor_mode,
             rule=rule.copy(),
             notes=sim_state.notes,
@@ -421,6 +427,7 @@ class ConfigSaver:
         sim_state.ink_weight = config.ink_weight
         sim_state.hue_sensitivity = config.hue_sensitivity
         sim_state.color_by_cohort = config.color_by_cohort
+        sim_state.legacy_color = config.legacy_color
         sim_state.watercolor_mode = watercolor_override if watercolor_override is not None else config.watercolor_mode
 
         # User notes

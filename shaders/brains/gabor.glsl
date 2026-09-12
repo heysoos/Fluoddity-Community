@@ -64,8 +64,9 @@ vec4 gabor_unit(uint base, int i, vec4 x) {
     float arg = dot(x, f);
     if (BRAIN_AUDIO_IN > 0) arg += gabor_audio_phase(base, o + 14 + COLOUR_OUTPUTS);
     float g = env * cos(arg + ph);
-    g_unit_colour = vec2(gabor_param_at(base, o + 14),
-                         gabor_param_at(base, o + 15)) * g;
+    if (!LEGACY_COLOR)
+        g_unit_colour = vec2(gabor_param_at(base, o + 14),
+                             gabor_param_at(base, o + 15)) * g;
     return a * g;
 }
 
@@ -75,7 +76,7 @@ vec4 brain_gabor(uint base, vec4 x) {
     int n = BRAIN_SHAPE.x;
     for (int i = 0; i < n; i++) {
         result += gabor_unit(base, i, x);
-        colour += g_unit_colour;
+        if (!LEGACY_COLOR) colour += g_unit_colour;
     }
     g_brain_colour = colour;
     return result;

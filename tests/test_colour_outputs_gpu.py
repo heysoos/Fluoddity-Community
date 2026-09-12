@@ -57,7 +57,7 @@ def gl():
     yield ctx, prog
 
 
-def evaluate(gl, params, layout, mut=0.0):
+def evaluate(gl, params, layout, mut=0.0, legacy=False):
     from utilities.gl_helpers import set_brain_layout_uniforms
 
     ctx, prog = gl
@@ -69,7 +69,7 @@ def evaluate(gl, params, layout, mut=0.0):
     for b, at in zip(bufs, (0, 1, 3, 4)):
         b.bind_to_storage_buffer(at)
     for k, v in (("MUT", mut), ("BRAIN_MODALITY", _MOD_ID[layout.modality]),
-                 ("BRAIN_LEN", layout.length)):
+                 ("BRAIN_LEN", layout.length), ("LEGACY_COLOR", legacy)):
         if k in prog:
             prog[k].value = v
     set_brain_layout_uniforms(prog, layout)
@@ -125,3 +125,19 @@ def test_a_brain_with_no_motion_still_has_colour(gl, name, settings):
     y, c = evaluate(gl, p, layout)
     assert not y.any()
     assert np.abs(c).max() > 1e-3
+
+
+@pytest.mark.parametrize("name,settings", CASES)
+@pytest.mark.parametrize("mut", [0.0, 0.3])
+def test_legacy_colouring_skips_the_colour_outputs_and_keeps_the_motion(
+        gl, name, settings, mut):
+    """The switch back to the old colouring is also the switch that pays for
+    itself: every colour weight is left unread, and the four motion outputs
+    must not move by a bit."""
+    layout = _layout(name, settings)
+    p = get(name).random(np.random.default_rng(11), layout)
+    y_on, c_on = evaluate(gl, p, layout, mut)
+    y_off, c_off = evaluate(gl, p, layout, mut, legacy=True)
+    np.testing.assert_array_equal(y_on, y_off)
+    assert np.abs(c_on).max() > 1e-6, "the genome must have colour to skip"
+    assert not c_off.any()

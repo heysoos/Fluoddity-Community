@@ -58,8 +58,9 @@ vec4 lenia_unit(uint base, int i, vec4 x) {
     float u = dot(x, w) - mu;
     if (BRAIN_AUDIO_IN > 0) u += lenia_audio(base, o + 10 + COLOUR_OUTPUTS);
     float g = 2.0 * exp(-(u * u) / (2.0 * sg * sg)) - 1.0;
-    g_unit_colour = vec2(lenia_param_at(base, o + 10),
-                         lenia_param_at(base, o + 11)) * g;
+    if (!LEGACY_COLOR)
+        g_unit_colour = vec2(lenia_param_at(base, o + 10),
+                             lenia_param_at(base, o + 11)) * g;
     return a * g;
 }
 
@@ -69,7 +70,7 @@ vec4 brain_lenia(uint base, vec4 x) {
     int n = BRAIN_SHAPE.x;
     for (int i = 0; i < n; i++) {
         result += lenia_unit(base, i, x);
-        colour += g_unit_colour;
+        if (!LEGACY_COLOR) colour += g_unit_colour;
     }
     g_brain_colour = colour;
     return result;
