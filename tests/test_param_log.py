@@ -125,3 +125,26 @@ def test_the_preference_is_off_by_default_and_not_undoable():
     from state.preferences_state import NOT_UNDOABLE, PreferencesState
     assert PreferencesState().log_parameters is False
     assert "log_parameters" in NOT_UNDOABLE
+
+
+def test_the_real_recorder_reports_its_frame_count_to_the_log(tmp_path):
+    """A stub recorder cannot see VidSaver.finish() losing the count."""
+    service = VideoRecorderService()
+    service.configure(None, record_audio=False, log_parameters=True)
+    service.start()
+    for i in range(5):
+        service.log_row({"A": float(i)}, {})
+    rec = service.recorder
+    rec.output_path = str(tmp_path / "take.mp4")
+
+    class _Encoder:
+        input_width = input_height = 8
+        fps = 60
+
+        def close(self):
+            pass
+
+    rec.recorder = _Encoder()
+    rec.current_frame = 4
+    service.stop()
+    assert len(_read(tmp_path / "take_params.csv")) == 4

@@ -142,6 +142,7 @@ class VidSaver:
                 self.current_frame += 1
 
         frames = self.current_frame
+        self.last_frames = frames
         nominal_fps = ENCODER_FPS
         if self.recorder is not None:
             nominal_fps = self.recorder.fps
