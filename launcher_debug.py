@@ -22,4 +22,8 @@ def main():
         sys.exit(1)
 
 if __name__ == "__main__":
+    # A child process of the frozen build re-runs this exe; without this it
+    # would launch a second copy of the app instead of serving its job.
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

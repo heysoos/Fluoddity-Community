@@ -1373,6 +1373,39 @@ mechanics these caveats assume.
 
 ### Audio input
 
+- **The device is read in a CHILD PROCESS, because a lagging frame loop
+  starved the callback and the driver THREW THE AUDIO AWAY.** A PortAudio
+  callback runs Python for every 11 ms block, so a main thread holding the
+  interpreter - a GL call, a big decode - stops it cold; the driver's buffer
+  overflows and the blocks between are gone. Measured by holding the GIL from
+  the main thread: every stall lost exactly its own length (a 1.6 s hold, 1.6 s
+  of audio) whatever `frames_per_buffer` was, and the sidecar came out short,
+  so a recording made under lag popped at every hitch AND was retimed fast to
+  match. Blocking-read mode with a big buffer was measured and rejected: the
+  driver then delivers audio in host-buffer chunks, which put 100-190 ms on
+  every signal the sim reacts to. `utilities/audio_worker.py` is the child -
+  a callback that only queues, a pump thread to the pipe, no analyser and no
+  settings, and free of the `services` package so it imports only PortAudio.
+  `AudioCapture` keeps the analyser and the recording tap on a READER THREAD
+  fed by the pipe, so every block is analysed and written in device order and
+  a stalled parent finds them all waiting. Measured on the real microphone
+  through `python -m tools.measure_audio_stall`: a 4.2 s GIL hold loses
+  nothing and drops zero blocks; warm Start is 149 ms, first snapshot 29 ms,
+  and the snapshot cadence is unchanged. Four rules. The child is PREWARMED
+  from `App.__init__` (23 ms on the caller; a cold Start otherwise waits ~1.3 s
+  for the interpreter) and kept across Stop/Start. The child ends when the
+  control pipe does, so a parent that dies hard does not leave a microphone
+  open. An overflow flag or a full queue is an EMPTY message on the data pipe,
+  counted in `AudioCapture.dropped` and reported by the take that saw it -
+  the hole is silent on playback and the message is the only place it is
+  said. And EVERY entry point that boots the app must guard `__main__` and a
+  frozen one must call `freeze_support()`, or the spawn re-runs the app: this
+  child is launched at EVERY start, where the map's fit child only ran on
+  demand, so `launcher_debug.py` gained the call. Guarded by
+  `tests/test_audio_worker.py` and `tests/test_audio_capture_process.py`,
+  which run the real `serve()` on a thread over real pipes against a fake
+  PortAudio, and by one test that spawns the real child.
+
 - **Windows lists ONE ROW PER HOST API, and the device is chosen BY NAME, so a
   list that is not deduped has rows that cannot be clicked.** MME, DirectSound
   and WASAPI each offer the same microphone, and the DirectSound and WASAPI

@@ -38,6 +38,7 @@ class RecordingAudio:
         # the picture lags the sound it is reacting to.
         self.audio_offset = float(audio_offset)
         self.track: AudioTrackWriter | None = None
+        self._dropped_at_start = 0
 
     def start(self) -> bool:
         """Open the sidecar and install the tap; False if there is no audio."""
@@ -49,6 +50,7 @@ class RecordingAudio:
         if not track.ok:
             return False
         self.track = track
+        self._dropped_at_start = int(getattr(cap, "dropped", 0))
         cap.tap = track.write
         return True
 
@@ -80,6 +82,10 @@ class RecordingAudio:
             return f"Audio could not be added ({error}); saved without sound."
         _discard(video_path)
         _discard(self.sidecar_path)
+        dropped = int(getattr(self.capture, "dropped", 0)) - self._dropped_at_start
+        if dropped > 0 and not warning:
+            warning = (f"Audio lost {dropped} block(s) during the take; the "
+                       f"soundtrack has gaps there.")
         return warning
 
     def _detach(self):

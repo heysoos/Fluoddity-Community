@@ -413,3 +413,34 @@ def test_a_device_that_has_gone_is_not_replaced_by_the_os_default():
     assert ast.status == "error"
     assert "K66" in ast.last_error
     assert ast.enabled is False
+
+
+class _LifecycleCapture:
+    """Records the lifecycle calls the runtime makes on its capture."""
+
+    def __init__(self):
+        self.calls = []
+
+    def prewarm(self):
+        self.calls.append("prewarm")
+
+    def stop(self):
+        self.calls.append("stop")
+
+    def shutdown(self):
+        self.calls.append("shutdown")
+
+
+def test_prewarm_launches_the_capture_process():
+    rt = AudioRuntime()
+    rt.capture = _LifecycleCapture()
+    rt.prewarm()
+    assert rt.capture.calls == ["prewarm"]
+
+
+def test_closing_the_runtime_ends_the_capture_process():
+    """stop() alone would leave the child alive after the app has gone."""
+    rt = AudioRuntime()
+    rt.capture = _LifecycleCapture()
+    rt.close()
+    assert "shutdown" in rt.capture.calls

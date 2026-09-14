@@ -1,8 +1,8 @@
 """The only module here that performs IO.
 
-Analysis runs on the capture callback thread and publishes an immutable
-snapshot; the frame loop reads the newest one and never blocks. A dropped audio
-buffer therefore costs a stale signal rather than a stalled frame.
+The device is read by a child process; a reader thread here analyses each
+block and publishes an immutable snapshot, which the frame loop reads without
+blocking. See `utilities/audio_worker.py` for why it is a process.
 """
 from __future__ import annotations
 
@@ -145,26 +145,93 @@ def device_choices() -> list[dict]:
              "rate": 0.0, "api": "", "rank": 0}] + list_devices()
 
 
-class AudioCapture:
-    """Owns the stream and the analyser. Never raises into the frame loop."""
+# How long Start waits for the child to open a device. A cold child is a
+# fresh interpreter importing PortAudio, which a scanned disk can make slow.
+START_TIMEOUT = 20.0
+STOP_TIMEOUT = 3.0
 
-    def __init__(self) -> None:
+
+class _Child:
+    """The capture process and the parent's ends of its two pipes.
+
+    Spawned once and kept across Start/Stop, so the launch is paid at most
+    once a session. `alive` is False once it has died or been killed.
+    """
+
+    def __init__(self, ctrl, data, proc) -> None:
+        self.ctrl = ctrl
+        self.data = data
+        self.proc = proc
+
+    @property
+    def alive(self) -> bool:
+        return self.proc is not None and self.proc.is_alive()
+
+    def request(self, msg, timeout: float):
+        """Send one command and wait for its reply; None on silence."""
+        try:
+            self.ctrl.send(msg)
+            if not self.ctrl.poll(timeout):
+                return None
+            return self.ctrl.recv()
+        except (EOFError, OSError, ValueError, BrokenPipeError):
+            return None
+
+    def kill(self) -> None:
+        for conn in (self.ctrl, self.data):
+            try:
+                conn.close()
+            except OSError:
+                pass
+        if self.proc is not None and self.proc.is_alive():
+            self.proc.terminate()
+
+
+def _spawn_child() -> _Child:
+    """A real child process running `utilities.audio_worker.serve`."""
+    import multiprocessing as mp
+    from utilities import audio_worker
+    ctx = mp.get_context("spawn")
+    ctrl, ctrl_child = ctx.Pipe()
+    data, data_child = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=audio_worker.serve,
+                       args=(ctrl_child, data_child),
+                       daemon=True, name="fluoddity-audio")
+    proc.start()
+    ctrl_child.close()
+    data_child.close()
+    return _Child(ctrl, data, proc)
+
+
+class AudioCapture:
+    """Owns the analyser and the child that owns the device.
+
+    Never raises into the frame loop. The device is read in a separate
+    process (`utilities/audio_worker.py`) so a frame that holds the
+    interpreter cannot starve the driver; blocks arrive on a reader thread
+    here, which runs the analyser and the recording tap in device order.
+    """
+
+    def __init__(self, spawn=None) -> None:
         self.status = "idle"
         self.last_error = ""
         self.sample_rate = 0.0
-        self._pa = None
-        self._stream = None
+        self._spawn = spawn or _spawn_child
+        self._child: _Child | None = None
+        self._reader: threading.Thread | None = None
+        self._open = False
         self._analyzer: Analyzer | None = None
         self._snapshot: SignalSnapshot | None = None
         self._lock = threading.Lock()
         self._tail = np.zeros(FFT_SIZE, dtype=np.float32)
         self._channels = 1
         # Set while a recording wants the soundtrack; receives each block's
-        # bytes verbatim. Read once into a local by the callback and cleared
+        # bytes verbatim. Read once into a local by the reader and cleared
         # before teardown, exactly as _analyzer is.
         self.tap = None
-        # Captured at start, because the callback must not import anything.
-        self._continue = None
+        # Blocks the device or the child had to throw away since Start. A
+        # take that saw any is reported, since its soundtrack has a hole.
+        self.dropped = 0
         # Remembered so a Start picks up settings pushed while nothing ran.
         self._bands: dict = {}
         self._release: float | None = None
@@ -223,7 +290,40 @@ class AudioCapture:
                     self._snapshot = snap
         except Exception as exc:            # never kill the audio thread
             self.last_error = repr(exc)
-        return (None, self._continue)
+
+    def _read(self, child: _Child) -> None:
+        """The reader thread: one per child, ends when its pipe does."""
+        data = child.data
+        while True:
+            try:
+                block = data.recv_bytes()
+            except (EOFError, OSError, ValueError):
+                return
+            if not block:
+                self.dropped += 1
+                continue
+            self._on_block(block, 0, None, 0)
+
+    def prewarm(self) -> None:
+        """Launch the child now, so Start pays only the device open."""
+        try:
+            self._ensure_child()
+        except Exception as exc:            # noqa: BLE001 - Start retries
+            self.last_error = str(exc) or repr(exc)
+
+    def _ensure_child(self) -> _Child:
+        child = self._child
+        if child is not None and child.alive:
+            return child
+        if child is not None:
+            child.kill()
+        child = self._spawn()
+        self._child = child
+        self._reader = threading.Thread(target=self._read, args=(child,),
+                                        daemon=True,
+                                        name="fluoddity-audio-reader")
+        self._reader.start()
+        return child
 
     def start(self, device_index: int | None, auto_gain: bool = True) -> bool:
         self.stop()
@@ -232,41 +332,33 @@ class AudioCapture:
             self.last_error = ("PyAudioWPatch is not installed, so audio input "
                                "is unavailable.")
             return False
-        pa_mod = _pyaudio()
         try:
-            self._continue = pa_mod.paContinue
-            self._pa = pa_mod.PyAudio()
-            if device_index is None:
-                info = self._pa.get_default_input_device_info()
-                device_index = int(info["index"])
-            else:
-                info = self._pa.get_device_info_by_index(int(device_index))
-
-            self.sample_rate = float(info["defaultSampleRate"])
-            self._channels = max(1, int(info.get("maxInputChannels", 1)))
-            self._analyzer = Analyzer(self.sample_rate, auto_gain=auto_gain,
-                                      bands=self._bands,
-                                      release=self._release)
-            self._tail = np.zeros(FFT_SIZE, dtype=np.float32)
-
-            self._stream = self._pa.open(
-                format=pa_mod.paFloat32,
-                channels=self._channels,
-                rate=int(self.sample_rate),
-                input=True,
-                input_device_index=int(device_index),
-                frames_per_buffer=_BLOCK,
-                stream_callback=self._on_block,
-            )
-            self._stream.start_stream()
-            self.status = "active"
-            self.last_error = ""
-            return True
-        except Exception as exc:
-            self.last_error = str(exc) or repr(exc)
-            self.stop()
+            child = self._ensure_child()
+            reply = child.request(("open", device_index, _BLOCK),
+                                  START_TIMEOUT)
+        except Exception as exc:            # noqa: BLE001
+            reply = ("error", str(exc) or repr(exc))
+        if reply is None:
+            # A child that does not answer is not one to keep.
+            self._drop_child()
+            reply = ("error", "the audio process did not answer")
+        if reply[0] != "opened":
             self.status = "error"
+            self.last_error = str(reply[1]) if len(reply) > 1 else "unknown"
             return False
+        _, rate, channels = reply
+        self.sample_rate = float(rate)
+        self._channels = max(1, int(channels))
+        self._tail = np.zeros(FFT_SIZE, dtype=np.float32)
+        self.dropped = 0
+        # Installed once the device is open, so no block is analysed under
+        # the previous device's rate.
+        self._analyzer = Analyzer(self.sample_rate, auto_gain=auto_gain,
+                                  bands=self._bands, release=self._release)
+        self._open = True
+        self.status = "active"
+        self.last_error = ""
+        return True
 
     def fail(self, message: str) -> None:
         """Report a device the caller could not resolve, with none to open."""
@@ -275,27 +367,34 @@ class AudioCapture:
         self.last_error = message
 
     def stop(self) -> None:
-        # The analyser and the tap go first, so a callback still in flight
+        # The analyser and the tap go first, so a block still in the pipe
         # publishes nothing into a stream that is being torn down and writes
         # nothing into a file the main thread is closing.
         self._analyzer = None
         self.tap = None
-        for close in (self._close_stream, self._close_pa):
-            try:
-                close()
-            except Exception:
-                pass
-        self._stream = None
-        self._pa = None
+        child = self._child
+        if self._open and child is not None and child.alive:
+            if child.request(("close",), STOP_TIMEOUT) is None:
+                self._drop_child()
+        self._open = False
         with self._lock:
             self._snapshot = None
         self.status = "idle"
 
-    def _close_stream(self) -> None:
-        if self._stream is not None:
-            self._stream.stop_stream()
-            self._stream.close()
+    def shutdown(self) -> None:
+        """Stop, and end the child. The last thing the runtime does."""
+        self.stop()
+        child = self._child
+        if child is not None:
+            try:
+                child.ctrl.send(None)
+            except (EOFError, OSError, ValueError, BrokenPipeError):
+                pass
+            if child.proc is not None:
+                child.proc.join(STOP_TIMEOUT)
+        self._drop_child()
 
-    def _close_pa(self) -> None:
-        if self._pa is not None:
-            self._pa.terminate()
+    def _drop_child(self) -> None:
+        child, self._child = self._child, None
+        if child is not None:
+            child.kill()

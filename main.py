@@ -197,6 +197,9 @@ class App:
         self.tournament_service = TournamentService(grid=4)
         from services.audio_runtime import AudioRuntime
         self.audio_runtime = AudioRuntime()
+        # The capture process is launched here rather than at Start, so the
+        # first Start pays for the device and not for an interpreter.
+        self.audio_runtime.prewarm()
         from services.audio_rig_io import load_rig
         load_rig(self.ui.state.audio)
         # The rig file is shared by every copy of Fluoddity, and the write at

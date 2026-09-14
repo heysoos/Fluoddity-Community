@@ -61,8 +61,12 @@ class AudioRuntime:
         # the same way.
         self.audio_inputs = None
 
+    def prewarm(self) -> None:
+        """Launch the capture process now, so Start pays only the device."""
+        self.capture.prewarm()
+
     def close(self) -> None:
-        self.capture.stop()
+        self.capture.shutdown()
         self._brain.clear()
 
     def _prune_states(self, ast) -> None:

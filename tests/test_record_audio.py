@@ -20,6 +20,7 @@ class _Capture:
         self.sample_rate = rate
         self.channels = channels
         self.tap = None
+        self.dropped = 0
 
 
 @pytest.fixture
@@ -124,6 +125,31 @@ def test_finishing_removes_the_tap(paths, tmp_path, muxed):
     audio.start()
     audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0, nominal_fps=50.0)
     assert cap.tap is None, "the tap would keep writing into the next take"
+
+
+def test_blocks_dropped_during_the_take_are_reported(paths, tmp_path, muxed):
+    """A hole in the soundtrack is silent on playback; the message is the
+    only place it is said."""
+    video, out = paths
+    cap = _Capture()
+    cap.dropped = 5                             # from before this take
+    audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"))
+    audio.start()
+    cap.tap(b"\x00" * (4 * 2 * 48000))
+    cap.dropped = 7
+    message = audio.finish(str(video), str(out), frame_count=1,
+                           wall_seconds=1.0, nominal_fps=50.0)
+    assert "2 block" in message
+
+
+def test_a_take_with_no_drops_says_nothing_about_them(paths, tmp_path, muxed):
+    video, out = paths
+    cap = _Capture()
+    audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"))
+    audio.start()
+    cap.tap(b"\x00" * (4 * 2 * 48000))
+    assert audio.finish(str(video), str(out), frame_count=1,
+                        wall_seconds=1.0, nominal_fps=50.0) == ""
 
 
 def test_the_sidecar_is_deleted_once_it_is_muxed(paths, tmp_path, muxed):
