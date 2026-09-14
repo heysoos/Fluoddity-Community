@@ -2,6 +2,7 @@ import os
 import tempfile
 from itertools import count
 
+from services.param_log import ParamLog
 from utilities.vid_saver import VidSaver
 
 
@@ -15,9 +16,12 @@ class VideoRecorderService:
         self._capture = None
         self._record_audio = False
         self._audio_offset = 0.0
+        self._log_parameters = False
+        self.param_log = ParamLog()
 
     def configure(self, capture, record_audio: bool,
-                  audio_offset: float = 0.0) -> None:
+                  audio_offset: float = 0.0,
+                  log_parameters: bool = False) -> None:
         """Push the soundtrack choice, which start() reads.
 
         Recording begins from the toggle and from the scheduled-start check, so
@@ -26,6 +30,7 @@ class VideoRecorderService:
         self._capture = capture
         self._record_audio = bool(record_audio)
         self._audio_offset = float(audio_offset)
+        self._log_parameters = bool(log_parameters)
 
     def is_active(self) -> bool:
         """Check if recording is active."""
@@ -36,7 +41,19 @@ class VideoRecorderService:
         if self.recorder.active:
             return
         self.recorder.audio = self._build_audio()
+        self.param_log.clear()
         self.recorder.active = True
+
+    def log_row(self, values: dict, signals: dict) -> None:
+        """One row per frame while a take runs with logging ticked."""
+        if self._log_parameters and self.recorder.active:
+            self.param_log.row(values, signals)
+
+    def after_frame(self) -> None:
+        """Lands the log once the take is over, whichever way it ended."""
+        if not self.recorder.active and len(self.param_log):
+            self.param_log.write(self.recorder.output_path,
+                                 self.recorder.last_frames)
 
     def _build_audio(self):
         """A soundtrack for the take about to start, or None."""
@@ -55,6 +72,7 @@ class VideoRecorderService:
         if self.recorder.active:
             self.recorder.finish()
         self.recorder.audio = None
+        self.after_frame()
 
     def take_message(self) -> str:
         """What the last take had to say, consumed once."""
@@ -83,6 +101,7 @@ class VideoRecorderService:
         """
         self.recorder.frame(ctx, texture, max_frames, ssk_w, filename_prefix,
                             view_rect)
+        self.after_frame()
 
     def cleanup(self) -> None:
         """Cleanup resources."""

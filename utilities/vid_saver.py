@@ -1,5 +1,5 @@
 from .save_frame_gpu import AsyncFrameReader, reset_gpu_frame_counter
-from .ffmpeg_recorder import FFmpegVideoRecorder
+from .ffmpeg_recorder import ENCODER_FPS, FFmpegVideoRecorder
 from .paths import get_videos_dir
 from services.record_crop import record_sizes, world_crop
 from services.record_view import RecordView
@@ -17,6 +17,8 @@ class VidSaver:
         self.audio = None
         self.output_path = None
         self.last_message = ""
+        # Frames the last take wrote, read by whoever files something per frame.
+        self.last_frames = 0
         self._audio_on = False
         self._video_path = None
         self._started_at = 0.0
@@ -89,7 +91,7 @@ class VidSaver:
             self.recorder = FFmpegVideoRecorder(
                 width=output_width,
                 height=output_height,
-                fps=60,  # Default fps, can be made configurable
+                fps=ENCODER_FPS,
                 output_path=self._video_path,
                 realtime=False
             )
@@ -140,15 +142,18 @@ class VidSaver:
                 self.current_frame += 1
 
         frames = self.current_frame
+        nominal_fps = ENCODER_FPS
         if self.recorder is not None:
+            nominal_fps = self.recorder.fps
             self.recorder.close()
             self.recorder = None
 
-        # After close(), so the file the mux reads is complete.
+        # After close(), so the file the mux reads is complete. The rate is
+        # the encoder's own, or the mux retimes the file off the wrong one.
         if self._audio_on:
             self.last_message = self.audio.finish(
                 self._video_path, self.output_path, frames,
-                perf_counter() - self._started_at)
+                perf_counter() - self._started_at, nominal_fps)
         self._audio_on = False
         self._video_path = None
 

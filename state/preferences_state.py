@@ -84,6 +84,7 @@ class PreferencesState:
     filename_prefix: str = ""
     record_audio: bool = False  # Mux the captured audio onto the recording
     record_audio_delay: float = 0.0  # Seconds to delay the soundtrack by
+    log_parameters: bool = False  # Write the physics per frame beside a take
     record_notice: str = ""  # Result of the last take, shown once and dismissed
     recording_motion_blur: bool = True  # Motion blur setting used during video recording
     recording_blur_quality: int = 1  # Blur quality setting used during video recording
@@ -125,6 +126,7 @@ NOT_UNDOABLE: dict[str, str] = {
     "perform_monitor": "names an external display, not the look of the simulation",
     "perform_calibrations": "the physical alignment of an external display, not the look of the simulation",
     "load_preview_on_hover": "how the Load menu behaves, not a change to the creature",
+    "log_parameters": "a recording option, not the look of the simulation",
 }
 
 UNDOABLE_FIELDS: tuple[str, ...] = tuple(

@@ -1342,7 +1342,8 @@ class App:
         # rather than an argument at either call.
         self.video_service.configure(self.audio_runtime.capture,
                                      ui_state.preferences.record_audio,
-                                     ui_state.preferences.record_audio_delay)
+                                     ui_state.preferences.record_audio_delay,
+                                     ui_state.preferences.log_parameters)
 
         # 2. Process one-shot commands
         fw.mark("pre")
@@ -1433,6 +1434,7 @@ class App:
             ui_state, dt, self.sim.brain_layout,
             self.rule_manager.get_current_rule())
         self.sim.apply_state(_audio_sim)
+        self._log_parameters(ui_state, _audio_sim)
         self.sim.set_cohort_audio(self.audio_runtime.cohort_audio)
         self.sim.set_audio_inputs(self.audio_runtime.audio_inputs)
         self.sim.set_audio_seed(ui_state.audio.audio_seed)
@@ -1757,6 +1759,19 @@ class App:
         if self.perform_view is not None:
             self.perform_view.cleanup()
             self.perform_view = None
+
+    def _log_parameters(self, ui_state, audio_sim) -> None:
+        """One row per frame into the take's log, when the box is ticked."""
+        if not ui_state.preferences.log_parameters:
+            return
+        if not self.video_service.is_active():
+            return
+        from services.audio_mapping import physics_targets
+        values = {t.key: float(getattr(audio_sim, t.key, 0.0))
+                  for t in physics_targets(audio_sim)}
+        snap = ui_state.audio.snapshot
+        signals = dict(snap.signals) if snap is not None else {}
+        self.video_service.log_row(values, signals)
 
     def _render_perform_view_paused(self, ui_state, sweep_mode,
                                     sweep_reticle_pos, sweep_reticle_visible,

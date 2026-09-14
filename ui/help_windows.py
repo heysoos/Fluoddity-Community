@@ -411,6 +411,12 @@ class HelpWindowsMixin:
                     imgui.end_popup()
                 imgui.unindent(20)
 
+            _, self.state.preferences.log_parameters = imgui.checkbox(
+                "Log Parameters",
+                self.state.preferences.log_parameters
+            )
+            hints.tip("Write the physics the sim ran under, one row per frame, beside the video.")
+
             notices.render_banner(self.state.preferences, "record_notice",
                                   notices.WARN, scope="recording")
 
