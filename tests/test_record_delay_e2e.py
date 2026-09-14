@@ -52,12 +52,12 @@ def _click_lands_at(ffmpeg, offset, tmp_path):
 
     cap = _Capture()
     audio = RecordingAudio(cap, str(tmp_path / f"s{offset}.pcm"),
-                           nominal_fps=50.0, audio_offset=offset)
+                           audio_offset=offset)
     assert audio.start()
     mono = np.zeros(int(SR * TAKE_SECONDS), dtype="f4")
     mono[int(SR * CLICK_AT):int(SR * CLICK_AT) + 480] = 0.9
     cap.tap(np.repeat(mono, CH).tobytes())
-    audio.finish(video, out, FRAMES, TAKE_SECONDS)
+    audio.finish(video, out, FRAMES, TAKE_SECONDS, nominal_fps=50.0)
     assert os.path.exists(out)
 
     raw = subprocess.run(

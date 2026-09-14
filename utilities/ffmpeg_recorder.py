@@ -115,6 +115,11 @@ def mux_command(ffmpeg, video_path, audio_path, out_path, itsscale,
     ]
 
 
+# The rate the encoder stamps a take with. With a soundtrack the mux retimes
+# the file off this number, so it is defined once and handed to both.
+ENCODER_FPS = 60
+
+
 class FFmpegVideoRecorder:
     """
     Video recorder that pipes frames directly to ffmpeg without intermediate PNG files.
@@ -138,7 +143,8 @@ class FFmpegVideoRecorder:
     To decrease quality/size: Raise CRF (e.g., 28) and/or use faster preset (e.g., 'veryfast')
     """
 
-    def __init__(self, width, height, fps=60, output_path=None, realtime=True,
+    def __init__(self, width, height, fps=ENCODER_FPS, output_path=None,
+                 realtime=True,
                  debug_log=False, preset=PRESET, crf=CRF):
         """
         Initialize ffmpeg video recorder.

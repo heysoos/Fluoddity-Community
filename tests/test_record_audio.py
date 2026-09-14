@@ -73,7 +73,7 @@ def test_finishing_muxes_and_produces_the_output(paths, tmp_path, muxed):
     audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"))
     audio.start()
     cap.tap(b"\x00" * (4 * 2 * 48000))          # one second of stereo
-    audio.finish(str(video), str(out), frame_count=30, wall_seconds=1.0)
+    audio.finish(str(video), str(out), frame_count=30, wall_seconds=1.0, nominal_fps=50.0)
 
     assert out.exists()
     assert len(muxed) == 1
@@ -84,10 +84,10 @@ def test_the_retime_matches_the_frames_against_the_audio(paths, tmp_path, muxed)
     slowed by 50/30 or the soundtrack drifts apart from the picture."""
     video, out = paths
     cap = _Capture()
-    audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"), nominal_fps=50.0)
+    audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"))
     audio.start()
     cap.tap(b"\x00" * (4 * 2 * 48000))
-    audio.finish(str(video), str(out), frame_count=30, wall_seconds=1.0)
+    audio.finish(str(video), str(out), frame_count=30, wall_seconds=1.0, nominal_fps=50.0)
 
     cmd, _ = muxed[0]
     assert float(cmd[cmd.index("-itsscale") + 1]) == pytest.approx(50.0 / 30.0)
@@ -101,7 +101,7 @@ def test_the_sync_offset_reaches_the_mux(paths, tmp_path, muxed):
     audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"), audio_offset=0.15)
     audio.start()
     cap.tap(b"\x00" * (4 * 2 * 48000))
-    audio.finish(str(video), str(out), frame_count=30, wall_seconds=1.0)
+    audio.finish(str(video), str(out), frame_count=30, wall_seconds=1.0, nominal_fps=50.0)
 
     cmd, _ = muxed[0]
     assert "delays=150.0" in cmd[cmd.index("-af") + 1]
@@ -113,7 +113,7 @@ def test_no_offset_is_the_default(paths, tmp_path, muxed):
     audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"))
     audio.start()
     cap.tap(b"\x00" * 4096)
-    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0)
+    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0, nominal_fps=50.0)
     assert "-af" not in muxed[0][0]
 
 
@@ -122,7 +122,7 @@ def test_finishing_removes_the_tap(paths, tmp_path, muxed):
     cap = _Capture()
     audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"))
     audio.start()
-    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0)
+    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0, nominal_fps=50.0)
     assert cap.tap is None, "the tap would keep writing into the next take"
 
 
@@ -133,7 +133,7 @@ def test_the_sidecar_is_deleted_once_it_is_muxed(paths, tmp_path, muxed):
     audio = ra.RecordingAudio(cap, str(sidecar))
     audio.start()
     cap.tap(b"\x00" * 4096)
-    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0)
+    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0, nominal_fps=50.0)
     assert not sidecar.exists()
 
 
@@ -143,7 +143,7 @@ def test_the_temp_video_is_deleted_once_it_is_muxed(paths, tmp_path, muxed):
     audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"))
     audio.start()
     cap.tap(b"\x00" * 4096)
-    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0)
+    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0, nominal_fps=50.0)
     assert not video.exists()
 
 
@@ -160,7 +160,7 @@ def test_a_failed_mux_still_leaves_the_silent_take(paths, tmp_path, monkeypatch)
     audio.start()
     cap.tap(b"\x00" * 4096)
     message = audio.finish(str(video), str(out), frame_count=1,
-                           wall_seconds=1.0)
+                           wall_seconds=1.0, nominal_fps=50.0)
 
     assert out.exists(), "the take was lost"
     assert out.read_bytes() == b"fake encoded video"
@@ -173,7 +173,7 @@ def test_a_take_with_no_captured_audio_is_just_renamed(paths, tmp_path, muxed):
     cap = _Capture()
     audio = ra.RecordingAudio(cap, str(tmp_path / "s.pcm"))
     audio.start()
-    audio.finish(str(video), str(out), frame_count=10, wall_seconds=1.0)
+    audio.finish(str(video), str(out), frame_count=10, wall_seconds=1.0, nominal_fps=50.0)
     assert out.exists()
     assert muxed == [], "an empty sidecar must not reach ffmpeg"
 
@@ -186,12 +186,12 @@ def test_a_truncated_stream_is_reported(paths, tmp_path, muxed):
     audio.start()
     cap.tap(b"\x00" * (4 * 2 * 24000))          # half a second
     message = audio.finish(str(video), str(out), frame_count=300,
-                           wall_seconds=10.0)
+                           wall_seconds=10.0, nominal_fps=50.0)
     assert "drift" in message.lower()
 
 
 def test_finishing_without_starting_is_harmless(paths, tmp_path, muxed):
     video, out = paths
     audio = ra.RecordingAudio(_Capture(), str(tmp_path / "s.pcm"))
-    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0)
+    audio.finish(str(video), str(out), frame_count=1, wall_seconds=1.0, nominal_fps=50.0)
     assert out.exists()

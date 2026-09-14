@@ -31,11 +31,9 @@ class RecordingAudio:
     """Owns the sidecar and the tap for the length of one recording."""
 
     def __init__(self, capture, sidecar_path: str,
-                 nominal_fps: float = 50.0,
                  audio_offset: float = 0.0) -> None:
         self.capture = capture
         self.sidecar_path = sidecar_path
-        self.nominal_fps = float(nominal_fps)
         # Positive delays the soundtrack, which is the direction that matters:
         # the picture lags the sound it is reacting to.
         self.audio_offset = float(audio_offset)
@@ -54,18 +52,24 @@ class RecordingAudio:
         cap.tap = track.write
         return True
 
-    def finish(self, video_path, out_path, frame_count, wall_seconds) -> str:
-        """Mux the take. `out_path` exists when this returns, always."""
+    def finish(self, video_path, out_path, frame_count, wall_seconds,
+               nominal_fps) -> str:
+        """Mux the take. `out_path` exists when this returns, always.
+
+        `nominal_fps` is the rate the encoder stamped `video_path` with; the
+        retime is relative to it, so it must come from the encoder.
+        """
         track = self._detach()
         if track is None or track.bytes_written <= 0:
             _replace(video_path, out_path)
             _discard(self.sidecar_path)
             return ""
 
+        nominal_fps = float(nominal_fps)
         fps, warning = recording_fps(frame_count, track.duration_seconds,
-                                     wall_seconds, self.nominal_fps)
+                                     wall_seconds, nominal_fps)
         cmd = mux_command(find_ffmpeg(), video_path, self.sidecar_path,
-                          out_path, self.nominal_fps / fps if fps > 0 else 1.0,
+                          out_path, nominal_fps / fps if fps > 0 else 1.0,
                           track.sample_rate, track.channels,
                           self.audio_offset)
         ok, error = run_mux(cmd, out_path)

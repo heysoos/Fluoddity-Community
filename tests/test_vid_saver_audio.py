@@ -17,6 +17,7 @@ class _FakeRecorder:
 
     def __init__(self, width, height, fps=50, output_path=None, **kw):
         self.input_width, self.input_height = width, height
+        self.fps = fps
         self.output_path = output_path
         self.frames = 0
         _FakeRecorder.instances.append(self)
@@ -60,8 +61,10 @@ class _FakeAudio:
         self.started = True
         return self.starts
 
-    def finish(self, video_path, out_path, frame_count, wall_seconds):
+    def finish(self, video_path, out_path, frame_count, wall_seconds,
+               nominal_fps):
         self.finished = (video_path, out_path, frame_count, wall_seconds)
+        self.nominal_fps = nominal_fps
         return "done"
 
 
@@ -110,6 +113,18 @@ def test_the_soundtrack_is_told_how_long_the_take_ran(saver):
     saver.clock["t"] = 112.5
     saver.finish()
     assert audio.finished[3] == pytest.approx(12.5)
+
+
+def test_the_soundtrack_is_retimed_against_the_rate_the_encoder_was_given(saver):
+    """The mux scales the video's timestamps off its nominal rate, so the
+    number it is handed must be the one the encoder stamped the file with.
+    A mux assuming 50 over a file stamped 60 plays the take 20% fast and
+    -shortest then cuts the end of the soundtrack off."""
+    audio = _FakeAudio()
+    saver.audio = audio
+    _run(saver, 3)
+    saver.finish()
+    assert audio.nominal_fps == _FakeRecorder.instances[0].fps
 
 
 def test_the_mux_target_is_the_name_the_user_expects(saver):
