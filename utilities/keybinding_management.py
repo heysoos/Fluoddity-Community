@@ -169,13 +169,18 @@ class KeybindingManager:
         Returns:
             The key name as a string (e.g., "W", "SPACE"), or "?" if not bound
         """
-        # Load the raw config to get the original key name
-        try:
-            with open(self.config_path, 'r') as f:
-                config = json.load(f)
-                return config.get(action, "?").upper()
-        except Exception:
-            return "?"
+        # The user's file first, then the default: an action added after the
+        # user's file was copied is bound from the default in memory, and its
+        # label must come from the same place.
+        for path in (self.config_path, self.default_config_path):
+            try:
+                with open(path, 'r') as f:
+                    name = json.load(f).get(action)
+            except Exception:
+                name = None
+            if name:
+                return str(name).upper()
+        return "?"
 
     def reload(self):
         """Reload keybindings from the JSON file."""

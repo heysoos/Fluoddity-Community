@@ -8,6 +8,9 @@ audience watches the projector, the laptop keeps its UI.
 
 - **A slot may also name a saved audio rig**, loaded through the Audio
   panel's own Load path after the preset; "" leaves the current rig alone.
+- **Cycle** loads the next filled slot every `cycle_seconds` (a preference)
+  while `PerformState.cycle_enabled`; any slot load restarts the clock from
+  that slot. `services/slot_cycle.py`, driven from `_handle_slot_load`.
 - **A key press is an ordinary cold load.** Physics with locks respected, the
   rule pushed, the field stack applied, undo tagged `Load <stem>`. No reset;
   the canvas keeps evolving.
@@ -52,5 +55,5 @@ banks. The device's MIDI IN cannot be remapped, so these are fixed.
 
 ## Not built
 
-Attract mode, reset on switch, absolute-encoder takeover, per-preset knob
+Reset on switch, absolute-encoder takeover, per-preset knob
 assignments, MIDI on the audio rig's signal list.

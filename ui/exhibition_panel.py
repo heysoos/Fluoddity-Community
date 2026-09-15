@@ -45,6 +45,19 @@ class ExhibitionPanelMixin:
             perform.exhibition_locked = want
         hints.tip("Only set-list keys and the unlock chord do anything while on.")
 
+        changed, want = imgui.checkbox("Cycle presets##exhibition",
+                                       perform.cycle_enabled)
+        if changed:
+            perform.cycle_enabled = want
+        hints.tip("Load the next set-list slot on a timer; a key press restarts it.")
+        imgui.same_line()
+        imgui.set_next_item_width(imgui.calc_text_size("M" * 7).x)
+        changed, secs = imgui.drag_float("s##cycle", prefs.cycle_seconds,
+                                         1.0, 5.0, 3600.0, "%.0f")
+        if changed:
+            prefs.cycle_seconds = max(5.0, min(3600.0, secs))
+        hints.tip("Seconds each slot stays up while cycling.")
+
         self._render_set_list_file(perform, prefs)
         self._render_slots(perform)
         self._render_device(perform, prefs)

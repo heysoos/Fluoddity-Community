@@ -31,6 +31,7 @@ def test_the_lock_the_set_list_and_the_knob_table_are_drawn(
     h = _show(Harness())
     labels = _labels(monkeypatch, h.render_perform_window)
     assert "Lock keyboard##exhibition" in labels
+    assert "Cycle presets##exhibition" in labels
     assert "Add key##exhibition" in labels
     assert "Device##midi" in labels
     assert "Add knob##exhibition" in labels

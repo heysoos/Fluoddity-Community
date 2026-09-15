@@ -109,6 +109,7 @@ class PreferencesState:
     # Exhibition: the set list that reopens, and the MIDI device by base name.
     set_list_name: str = ""
     midi_device: str = ""
+    cycle_seconds: float = 300.0  # how long each set-list slot stays up while cycling
 
     # Exploration archive
     archive_name: str = "default"  # which Documents/Fluoddity/archives/<name> Explore mode loads
@@ -134,6 +135,7 @@ NOT_UNDOABLE: dict[str, str] = {
     "log_parameters": "a recording option, not the look of the simulation",
     "set_list_name": "names a set list file, not the look of the simulation",
     "midi_device": "names an external controller, not the look of the simulation",
+    "cycle_seconds": "a show timer, not the look of the simulation",
 }
 
 UNDOABLE_FIELDS: tuple[str, ...] = tuple(

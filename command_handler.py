@@ -45,6 +45,8 @@ class CommandHandler:
         self.tournament_service = tournament_service
         self.auto_service = auto_service
         self._auto_capture_warned = False
+        from services.slot_cycle import SlotCycle
+        self.slot_cycle = SlotCycle()
         # Explore (IMGEP) mode; set by App._ensure_archive_service().
         self.imgep_driver = None
         self.archive = None
@@ -2037,13 +2039,30 @@ class CommandHandler:
             else:
                 print(f"Failed to load config from {filepath}")
 
-    def _handle_slot_load(self, ui_state):
-        """Load the preset a set-list key named, on the ordinary cold path."""
+    def _handle_slot_load(self, ui_state, now=None):
+        """Load the preset a set-list key named, on the ordinary cold path.
+
+        With the cycle on and no key pressed, the timer supplies the slot.
+        """
+        import time
         perform = ui_state.perform
+        now = time.monotonic() if now is None else now
         if perform.slot_load is None:
-            return
+            if not perform.cycle_enabled:
+                self.slot_cycle.reset()
+                return
+            nxt = self.slot_cycle.due(perform.set_list, now,
+                                      ui_state.preferences.cycle_seconds)
+            if nxt is None:
+                return
+            perform.slot_load = (nxt.filename, nxt.category, nxt.rig)
         filename, category, rig = perform.slot_load
         perform.slot_load = None
+        # A key press restarts the clock from the slot it chose.
+        slot = next((s for s in perform.set_list.slots
+                     if (s.filename, s.category) == (filename, category)), None)
+        if slot is not None:
+            self.slot_cycle.note_loaded(slot, now)
         if filename:
             self._clear_menu_preview(ui_state)
             ui_state.load_filename = filename

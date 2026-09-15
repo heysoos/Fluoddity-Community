@@ -41,6 +41,9 @@ class PerformState:
     slot_load: tuple | None = None
     recentre_knobs: bool = False
     midi_status: str = ""     # a readout
+    # Walk the set list on a timer. Session-only, as the lock is; the
+    # interval is PreferencesState.cycle_seconds.
+    cycle_enabled: bool = False
 
     def slot_for_key(self, name: str):
         return self.set_list.slot_for_key(name)
