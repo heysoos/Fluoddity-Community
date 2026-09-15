@@ -35,7 +35,7 @@ class PerformState:
     # must not take the keyboard away.
     exhibition_locked: bool = False
     set_list: SetList = field(default_factory=SetList.default)
-    # One-shots. `slot_load` is (filename, category) for the key just pressed;
+    # One-shots. `slot_load` is (filename, category, rig) for the key just pressed;
     # `recentre_knobs` is set by whatever applied a config, so a push on an
     # encoder returns its slider to the value that preset loaded with.
     slot_load: tuple | None = None

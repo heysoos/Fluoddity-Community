@@ -68,7 +68,7 @@ def ui(gui, tmp_path):
 
 def test_a_free_key_loads_its_slot_even_unlocked(ui):
     _press(ui, glfw.KEY_1)
-    assert ui.state.perform.slot_load == ("reef", "Core")
+    assert ui.state.perform.slot_load == ("reef", "Core", "")
 
 
 def test_a_key_the_app_uses_keeps_its_binding_while_unlocked(ui):
@@ -81,7 +81,7 @@ def test_a_key_the_app_uses_keeps_its_binding_while_unlocked(ui):
 def test_the_lock_hands_that_key_to_the_set_list_and_drops_the_rest(ui):
     ui.state.perform.exhibition_locked = True
     _press(ui, glfw.KEY_Q)
-    assert ui.state.perform.slot_load == ("karst", "Custom")
+    assert ui.state.perform.slot_load == ("karst", "Custom", "")
     assert ui._keys_pressed == set(), "a held camera key must not move the view"
     ui.state.perform.slot_load = None
     _press(ui, glfw.KEY_Z)
@@ -123,7 +123,10 @@ def test_a_ctrl_number_is_not_a_slot(ui):
 class _Sim:
     def __init__(self):
         self.rules = []
-        self.brain_layout = None
+        # A rig load rerolls the audio weights, which asks the layout how
+        # many inputs it has; a deaf layout is left alone.
+        self.brain_layout = type("L", (), {"audio_inputs": 0,
+                                           "signature": lambda _s: "fourier-n10+c2"})()
 
     def apply_rule(self, rule):
         self.rules.append(rule)
@@ -159,7 +162,7 @@ def test_a_slot_press_loads_on_the_cold_path_and_recentres_the_knobs(tmp_path):
     ch = _handler(tmp_path)
     _write(tmp_path, "reef", 3.0)
     ui = UIState()
-    ui.perform.slot_load = ("reef", "Core")
+    ui.perform.slot_load = ("reef", "Core", "")
 
     ch.process_commands(ui, False)
 
@@ -183,9 +186,47 @@ def test_a_slot_press_under_a_live_hover_loads_its_own_preset(tmp_path):
     assert ch.preview_rule_active
 
     ui = UIState()
-    ui.perform.slot_load = ("reef", "Core")
+    ui.perform.slot_load = ("reef", "Core", "")
     ch.process_commands(ui, False)
 
     assert ch.preview_rule_active is False
     assert ui.sim.SENSOR_GAIN == pytest.approx(3.0)
     assert ch.ui.loaded[-1] == "reef"
+
+
+def test_a_slot_loads_its_rig_through_the_audio_panels_own_path(tmp_path, monkeypatch):
+    from services import audio_rig_io
+    from state.audio_in_state import AudioInState
+    monkeypatch.setattr(audio_rig_io, "rigs_dir", lambda: tmp_path / "rigs")
+    rig = AudioInState()
+    rig.global_strength = 0.25
+    audio_rig_io.save_rig(rig, audio_rig_io.preset_path("loud"))
+    ch = _handler(tmp_path)
+    _write(tmp_path, "reef", 3.0)
+    ui = UIState()
+    ui.audio.global_strength = 1.0
+    ui.perform.slot_load = ("reef", "Core", "loud")
+
+    ch.process_commands(ui, False)
+
+    assert ui.sim.SENSOR_GAIN == pytest.approx(3.0)
+    assert ui.audio.global_strength == pytest.approx(0.25)
+    assert ui.audio.preset_name == "loud"
+    assert ui.audio.request_load_preset is False
+
+
+def test_a_slot_with_only_a_rig_leaves_the_physics_alone(tmp_path, monkeypatch):
+    from services import audio_rig_io
+    from state.audio_in_state import AudioInState
+    monkeypatch.setattr(audio_rig_io, "rigs_dir", lambda: tmp_path / "rigs")
+    audio_rig_io.save_rig(AudioInState(), audio_rig_io.preset_path("quiet"))
+    ch = _handler(tmp_path)
+    ui = UIState()
+    ui.sim.SENSOR_GAIN = 7.0
+    ui.perform.slot_load = ("", "", "quiet")
+
+    ch.process_commands(ui, False)
+
+    assert ui.sim.SENSOR_GAIN == 7.0
+    assert ui.audio.preset_name == "quiet"
+    assert ch.ui.loaded == []

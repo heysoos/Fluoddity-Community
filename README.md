@@ -130,7 +130,7 @@ This handles any **flat** surface at any angle. A curved or folded surface needs
 
 ### Exhibition: a set list, some knobs, and a lock
 
-The bottom of the same panel is for leaving the machine with an audience. A **set list** puts presets on keys: each row is a key and the preset it loads, and the number row is filled in ready for you. Give it a name and press **Save** to keep it under `Documents/Fluoddity/setlists`; **Open** brings a saved one back, and the last one you used reopens with the app. Pressing a set-list key loads its preset the way File > Load does — the canvas carries on, nothing resets. A key the app already uses (Q, W, Z and so on) keeps its normal job until you lock.
+The bottom of the same panel is for leaving the machine with an audience. A **set list** puts presets on keys: each row is a key, the preset it loads, and optionally a saved audio rig loaded with it (a row can name a rig alone, or leave the rig where it is). The number row is filled in ready for you. Give it a name and press **Save** to keep it under `Documents/Fluoddity/setlists`; **Open** brings a saved one back, and the last one you used reopens with the app. Pressing a set-list key loads its preset the way File > Load does — the canvas carries on, nothing resets. A key the app already uses (Q, W, Z and so on) keeps its normal job until you lock.
 
 **Lock keyboard** hands the keyboard to the visitors: only the set-list keys do anything, every other key is swallowed, and the mouse still works for you. **Ctrl+Shift+F11** gives the keyboard back.
 

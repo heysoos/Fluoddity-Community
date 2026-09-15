@@ -6,6 +6,8 @@ audience watches the projector, the laptop keeps its UI.
 
 ## Decisions
 
+- **A slot may also name a saved audio rig**, loaded through the Audio
+  panel's own Load path after the preset; "" leaves the current rig alone.
 - **A key press is an ordinary cold load.** Physics with locks respected, the
   rule pushed, the field stack applied, undo tagged `Load <stem>`. No reset;
   the canvas keeps evolving.

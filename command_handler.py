@@ -2042,15 +2042,20 @@ class CommandHandler:
         perform = ui_state.perform
         if perform.slot_load is None:
             return
-        filename, category = perform.slot_load
+        filename, category, rig = perform.slot_load
         perform.slot_load = None
-        if not filename:
-            return
-        self._clear_menu_preview(ui_state)
-        ui_state.load_filename = filename
-        ui_state.load_category = category
-        ui_state.load_watercolor_override = None
-        self._handle_file_load(ui_state)
+        if filename:
+            self._clear_menu_preview(ui_state)
+            ui_state.load_filename = filename
+            ui_state.load_category = category
+            ui_state.load_watercolor_override = None
+            self._handle_file_load(ui_state)
+        if rig:
+            # The Audio panel's own Load, so a rig means the same thing
+            # whichever button asked for it.
+            ui_state.audio.preset_name = rig
+            ui_state.audio.request_load_preset = True
+            self._handle_audio_preset(ui_state)
 
     def _clear_menu_preview(self, ui_state):
         """Put back what a File > Load hover borrowed, if anything."""

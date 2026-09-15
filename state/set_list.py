@@ -18,16 +18,18 @@ class Slot:
     key: str = ""        # a KEY_NAME_TO_GLFW name, upper case
     category: str = ""   # a File > Load category ("Core", "Custom", a folder)
     filename: str = ""   # the config's stem, "" for an empty slot
+    rig: str = ""        # a named audio rig to load with it, "" leaves the rig alone
 
     def to_dict(self) -> dict:
         return {"key": self.key, "category": self.category,
-                "filename": self.filename}
+                "filename": self.filename, "rig": self.rig}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Slot":
         return cls(key=str(d.get("key", "")).upper(),
                    category=str(d.get("category", "")),
-                   filename=str(d.get("filename", "")))
+                   filename=str(d.get("filename", "")),
+                   rig=str(d.get("rig", "")))
 
 
 @dataclass
@@ -63,10 +65,10 @@ class SetList:
         return cls(name=name, slots=[Slot(key=k) for k in DEFAULT_SLOT_KEYS])
 
     def slot_for_key(self, key: str) -> Slot | None:
-        """The first slot bound to `key` that names a preset."""
+        """The first slot bound to `key` that names a preset or a rig."""
         key = key.upper()
         for s in self.slots:
-            if s.key == key and s.filename:
+            if s.key == key and (s.filename or s.rig):
                 return s
         return None
 

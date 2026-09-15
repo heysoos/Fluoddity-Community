@@ -11,6 +11,11 @@ from tests.test_perform_window_render import (  # noqa: F401
     Harness, _labels, frame, gui, host_only, no_disk_or_midi, two_displays)
 
 
+@pytest.fixture(autouse=True)
+def no_rig_dir(monkeypatch):
+    monkeypatch.setattr("services.audio_rig_io.list_rigs", lambda: ["loud"])
+
+
 def _show(h):
     h.state.perform.set_list = SetList(
         name="open house",
@@ -30,6 +35,7 @@ def test_the_lock_the_set_list_and_the_knob_table_are_drawn(
     assert "Device##midi" in labels
     assert "Add knob##exhibition" in labels
     assert labels.count("##key") == 2
+    assert labels.count("##rig") == 2
     assert labels.count("##param") == 2
 
 

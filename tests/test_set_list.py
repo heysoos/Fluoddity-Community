@@ -23,7 +23,7 @@ def test_an_empty_slot_does_not_shadow_a_filled_one_on_the_same_key():
 
 def test_a_set_list_round_trips(tmp_path):
     sl = SetList(name="open house",
-                 slots=[Slot("1", "Exhibition", "reef"), Slot("2")],
+                 slots=[Slot("1", "Exhibition", "reef", rig="loud"), Slot("2")],
                  knobs=[KnobBinding(cc=4, param="SENSOR_GAIN", step=0.02,
                                     rest_colour=10, active_colour=100)])
     set_list_io.save_set_list(sl, tmp_path)
@@ -51,3 +51,8 @@ def test_a_file_written_by_hand_is_tolerated():
     assert sl.slots[0].key == "Q"
     assert len(sl.slots) == 1
     assert sl.knobs[0].cc == 300 & 127
+
+
+def test_a_slot_naming_only_a_rig_is_still_a_slot():
+    sl = SetList(slots=[Slot("3", rig="quiet")])
+    assert sl.slot_for_key("3").rig == "quiet"

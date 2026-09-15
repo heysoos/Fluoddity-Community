@@ -375,7 +375,7 @@ class UI(
     def _request_slot(self, slot):
         # Runs after the preview clear in CommandHandler, which is what keeps a
         # slot press from finalising a hovered preset instead of loading its own.
-        self.state.perform.slot_load = (slot.filename, slot.category)
+        self.state.perform.slot_load = (slot.filename, slot.category, slot.rig)
 
     def key_callback(self, window, key, scancode, action, mods):
         # The lock takes the whole keyboard BEFORE ImGui sees a key: the

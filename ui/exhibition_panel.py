@@ -25,6 +25,8 @@ class ExhibitionPanelMixin:
 
     _set_list_name_edit = None
     _exhibition_notice = ""
+    _rig_cache = ()
+    _rig_cache_at = -1e9
     _device_cache = ()
     _device_cache_at = -1e9
 
@@ -105,11 +107,23 @@ class ExhibitionPanelMixin:
                 out.append((cat, f, f"{cat} / {f}"))
         return out
 
+    def _rig_names(self):
+        """Named rigs on disk, re-read once a second rather than per frame."""
+        now = time.monotonic()
+        if now - self._rig_cache_at > DEVICE_RESCAN_SECONDS:
+            from services.audio_rig_io import list_rigs
+            self._rig_cache = tuple(list_rigs())
+            self._rig_cache_at = now
+        return self._rig_cache
+
     def _render_slots(self, perform):
         imgui.spacing()
         imgui.text("Keys")
+        layout.text_disabled_wrapped("Key, the preset it loads, and the audio "
+                                     "rig loaded with it.")
         choices = self._preset_choices()
         labels = ["(empty)"] + [c[2] for c in choices]
+        rigs = list(self._rig_names())
         key_w = imgui.calc_text_size("MMMMMM").x + 24
         remove = -1
         for i, slot in enumerate(perform.set_list.slots):
@@ -128,14 +142,26 @@ class ExhibitionPanelMixin:
                 cur = len(shown) - 1
             else:
                 shown = labels
-            imgui.set_next_item_width(max(120.0, imgui.get_content_region_avail().x
-                                          - layout.button_width("X") - 8))
+            room = (imgui.get_content_region_avail().x
+                    - layout.button_width("X") - 16) / 2
+            imgui.set_next_item_width(max(100.0, room))
             changed, picked = imgui.combo("##preset", cur, shown)
             if changed:
                 if picked == 0:
                     slot.category = slot.filename = ""
                 elif picked <= len(choices):
                     slot.category, slot.filename = choices[picked - 1][:2]
+            imgui.same_line()
+            rig_shown = ["(keep rig)"] + rigs
+            if slot.rig and slot.rig not in rigs:
+                rig_shown.append(f"{slot.rig} (missing)")
+                rig_cur = len(rig_shown) - 1
+            else:
+                rig_cur = rig_shown.index(slot.rig) if slot.rig in rigs else 0
+            imgui.set_next_item_width(max(100.0, room))
+            changed, picked = imgui.combo("##rig", rig_cur, rig_shown)
+            if changed and picked <= len(rigs):
+                slot.rig = "" if picked == 0 else rigs[picked - 1]
             imgui.same_line()
             if imgui.small_button("X"):
                 remove = i
