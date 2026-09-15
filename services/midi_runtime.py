@@ -4,6 +4,10 @@
 ui_state.sim or an audio setting on ui_state.audio - so the slider moves and
 Save writes it. `feedback` lights the rings from the value the sim actually
 ran under, which for a physics slider is the audio-modulated copy.
+
+The archive-entry knob is the exception: a detent is a STEP through the
+gallery, resolved by the command handler, and its ring shows where in the
+gallery the knob is.
 """
 import math
 import time
@@ -20,7 +24,7 @@ ACTIVE_BAND = 0.005        # fraction of the range past which audio counts as be
 class KnobTarget:
     key: str          # what a KnobBinding.param names
     label: str
-    holder: str       # "sim" or "audio": which ui_state member carries it
+    holder: str       # "sim", "audio" or "archive": which ui_state member carries it
     attr: str
     lo: float
     hi: float
@@ -35,6 +39,11 @@ AUDIO_KNOB_TARGETS = (
     KnobTarget("audio:rate_scale", "Rate Scale", "audio",
                "rate_scale", 0.05, 8.0, True, 0.05, 8.0),
 )
+
+# One detent loads the next entry of the archive gallery, as sorted and
+# filtered in the browser; the attr is the ring's readout.
+ARCHIVE_KNOB_TARGET = KnobTarget("archive:entry", "Archive Entry", "archive",
+                                 "knob_entry_pos", 0.0, 1.0)
 
 
 def _param_defs():
@@ -61,11 +70,12 @@ def knob_targets(sim_state) -> list[KnobTarget]:
         out.append(KnobTarget(p.name, p.label, "sim", p.name, lo, hi, False,
                               p.hard_min, p.hard_max))
     out.extend(AUDIO_KNOB_TARGETS)
+    out.append(ARCHIVE_KNOB_TARGET)
     return out
 
 
 def resolve(ui_state, key: str) -> KnobTarget | None:
-    for t in AUDIO_KNOB_TARGETS:
+    for t in AUDIO_KNOB_TARGETS + (ARCHIVE_KNOB_TARGET,):
         if t.key == key:
             return t
     p = _param_defs().get(key)
@@ -76,6 +86,8 @@ def resolve(ui_state, key: str) -> KnobTarget | None:
 
 
 def _holder(ui_state, t: KnobTarget):
+    if t.holder == "archive":
+        return ui_state.archive
     return ui_state.sim if t.holder == "sim" else ui_state.audio
 
 
@@ -211,6 +223,10 @@ class MidiRuntime:
         t = resolve(ui_state, knob.param)
         if not detents or t is None:
             return
+        if t.holder == "archive":
+            ui_state.archive.step_entry += int(detents)
+            self._touched(ui_state, t)
+            return
         obj = _holder(ui_state, t)
         f = _fraction(t, float(getattr(obj, t.attr))) + detents * knob.step
         setattr(obj, t.attr, _clamp_hard(t, _from_fraction(t, f)))
@@ -218,6 +234,10 @@ class MidiRuntime:
 
     def _reset(self, ui_state, knob) -> None:
         t = resolve(ui_state, knob.param)
+        if t is not None and t.holder == "archive":
+            ui_state.archive.knob_entry_reset = True
+            self._touched(ui_state, t)
+            return
         centre = self._centres.get(knob.param)
         if t is None or centre is None:
             return

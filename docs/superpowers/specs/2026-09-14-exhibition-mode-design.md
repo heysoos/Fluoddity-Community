@@ -21,6 +21,12 @@ audience watches the projector, the laptop keeps its UI.
   loaded with. The audio rig's `global_strength` and `rate_scale` are knob
   targets too (`AUDIO_KNOB_TARGETS`), recentred when a rig loads; Rate Scale
   steps in log space because its slider is logarithmic.
+- **An archive-entry knob walks the gallery.** Target `archive:entry`: a
+  detent loads the next entry of the OPEN archive as the browser sorts and
+  filters it (the Brain filter is how it is held to one brain), wrapping at
+  both ends; a push goes back to the first. The runtime writes a step and
+  `_handle_entry_knob` resolves it to a `load_entry_id`, so the load is the
+  browser's own click. The ring shows the position along the gallery.
 - **Audio bends on top.** MIDI runs before the audio runtime, whose output is
   what the sim runs under. The LED ring shows THAT value; the colour switches
   while it differs from the slider by more than a dead band.

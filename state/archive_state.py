@@ -193,6 +193,13 @@ class ArchiveState:
     delete_entry_id: int = -1
     # Commit what is being previewed, so it survives the pointer leaving.
     load_entry_id: int = -1
+    # The archive-entry knob. `step_entry` is detents to walk the gallery by,
+    # `knob_entry_reset` a push (back to the first entry); both one-shots
+    # resolved to a load_entry_id by the command handler. `knob_entry_pos` is
+    # the readout the ring shows, 0..1 along the gallery.
+    step_entry: int = 0
+    knob_entry_reset: bool = False
+    knob_entry_pos: float = 0.0
     refit_projection_requested: bool = False
     switch_archive_name: str = ""
     new_archive_requested: bool = False

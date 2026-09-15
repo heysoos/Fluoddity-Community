@@ -52,6 +52,7 @@ class CommandHandler:
         self.archive = None
         self.archive_store = None
         self.goal_list = None
+        self._knob_entry_id = -1     # where the archive knob stands
         self.map_layout_service = None
         # Which run's physics is already on disk, and the configs read back for
         # the preview. Both are per-archive and cleared on a switch.
@@ -1397,6 +1398,8 @@ class CommandHandler:
         # tab entirely - and slot 0 under a grid is tile 0, which is the split
         # _grid_owner() already makes for the Z and G keys.
         grid = bool(getattr(ui_state.tournament, "enabled", False))
+        # The knob's step becomes a load_entry_id, handled below like a click.
+        self._handle_entry_knob(ui_state)
         if self.archive is None:
             self._end_archive_preview(ui_state)
             ast.load_entry_id = -1
@@ -1464,6 +1467,38 @@ class CommandHandler:
         self._end_archive_preview(ui_state)
         if want >= 0:
             self._show_archive_preview(ui_state, want)
+
+    def _handle_entry_knob(self, ui_state) -> None:
+        """Turn the archive knob's step into the next entry to load.
+
+        The walk is the gallery as the browser sorts and filters it, so the
+        knob shows what the browser shows; it wraps at both ends, and a push
+        goes back to the first entry.
+        """
+        from services.gallery_sort import sort_entries
+
+        ast = ui_state.archive
+        step, ast.step_entry = int(ast.step_entry), 0
+        reset, ast.knob_entry_reset = bool(ast.knob_entry_reset), False
+        if not step and not reset:
+            return
+        arc = self.archive
+        rows = (sort_entries(arc, ast.sort_by, ast.sort_desc, ast.pinned_only,
+                             brain=ast.brain_filter)
+                if arc is not None else [])
+        if not rows:
+            return
+        ids = [e.id for _, e in rows]
+        held = getattr(self, "_knob_entry_id", -1)
+        at = ids.index(held) if held in ids else -1
+        pos = 0 if reset else (at + step) % len(ids)
+        self._knob_entry_id = ids[pos]
+        ast.load_entry_id = ids[pos]
+        ast.knob_entry_pos = pos / (len(ids) - 1) if len(ids) > 1 else 0.0
+        perform = getattr(ui_state, "perform", None)
+        if perform is not None:
+            # The entry's physics land on the sliders, so a push returns there.
+            perform.recentre_knobs = True
 
     def _entry_has_physics(self, entry_id) -> bool:
         """Did this entry record any physics of its own?
