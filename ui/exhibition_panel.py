@@ -174,7 +174,7 @@ class ExhibitionPanelMixin:
         if changed:
             prefs.midi_device = "" if picked == 0 else options[picked]
         hints.tip("The controller, by name. Encoders must send relative "
-                  "(ENC 3FH/41H) messages.")
+                  "(ENC 3FH/41H) messages and their switches CC Hold.")
         if perform.midi_status:
             imgui.text_disabled(perform.midi_status)
 
