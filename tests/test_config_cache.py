@@ -92,3 +92,21 @@ def test_the_click_that_empties_the_visible_cache_does_not_force_a_reparse(tmp_p
     b._cache_all_configs()
     assert loads["n"] == 5
     assert len(b.cached_configs) == 5
+
+
+def test_a_subfolder_of_the_user_directory_is_a_category_of_its_own(tmp_path):
+    """An exhibition is a hand-picked folder, and it gets a heading in File >
+    Load without any file being moved out of Custom."""
+    b, loads = _make(tmp_path)
+    (b.user_configs_dir / "Exhibition").mkdir()
+    (b.user_configs_dir / "_private").mkdir()
+    (b.user_configs_dir / "Empty").mkdir()
+    _write(b.config_saver, b.user_configs_dir / "Exhibition" / "e0.json")
+    _write(b.config_saver, b.user_configs_dir / "_private" / "p0.json")
+    b._cache_all_configs()
+    assert b.folder_categories() == ["Exhibition"]
+    assert b.config_files_by_category["Exhibition"] == ["e0"]
+    assert b.config_files_by_category["Custom"] == ["u0", "u1"]
+    assert "Exhibition/e0" in b.cached_configs
+    assert (b._get_config_path("e0", "Exhibition")
+            == b.user_configs_dir / "Exhibition" / "e0.json")

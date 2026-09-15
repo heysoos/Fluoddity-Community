@@ -76,6 +76,8 @@ class PreferencesState:
     load_menu_core_open: bool = True  # Default: open
     load_menu_custom_open: bool = True  # Default: open
     load_menu_advanced_open: bool = False  # Default: collapsed
+    # A subfolder of physics_configs that File > Load is restricted to; "" shows every category.
+    load_menu_only_category: str = ""
 
     # Recording preferences
     max_frames: int = 1800  # 150 * 12

@@ -38,6 +38,18 @@ class ConfigBrowserMixin:
             for f in sorted(self.user_configs_dir.glob("*.json")):
                 self.config_files_by_category["Custom"].append(f.stem)
                 self.config_files.append(f.stem)  # Maintain backward compat list
+            # Every subfolder of the user directory is a category of its own,
+            # which is how a hand-picked set (an exhibition) gets a heading.
+            for d in sorted(p for p in self.user_configs_dir.iterdir()
+                            if p.is_dir() and not p.name.startswith(('.', '_'))):
+                files = [f.stem for f in sorted(d.glob("*.json"))]
+                if files:
+                    self.config_files_by_category[d.name] = files
+
+    def folder_categories(self) -> list[str]:
+        """The categories that are subfolders of the user configs directory."""
+        return [c for c in self.config_files_by_category
+                if c not in ("Core", "Custom", "Advanced")]
 
     def _cache_all_configs(self):
         """Load and cache all config files for preview.
@@ -90,6 +102,8 @@ class ConfigBrowserMixin:
             return self.app_configs_dir / "Advanced" / f"{filename}.json"
         elif category == "Custom":
             return self.user_configs_dir / f"{filename}.json"
+        elif category:
+            return self.user_configs_dir / category / f"{filename}.json"
 
         # Fallback: search categories in order (for backward compatibility)
         if filename in self.config_files_by_category.get("Core", []):
@@ -100,6 +114,25 @@ class ConfigBrowserMixin:
 
         # Default to Custom (user directory)
         return self.user_configs_dir / f"{filename}.json"
+
+    def _render_show_only_picker(self, folders: list[str]) -> str:
+        """Draw the Show combo when a folder category exists. -> the folder the
+        menu is restricted to, or "" for every category."""
+        prefs = self.state.preferences
+        only = prefs.load_menu_only_category
+        if only and only not in folders:
+            only = prefs.load_menu_only_category = ""
+        if not folders:
+            return ""
+        options = ["All"] + folders
+        current = options.index(only) if only in options else 0
+        imgui.set_next_item_width(imgui.calc_text_size("M" * 14).x)
+        changed, current = imgui.combo("Show##load_menu_only", current, options)
+        if changed:
+            prefs.load_menu_only_category = "" if current == 0 else options[current]
+        hints.tip("Show only one folder of physics_configs in this menu.")
+        imgui.separator()
+        return prefs.load_menu_only_category
 
     def _render_load_submenu_content(self, menu_watercolor_mode: bool):
         """Render the content of a load submenu with hierarchical categories.
@@ -132,18 +165,37 @@ class ConfigBrowserMixin:
             ("Custom", self.config_files_by_category["Custom"], "load_menu_custom_open"),
             ("Advanced", self.config_files_by_category["Advanced"], "load_menu_advanced_open")
         ]
+        folders = self.folder_categories()
+        for name in folders:
+            categories.append((name, self.config_files_by_category[name], None))
+
+        only = self._render_show_only_picker(folders)
+        folder_open = getattr(self, "_folder_category_open", None)
+        if folder_open is None:
+            folder_open = self._folder_category_open = {}
 
         for category_name, category_files, pref_attr in categories:
             if len(category_files) == 0:
                 continue  # Skip empty categories
+            if only and category_name != only:
+                continue
 
-            # Set collapse state from preferences
-            imgui.set_next_item_open(getattr(self.state.preferences, pref_attr))
-            category_open = imgui.collapsing_header(category_name)
+            if only:
+                # One folder on show: its files, with no heading to fold away.
+                category_open = True
+            else:
+                # Set collapse state from preferences
+                was_open = (getattr(self.state.preferences, pref_attr)
+                            if pref_attr else folder_open.get(category_name, True))
+                imgui.set_next_item_open(was_open)
+                category_open = imgui.collapsing_header(category_name)
 
-            # Update preference to match actual header state (handles user clicks)
-            if imgui.is_item_toggled_open():
-                setattr(self.state.preferences, pref_attr, category_open)
+                # Update preference to match actual header state (handles user clicks)
+                if imgui.is_item_toggled_open():
+                    if pref_attr:
+                        setattr(self.state.preferences, pref_attr, category_open)
+                    else:
+                        folder_open[category_name] = category_open
 
             if category_open:
                 # Render configs in this category

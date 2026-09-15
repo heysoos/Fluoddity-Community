@@ -2265,6 +2265,15 @@ keeps them, each with the phase that took the time.
   config's notes rather than approximated. Guarded by
   `tests/test_web_config.py`.
 
+- **Every SUBFOLDER of the user's `physics_configs` is a category in File >
+  Load, and the Show picker restricts the menu to one of them.** That is how
+  an exhibition machine offers only the presets chosen for it: the chosen
+  files go in `physics_configs/Exhibition/` and Show is set to that folder,
+  which `load_menu_only_category` remembers. A folder starting with `.` or
+  `_` and an empty folder are skipped, and a remembered folder that has gone
+  falls back to showing everything. Save still lands in the folder root
+  (Custom). Guarded by `tests/test_load_menu_render.py`.
+
 - **A save that only prints to the console reads as a no-op.** The file lands
   somewhere not on screen, so every save path sets a `notice` (or `warning` on
   failure) rendered by `ui/notices.py`. Pass a distinct `scope` — two tabs both
