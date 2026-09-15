@@ -565,3 +565,30 @@ def test_the_drawn_cell_stays_near_the_size_asked_for():
             cx, _ = mv.atlas_cell(span, 320.0, float(px))
             on_screen = cx * span
             assert 0.7 * px <= on_screen <= 1.45 * px, (px, span, on_screen)
+
+
+# ---- the brain filter, shared with the gallery -----------------------------
+
+class _Arc:
+    signature = "fourier-n10"
+
+    def __init__(self, layouts):
+        self.entries = [_E(i) for i in range(len(layouts))]
+        for e, lay in zip(self.entries, layouts):
+            e.layout = lay
+
+    def layout_at(self, i):
+        return self.entries[i].layout or self.signature
+
+
+def test_brain_signatures_are_the_distinct_brains_with_the_blank_resolved():
+    arc = _Arc(["", "mlp-n16-a0", "", "gabor-n8"])
+    assert mv.brain_signatures(arc) == ["fourier-n10", "gabor-n8", "mlp-n16-a0"]
+
+
+def test_brain_indices_select_one_brain_in_archive_order():
+    arc = _Arc(["", "mlp-n16-a0", "", "gabor-n8"])
+    assert mv.brain_indices(arc, "fourier-n10").tolist() == [0, 2]
+    assert mv.brain_indices(arc, "mlp-n16-a0").tolist() == [1]
+    assert mv.brain_indices(arc, "").tolist() == [0, 1, 2, 3]
+    assert mv.brain_indices(arc, "lenia-n8").tolist() == []

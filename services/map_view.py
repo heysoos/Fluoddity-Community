@@ -84,6 +84,21 @@ def filter_indices(entries, mode: str, *, recent_gens: int = 200,
                     dtype=np.int64)
 
 
+def brain_signatures(archive) -> list[str]:
+    """The distinct brains the archive holds, by signature. Through layout_at,
+    because an entry with an empty layout belongs to the archive's own."""
+    return sorted({archive.layout_at(i) for i in range(len(archive.entries))})
+
+
+def brain_indices(archive, brain: str) -> np.ndarray:
+    """-> indices of the entries of one brain, ascending; every index for ""."""
+    n = len(archive.entries)
+    if not brain:
+        return np.arange(n, dtype=np.int64)
+    return np.array([i for i in range(n) if archive.layout_at(i) == brain],
+                    dtype=np.int64)
+
+
 def present_values(entries, field: str) -> list[str]:
     """The distinct non-empty values of `field`, for a combo to offer."""
     return sorted({getattr(e, field, "") for e in entries} - {""})

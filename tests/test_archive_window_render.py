@@ -2748,3 +2748,36 @@ def test_a_foreign_entry_says_what_clicking_would_do(monkeypatch, gui, live,
     h.state.archive.live_preview = live
 
     assert f"mlp-n16-a0 brain - {tail}" in _hover_texts(monkeypatch, h)
+
+
+# ---- the brain filter, in both views ---------------------------------------
+
+def test_the_brain_filter_is_offered_in_the_gallery_and_the_map(gui, monkeypatch):
+    """One combo, drawn in both tabs, writing one field: an archive pools
+    every brain, and picking one has to work wherever the entries are shown."""
+    h = Harness(archive=_two_brains())
+    assert "Brain##gallery" in _combo_labels(
+        monkeypatch, lambda: h._render_gallery_toolbar(h.state.archive, h.archive_obj))
+    h.map_layout_service = _spread(h.archive_obj)
+    assert "Brain##map" in _combo_labels(
+        monkeypatch, lambda: h._render_map(h.state.archive, h.archive_obj))
+
+
+def test_a_brain_filter_narrows_both_views(gui):
+    h = Harness(archive=_two_brains(n=8, foreign_from=5))
+    ast = h.state.archive
+    ast.sort_by, ast.sort_desc = "id", False
+    ast.brain_filter = "mlp-n3.4.4-a0.0.0"
+    assert [i for i, _ in h._sorted_entries(ast, h.archive_obj)] == [5, 6, 7]
+    h.map_layout_service = _spread(h.archive_obj)
+    pts = h._map_points(h.archive_obj, h.map_layout_service, ast)
+    assert pts.idx.tolist() == [5, 6, 7]
+
+
+def test_a_remembered_brain_the_archive_no_longer_holds_shows_every_brain(gui):
+    h = Harness(archive=_populated())
+    ast = h.state.archive
+    ast.brain_filter = "lenia-n8"
+    frame(lambda: h._render_gallery_toolbar(ast, h.archive_obj))
+    assert ast.brain_filter == ""
+    assert len(h._sorted_entries(ast, h.archive_obj)) == 8

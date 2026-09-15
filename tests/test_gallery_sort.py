@@ -119,3 +119,16 @@ def test_every_declared_mode_actually_sorts(mode):
 def test_every_declared_mode_has_a_label(mode):
     label = GALLERY_SORTS[mode].label
     assert label and label[0].isupper()
+
+
+def test_a_brain_filter_keeps_that_brain_alone():
+    """The gallery and the map share the one filter, both reading layout_at:
+    an entry with an empty layout belongs to the archive's own brain."""
+    assert _ids(sort_entries(_arc(), "id", False, False, brain="mlp-n16-a0")) == [0, 2]
+    assert _ids(sort_entries(_arc(), "id", False, False, brain="fourier-c10")) == [1]
+    assert _ids(sort_entries(_arc(), "id", False, False, brain="")) == [0, 1, 2]
+
+
+def test_the_brain_filter_stacks_with_pinned_only():
+    assert _ids(sort_entries(_arc(), "id", False, True, brain="mlp-n16-a0")) == [0, 2]
+    assert _ids(sort_entries(_arc(), "id", False, True, brain="fourier-c10")) == []

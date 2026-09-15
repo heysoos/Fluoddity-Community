@@ -33,15 +33,18 @@ DEFAULT_SORT = "novelty"
 
 
 def sort_entries(archive, sort_by: str, sort_desc: bool,
-                 pinned_only: bool) -> list[tuple]:
+                 pinned_only: bool, brain: str = "") -> list[tuple]:
     """-> [(archive row index, entry)] in display order.
 
     The index is the archive's own row, which is how every command addresses an
-    entry; the position in this list is only where it is drawn.
+    entry; the position in this list is only where it is drawn. `brain` is a
+    layout signature, or "" for every brain.
     """
     rows = list(enumerate(archive.entries))
     if pinned_only:
         rows = [(i, e) for i, e in rows if e.pinned]
+    if brain:
+        rows = [(i, e) for i, e in rows if archive.layout_at(i) == brain]
     key = GALLERY_SORTS.get(sort_by, GALLERY_SORTS[DEFAULT_SORT]).key
     return sorted(rows, key=lambda p: key(archive, p[0], p[1]),
                   reverse=bool(sort_desc))

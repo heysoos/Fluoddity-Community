@@ -857,18 +857,19 @@ class ArchiveWindowMixin:
         The order only changes when the archive does, so it must not be
         recomputed every frame.
         """
-        key = (ast.sort_by, ast.sort_desc, ast.pinned_only,
+        key = (ast.sort_by, ast.sort_desc, ast.pinned_only, ast.brain_filter,
                getattr(arc, "revision", None))
         hit = getattr(self, "_sort_cache", None)
         if hit is not None and hit[0] is arc and hit[1] == key:
             return hit[2]
 
-        out = sort_entries(arc, ast.sort_by, ast.sort_desc, ast.pinned_only)
+        out = sort_entries(arc, ast.sort_by, ast.sort_desc, ast.pinned_only,
+                           brain=ast.brain_filter)
         self._sort_cache = (arc, key, out)
         return out
 
     def _render_gallery(self, ast, arc):
-        self._render_gallery_toolbar(ast)
+        self._render_gallery_toolbar(ast, arc)
         if ast.thumb_size <= GALLERY_LIST_MAX:
             self._render_gallery_list(ast, arc)
         else:
@@ -877,7 +878,22 @@ class ArchiveWindowMixin:
 
     # ---- the toolbar ---------------------------------------------------
 
-    def _render_gallery_toolbar(self, ast):
+    def _render_brain_filter(self, ast, arc, suffix: str) -> None:
+        """The Brain combo: one brain of the archive, or every brain. Drawn in
+        both views, writing the one field both read."""
+        brains = map_view.brain_signatures(arc)
+        if ast.brain_filter and ast.brain_filter not in brains:
+            ast.brain_filter = ""
+        options = ["All brains"] + brains
+        current = options.index(ast.brain_filter) if ast.brain_filter else 0
+        layout.push_settings_width("Brain")
+        changed, current = imgui.combo(f"Brain##{suffix}", current, options)
+        imgui.pop_item_width()
+        if changed:
+            ast.brain_filter = "" if current == 0 else options[current]
+        hints.tip("Show only the entries of one brain.")
+
+    def _render_gallery_toolbar(self, ast, arc):
         # The size row. The slider is ##-labelled, so it owes nothing to
         # WIDEST_LABEL; the icons are what say which end is which.
         if self._size_icon("##gallery_list_icon", "list"):
@@ -916,6 +932,7 @@ class ArchiveWindowMixin:
         # only teaches that tooltips are not worth hovering.
         layout.wrap_row(right, layout.button_width("Pinned only"))
         _, ast.pinned_only = imgui.checkbox("Pinned only", ast.pinned_only)
+        self._render_brain_filter(ast, arc, "gallery")
 
     @staticmethod
     def _size_icon(str_id: str, kind: str) -> bool:
@@ -1543,7 +1560,8 @@ class ArchiveWindowMixin:
         """
         key = (getattr(arc, "revision", None), getattr(proj, "version", None),
                len(arc), ast.map_color_by, ast.map_filter, ast.map_recent_gens,
-               ast.map_novel_pct, ast.map_filter_goal, ast.map_filter_source)
+               ast.map_novel_pct, ast.map_filter_goal, ast.map_filter_source,
+               ast.brain_filter)
         hit = getattr(self, "_map_cache", None)
         if hit is not None and hit[0] is arc and hit[1] is proj and hit[2] == key:
             return hit[3]
@@ -1552,6 +1570,9 @@ class ArchiveWindowMixin:
             arc.entries, ast.map_filter,
             recent_gens=ast.map_recent_gens, novel_pct=ast.map_novel_pct,
             goal=ast.map_filter_goal, source=ast.map_filter_source)
+        if ast.brain_filter:
+            idx = np.intersect1d(idx, map_view.brain_indices(arc, ast.brain_filter),
+                                 assume_unique=True)
         if not len(idx):
             self._map_cache = (arc, proj, key, None)
             return None
@@ -1629,6 +1650,7 @@ class ArchiveWindowMixin:
         hints.tip("Dots, or a heatmap of the same colours.")
 
         self._render_map_filter_arg(ast, arc)
+        self._render_brain_filter(ast, arc, "map")
 
     def _render_atlas_controls(self, ast) -> None:
         """The atlas toggle and its cell size."""

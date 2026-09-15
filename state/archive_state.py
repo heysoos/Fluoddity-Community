@@ -108,6 +108,9 @@ class ArchiveState:
     sort_by: str = "novelty"         # see GALLERY_SORTS
     sort_desc: bool = True
     pinned_only: bool = False
+    # One brain's signature, or "" for every brain. Read by the gallery AND
+    # the map, since an archive pools every layout it was ever searched under.
+    brain_filter: str = ""
     selected_entry_id: int = -1
     # Gallery tile size in pixels, and the list row height below the threshold.
     # See ui/archive_window.py for the threshold and why the grid has a floor.
@@ -284,8 +287,8 @@ PERSISTED_FIELDS = (
     # browser and map view: per-archive, and restoring where you were looking
     # is most of what "open it in its last state" means once the archive is
     # large enough that the map does not fit on screen.
-    "show_browser", "sort_by", "sort_desc", "pinned_only", "live_preview",
-    "layout_signature", "thumb_size",
+    "show_browser", "sort_by", "sort_desc", "pinned_only", "brain_filter",
+    "live_preview", "layout_signature", "thumb_size",
     "map_zoom", "map_center_x", "map_center_y",
     "map_color_by", "map_filter", "map_render",
     "map_layout", "map_thumbs", "map_thumb_px",
