@@ -10,6 +10,7 @@ _ASPECT_RATIO_OPTIONS = [
     ("4:3",  "4:3",  False),
     ("16:9", "16:9", False),
     ("2:1",  "2:1",  False),
+    ("21:9 (2560x1080)", "64:27", False),
     ("3:1",  "3:1",  False),
     ("---",  None,   True),   # Separator (not selectable)
     ("3:4",  "3:4",  False),
