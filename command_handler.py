@@ -112,6 +112,8 @@ class CommandHandler:
         if pls:
             pls.restore_locked(ui_state.sim, ui_state.preferences, snapshot)
         self._restore_brain_settings(config, ui_state)
+        # A push on an encoder returns its slider to what this config set.
+        ui_state.perform.recentre_knobs = True
         return rule
 
     def _push_and_apply_rule(self, rule, ui_state):
@@ -313,6 +315,10 @@ class CommandHandler:
 
         # Handle preview commands (file browser)
         self._handle_preview_commands(ui_state)
+
+        # A set-list key. After the preview handler, so a hovered preset is
+        # put back before this one loads rather than finalised in its place.
+        self._handle_slot_load(ui_state)
 
         # Handle config clipboard commands
         self._handle_clipboard_commands(ui_state)
@@ -2031,26 +2037,45 @@ class CommandHandler:
             else:
                 print(f"Failed to load config from {filepath}")
 
+    def _handle_slot_load(self, ui_state):
+        """Load the preset a set-list key named, on the ordinary cold path."""
+        perform = ui_state.perform
+        if perform.slot_load is None:
+            return
+        filename, category = perform.slot_load
+        perform.slot_load = None
+        if not filename:
+            return
+        self._clear_menu_preview(ui_state)
+        ui_state.load_filename = filename
+        ui_state.load_category = category
+        ui_state.load_watercolor_override = None
+        self._handle_file_load(ui_state)
+
+    def _clear_menu_preview(self, ui_state):
+        """Put back what a File > Load hover borrowed, if anything."""
+        if not self.preview_rule_active:
+            return
+        # Before the rule: what comes off the stack is the user's own
+        # brain, and apply_rule measures a rule against the live layout.
+        self._return_layout("menu")
+        if self._preview_rule_was_pushed:
+            prev_rule, prev_seed = self.rule_manager.pop_rule()
+            if prev_seed is not None:
+                ui_state.sim.rule_seed = prev_seed
+            self.sim.apply_rule(prev_rule)
+        self.preview_rule_active = False
+        self._preview_rule_was_pushed = False
+        if self.field_handler:
+            self.field_handler.restore_from_preview(ui_state)
+
     def _handle_preview_commands(self, ui_state):
         """Handle config preview (hover in Load submenu) and clear preview."""
         fh = self.field_handler
 
         # Clear preview must happen before new preview
         if ui_state.request_clear_preview:
-            if self.preview_rule_active:
-                # Before the rule: what comes off the stack is the user's own
-                # brain, and apply_rule measures a rule against the live layout.
-                self._return_layout("menu")
-                if self._preview_rule_was_pushed:
-                    prev_rule, prev_seed = self.rule_manager.pop_rule()
-                    if prev_seed is not None:
-                        ui_state.sim.rule_seed = prev_seed
-                    self.sim.apply_rule(prev_rule)
-                self.preview_rule_active = False
-                self._preview_rule_was_pushed = False
-
-                if fh:
-                    fh.restore_from_preview(ui_state)
+            self._clear_menu_preview(ui_state)
 
         # New preview
         if ui_state.request_preview_config:

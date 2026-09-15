@@ -85,6 +85,9 @@ hiddenimports = [
     'imgui_bundle.python_backends',
     'imgui_bundle.python_backends.glfw_backend',
     'pyaudiowpatch',
+    'mido',
+    'mido.backends.rtmidi',
+    'rtmidi',
 ]
 
 a = Analysis(

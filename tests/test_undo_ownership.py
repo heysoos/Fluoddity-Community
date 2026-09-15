@@ -12,6 +12,8 @@ The rule is that the journal records what the user set, and while something
 else owns the preferences what is on screen is not that.
 """
 import numpy as np
+import types
+
 import pytest
 
 from main import App
@@ -65,6 +67,7 @@ class _App:
         self.rule_manager = _Rules()
         self.video_service = _Video(recording)
         self.screenshot_in_progress = screenshot
+        self.midi_runtime = types.SimpleNamespace(gesture_active=lambda: False)
 
 
 def frame(app, st):

@@ -365,7 +365,34 @@ class UI(
         if not imgui.get_io().want_capture_mouse:
             self._scroll_delta += yoffset
 
+    def _slot_for_key(self, key):
+        """The set-list slot on this GLFW key, or None."""
+        name = self.keybindings.key_name(key)
+        if not name:
+            return None
+        return self.state.perform.slot_for_key(name)
+
+    def _request_slot(self, slot):
+        # Runs after the preview clear in CommandHandler, which is what keeps a
+        # slot press from finalising a hovered preset instead of loading its own.
+        self.state.perform.slot_load = (slot.filename, slot.category)
+
     def key_callback(self, window, key, scancode, action, mods):
+        # The lock takes the whole keyboard BEFORE ImGui sees a key: the
+        # visitors' keyboard reaches the set list and the exit chord and
+        # nothing else. The mouse is untouched.
+        if self.state.perform.exhibition_locked:
+            self._keys_pressed.clear()
+            if action == glfw.PRESS:
+                chord = (mods & glfw.MOD_CONTROL) and (mods & glfw.MOD_SHIFT)
+                if chord and key == self.keybindings.get_key("toggle_perform_mode"):
+                    self.state.perform.exhibition_locked = False
+                elif not (mods & glfw.MOD_CONTROL):
+                    slot = self._slot_for_key(key)
+                    if slot is not None:
+                        self._request_slot(slot)
+            return
+
         if self.imgui_key_callback:
             self.imgui_key_callback(window, key, scancode, action, mods)
 
@@ -382,9 +409,14 @@ class UI(
             ctrl_pressed = mods & glfw.MOD_CONTROL
             shift_pressed = mods & glfw.MOD_SHIFT
 
+            # Unlocked, a set-list key still loads its preset so a show can be
+            # rehearsed - unless the app already uses that key, which wins.
+            slot = None if ctrl_pressed else self._slot_for_key(key)
+            if slot is not None and not self.keybindings.is_bound(key):
+                self._request_slot(slot)
             # Undo/redo first: Z is also bound to randomize_rules, which is
             # tested without a modifier further down this chain.
-            if ctrl_pressed and key == self.keybindings.get_key("undo_with_ctrl"):
+            elif ctrl_pressed and key == self.keybindings.get_key("undo_with_ctrl"):
                 if shift_pressed:
                     self._request_redo = True
                 else:
@@ -451,6 +483,11 @@ class UI(
             if time.time() - self.pending_resize_time >= self.resize_debounce_delay:
                 self._request_reload = True
                 self.pending_resize_time = None
+
+        # The lock drops held keys too, or a key held as it was ticked on
+        # keeps the camera moving until the next key event.
+        if self.state.perform.exhibition_locked:
+            self._keys_pressed.clear()
 
         # Check for R key hold (reset command - continuous)
         reset_key = self.keybindings.get_key("reset_keybinding")

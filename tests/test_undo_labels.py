@@ -43,6 +43,7 @@ class _App:
         self.rule_manager = _Rules()
         self.video_service = type("V", (), {"is_active": lambda _s: False})()
         self.screenshot_in_progress = False
+        self.midi_runtime = type("M", (), {"gesture_active": lambda _s: False})()
 
 
 def test_a_tag_names_the_step_it_rides_with():

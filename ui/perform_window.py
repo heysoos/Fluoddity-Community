@@ -4,6 +4,7 @@ from imgui_bundle import imgui
 from services import corner_pin
 from services.perform_window import list_monitors
 from . import hints, layout, notices
+from .exhibition_panel import ExhibitionPanelMixin
 
 CANVAS_MAX_W = 280.0      # the proxy display, in points
 GRAB_PX = 14.0            # how close the pointer must be to pick a handle
@@ -19,7 +20,7 @@ def _col(rgba):
     return imgui.get_color_u32(imgui.ImVec4(*rgba))
 
 
-class PerformWindowMixin:
+class PerformWindowMixin(ExhibitionPanelMixin):
     """Mixin for the Perform Mode panel. Combined into UI via inheritance."""
 
     # Which handle this gesture grabbed, None for a drag that caught nothing.
@@ -98,6 +99,7 @@ class PerformWindowMixin:
                   "it, or waits for the click.")
 
         self._render_calibration(perform, selected)
+        self._render_exhibition(perform, prefs)
 
         notices.render_banner(perform, "notice", notices.WARN, scope="perform")
         imgui.end()

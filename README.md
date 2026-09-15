@@ -128,6 +128,16 @@ Each display remembers its own corners, so a projector you have calibrated once 
 
 This handles any **flat** surface at any angle. A curved or folded surface needs more than four corners and is not something this can fix.
 
+### Exhibition: a set list, some knobs, and a lock
+
+The bottom of the same panel is for leaving the machine with an audience. A **set list** puts presets on keys: each row is a key and the preset it loads, and the number row is filled in ready for you. Give it a name and press **Save** to keep it under `Documents/Fluoddity/setlists`; **Open** brings a saved one back, and the last one you used reopens with the app. Pressing a set-list key loads its preset the way File > Load does — the canvas carries on, nothing resets. A key the app already uses (Q, W, Z and so on) keeps its normal job until you lock.
+
+**Lock keyboard** hands the keyboard to the visitors: only the set-list keys do anything, every other key is swallowed, and the mouse still works for you. **Ctrl+Shift+F11** gives the keyboard back.
+
+**Knobs** are for a MIDI controller with endless encoders — a Midi Fighter Twister, with its encoders set to *ENC 3FH/41H* in the Midi Fighter Utility. Pick the device, then add a row per knob: the encoder's CC number (0–15 for bank 1, 16–31 for bank 2), the slider it nudges, and how far one click moves it as a fraction of the slider's range. A knob turns the real slider, so what you see in the Physics window is what the visitor did, and every preset loads exactly as you saved it; pushing an encoder puts its slider back to where the preset left it.
+
+The Twister's rings follow the value the simulation is actually running under, which is the audio-reactive one when a rig is on — so a ring twitches with the music around wherever the knob left it. The two colour numbers on each row are the ring's colour at rest and while audio is bending it; a knob on a slider that a parameter sweep has taken over is dimmed, because the slider does nothing there.
+
 ## Inject Texture
 
 **Extras > Inject Texture** injects texture into the fields the particles move through — procedural noise, an image, your own GLSL, or the simulation's own canvas fed back into itself.

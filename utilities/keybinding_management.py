@@ -134,6 +134,19 @@ class KeybindingManager:
             if key is not None:
                 self.bindings[action] = key
 
+    @classmethod
+    def key_name(cls, key: int) -> str:
+        """The name a set list or the binding file uses for a GLFW key, or ""."""
+        if not hasattr(cls, "_GLFW_TO_NAME"):
+            cls._GLFW_TO_NAME = {}
+            for name, code in cls.KEY_NAME_TO_GLFW.items():
+                cls._GLFW_TO_NAME.setdefault(code, name)
+        return cls._GLFW_TO_NAME.get(key, "")
+
+    def is_bound(self, key: int) -> bool:
+        """Does any action already use this key?"""
+        return key in self.bindings.values()
+
     def get_key(self, action: str) -> int | None:
         """
         Get the GLFW key code for a given action.

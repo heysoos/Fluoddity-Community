@@ -2024,6 +2024,36 @@ design; these are the rules it rests on.
   `tests/test_undo_fields.py` stays green - the opposite of the `SimState`
   reading of that rule. Left undoable, Ctrl+Z reverts a projector alignment.
 
+- **The exhibition lock takes the keyboard BEFORE ImGui, and a slot key
+  loads on the cold path AFTER the preview handler.** `key_callback` returns
+  under `perform.exhibition_locked` before the ImGui callback runs, so a
+  visitor's keys reach the set list and the Ctrl+Shift+F11 chord and nothing
+  else - held keys included, which `get_state` drops as well. A slot press is
+  the one-shot `perform.slot_load`, handled in `_handle_slot_load` after
+  `_handle_preview_commands`: dispatched through the ordinary
+  `request_load_file` it ran BEFORE the preview clear and took the finalise
+  branch, loading the HOVERED preset in place of its own. Unlocked, a key the
+  app already binds keeps its binding (`KeybindingManager.is_bound`).
+  Guarded by `tests/test_exhibition_keys.py`, which drives the real
+  `key_callback` and the real `process_commands`.
+
+- **A MIDI knob writes `ui_state.sim`, not a copy, and undo waits for the
+  twist to end.** It is a relative encoder, so a preset load recentres by
+  itself and a push returns the slider to `_centres`, snapshotted on
+  `perform.recentre_knobs` - set by `_apply_config_with_locks`, so every
+  path that applies a config reaches it. `MidiRuntime.update` runs before
+  `audio_runtime.update` and `feedback` reads the modulated copy, which is
+  what the rings show. Each detent would be a journal step, so
+  `_record_undo_step` defers on `gesture_active()`; a stub App borrowing
+  that method needs a `midi_runtime`. `mido`/`python-rtmidi` are imported
+  lazily inside `services/midi_control.py`. Windows appends a port index to
+  the name, which `port_base_name` strips so one name opens input and
+  output; a device that is not listed is polled for once a second rather
+  than per frame, and a send that raises closes the port and posts
+  `midi_status`. Guarded by `tests/test_midi_runtime.py` against a fake
+  port. Twister channels are 0-indexed as mido reports them, and its MIDI
+  IN cannot be remapped, so the constants there are fixed.
+
 - **`python -m tools.drive_perform` is what verifies this.** A render test
   drives a bare mixin and a GL test drives the shader into a standalone
   framebuffer; neither runs the two-context path, where a stale external

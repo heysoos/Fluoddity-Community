@@ -247,3 +247,8 @@ def initialize_user_data():
     migrate_imgui_ini()
 
     print(f"[Fluoddity] User data directory: {user_dir}")
+
+
+def get_set_lists_dir() -> Path:
+    """Get path to the user's set lists, one JSON per show."""
+    return get_user_data_dir() / "setlists"

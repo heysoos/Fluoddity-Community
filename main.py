@@ -202,6 +202,9 @@ class App:
         self.audio_runtime.prewarm()
         from services.audio_rig_io import load_rig
         load_rig(self.ui.state.audio)
+        from services.midi_runtime import MidiRuntime
+        self.midi_runtime = MidiRuntime()
+        self._restore_set_list()
         # The rig file is shared by every copy of Fluoddity, and the write at
         # exit used to be unconditional - so a second instance that never
         # touched audio wrote its empty rig over the one you had just built.
@@ -1430,6 +1433,8 @@ class App:
         if ui_state.request_camera_reset:
             ui_state.camera.position[:] = [0.0, 0.0]
             ui_state.camera.zoom = 1.0
+        # A knob nudges the REAL state, before audio so audio bends on top.
+        self.midi_runtime.update(ui_state)
         # Audio modulates a COPY. ui_state.sim keeps what the user set, so the
         # sliders do not drift and Save writes slider values rather than
         # whatever the music was doing at that instant.
@@ -1438,6 +1443,8 @@ class App:
             self.rule_manager.get_current_rule())
         self.sim.apply_state(_audio_sim)
         self._log_parameters(ui_state, _audio_sim)
+        # The rings show the value the sim ran under, not the slider.
+        self.midi_runtime.feedback(ui_state, _audio_sim)
         self.sim.set_cohort_audio(self.audio_runtime.cohort_audio)
         self.sim.set_audio_inputs(self.audio_runtime.audio_inputs)
         self.sim.set_audio_seed(ui_state.audio.audio_seed)
@@ -1974,6 +1981,16 @@ class App:
             uh.capture(ui_state, self.rule_manager.get_current_rule(),
                        self.sim.brain_layout))
 
+    def _restore_set_list(self) -> None:
+        """Reopen the set list named in preferences; a missing one is left alone."""
+        from services.set_list_io import load_set_list
+        name = self.ui.state.preferences.set_list_name
+        if not name:
+            return
+        sl = load_set_list(name)
+        if sl is not None:
+            self.ui.state.perform.set_list = sl
+
     def _preferences_are_borrowed(self, ui_state) -> bool:
         """Is something other than the user driving the render preferences?
 
@@ -2011,6 +2028,9 @@ class App:
         # 200 steps: leaving Explore running discarded every real step the
         # user had made, and half the survivors restore speedmult = 0.
         if self._preferences_are_borrowed(ui_state):
+            return
+        # A twist on a knob is one gesture, not one step per detent.
+        if self.midi_runtime.gesture_active():
             return
         snap = uh.capture(ui_state, self.rule_manager.get_current_rule(),
                           self.sim.brain_layout)
@@ -2096,6 +2116,7 @@ class App:
             # call, not the expression that produces it.
             self._step("save audio rig",
                        lambda: self._save_last_rig(ui_state))
+        self._step("close midi", lambda: self.midi_runtime.close())
 
         # The scoring thread only reads its own copy of the frame buffer, so
         # closing it after the flush cannot race the archive.

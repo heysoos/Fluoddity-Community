@@ -51,6 +51,7 @@ def build():
         # Nothing has commandeered the render preferences in these tests.
         video_service=types.SimpleNamespace(is_active=lambda: False),
         screenshot_in_progress=False,
+        midi_runtime=types.SimpleNamespace(gesture_active=lambda: False),
     )
     app._preferences_are_borrowed = types.MethodType(
         main.App._preferences_are_borrowed, app)

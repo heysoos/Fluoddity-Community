@@ -70,6 +70,18 @@ def _mon(name, primary=False, x=0, phys=(380, 210), dup=0):
                        dup_index=dup)
 
 
+@pytest.fixture(autouse=True)
+def no_disk_or_midi(monkeypatch):
+    """The exhibition section lists set lists and MIDI ports; neither is
+    the user's business during a render test."""
+    monkeypatch.setattr("ui.exhibition_panel.set_list_io.list_set_lists",
+                        lambda root=None: [])
+    monkeypatch.setattr("ui.exhibition_panel.midi_control.list_devices",
+                        lambda: [])
+    monkeypatch.setattr("ui.exhibition_panel.midi_control.available",
+                        lambda: True)
+
+
 @pytest.fixture
 def two_displays(monkeypatch):
     monkeypatch.setattr("ui.perform_window.list_monitors",
