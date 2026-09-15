@@ -26,7 +26,9 @@ def data_dir(tmp_path, monkeypatch):
 
 def _ui_state(audio):
     brain = type("Brain", (), {"reroll_audio_requested": False})()
-    return type("UIState", (), {"audio": audio, "brain": brain})()
+    from state.perform_state import PerformState
+    return type("UIState", (), {"audio": audio, "brain": brain,
+                                "perform": PerformState()})()
 
 
 # --- the folder -------------------------------------------------------------
