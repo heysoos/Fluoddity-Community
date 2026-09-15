@@ -230,3 +230,16 @@ def test_a_slot_with_only_a_rig_leaves_the_physics_alone(tmp_path, monkeypatch):
     assert ui.sim.SENSOR_GAIN == 7.0
     assert ui.audio.preset_name == "quiet"
     assert ch.ui.loaded == []
+
+
+def test_a_rig_load_asks_the_audio_knobs_to_recentre(tmp_path, monkeypatch):
+    from services import audio_rig_io
+    from state.audio_in_state import AudioInState
+    monkeypatch.setattr(audio_rig_io, "rigs_dir", lambda: tmp_path / "rigs")
+    audio_rig_io.save_rig(AudioInState(), audio_rig_io.preset_path("quiet"))
+    ch = _handler(tmp_path)
+    ui = UIState()
+    ui.perform.slot_load = ("", "", "quiet")
+    ch.process_commands(ui, False)
+    assert ui.perform.recentre_audio_knobs is True
+    assert ui.perform.recentre_knobs is False

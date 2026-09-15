@@ -54,8 +54,10 @@ class _Keys:
 
 class _State:
     def __init__(self):
+        from state.sim_state import SimState
         self.perform = PerformState()
         self.preferences = PreferencesState()
+        self.sim = SimState()
 
 
 class Harness(PerformWindowMixin):

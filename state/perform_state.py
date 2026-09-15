@@ -40,6 +40,7 @@ class PerformState:
     # encoder returns its slider to the value that preset loaded with.
     slot_load: tuple | None = None
     recentre_knobs: bool = False
+    recentre_audio_knobs: bool = False   # set when a rig loads
     midi_status: str = ""     # a readout
     # Walk the set list on a timer. Session-only, as the lock is; the
     # interval is PreferencesState.cycle_seconds.

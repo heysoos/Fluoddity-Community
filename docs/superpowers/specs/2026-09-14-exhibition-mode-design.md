@@ -18,7 +18,9 @@ audience watches the projector, the laptop keeps its UI.
   fraction of the slider's live range to `ui_state.sim`, so the Physics
   slider moves and Save writes it. A preset load recentres by definition.
   Pushing an encoder returns its slider to the value the current preset
-  loaded with.
+  loaded with. The audio rig's `global_strength` and `rate_scale` are knob
+  targets too (`AUDIO_KNOB_TARGETS`), recentred when a rig loads; Rate Scale
+  steps in log space because its slider is logarithmic.
 - **Audio bends on top.** MIDI runs before the audio runtime, whose output is
   what the sim runs under. The LED ring shows THAT value; the colour switches
   while it differs from the slider by more than a dead band.

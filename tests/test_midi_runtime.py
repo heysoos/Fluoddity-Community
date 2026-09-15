@@ -49,7 +49,9 @@ class Clock:
 
 class State:
     def __init__(self):
+        from state.audio_in_state import AudioInState
         self.sim = SimState()
+        self.audio = AudioInState()
         self.perform = PerformState()
         self.preferences = PreferencesState()
         self.undo_tag = ""
@@ -72,7 +74,9 @@ def rig():
     st.preferences.midi_device = DEVICE
     st.perform.set_list = SetList(knobs=[
         KnobBinding(cc=0, param="SENSOR_GAIN", step=0.1),
-        KnobBinding(cc=1, param="DRAG", step=0.01)])
+        KnobBinding(cc=1, param="DRAG", step=0.01),
+        KnobBinding(cc=2, param="audio:global_strength", step=0.1),
+        KnobBinding(cc=3, param="audio:rate_scale", step=0.25)])
     return rt, st, ports, devices, clock
 
 
@@ -192,7 +196,7 @@ def test_connecting_switches_off_every_encoder_the_set_list_does_not_bind(rig):
     rt, st, ports, _, _ = rig
     rt.update(st)
     rings = {cc for ch, cc, v in ports[0].sent if ch == mc.ENCODER_CHANNEL and v == 0}
-    assert rings == set(range(mc.ENCODER_COUNT)) - {0, 1}
+    assert rings == set(range(mc.ENCODER_COUNT)) - {0, 1, 2, 3}
 
 
 def test_the_ring_shows_the_value_the_sim_ran_under(rig):
@@ -241,3 +245,78 @@ def test_relative_decoding_and_ring_mapping():
     assert mc.ring_value(1.0, 1.0, 1.0) == 0
     assert mc.port_base_name("Midi Fighter Twister 0") == "Midi Fighter Twister"
     assert mc.port_base_name("Twister 2 3") == "Twister 2"
+
+
+def test_an_audio_knob_moves_the_rig_setting_and_a_push_returns_to_the_rig(rig):
+    rt, st, ports, _, _ = rig
+    st.audio.global_strength = 1.0
+    st.perform.recentre_audio_knobs = True
+    rt.update(st)
+    _turn(ports[0], 2, +2)
+    rt.update(st)
+    assert st.audio.global_strength == pytest.approx(1.4)
+    assert st.undo_tag == "Audio Strength"
+    ports[0].queued.append((mc.SWITCH_CHANNEL, 2, mc.SWITCH_PRESSED))
+    rt.update(st)
+    assert st.audio.global_strength == pytest.approx(1.0)
+
+
+def test_a_rig_load_recentres_the_audio_knobs_but_not_the_physics_ones(rig):
+    rt, st, ports, _, _ = rig
+    st.sim.SENSOR_GAIN = 0.3
+    st.perform.recentre_knobs = True
+    rt.update(st)
+    _turn(ports[0], 0, +3)
+    rt.update(st)
+    twisted = st.sim.SENSOR_GAIN
+    st.audio.global_strength = 0.5
+    st.perform.recentre_audio_knobs = True
+    rt.update(st)
+    ports[0].queued.append((mc.SWITCH_CHANNEL, 0, mc.SWITCH_PRESSED))
+    ports[0].queued.append((mc.SWITCH_CHANNEL, 2, mc.SWITCH_PRESSED))
+    rt.update(st)
+    assert st.sim.SENSOR_GAIN == pytest.approx(0.3), "physics centre untouched by a rig"
+    assert st.audio.global_strength == pytest.approx(0.5)
+    assert twisted != pytest.approx(0.3)
+
+
+def test_rate_scale_steps_in_log_space(rig):
+    rt, st, ports, _, _ = rig
+    st.audio.rate_scale = 1.0
+    rt.update(st)
+    _turn(ports[0], 3, +1)
+    rt.update(st)
+    up = st.audio.rate_scale
+    _turn(ports[0], 3, -2)
+    rt.update(st)
+    down = st.audio.rate_scale
+    assert up / 1.0 == pytest.approx(1.0 / down), "one click up and one down are the same ratio"
+    assert up > 1.0 > down
+    _turn(ports[0], 3, -50)
+    rt.update(st)
+    assert st.audio.rate_scale == pytest.approx(0.05)
+
+
+def test_connecting_with_no_preset_loaded_centres_on_what_is_on_screen(rig):
+    rt, st, ports, _, _ = rig
+    st.sim.SENSOR_GAIN = 0.2
+    st.audio.global_strength = 0.7
+    rt.update(st)
+    _turn(ports[0], 0, +3)
+    _turn(ports[0], 2, +3)
+    rt.update(st)
+    ports[0].queued.append((mc.SWITCH_CHANNEL, 0, mc.SWITCH_PRESSED))
+    ports[0].queued.append((mc.SWITCH_CHANNEL, 2, mc.SWITCH_PRESSED))
+    rt.update(st)
+    assert st.sim.SENSOR_GAIN == pytest.approx(0.2)
+    assert st.audio.global_strength == pytest.approx(0.7)
+
+
+def test_an_audio_knob_ring_follows_the_setting_and_never_reads_as_bending(rig):
+    rt, st, ports, _, _ = rig
+    rt.update(st)
+    st.audio.global_strength = 2.0
+    ports[0].sent.clear()
+    rt.feedback(st, st.sim)
+    assert (mc.ENCODER_CHANNEL, 2, 127) in ports[0].sent
+    assert (mc.SWITCH_CHANNEL, 2, st.perform.set_list.knobs[2].rest_colour) in ports[0].sent

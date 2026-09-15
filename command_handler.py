@@ -1944,6 +1944,8 @@ class CommandHandler:
         # rig, and a rig built elsewhere names one that is not here.
         if load_rig(ast, preset_path(name), keep_device=True):
             ast.notice = f"Rig loaded from {name}"
+            # A push on an audio knob returns to what this rig set.
+            ui_state.perform.recentre_audio_knobs = True
             # The rig's seed names its audio weights, so a loaded rig is
             # given them back; the count follows on the next layout pass.
             ui_state.brain.reroll_audio_requested = True

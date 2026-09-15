@@ -15,9 +15,9 @@ DEVICE_RESCAN_SECONDS = 1.0
 NONE_DEVICE = "(none)"
 
 
-def _param_labels():
-    from ui.physics_params import PHYSICS_PARAMS
-    return [(p.name, p.label) for p in PHYSICS_PARAMS]
+def _param_labels(sim_state):
+    from services.midi_runtime import knob_targets
+    return [(t.key, t.label) for t in knob_targets(sim_state)]
 
 
 class ExhibitionPanelMixin:
@@ -222,7 +222,7 @@ class ExhibitionPanelMixin:
     def _render_knobs(self, perform):
         imgui.spacing()
         imgui.text("Knobs")
-        params = _param_labels()
+        params = _param_labels(self.state.sim)
         names = [p[0] for p in params]
         labels = ["(none)"] + [p[1] for p in params]
         narrow = imgui.calc_text_size("MMMM").x + 20
