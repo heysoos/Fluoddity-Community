@@ -2251,6 +2251,20 @@ keeps them, each with the phase that took the time.
   the load menu. An Auto **checkpoint** is deliberately outside all of this —
   it resumes the optimizer, is not a config, and stays in the run folder.
 
+- **A `version: 8` file is the WEB app's (fluoddity.com), and its enums are
+  numbered differently.** `services/web_config.py` translates it and
+  `PhysicsConfig.from_dict` calls that first, so a downloaded file loads from
+  File > Load as is; `python -m tools.convert_web_config` rewrites files on
+  disk and splits a multi-config one. The physics and the Fourier brain are
+  the desktop's exactly. What differs: web Wrap is 1 where the desktop's is 2;
+  web Ring is 3 and web Centre (2) has no desktop mode; `mutation_seed` is
+  `rule_seed`; the web's sensor jitter is an ABSOLUTE wobble (distance over a
+  span of 5) where the desktop's is relative, so it is divided by the value;
+  and the web colour term is `legacy_color`. Gravity below the web's 0.05
+  dead zone is exactly zero; above it, and cohort fences, are written to the
+  config's notes rather than approximated. Guarded by
+  `tests/test_web_config.py`.
+
 - **A save that only prints to the console reads as a no-op.** The file lands
   somewhere not on screen, so every save path sets a `notice` (or `warning` on
   failure) rendered by `ui/notices.py`. Pass a distinct `scope` — two tabs both

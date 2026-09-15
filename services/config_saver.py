@@ -214,6 +214,15 @@ class PhysicsConfig:
     @classmethod
     def from_dict(cls, data: dict) -> 'PhysicsConfig':
         """Create config from JSON dict."""
+        from services.web_config import is_web_config, translate_web_config
+        if is_web_config(data):
+            # A web file may hold several configs; a PhysicsConfig is one.
+            translated = translate_web_config(data)
+            if len(translated) > 1:
+                print(f"Web config holds {len(translated)} configs; "
+                      "loading the first (python -m tools.convert_web_config "
+                      "splits them)")
+            data = translated[0]
         physics = data.get('physics', {})
         settings = data.get('settings', {})
         appearance = data.get('appearance', {})
