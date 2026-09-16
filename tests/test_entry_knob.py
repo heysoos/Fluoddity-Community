@@ -96,7 +96,10 @@ def test_recentring_the_physics_knobs_leaves_the_archive_knob_alone(rig):
 
 class _Entry:
     def __init__(self, i, layout="", novelty=0.5):
-        self.id = i
+        # Ids restart per brain directory, so they are deliberately NOT the
+        # rows here: a knob that handed an id to a row-addressed one-shot
+        # loaded the wrong entry.
+        self.id = 100 + i
         self.layout = layout
         self.novelty = novelty
         self.pinned = False
@@ -122,7 +125,7 @@ class _Archive:
 def _handler(archive):
     h = object.__new__(CommandHandler)
     h.archive = archive
-    h._knob_entry_id = -1
+    h._knob_entry_row = -1
     return h
 
 
@@ -136,9 +139,11 @@ def _state(brain=""):
 def test_steps_walk_the_gallery_in_its_order_and_wrap():
     h = _handler(_Archive(["", "", ""]))
     st = _state()
+    st.archive.preview_entry_id = 7          # a hover the browser left standing
     st.archive.step_entry = 1
     h._handle_entry_knob(st)
     assert st.archive.load_entry_id == 0
+    assert st.archive.preview_entry_id == -1
     assert st.archive.step_entry == 0
     assert st.archive.knob_entry_pos == 0.0
     assert st.perform.recentre_knobs is True

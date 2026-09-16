@@ -52,7 +52,7 @@ class CommandHandler:
         self.archive = None
         self.archive_store = None
         self.goal_list = None
-        self._knob_entry_id = -1     # where the archive knob stands
+        self._knob_entry_row = -1    # where the archive knob stands
         self.map_layout_service = None
         # Which run's physics is already on disk, and the configs read back for
         # the preview. Both are per-archive and cleared on a switch.
@@ -1351,6 +1351,43 @@ class CommandHandler:
 
         return layout_from_signature(self.archive.layout_at(i))
 
+    def _deaf_twin_of_live(self, i):
+        """The live layout, when entry `i` is its DEAF version; else None.
+
+        The rig re-imposes its input count every frame, so under a rig the
+        sim runs the wide layout while the archive's entries of that brain
+        are deaf. Such an entry is the same brain: it is widened from the
+        rig's seed and run in place, exactly as a deaf preset is, rather than
+        switched to and then widened back a frame later.
+        """
+        from services.brains import with_audio_inputs
+
+        live = getattr(self.sim, "brain_layout", None)
+        if live is None or not live.audio_inputs:
+            return None
+        deaf = with_audio_inputs(live, 0)
+        return live if self.archive.layout_at(i) == deaf.signature() else None
+
+    def _entry_needs_switch(self, i) -> bool:
+        """Does running entry `i` mean switching brain?"""
+        return (not self.archive.is_native(i)
+                and self._deaf_twin_of_live(i) is None)
+
+    def _entry_rule(self, ui_state, i):
+        """Entry `i`'s brain as the live layout runs it: widened when the
+        entry is the deaf twin of the running layout."""
+        from services.brains import with_audio_inputs
+        from services.brains.layout_moves import transfer_audio_inputs
+
+        # brain_at, not brains: the pooled column is padded to the WIDEST
+        # layout the archive holds, and apply_rule refuses the wrong width.
+        rule = np.asarray(self.archive.brain_at(i), dtype=np.float32)
+        live = self._deaf_twin_of_live(i)
+        if live is None:
+            return rule
+        return transfer_audio_inputs(rule, with_audio_inputs(live, 0), live,
+                                     ui_state.audio.audio_seed)
+
     def _foreign_notice(self, i) -> str:
         """Why an entry of another brain cannot be decoded here, or ""."""
         if self.archive.is_native(i):
@@ -1411,7 +1448,7 @@ class CommandHandler:
             self._end_archive_preview(ui_state)
             entry_id, ast.load_entry_id = ast.load_entry_id, -1
             row = self._archive_index(entry_id) if entry_id >= 0 else None
-            if row is not None and not self.archive.is_native(row):
+            if row is not None and self._entry_needs_switch(row):
                 self._return_layout("gallery")
                 self._adopt_foreign_entry(ui_state, row)
             return
@@ -1433,7 +1470,7 @@ class CommandHandler:
             # explicit. Hand the genome to the switch the way a cross-brain
             # config load does, and let _handle_brain_layout apply both.
             row = self._archive_index(entry_id)
-            if row is not None and not self.archive.is_native(row):
+            if row is not None and self._entry_needs_switch(row):
                 # The borrow ends here and the real switch takes over, so the
                 # sim must be holding the user's own layout for it to switch
                 # FROM. The physics stay: this is a commit, not a restore.
@@ -1488,13 +1525,17 @@ class CommandHandler:
                 if arc is not None else [])
         if not rows:
             return
-        ids = [e.id for _, e in rows]
-        held = getattr(self, "_knob_entry_id", -1)
-        at = ids.index(held) if held in ids else -1
-        pos = 0 if reset else (at + step) % len(ids)
-        self._knob_entry_id = ids[pos]
-        ast.load_entry_id = ids[pos]
-        ast.knob_entry_pos = pos / (len(ids) - 1) if len(ids) > 1 else 0.0
+        # ROWS, not ids: an id is unique inside one brain's directory only,
+        # and load_entry_id is a row like every other browser one-shot.
+        order = [i for i, _ in rows]
+        held = getattr(self, "_knob_entry_row", -1)
+        at = order.index(held) if held in order else -1
+        pos = 0 if reset else (at + step) % len(order)
+        self._knob_entry_row = order[pos]
+        ast.load_entry_id = order[pos]
+        # A hover the browser left standing must not replace the knob's load.
+        ast.preview_entry_id = -1
+        ast.knob_entry_pos = pos / (len(order) - 1) if len(order) > 1 else 0.0
         perform = getattr(ui_state, "perform", None)
         if perform is not None:
             # The entry's physics land on the sliders, so a push returns there.
@@ -1552,7 +1593,7 @@ class CommandHandler:
         # nothing else. Silent when the layout cannot be rebuilt: the click says
         # so out loud, and a notice per hovered pixel is not feedback.
         borrowed = None
-        if not self.archive.is_native(i):
+        if self._entry_needs_switch(i):
             borrowed = self._preview_layout(i)
             if borrowed is None:
                 return
@@ -1573,9 +1614,7 @@ class CommandHandler:
                 for j, (name, _g, _lo, _hi) in enumerate(PHYSICS_PARAMS):
                     setattr(sim_state, name, float(self.archive.physics[i][j]))
 
-        # brain_at, not brains: the pooled column is padded to the WIDEST layout
-        # the archive holds, and apply_rule refuses a rule of the wrong width.
-        rule = np.asarray(self.archive.brain_at(i), dtype=np.float32)
+        rule = self._entry_rule(ui_state, i)
         pls = self.param_lock_service
         blocked = bool(pls and pls.should_block_rule_push())
         if borrowed is not None and not blocked:
