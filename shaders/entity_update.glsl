@@ -58,7 +58,7 @@ uniform bool DISABLE_SYMMETRY;
 uniform int ABSOLUTE_ORIENTATION; // 0=Off, 1=Y axis, 2=Radial
 uniform float ORIENTATION_MIX; // Blend factor for orientation calculations
 uniform int BOUNDARY_CONDITIONS_MODE; //0-1-2 == BOUNCE-RESET-WRAP
-uniform int RESET_MODE; //0-1-2 == GRID-RANDOM-RING
+uniform int RESET_MODE; //0-1-2-3 == GRID-RANDOM-RING-CENTRE
 uniform int COHORTS; //each cohort gets its own rule and starting location
 uniform float RULE_SEED;
 uniform bool WRITE_RULES; // Set true for one frame when rule buffer readback is needed
@@ -539,7 +539,7 @@ void reset(uint index){
     vec2 pos=cohort_scale*vec2(hash(vec2(cohort_val+RESET_SEED)),hash(vec2(cohort_val+index+2.142+RESET_SEED)));
     vec2 vel=.00005*(vec2(hash(vec2(cohort_val+RESET_SEED,index)),hash(vec2(cohort_val,pos.y)))*2-1);
 
-    //RESET_MODE: 0=Grid, 1=Random, 2=Ring
+    //RESET_MODE: 0=Grid, 1=Random, 2=Ring, 3=Centre (the bare disk above)
     int reset_mode = get_particle_reset_mode();
     int cohorts = get_particle_cohorts();
     if(reset_mode == 0) {

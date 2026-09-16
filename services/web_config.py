@@ -21,10 +21,9 @@ WEB_VERSION = 8
 
 # Web: 0 Bounce, 1 Wrap, 2 Reset.  Desktop: 0 Bounce, 1 Reset, 2 Wrap.
 BOUNDARY_MAP = {0: 0, 1: 2, 2: 1}
-# Web: 0 Grid, 1 Random, 2 Centre, 3 Ring.  Desktop: 0 Grid, 1 Random, 2 Ring.
-# Centre has no desktop mode; Grid is the closest, since a lone cohort's grid
-# cell is the centre.
-SPAWN_MAP = {0: 0, 1: 1, 2: 0, 3: 2}
+# Web: 0 Grid, 1 Random, 2 Centre, 3 Ring.  Desktop: 0 Grid, 1 Random,
+# 2 Ring, 3 Centre.
+SPAWN_MAP = {0: 0, 1: 1, 2: 3, 3: 2}
 # The web adds SENSOR_DISTANCE_SPAN * jitter to the distance; the desktop adds
 # jitter * value.
 SENSOR_DISTANCE_SPAN = 5.0
@@ -108,8 +107,6 @@ def _translate_one(world: dict, cfg: dict, notes: str) -> dict:
     if force2.get("cohort_fences"):
         lost.append("cohort fences")
     ic = int(force2.get("initial_conditions", 2))
-    if ic == 2:
-        lost.append("centre spawn (loaded as grid)")
     if lost:
         line = "Web-only features not reproduced: " + "; ".join(lost) + "."
         notes = (notes + "\n" + line) if notes else line

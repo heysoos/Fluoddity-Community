@@ -293,6 +293,8 @@ class CommandHandler:
         # Full reset (Z key)
         if ui_state.request_full_reset:
             self._handle_full_reset(ui_state)
+        if ui_state.request_gather_center:
+            self._handle_gather_center(ui_state)
 
         # Randomize mutations (M key)
         if ui_state.request_randomize_mutations:
@@ -660,6 +662,12 @@ class CommandHandler:
         self.sim.apply_rule(zero_rule)
         ui_state.sim.rule_seed = random.random()
         self.rule_manager.push_rule(zero_rule, ui_state.sim.rule_seed)
+
+    def _handle_gather_center(self, ui_state):
+        """M: every particle back to the centre, once. The preset's own spawn
+        mode is untouched; only this reset lands on the centre disk."""
+        from state.sim_state import IC_CENTER
+        self.sim.reset(IC_CENTER)
 
     def _handle_randomize_mutations(self, ui_state):
         """G: a fresh crop of mutations.

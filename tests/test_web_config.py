@@ -75,8 +75,8 @@ def test_the_boundary_enum_is_renumbered(web, desktop):
     assert translate_web_config(src)[0]["settings"]["boundary_conditions"] == desktop
 
 
-@pytest.mark.parametrize("web, desktop", [(0, 0), (1, 1), (3, 2), (2, 0)])
-def test_the_spawn_enum_is_renumbered_and_centre_falls_back_to_grid(web, desktop):
+@pytest.mark.parametrize("web, desktop", [(0, 0), (1, 1), (3, 2), (2, 3)])
+def test_the_spawn_enum_is_renumbered(web, desktop):
     d = translate_web_config(web_config(**{"force2.initial_conditions": web}))[0]
     assert d["settings"]["initial_conditions"] == desktop
 

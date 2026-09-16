@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
 
 
+# Initial-conditions modes; the shader's RESET_MODE uses the same numbers.
+IC_GRID, IC_RANDOM, IC_RING, IC_CENTER = 0, 1, 2, 3
+
 @dataclass
 class SimState:
     """State for simulation parameters that UI controls."""
@@ -37,7 +40,7 @@ class SimState:
 
     # Simulation settings (defaults ensure backward compatibility with old configs)
     boundary_conditions: int = 2  # 0=Bounce, 1=Reset, 2=Wrap (default: Wrap)
-    initial_conditions: int = 0   # 0=Grid, 1=Random, 2=Ring (default: Grid)
+    initial_conditions: int = 0   # 0=Grid, 1=Random, 2=Ring, 3=Centre (default: Grid)
     num_cohorts: int = 64         # Number of cohorts (1-144, default: 64)
     # Box each cohort off into its own cell of the canvas, so a cohort is a
     # self-contained little world you can look at on its own. Ignored while a

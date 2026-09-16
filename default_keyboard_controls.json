@@ -21,5 +21,6 @@
   "toggle_sidebar": "X",
   "toggle_perform_mode": "F11",
   "exit_keybinding": "ESCAPE",
-  "reset_keybinding": "R"
+  "reset_keybinding": "R",
+  "gather_center": "M"
 }

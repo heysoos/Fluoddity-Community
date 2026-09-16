@@ -59,6 +59,7 @@ class UIState:
     request_reload: bool = False
     request_reset: bool = False
     request_full_reset: bool = False
+    request_gather_center: bool = False   # reset every particle to the centre, once
     request_randomize_mutations: bool = False
     toggle_recording: bool = False
     request_screenshot: bool = False

@@ -204,6 +204,7 @@ class UI(
         self._request_reload = False
         self._request_reset = False
         self._request_full_reset = False
+        self._request_gather_center = False
         self._request_randomize_mutations = False
         self._toggle_recording = False
         self._request_screenshot = False
@@ -387,6 +388,8 @@ class UI(
                 chord = (mods & glfw.MOD_CONTROL) and (mods & glfw.MOD_SHIFT)
                 if chord and key == self.keybindings.get_key("toggle_perform_mode"):
                     self.state.perform.exhibition_locked = False
+                elif key == self.keybindings.get_key("gather_center"):
+                    self._request_gather_center = True
                 elif not (mods & glfw.MOD_CONTROL):
                     slot = self._slot_for_key(key)
                     if slot is not None:
@@ -464,6 +467,8 @@ class UI(
             elif key == self.keybindings.get_key("randomize_rules"):
                 # Full reset (one-shot, not hold)
                 self._request_full_reset = True
+            elif key == self.keybindings.get_key("gather_center"):
+                self._request_gather_center = True
             elif key == self.keybindings.get_key("toggle_sidebar"):
                 # Toggle windows (Physics Settings, Preferences, Drawing Controls, Config Clipboard, Screen Recording)
                 self.state.preferences.show_sidebar = not self.state.preferences.show_sidebar
@@ -517,6 +522,7 @@ class UI(
         self.state.request_reload = self._request_reload
         self.state.request_reset = self._request_reset
         self.state.request_full_reset = self._request_full_reset
+        self.state.request_gather_center = self._request_gather_center
         self.state.request_randomize_mutations = self._request_randomize_mutations
         self.state.toggle_recording = self._toggle_recording
         self.state.request_screenshot = self._request_screenshot
@@ -581,6 +587,7 @@ class UI(
         self._request_reload = False
         self._request_reset = False
         self._request_full_reset = False
+        self._request_gather_center = False
         self._request_randomize_mutations = False
         self._toggle_recording = False
         self._request_screenshot = False

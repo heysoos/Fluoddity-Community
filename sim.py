@@ -411,6 +411,19 @@ class Sim:
         # of its own - the service calls it between generations - so a cached
         # copy would keep a stale grid; and the overrides below must land on
         # top of the settings the block above has just written.
+        # A one-shot reset mode holds for the reset step and no other, so it
+        # sits on top of the cached block and outside it.
+        override = getattr(self, '_reset_mode_override', None)
+        if override is not None and self.frame_count == 0:
+            tryset(self.entity_update_program, 'RESET_MODE', override)
+            self._reset_mode_restore = True
+        elif getattr(self, '_reset_mode_restore', False):
+            # The step after the override, or a plain reset that pre-empted
+            # it: the setting's own mode goes back before anything respawns.
+            tryset(self.entity_update_program, 'RESET_MODE',
+                   self._state.initial_conditions)
+            self._reset_mode_restore = False
+            self._reset_mode_override = None
         # Outside the cached block: the arrays move every frame while a rig is
         # playing, and the cache is skipped only when the program changes.
         _ca = self._cohort_audio
@@ -662,13 +675,16 @@ class Sim:
             self.ctx.clear(0, 0, 0, 0)
         old_fbo.use()
 
-    def reset(self):
+    def reset(self, mode: int | None = None):
+        """Clear the canvas and restart the particles. `mode` overrides the
+        initial-conditions mode for the reset step alone."""
         old_fbo = self.ctx.fbo
         # Clear both canvas buffers
         for fb in self.can_framebuffers:
             fb.use()
             self.ctx.clear(0, 0, 0, 0)
         self.frame_count = 0
+        self._reset_mode_override = mode
         old_fbo.use()
 
     def reload(self):

@@ -112,11 +112,12 @@ class PhysicsWindowMixin:
                 pls.pop_locked_style(bc_lock_colors)
 
             # Initial Conditions (with per-option tooltips)
-            initial_options = ["Grid", "Random", "Ring"]
+            initial_options = ["Grid", "Random", "Ring", "Centre"]
             initial_tooltips = [
                 "Particles start in a grid, organized by cohort",
                 "Particles are spread uniformly across the canvas",
-                "Particles start distributed around a circle, organized by cohort"
+                "Particles start distributed around a circle, organized by cohort",
+                "Every cohort starts on one small disk at the centre",
             ]
             ic_lock_colors = pls.push_locked_style('initial_conditions') if pls else 0
             ic_label = pls.get_display_label('initial_conditions', "Initial Conditions") if pls else "Initial Conditions"
@@ -137,6 +138,10 @@ class PhysicsWindowMixin:
                 pls.handle_alt_click('initial_conditions')
             if pls:
                 pls.pop_locked_style(ic_lock_colors)
+            imgui.same_line()
+            if imgui.button("Gather##ic"):
+                self._request_gather_center = True
+            hints.tip("Reset every particle to the centre, once, whatever the mode.")
 
             # Number of Cohorts
             nc_lock_colors = pls.push_locked_style('num_cohorts') if pls else 0
@@ -449,7 +454,7 @@ class PhysicsWindowMixin:
                 # Initial Conditions (greyed if per-config)
                 if self.state.multi_load.per_config_initial_conditions:
                     imgui.begin_disabled()
-                initial_options = ["Grid", "Random", "Ring"]
+                initial_options = ["Grid", "Random", "Ring", "Centre"]
                 imgui.set_next_item_width(100)
                 if imgui.begin_combo("Initial Conditions", initial_options[self.state.sim.initial_conditions]):
                     for i, option in enumerate(initial_options):

@@ -330,6 +330,15 @@ mechanics these caveats assume.
   (`e.pos+e.vel` for `STRAFE_POWER`, `e.pos+step_delta` for `get_field`) are
   also unscaled, which only bites under a sweep or a drawn field.
 
+- **A one-shot reset mode rides OUTSIDE the frame cache, on top of it.**
+  `Sim.reset(mode)` overrides `RESET_MODE` for the reset step alone, which is
+  what Gather (M, and the button beside Initial Conditions) uses to put every
+  particle on the centre disk without touching the preset's own spawn mode.
+  The cached settings block re-uploads `RESET_MODE` from the state, so the
+  override is written AFTER that block, and the setting goes back on the
+  following step even when a plain reset pre-empts it - or the next reset
+  lands on the centre too. Guarded by `tests/test_gather_center.py`.
+
 - **A `plain_uniform` parameter is in `PHYSICS_PARAMS` but not in
   `PHYSICS_PARAM_NAMES`.** It is one float for the whole canvas, so there is
   no sweep or jitter to offer and no entry in those dicts — declaring one
