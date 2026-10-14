@@ -3263,9 +3263,7 @@ keeps them, each with the phase that took the time.
 - `docs/imgep.md` — **how Explore mode works**: the regime loop, every fitness
   and admission equation in pseudocode, and what each setting does. Read this
   before the search and archive caveats above, which assume it.
-- `README.md` — the USER-facing walkthrough of tournament mode and the brain
-  modalities: which menu, which button, what each control does. Keep the
-  how-to-drive-it there and the why-it-is-built-this-way here.
+- `README.md` — user-facing overview: 1-3 plain lines per feature, no walkthroughs.
 - `ARCHITECTURE.md` — comprehensive architecture, file map, data flows, subsystem docs
 - `ui/README.md` — mixin architecture, how to add windows/sliders
 - `docs/adding_ui_shader_params.md` — step-by-step guide for new parameters
