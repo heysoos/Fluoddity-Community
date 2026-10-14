@@ -13,8 +13,8 @@ Fluoddity is a GPU-accelerated 2D particle simulation for generative art. Thousa
 pip install -r requirements.txt
 python main.py
 
-# Tests - the venv interpreter, NOT bare `python` (that is 3.10 with no pytest)
-.venv/Scripts/python.exe -m pytest -q
+# Tests
+python -m pytest -q
 
 # Build distributable (Windows, PowerShell)
 .\build.ps1
@@ -27,6 +27,14 @@ Move-Item -Path "dist\Fluoddity\_internal\shaders" -Destination "dist\Fluoddity\
 `tests/` covers the services, the GPU tiling (via a headless context) and UI
 render smoke tests. The sim itself is verified by hand — see
 `docs/testing_checklist.md`.
+
+## Git remotes
+
+- `personal` (private): the default push target; backs up every branch.
+- `community` (public): publish with `git push community <branch>`.
+- `origin` (aphid91, upstream): fetch only, push disabled.
+
+Never push unless asked. Branch new work from `integration`.
 
 ## Architecture
 
